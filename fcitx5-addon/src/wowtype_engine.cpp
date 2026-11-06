@@ -300,12 +300,37 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     }
 
-    // 翻页/移动（↑↓、PgUp/PgDn、-/=）交给候选列表自己处理。
-    if (auto *list = ic->inputPanel().candidateList()) {
-        if (list->size() > 0 && list->keyEvent(event)) {
-            event.filterAndAccept();
-            ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-            return;
+    // 候选翻页/移动。fcitx5 的 CandidateList 没有 keyEvent，
+    // 引擎需要自己把按键映射到 prev/next/prevCandidate/nextCandidate。
+    if (!state->buffer_.empty()) {
+        if (auto *list = ic->inputPanel().candidateList()) {
+            if (list->size() > 0) {
+                bool handled = true;
+                if (sym == FcitxKey_Up) {
+                    list->prevCandidate();
+                } else if (sym == FcitxKey_Down) {
+                    list->nextCandidate();
+                } else if (sym == FcitxKey_Page_Up || sym == FcitxKey_minus) {
+                    if (list->hasPrev()) {
+                        list->prev();
+                    } else {
+                        handled = false;
+                    }
+                } else if (sym == FcitxKey_Page_Down || sym == FcitxKey_equal) {
+                    if (list->hasNext()) {
+                        list->next();
+                    } else {
+                        handled = false;
+                    }
+                } else {
+                    handled = false;
+                }
+                if (handled) {
+                    event.filterAndAccept();
+                    ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+                    return;
+                }
+            }
         }
     }
 

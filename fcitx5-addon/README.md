@@ -159,3 +159,33 @@ bigram 格式（可选）：
 每次上屏都会调用 `wowtype_engine_record_selection`，历史计数参与排序；
 同时把最近 24 字节的已上屏文本通过 `wowtype_engine_set_context` 传给引擎，
 用于上下文 bigram 特征。用户词库在插件析构时落盘。
+
+## 已核对的 fcitx5 API（对照 master 头文件）
+
+| 用法 | 头文件 | 结论 |
+|---|---|---|
+| `InputMethodEngineV2` 的 `keyEvent/activate/deactivate/reset` | `fcitx/inputmethodengine.h` | ✅ 签名一致；V2 只额外加了 `subModeIconImpl/subModeLabelImpl` |
+| `CandidateWord::select(InputContext*) const` | `fcitx/candidatelist.h` | ✅ |
+| `CandidateList::size()/hasPrev()/prev()/hasNext()/next()/prevCandidate()/nextCandidate()` | 同上 | ✅ 均存在 |
+| **`CandidateList::keyEvent`** | 同上 | ❌ **不存在**，原来调用它的代码必然编译失败，已改为手动映射按键 |
+| `CandidateList::append<T>(args...)` | 同上 | ✅ 模板转发 |
+| `CommonCandidateList::setPageSize/setLayoutHint` | 同上 | ✅ |
+| `InputPanel::setPreedit/setCandidateList/reset` | `fcitx/inputpanel.h` | ✅ |
+| `InputContext::commitString/updatePreedit/updateUserInterface/inputPanel` | `fcitx/inputcontext.h` | ✅ |
+| `InputContextManager::registerProperty(name, factory*)` | `fcitx/inputcontextmanager.h` | ✅ 第二参数是 `InputContextPropertyFactory*` |
+| `FactoryFor<T>` | `fcitx/inputcontextproperty.h` | ✅ 就是 `LambdaInputContextPropertyFactory<T>` |
+| `AddonFactory::create(AddonManager*)` | `fcitx/addonfactory.h` | ✅ |
+| `FCITX_ADDON_FACTORY_V2(name, cls)` | `fcitx/addoninstance.h`（被 addonfactory.h 引入） | ✅ 宏存在 |
+
+### 翻页的正确写法
+
+fcitx5 不会替你处理候选翻页，引擎必须自己把按键映射过去：
+
+```cpp
+if (sym == FcitxKey_Up) list->prevCandidate();
+else if (sym == FcitxKey_Down) list->nextCandidate();
+else if (sym == FcitxKey_Page_Up && list->hasPrev()) list->prev();
+else if (sym == FcitxKey_Page_Down && list->hasNext()) list->next();
+```
+
+`-` / `=` 也映射到翻页（传统输入法习惯）。
