@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -78,7 +79,10 @@ pub struct MemoryLexicon {
     full_index: HashMap<Vec<SyllableKey>, Vec<usize>>,
     jianpin_index: HashMap<Vec<u8>, Vec<usize>>,
     /// 模糊音索引：键是各音节的规范形式 ID。
-    fuzzy_index: HashMap<Vec<SyllableId>, Vec<usize>>,
+    ///
+    /// 默认不构建——模糊音默认关闭，而 55 万词库下建这张表要占掉不少加载时间。
+    /// 第一次模糊查询时再建。
+    fuzzy_index: OnceLock<HashMap<Vec<SyllableId>, Vec<usize>>>,
     by_length: HashMap<usize, Vec<usize>>,
     total_freq: f64,
     /// 加载时被跳过的行数（未知音节等）。
@@ -115,13 +119,6 @@ impl MemoryLexicon {
             keys: keys.clone(),
             initials: initials.clone(),
         });
-        if let Some(fuzzy) = keys
-            .iter()
-            .map(|k| crate::syllable::fuzzy_id(k.id))
-            .collect::<Option<Vec<_>>>()
-        {
-            self.fuzzy_index.entry(fuzzy).or_default().push(idx);
-        }
         self.full_index.entry(keys.clone()).or_default().push(idx);
         self.jianpin_index
             .entry(initials.clone())
@@ -158,6 +155,21 @@ impl MemoryLexicon {
             }
         }
         Ok(lex)
+    }
+
+    fn build_fuzzy_index(&self) -> HashMap<Vec<SyllableId>, Vec<usize>> {
+        let mut map: HashMap<Vec<SyllableId>, Vec<usize>> = HashMap::new();
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if let Some(fuzzy) = entry
+                .keys
+                .iter()
+                .map(|k| crate::syllable::fuzzy_id(k.id))
+                .collect::<Option<Vec<_>>>()
+            {
+                map.entry(fuzzy).or_default().push(idx);
+            }
+        }
+        map
     }
 
     /// 加载时被跳过的行数。
@@ -248,7 +260,8 @@ impl Lexicon for MemoryLexicon {
                 SyllableQuery::Jianpin { .. } => return Vec::new(),
             }
         }
-        self.fuzzy_index
+        let index = self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
+        index
             .get(&key)
             .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
             .unwrap_or_default()
