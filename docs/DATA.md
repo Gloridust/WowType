@@ -279,3 +279,88 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 
 「遍历 trie 导出词库」这条路走不通：trie 只存音节序列和频次，词条在另一套值编码里。
 要拿词条还是得解 `LargeDictValueHuffmanCodec` + 音节 ID 映射，或者换个思路。
+## 14. 复现指南与失败记录（收尾）
+
+这一节给后来者：怎么从零复现这套分析，以及**哪些路走过、为什么没走通**。
+失败记录比成功记录更有价值——它能省掉重复踩坑。
+
+### 14.1 环境
+
+- WeType 2.2.0（build 637），universal Mach-O，155MB，未 strip（25 万符号）
+- macOS 14 / arm64
+- `lipo`、`codesign`、`python3`、`clang++`
+
+### 14.2 让官方引擎可被调用
+
+1. `lipo -thin arm64` 从主二进制切出 arm64
+2. 把 Mach-O 头里的 filetype 从 `MH_EXECUTE(2)` 改成 `MH_BUNDLE(8)`
+3. `codesign -s - -f` 做 ad-hoc 签名
+4. 造一个假的 `.app`：把产物放到 `Contents/MacOS/libwxime.dylib`，
+   并软链 `Contents/Resources`、`Contents/Frameworks` 到真实安装目录
+5. 设 `DYLD_FRAMEWORK_PATH` / `DYLD_LIBRARY_PATH` 指向真实 Frameworks
+6. `dlopen` 之后就能 dlsym 那 49 个 `wxime_*` 函数
+
+（具体命令见 `tools/oracle/README.md`，那里有可直接执行的版本。）
+
+常见错误对照：
+
+| 报错 | 原因 |
+|---|---|
+| `MH_DYLIB is missing LC_ID_DYLIB` | filetype 还是 MH_EXECUTE，改成 8 |
+| 找不到 framework | 没设 `DYLD_FRAMEWORK_PATH` |
+| `init_context_.logger_ != nullptr` 断言 | 配置结构体第 0 个字段给非空指针即可 |
+| `wxime_config_dict` 报 “wxime not init” | 必须先 `wxime_initialize` |
+| `create_session` 段错误 | 见 14.4 第 3 条 |
+
+### 14.3 工具索引（`tools/oracle/`）
+
+| 文件 | 作用 |
+|---|---|
+| `oracle3.c` | 最小可运行示例：初始化 + 建会话 + 输入 + 取候选 |
+| `oracle5_patch.c` | 运行时改内存（`mach_vm_protect` + `VM_PROT_COPY` + `sys_icache_invalidate`）绕开崩溃点 |
+| `probe_dict_kinds.cpp` | 枚举 45 个已加载词典的 kind 与类型名 |
+| `probe_cell_kind.cpp` / `probe_cell_types.c` | cell 词典槽位与 dict_type 的对应关系 |
+| `probe_cursor_walk.cpp` | 用 `Cursor::Move/Path/ToSyllable` 走 trie |
+| `probe_cursor_dfs.cpp` | 深度优先遍历 V3 词库，打印「音节序列 + 频次」 |
+
+`probe_cursor_dfs.cpp` 与 `oracle3.c` 都验证过能编译：
+
+```sh
+clang++ -std=c++17 -o /tmp/pcd tools/oracle/probe_cursor_dfs.cpp
+/tmp/pcd /tmp/WeTypeFake.app/Contents/MacOS/libwxime.dylib 45 40
+# 输出形如：\ta\t21578（音节序列 + 频次）
+```
+
+### 14.4 失败的尝试（按投入排序）
+
+**1. 遍历 trie 导出词条 ❌**
+
+V3 词库（kind 45）的 cursor 在叶子上 `Path()` 恒为空，只给 `ToSyllable()`（音节序列）和 `Freq()`。
+词条本身存在值区，由 `LargeDictValueHuffmanCodec` 编码。要导库得先解这套编码 + 音节 ID 映射。详见 §11–§13。
+
+**2. 语言模型导出 ❌**
+
+LM 的 key 是 `absl::StrCat(context, candidate)`（无分隔符）再反转后哈希，**键不可枚举**：
+知道某个上下文才能查，无法反向列出全部 n-gram。
+
+**3. 构造 AssociateWbDict（kind 8）❌**
+
+`create_session` 依赖它。试过两条路都没成：28 个 bundle 内 `.bin` 逐个加载并检查 `item.id == 0x10008`；
+以及 `wxime_add_cell_dict(path, 8, 0)`。怀疑 `DictManager::Impl::AddCellDict` 的槽位到 dict_type 映射没解对
+（cell 槽位 1→4、2→3、4→14、8→21；文件 dict_type：hf=4、sc=4、newhot=4、fi=21、ssrc=22）。
+已用补丁绕过崩溃点，但会话语义不完整。
+
+**4. kind 29 / kind 0 的 cursor ❌**
+
+kind 29 用同一套 cursor 接口没有子节点（API 不同）；kind 0 直接崩溃。
+
+### 14.5 结论
+
+逆向到此为止：**能调用官方引擎（可做 teacher），但导不出它的词库和语言模型**。
+可行路线是继续解 `LargeDictValueHuffmanCodec`。
+当前项目采用开源词库（rime-ice）+ 自建引擎，实测完整输入 top1 99.2%。
+
+### 14.6 法律边界
+
+WeType 的二进制与模型是腾讯专有资产，**不随本仓库分发**。
+`tools/oracle/` 里的工具只用于在你自己的机器上分析你自己的那份安装，理解格式与对照行为，不再分发。
