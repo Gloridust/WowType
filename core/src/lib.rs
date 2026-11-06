@@ -14,7 +14,8 @@ pub mod syllable;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 
@@ -67,12 +68,32 @@ impl Default for EngineConfig {
     }
 }
 
+/// 用户历史里的一条记录。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub count: u32,
+    /// 上次使用时间（epoch 毫秒）。
+    pub last_used_ms: u64,
+}
+
+/// 当前时间（epoch 毫秒）。
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// 拼音引擎。
 pub struct Engine {
     lexicon: Arc<dyn Lexicon>,
     lm: Arc<dyn LanguageModel>,
     ranker: Arc<dyn Ranker>,
     config: EngineConfig,
+    /// 用户选词历史：候选文本 -> (次数, 上次时间)。
+    history: RwLock<HashMap<String, HistoryEntry>>,
+    /// 光标前已上屏的文本，用于上下文 bigram 特征。
+    context: RwLock<String>,
 }
 
 impl Engine {
@@ -82,7 +103,49 @@ impl Engine {
             lm,
             ranker: Arc::new(LinearRanker::default()),
             config: EngineConfig::default(),
+            history: RwLock::new(HashMap::new()),
+            context: RwLock::new(String::new()),
         }
+    }
+
+    /// 设置光标前的文本（上一次上屏的内容）。
+    pub fn set_context(&self, text: &str) {
+        if let Ok(mut slot) = self.context.write() {
+            slot.clear();
+            slot.push_str(text);
+        }
+    }
+
+    pub fn context(&self) -> String {
+        self.context.read().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    /// 记录一次选词，用于历史特征。时间戳取当前时间。
+    pub fn record_selection(&self, word: &str) {
+        self.record_selection_at(word, now_ms());
+    }
+
+    /// 带时间戳的选词记录（方便测试）。
+    pub fn record_selection_at(&self, word: &str, at_ms: u64) {
+        if word.is_empty() {
+            return;
+        }
+        if let Ok(mut history) = self.history.write() {
+            let entry = history.entry(word.to_string()).or_insert(HistoryEntry {
+                count: 0,
+                last_used_ms: at_ms,
+            });
+            entry.count = entry.count.saturating_add(1);
+            entry.last_used_ms = at_ms;
+        }
+    }
+
+    pub fn history_count(&self, word: &str) -> u32 {
+        self.history
+            .read()
+            .ok()
+            .and_then(|h| h.get(word).map(|e| e.count))
+            .unwrap_or(0)
     }
 
     pub fn with_config(mut self, config: EngineConfig) -> Self {
@@ -124,11 +187,20 @@ impl Engine {
     }
 
     pub fn input(&self, raw: &str) -> Vec<Candidate> {
-        self.try_input(raw).unwrap_or_default()
+        self.input_at(raw, now_ms())
+    }
+
+    /// 带时间戳的输入：历史特征的时间衰减按 at_ms 计算，便于测试与回放。
+    pub fn input_at(&self, raw: &str, at_ms: u64) -> Vec<Candidate> {
+        self.try_input_at(raw, at_ms).unwrap_or_default()
     }
 
     /// 可返回错误的版本，供 CLI/FFI 使用。
     pub fn try_input(&self, raw: &str) -> Result<Vec<Candidate>> {
+        self.try_input_at(raw, now_ms())
+    }
+
+    pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let normalized = raw.trim().to_ascii_lowercase();
         let parsed = parse(&normalized)?;
         if parsed.is_empty() {
@@ -186,7 +258,7 @@ impl Engine {
 
         let candidates: Vec<Candidate> = paths
             .into_iter()
-            .map(|path| self.make_candidate(path, best_score))
+            .map(|path| self.make_candidate(path, best_score, at_ms))
             .collect();
 
         let mut deduped = dedupe_by_text(candidates);
@@ -195,8 +267,8 @@ impl Engine {
         Ok(deduped)
     }
 
-    fn make_candidate(&self, path: BeamPath, best_score: f64) -> Candidate {
-        let feature = self.make_feature(&path, best_score);
+    fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64) -> Candidate {
+        let feature = self.make_feature(&path, best_score, at_ms);
         let rank_score = self.ranker.score(&feature) as f64;
         let score = path.score + rank_score;
         Candidate {
@@ -217,7 +289,55 @@ impl Engine {
         }
     }
 
-    fn make_feature(&self, path: &BeamPath, best_score: f64) -> Feature {
+    fn make_feature(&self, path: &BeamPath, best_score: f64, at_ms: u64) -> Feature {
+        // 历史：整句命中与末词命中都算；时间差取 ln(1+秒) 做衰减。
+        let (history_count, history_use, history_time_diff) = self
+            .history
+            .read()
+            .ok()
+            .map(|history| {
+                let exact = history.get(&path.text).copied();
+                let tail = path
+                    .words
+                    .last()
+                    .and_then(|w| history.get(&w.text))
+                    .copied();
+                let merged = match (exact, tail) {
+                    (Some(a), Some(b)) if b.count > a.count => b,
+                    (Some(a), _) => a,
+                    (None, Some(b)) => b,
+                    (None, None) => HistoryEntry {
+                        count: 0,
+                        last_used_ms: at_ms,
+                    },
+                };
+                let seconds = at_ms.saturating_sub(merged.last_used_ms) as f64 / 1000.0;
+                (
+                    merged.count as f32,
+                    merged.count as f32,
+                    (1.0 + seconds).ln() as f32,
+                )
+            })
+            .unwrap_or((0.0, 0.0, 0.0));
+
+        // 上下文：取光标前文本的最后一个词，与候选首词算二元分。
+        let (with_context, context_bigram_score) = self
+            .context
+            .read()
+            .map(|context| {
+                let prev_word = context.split_whitespace().last().unwrap_or("");
+                if prev_word.is_empty() {
+                    return (0.0, 0.0);
+                }
+                let score = path
+                    .words
+                    .first()
+                    .map(|w| self.lm.score(Some(prev_word), &w.text) as f32)
+                    .unwrap_or(0.0);
+                (1.0, score)
+            })
+            .unwrap_or((0.0, 0.0));
+
         Feature {
             kind: if path.words.len() <= 1 { 0.0 } else { 1.0 },
             prob: (path.score - best_score).exp().clamp(0.0, 1.0) as f32,
@@ -225,7 +345,12 @@ impl Engine {
             lm_score_with_previous_txt: path.lm_score as f32,
             full_jianpin: if path.jianpin { 1.0 } else { 0.0 },
             ltr_valid: if self.ranker.has_ltr() { 1.0 } else { 0.0 },
-            // 其余特征（历史、用户词、上下文、NNLM、typo 等）暂时置 0。
+            history_count,
+            history_use_count: history_use,
+            history_time_diff,
+            with_context,
+            context_bigram_score,
+            // 用户词、NNLM、typo、补全等特征还没有数据源，保持 0。
             ..Feature::default()
         }
     }
@@ -269,6 +394,60 @@ mod tests {
             "zhong guo\t中国\t800\n",
             "hua r\t花儿\t100\n",
         ))
+    }
+
+    #[test]
+    fn history_boosts_selection() {
+        let e = engine("shi\t是\t900\nshi\t事\t800\n");
+        let first = e.input_at("shi", 1_000_000);
+        assert_eq!(first[0].text, "是", "默认按频次");
+
+        for i in 0..5 {
+            e.record_selection_at("事", 1_000_000 + i);
+        }
+        assert_eq!(e.history_count("事"), 5);
+
+        let after = e.input_at("shi", 1_000_100);
+        assert_eq!(
+            after[0].text,
+            "事",
+            "选过多次的词应当排到前面: {:?}",
+            after.iter().map(|c| c.text.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn context_bigram_boosts_first_word() {
+        let mut lm = BigramLm::new().with_backoff(0.001);
+        lm.add_unigram("今天", 10.0);
+        lm.add_unigram("天", 5.0);
+        lm.add_unigram("田", 5.0);
+        lm.add_bigram("今天", "天", 8.0);
+
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("tian\t田\t200\ntian\t天\t100\n").unwrap());
+        let e = Engine::new(lexicon, Arc::new(lm));
+
+        let before = e.input_at("tian", 1);
+        assert_eq!(before[0].text, "田", "没有上下文时按频次");
+
+        e.set_context("今天");
+        let after = e.input_at("tian", 1);
+        assert_eq!(
+            after[0].text,
+            "天",
+            "上下文应当把 天 提上来: {:?}",
+            after.iter().map(|c| c.text.as_str()).collect::<Vec<_>>()
+        );
+        let tian = after.iter().find(|c| c.text == "天").unwrap();
+        let tian_farm = after.iter().find(|c| c.text == "田").unwrap();
+        assert!(tian.features.with_context == 1.0);
+        assert!(
+            tian.features.context_bigram_score > tian_farm.features.context_bigram_score,
+            "{} vs {}",
+            tian.features.context_bigram_score,
+            tian_farm.features.context_bigram_score
+        );
     }
 
     #[test]

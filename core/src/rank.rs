@@ -130,7 +130,8 @@ impl Default for FeatureWeights {
             typo_count: -1.5,
             history_count: 0.15,
             complete_count: 0.2,
-            history_time_diff: 0.0,
+            // 历史时间差用 ln(1+秒)，越久远惩罚越大
+            history_time_diff: -0.4,
             context_bigram_score: 1.0,
             user_word_rollback_score: 0.8,
             lm_score_with_previous_txt: 1.0,

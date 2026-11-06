@@ -67,10 +67,32 @@ value = (h & 0x8000) 符号位 | mag
 
 所以每个条目的值 = **4 字节（两个 16 位概率）**。
 
+### 桶内布局（已解出）
+
+`HashMapReader<DefaultKeyHash, DefaultKeyCheckHash>::operator[]`：
+
+```
+idx   = CityHash32(key) % size_          // size_ = u32[1]
+off   = offsets[idx]                     // CSR
+n     = u32  at buf + off
+h[i]  = u32  at buf + off + 4 + 4*i      // CityHash64WithSeed(key, len, 0x1DBBA5) 低 32 位
+ck[i] = u16  at buf + off + 4 + 4*n + 2*i // 该条目值在值区里的偏移
+val   = deserialize(buf + off + 4 + 6*n + ck[i])
+```
+
+`[reader+0x30]` 为 0 时线性扫描、为 1 时二分（哈希数组有序）。
+
+### 重要结论：lmcnmac 无法枚举导出
+
+条目里**只存 32 位哈希，不存 key**，所以拿到文件也还原不出「哪些 bigram 存在」，
+只能按已知 key 查询。想导出只能拿一份词表逐对算哈希做 join（top 5k 词约 2500 万次
+CityHash，可行但重），更实际的是 Rust 侧用开源 bigram 或自建语料统计——
+`LanguageModel` trait 已经支持替换实现。
+
 ### 待办
 
-- `HashMapReader` 的桶内条目布局（key 是全存还是只存 1 字节 check）还没定稿
-- 需要确认第 2 个 int16 的含义（可能是 backoff 权重或条件概率）
+- key 的拼接格式（分隔符、是否按字符反转）需要从上游
+  `PathV2::CalculateContextNGramScore` 确认，否则 join 时算不出正确哈希
 
 ## 4. Cell 词典（`cell_dict.*.zh`）
 

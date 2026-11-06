@@ -194,6 +194,42 @@ pub unsafe extern "C" fn wowtype_engine_predict_next(
     }
 }
 
+/// 记录一次选词，用于历史特征。返回 0 表示成功。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_record_selection(
+    engine: *mut WowtypeEngineHandle,
+    word: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(word) = (unsafe { cstr_to_str(word) }) else {
+        set_last_error("word is null or not utf8");
+        return -1;
+    };
+    unsafe { &*engine }.engine.record_selection(word);
+    0
+}
+
+/// 设置光标前文本，用于上下文 bigram 特征。返回 0 表示成功。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_context(
+    engine: *mut WowtypeEngineHandle,
+    text: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(text) = (unsafe { cstr_to_str(text) }) else {
+        set_last_error("context is null or not utf8");
+        return -1;
+    };
+    unsafe { &*engine }.engine.set_context(text);
+    0
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {

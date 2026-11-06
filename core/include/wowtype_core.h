@@ -28,6 +28,12 @@ void wowtype_engine_free(WowtypeEngineHandle *engine);
 /* 设置 beam size；成功返回 0，失败返回 -1。 */
 int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_size);
 
+/* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
+int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
+
+/* 设置光标前文本，参与上下文 bigram 特征。返回 0 成功，-1 失败。 */
+int wowtype_engine_set_context(WowtypeEngineHandle *engine, const char *text);
+
 /* 输入拼音串；失败返回 NULL。 */
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 
