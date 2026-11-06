@@ -214,3 +214,30 @@ bool IsLeaf();
 `base + label*16` 是 `{ptr,len}`，但实测越界/乱码，说明那是个分页表而不是扁平数组，
 或者 label 空间不是从 0 连续。下一步要么解分页表，要么用 `Cursor::ToSyllable()`
 （返回 Cursor+0x44 的引用）配合正确的字符串布局。
+
+## 12. Cursor 遍历（本轮进展）
+
+已确认：
+
+```
+Cursor::Path()       -> Cursor+0x2c 的引用（未解出内容）
+Cursor::ToSyllable() -> Cursor+0x44 的引用（音节路径，逗号分隔，如 a,a）
+Cursor::Move(int)    -> bool，label 是**全局音节 id**，不是下标
+Cursor::Freq()       -> 低 32 位频次，bit32 有效
+```
+
+label 表在全局 `0x10367a768`（两层指针：`*(void**)slot` 才是 `string_view` 数组），
+元素 16 字节 `{char* ptr; size_t len}`，内容就是拼音音节表：
+`a, ai, an, ang, ao, ba, bai, ...`（按字典序）。
+
+DFS 实测输出：
+
+```
+\ta\t21578
+\ta,a\t10686
+\ta,a,a\t10652
+```
+
+即「音节路径 + 频次」已经能读，但 `+0x2c` 那个字符串一直是空的，
+所以**中文词条本体还没拿到**。`MoveImpl` 里确实会写 `+0x2c`（`stur x9,[x19,#0x2c]`），
+说明它由某种条件触发，下一步要找到触发条件。
