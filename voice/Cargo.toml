@@ -5,8 +5,13 @@ edition = "2021"
 description = "语音输入：热键状态机、音频帧、VAD、ASR 抽象、上屏"
 
 [dependencies]
+anyhow = "1"
+# 采集默认不开，避免在无音频开发环境里也要装 ALSA 头文件
+cpal = { version = "0.15", optional = true }
 
 [features]
 default = []
+# 打开后编译麦克风采集（Linux 需要 libasound2-dev）
+capture = ["dep:cpal"]
 # 打开后编译 X11 全局热键（需要系统装 libx11-dev）
 linux-x11 = []

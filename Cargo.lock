@@ -1028,13 +1028,16 @@ dependencies = [
 [[package]]
 name = "wowtype-voice"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cpal",
+]
 
 [[package]]
 name = "wowtype-voiced"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "cpal",
  "wowtype-voice",
  "x11rb",
 ]

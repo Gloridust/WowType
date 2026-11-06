@@ -81,3 +81,36 @@ Wayland 下"抢一个键"本质上不被允许（安全模型），所以要么�
 3. fcitx5 addon 里的语音状态机接线
 4. X11 全局热键守护进程（`wowtype-voiced`）
 5. Wayland 下用 keyd 配置做热键的文档
+
+## 6. 采集与识别（已落地）
+
+### 麦克风采集
+
+`voice/src/capture.rs`（feature `capture`，cpal）：
+
+```rust
+use wowtype_voice::capture;
+let cap = capture::start(None, move |pcm: Vec<i16>| { /* 16kHz 单声道 */ })?;
+```
+
+- 支持 f32 / i16 / u16 三种采样格式，内部统一降混 + 重采样到 16kHz
+- 跨平台：Linux 走 ALSA/PulseAudio，macOS 走 CoreAudio（所以能在 macOS 上编译验证）
+- `capture::list_devices()` 枚举设备
+
+### 识别后端
+
+`ProcessChannel`：把整段音频写成 WAV，交给命令行识别器，读 stdout。
+这样 Linux 上不用编译任何原生绑定：
+
+```bash
+# whisper.cpp
+wowtype-voiced --asr-cmd 'whisper-cli -m ggml-large-v3-turbo.bin -l zh -nt -f'
+# sherpa-onnx
+wowtype-voiced --asr-cmd 'sherpa-onnx-offline --tokens=tokens.txt --paraformer=model.onnx'
+```
+
+命令末尾会自动追加 WAV 路径；输出会过滤 `[BLANK_AUDIO]`、`(音乐)`、`<|nospeech|>` 这类标记。
+
+### WAV 工具
+
+`voice/src/wav.rs` 提供 16kHz 单声道 16bit 的读写，无第三方依赖。

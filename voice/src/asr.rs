@@ -93,9 +93,116 @@ impl AsrChannel for MockChannel {
     }
 }
 
+/// 外部命令式识别渠道：把整段音频写成 WAV，交给命令行识别器，读 stdout。
+///
+/// 这样在 Linux 上不用编译任何原生绑定就能接 whisper.cpp / sherpa-onnx：
+///
+/// ```text
+/// whisper-cli -m ggml-large-v3-turbo.bin -l zh -nt -f
+/// sherpa-onnx-offline --tokens=... --paraformer=... --wav=
+/// ```
+///
+/// 命令末尾会自动追加 WAV 路径。
+pub struct ProcessChannel {
+    name: String,
+    program: Vec<String>,
+    pcm: Vec<i16>,
+}
+
+impl ProcessChannel {
+    pub fn new(name: impl Into<String>, program: Vec<String>) -> Self {
+        Self {
+            name: name.into(),
+            program,
+            pcm: Vec::new(),
+        }
+    }
+
+    pub fn from_command_line(name: impl Into<String>, cmdline: &str) -> Self {
+        let program = cmdline.split_whitespace().map(String::from).collect();
+        Self::new(name, program)
+    }
+
+    pub fn sample_count(&self) -> usize {
+        self.pcm.len()
+    }
+}
+
+/// 去掉识别器常见的标记，如 [BLANK_AUDIO]、(音乐)、<|nospeech|>。
+fn clean_transcript(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut depth = 0i32;
+    for ch in text.chars() {
+        match ch {
+            '[' | '(' | '<' => depth += 1,
+            ']' | ')' | '>' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out.trim().to_string()
+}
+
+impl AsrChannel for ProcessChannel {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn feed(&mut self, pcm: &[i16]) {
+        self.pcm.extend_from_slice(pcm);
+    }
+
+    fn finish(&mut self) -> Option<String> {
+        if self.pcm.is_empty() || self.program.is_empty() {
+            return None;
+        }
+        let path = std::env::temp_dir().join(format!("wowtype-asr-{}.wav", std::process::id()));
+        if crate::wav::write_wav(&path, &self.pcm).is_err() {
+            return None;
+        }
+        let (program, args) = self.program.split_first()?;
+        let output = std::process::Command::new(program)
+            .args(args)
+            .arg(&path)
+            .output()
+            .ok();
+        let _ = std::fs::remove_file(&path);
+        self.pcm.clear();
+        let output = output?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = clean_transcript(&String::from_utf8_lossy(&output.stdout));
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_channel_runs_command() {
+        // sh -c 'echo 你好'：WAV 路径会作为 $0 被忽略
+        let mut ch =
+            ProcessChannel::new("echo", vec!["sh".into(), "-c".into(), "echo 你好".into()]);
+        ch.feed(&[1i16; 320]);
+        let text = ch.finish().expect("应当有结果");
+        assert_eq!(text, "你好");
+    }
+
+    #[test]
+    fn clean_strips_tags() {
+        assert_eq!(clean_transcript("[BLANK_AUDIO]你好(音乐)"), "你好");
+    }
 
     #[test]
     fn multi_channel_collects_results() {

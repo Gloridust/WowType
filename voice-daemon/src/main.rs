@@ -29,6 +29,8 @@ pub struct Options {
     pub mode: String,
     pub silence_ms: u64,
     pub device: Option<String>,
+    /// 外部识别命令，末尾会自动追加 WAV 路径；为空则用 Mock 渠道。
+    pub asr_cmd: Option<String>,
 }
 
 impl Default for Options {
@@ -38,6 +40,7 @@ impl Default for Options {
             mode: "tap".into(),
             silence_ms: 1500,
             device: None,
+            asr_cmd: None,
         }
     }
 }
@@ -53,10 +56,12 @@ fn parse_args() -> Options {
                 opt.silence_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(1500)
             }
             "--device" => opt.device = it.next(),
+            "--asr-cmd" => opt.asr_cmd = it.next(),
             "--help" | "-h" => {
                 println!(
-                    "wowtype-voiced --hotkey alt_r|ctrl_r --mode tap|hold --silence-ms 1500 [--device 名称]"
+                    "wowtype-voiced --hotkey alt_r|ctrl_r --mode tap|hold --silence-ms 1500 [--device 名称] [--asr-cmd '命令 参数']"
                 );
+                println!("  例：--asr-cmd 'whisper-cli -m ggml-large-v3-turbo.bin -l zh -nt -f'");
                 std::process::exit(0);
             }
             other => eprintln!("未知参数：{}", other),

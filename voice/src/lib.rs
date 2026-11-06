@@ -7,10 +7,13 @@
 
 pub mod asr;
 pub mod audio;
+#[cfg(feature = "capture")]
+pub mod capture;
 pub mod hotkey;
 pub mod sink;
 pub mod typer;
 pub mod vad;
+pub mod wav;
 
 pub use asr::{AsrChannel, MultiChannel, Transcript};
 pub use audio::{CaptureFormat, Framer, Resampler, FRAME_SAMPLES, TARGET_RATE};
@@ -18,6 +21,7 @@ pub use hotkey::{Action, Mode, TriggerConfig, VoiceTrigger};
 pub use sink::{CommandSink, StdoutSink, TextSink};
 pub use typer::Typer;
 pub use vad::Vad;
+pub use wav::{read_wav, write_wav};
 
 /// 一次语音会话的编排器：把热键动作、音频、识别、上屏串起来。
 pub struct VoiceSession {

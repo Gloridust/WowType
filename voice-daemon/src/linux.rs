@@ -5,12 +5,10 @@
 
 use crate::Options;
 use anyhow::{anyhow, Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use wowtype_voice::{
-    asr::{MockChannel, MultiChannel},
-    audio::{downmix, to_i16, Resampler, TARGET_RATE},
+    asr::{MockChannel, MultiChannel, ProcessChannel},
     CommandSink, TextSink, VoiceSession,
 };
 
@@ -80,7 +78,7 @@ fn log_actions(actions: &[wowtype_voice::Action]) {
 fn new_session(opt: &Options) -> VoiceSession {
     VoiceSession::new(
         crate::trigger_config(opt),
-        build_channel(),
+        build_channel(opt),
         build_sink(),
         false,
     )
@@ -97,9 +95,20 @@ fn finish_and_reset(session: &mut VoiceSession, opt: &Options) {
     *session = new_session(opt);
 }
 
-/// TODO: 接 sherpa-onnx / whisper.cpp；当前用 Mock 验证链路
-fn build_channel() -> MultiChannel {
-    MultiChannel::new(vec![Box::new(MockChannel::new("mock"))])
+/// 有 --asr-cmd 就走外部识别器，否则用 Mock 验证链路。
+fn build_channel(opt: &Options) -> MultiChannel {
+    match opt.asr_cmd.as_deref() {
+        Some(cmd) if !cmd.trim().is_empty() => {
+            println!("识别渠道：外部命令 {cmd}");
+            MultiChannel::new(vec![Box::new(ProcessChannel::from_command_line(
+                "cmd", cmd,
+            ))])
+        }
+        _ => {
+            println!("识别渠道：Mock（仅用于验证链路）");
+            MultiChannel::new(vec![Box::new(MockChannel::new("mock"))])
+        }
+    }
 }
 
 fn build_sink() -> Box<dyn TextSink> {
@@ -110,90 +119,17 @@ fn build_sink() -> Box<dyn TextSink> {
     }
 }
 
-fn pick_device(host: &cpal::Host, want: &Option<String>) -> Result<cpal::Device> {
-    if let Some(name) = want {
-        let mut devices = host
-            .input_devices()
-            .context("枚举录音设备失败")?
-            .collect::<Vec<_>>();
-        if let Some(pos) = devices
-            .iter()
-            .position(|d| d.name().map(|n| &n == name).unwrap_or(false))
-        {
-            return Ok(devices.remove(pos));
-        }
-        eprintln!("找不到设备 {:?}，改用默认设备", name);
-    }
-    host.default_input_device().context("没有可用的录音设备")
-}
-
-fn start_capture(device_name: Option<String>, tx: Sender<Vec<i16>>) -> Result<()> {
-    let host = cpal::default_host();
-    let device = pick_device(&host, &device_name)?;
-    let supported = device.default_input_config().context("读取录音配置失败")?;
-    let format = supported.sample_format();
-    let config: cpal::StreamConfig = supported.into();
-    let channels = config.channels;
-    let rate = config.sample_rate.0;
-
+fn start_capture(device: Option<String>, tx: Sender<Vec<i16>>) -> Result<()> {
+    let cap = wowtype_voice::capture::start(device.as_deref(), move |pcm| {
+        let _ = tx.send(pcm);
+    })
+    .context("启动麦克风失败")?;
     println!(
-        "麦克风：{:?}  {} Hz  {} 声道  {:?}",
-        device.name().unwrap_or_default(),
-        rate,
-        channels,
-        format
+        "麦克风：{}  {} Hz  {} 声道  {}",
+        cap.info.device, cap.info.sample_rate, cap.info.channels, cap.info.format
     );
-
-    let err_fn = |e| eprintln!("录音流错误：{}", e);
-    let tx_f32 = tx.clone();
-    let tx_i16 = tx.clone();
-    let tx_u16 = tx;
-
-    let stream = match format {
-        cpal::SampleFormat::F32 => device.build_input_stream(
-            &config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mut rs = Resampler::new(rate, TARGET_RATE);
-                let mono = downmix(data, channels);
-                let res = rs.process(&mono);
-                let _ = tx_f32.send(to_i16(&res));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::I16 => device.build_input_stream(
-            &config,
-            move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                let mut rs = Resampler::new(rate, TARGET_RATE);
-                let f: Vec<f32> = data.iter().map(|&v| v as f32 / 32768.0).collect();
-                let mono = downmix(&f, channels);
-                let res = rs.process(&mono);
-                let _ = tx_i16.send(to_i16(&res));
-            },
-            err_fn,
-            None,
-        )?,
-        cpal::SampleFormat::U16 => device.build_input_stream(
-            &config,
-            move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                let mut rs = Resampler::new(rate, TARGET_RATE);
-                let f: Vec<f32> = data
-                    .iter()
-                    .map(|&v| (v as f32 - 32768.0) / 32768.0)
-                    .collect();
-                let mono = downmix(&f, channels);
-                let res = rs.process(&mono);
-                let _ = tx_u16.send(to_i16(&res));
-            },
-            err_fn,
-            None,
-        )?,
-        other => return Err(anyhow!("不支持的采样格式：{:?}", other)),
-    };
-
-    stream.play().context("启动录音流失败")?;
-    // 进程常驻，故意泄漏以保持流存活
-    std::mem::forget(stream);
+    // 进程常驻，故意泄漏以保持录音流存活
+    std::mem::forget(cap);
     Ok(())
 }
 
