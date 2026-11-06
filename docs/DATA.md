@@ -89,10 +89,21 @@ val   = deserialize(buf + off + 4 + 6*n + ck[i])
 CityHash，可行但重），更实际的是 Rust 侧用开源 bigram 或自建语料统计——
 `LanguageModel` trait 已经支持替换实现。
 
-### 待办
+### key 的拼接格式（已确认）
 
-- key 的拼接格式（分隔符、是否按字符反转）需要从上游
-  `PathV2::CalculateContextNGramScore` 确认，否则 join 时算不出正确哈希
+`PathV2::CalculateContextNGramScore` 里：
+
+```
+key = absl::StrCat(上下文文本, 候选文本)   // 直接拼，无分隔符
+```
+
+然后 `LookUp` 把 key **整体反转**再哈希。所以：
+
+- 条目粒度和「上下文长度」强相关，key 是任意长度的文本串，不是简单的词语对
+- 加上只存哈希，**lmcnmac 无法用词表 join 反推**，导出这条路实际上走不通
+
+结论：Rust 侧不要指望复刻这份 LM，直接换开源/自建 bigram，
+`LanguageModel` trait 已经预留了替换点。
 
 ## 4. Cell 词典（`cell_dict.*.zh`）
 
