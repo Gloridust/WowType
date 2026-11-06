@@ -2,9 +2,12 @@
 
 把微信输入法（WeType）的输入体验搬到 Linux：拼音 + 语音，跑在 fcitx5 上。
 
-> 状态：**算法与框架就绪，数据管线在建。** 文字输入的引擎骨架可运行、有测试；
-> 语音的可测核心完成；Linux 平台层（X11 热键、麦克风采集）是脚手架，需要在
-> Linux 实机上收尾。
+> 状态：**文字输入可用，语音待实机验证。**
+> 文字引擎功能完整、有 78 项测试，用真实词库（rime-ice 55 万条）测到 top1 100%；
+> 语音的可测部分（VAD/WAV/识别器调用/上屏）有 35 项测试，但 X11 热键和采集
+> 没在 Linux 上实机跑过。
+>
+> **完整安装步骤见 [docs/INSTALL.md](docs/INSTALL.md)。**
 
 ## 目录
 
@@ -20,10 +23,14 @@
 
 ## 快速开始（Ubuntu）
 
+完整步骤（含词库准备、故障排查、语音依赖）见 **[docs/INSTALL.md](docs/INSTALL.md)**。
+最短路径：
+
 ```bash
 # 1. 系统依赖
-sudo apt install -y build-essential pkg-config libasound2-dev libx11-dev \
-  extra-cmake-modules libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev
+sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
+  libasound2-dev libx11-dev libxkbcommon-dev \
+  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev
 
 # 2. 测试核心算法
 cargo test -p wowtype-core -p wowtype-voice
