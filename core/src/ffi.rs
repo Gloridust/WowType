@@ -434,6 +434,28 @@ pub unsafe extern "C" fn wowtype_symbol_search(
     Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
 }
 
+/// 记录选词并可携带拼音：选够次数后自动加入用户词库。pinyin 可为 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_record_selection_ex(
+    engine: *mut WowtypeEngineHandle,
+    word: *const c_char,
+    pinyin: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(word) = (unsafe { cstr_to_str(word) }) else {
+        set_last_error("word is null or not utf8");
+        return -1;
+    };
+    let pinyin = unsafe { cstr_to_str(pinyin) }.filter(|p| !p.is_empty());
+    unsafe { &*engine }
+        .engine
+        .record_selection_with_pinyin(word, pinyin);
+    0
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {

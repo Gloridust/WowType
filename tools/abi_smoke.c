@@ -92,6 +92,14 @@ int main(int argc, char **argv) {
     check(wowtype_engine_remove_user_word(e, "我特") == 1, "remove_user_word");
     check(wowtype_engine_load_user_dict(e, "/tmp/wowtype_abi_user.tsv") >= 1, "load_user_dict");
 
+    /* 自动学习：同一个词选 3 次后应当能直接打出来 */
+    for (int i = 0; i < 3; i++) {
+        wowtype_engine_record_selection_ex(e, "阿特", "a te");
+    }
+    c = wowtype_engine_input(e, "ate");
+    check(c && has_candidate(c, "阿特"), "auto learn: ate -> 阿特");
+    wowtype_candidates_free(c);
+
     c = wowtype_symbol_search("juhao", 3);
     check(c && wowtype_candidates_len(c) > 0 &&
               strcmp(wowtype_candidates_text(c, 0), "。") == 0,

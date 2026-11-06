@@ -72,6 +72,10 @@ pub struct EngineConfig {
     pub english_candidate: bool,
     /// 是否把候选转成繁体。
     pub traditional: bool,
+    /// 选词达到阈值后自动加入用户词库。
+    pub auto_learn: bool,
+    /// 自动学习阈值（选多少次后进用户词库）。
+    pub auto_learn_threshold: u32,
 }
 
 impl Default for EngineConfig {
@@ -85,6 +89,8 @@ impl Default for EngineConfig {
             shuangpin: false,
             english_candidate: true,
             traditional: false,
+            auto_learn: true,
+            auto_learn_threshold: 3,
         }
     }
 }
@@ -152,6 +158,27 @@ impl Engine {
     /// 记录一次选词，用于历史特征。时间戳取当前时间。
     pub fn record_selection(&self, word: &str) {
         self.record_selection_at(word, now_ms());
+    }
+
+    /// 记录选词；当同一个词选够次数后自动加入用户词库。
+    ///
+    /// pinyin 是这次上屏时输入的拼音（用于生成用户词条）。词库里已有的词也会被
+    /// 加成用户词——这等价于「记住用户的偏好」，不会覆盖原词条。
+    pub fn record_selection_with_pinyin(&self, word: &str, pinyin: Option<&str>) {
+        self.record_selection(word);
+        if !self.config.auto_learn || word.is_empty() {
+            return;
+        }
+        let Some(pinyin) = pinyin.filter(|p| !p.trim().is_empty()) else {
+            return;
+        };
+        let count = self.history_count(word);
+        if count < self.config.auto_learn_threshold.max(1) {
+            return;
+        }
+        // 频次随选用次数增长但有上限，避免用户词压过通用高频词
+        let freq = (1000.0 * f64::from(count)).min(50_000.0);
+        let _ = self.lexicon.add(pinyin, word, freq);
     }
 
     /// 带时间戳的选词记录（方便测试）。
@@ -941,6 +968,44 @@ mod tests {
         assert_eq!(e.input("zhongguo")[0].text, "中國");
         // 分词文本也要跟着转
         assert_eq!(e.input("zhongguo")[0].words[0].text, "中國");
+    }
+
+    #[test]
+    fn auto_learn_promotes_word() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("ni hao\t你好\t10000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let e = Engine::new(lexicon, lm);
+
+        // 词库里没有「我特」，初始只能拿到原始串
+        assert!(!e.input("wote").iter().any(|c| c.text == "我特"));
+
+        // 选不够次数不学
+        e.record_selection_with_pinyin("我特", Some("wo te"));
+        e.record_selection_with_pinyin("我特", Some("wo te"));
+        assert!(!e.input("wote").iter().any(|c| c.text == "我特"));
+
+        // 第三次达到阈值
+        e.record_selection_with_pinyin("我特", Some("wo te"));
+        assert_eq!(e.user_words().len(), 1);
+        assert!(
+            e.input("wote").iter().any(|c| c.text == "我特"),
+            "自动学习后应当能打出 我特"
+        );
+    }
+
+    #[test]
+    fn auto_learn_can_be_disabled() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("ni hao\t你好\t10000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut config = EngineConfig::default();
+        config.auto_learn = false;
+        let e = Engine::new(lexicon, lm).with_config(config);
+        for _ in 0..5 {
+            e.record_selection_with_pinyin("我特", Some("wo te"));
+        }
+        assert!(e.user_words().is_empty());
     }
 
     #[test]

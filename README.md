@@ -77,6 +77,9 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 支持**模糊音**（默认关闭）：`--fuzzy` 或 `WOWTYPE_FUZZY=1` 开启后，
 `zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
 
+支持**自动学习**：同一个词选够 3 次（可配置）后自动收进用户词库，之后能直接打出来。
+词库已有的词也会被记录，相当于记住用户偏好。
+
 支持**符号面板**：输入 `/` 后跟拼音或中文名前缀（`/juhao` → 。，`/kuo` → （））。
 ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）。
 

@@ -49,6 +49,10 @@ WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
 /* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
 
+/* 记录选词并带上拼音：选够次数后自动加入用户词库。pinyin 可为 NULL。 */
+int wowtype_engine_record_selection_ex(WowtypeEngineHandle *engine,
+                                       const char *word, const char *pinyin);
+
 /* 设置光标前文本，参与上下文 bigram 特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_set_context(WowtypeEngineHandle *engine, const char *text);
 

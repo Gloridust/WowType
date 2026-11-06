@@ -150,7 +150,10 @@ void WowtypeEngine::commitText(fcitx::InputContext *ic, WowtypeState *state,
     }
     ic->commitString(text);
     if (core_) {
-        wowtype_engine_record_selection(core_, text.c_str());
+        // 带上当前拼音缓冲：选够次数后引擎会自动把这个词收进用户词库
+        wowtype_engine_record_selection_ex(
+            core_, text.c_str(),
+            state->buffer_.empty() ? nullptr : state->buffer_.c_str());
         // 上下文只保留尾部：bigram 特征只看紧邻的上文。
         recent_ += text;
         if (recent_.size() > 24) {
