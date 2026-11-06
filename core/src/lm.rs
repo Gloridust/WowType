@@ -15,6 +15,12 @@ pub trait LanguageModel: Send + Sync {
     /// 返回 ln P(cur | prev)。prev 为 None 表示句首。
     fn score(&self, prev: Option<&str>, cur: &str) -> f64;
 
+    /// 是否存在「显式」的二元组。上下文打分只认这个，
+    /// 避免回退到一元概率时用错分布（例如从二元计数反推的一元）。
+    fn has_bigram(&self, _prev: &str, _cur: &str) -> bool {
+        false
+    }
+
     /// 一句话的累计对数概率。
     fn sequence_score(&self, words: &[&str]) -> f64 {
         let mut total = 0.0;
@@ -147,13 +153,26 @@ impl BigramLm {
 }
 
 impl LanguageModel for BigramLm {
+    fn has_bigram(&self, prev: &str, cur: &str) -> bool {
+        self.bigram
+            .get(prev)
+            .map(|next| next.contains_key(cur))
+            .unwrap_or(false)
+    }
+
     fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
         // 未加载任何数据时保持中性，避免骨架的排序被常数惩罚主导。
         if self.total <= 0.0 {
             return 0.0;
         }
 
-        let unigram = self.unigram_logprob(cur);
+        // 词表里没有的词（例如字级模型评多字词）当作「无信息」，
+        // 否则会被按近零概率惩罚，反而把正确的长词压下去。
+        let unigram = if self.unigram.contains_key(cur) {
+            self.unigram_logprob(cur)
+        } else {
+            0.0
+        };
         // 句首用 <s> 查 bigram；没有 <s> 时自然回退到 unigram。
         let prev_word = prev.unwrap_or("<s>");
         let bigram_count = self.bigram.get(prev_word).and_then(|m| m.get(cur)).copied();
@@ -303,6 +322,11 @@ impl ArpaLm {
 }
 
 impl LanguageModel for ArpaLm {
+    fn has_bigram(&self, prev: &str, cur: &str) -> bool {
+        self.bigram
+            .contains_key(&(prev.to_string(), cur.to_string()))
+    }
+
     fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
         if let Some(prev) = prev {
             if let Some(log10) = self.bigram.get(&(prev.to_string(), cur.to_string())) {

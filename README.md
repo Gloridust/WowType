@@ -126,6 +126,26 @@ cargo run --release -p wowtype-core --bin wowtype-eval -- \
     --weights coverage_score=1.5,prob=0,history_count=0.3
 ```
 
+### 语言模型与上下文
+
+`--lm` 吃「prev<TAB>cur<TAB>count」的 bigram TSV，`--arpa` 吃标准 ARPA。
+上下文取光标前文本的**最后一个词或最后一个字**去查二元组（中文通常没有空格，
+只取「最后一个词」会把整段当成一个词，永远查不到）。
+
+实测上下文消歧：
+
+```bash
+wowtype-demo --lexicon lex.tsv --lm lm.tsv xian              # 1. 先
+wowtype-demo --lexicon lex.tsv --lm lm.tsv --context 我 xian  # 1. 西安
+```
+
+`tools/make_bigram.py` 能从词库反推字二元（`事->情` 这类词内搭配），但它**不能替代真实语料**：
+在没有语料的情况下实测，rank1 从 100% 掉到 99%，rank2 的 top10 从 100% 掉到 98.7%——
+用它换来的是上下文能力，用频率忠实度做代价。真实语料训练的 LM 才有正收益。
+
+另外，词表里没有的词（例如字级模型评多字词）一律当「无信息」处理，
+否则会被按近零概率惩罚，把正确的长词压下去。
+
 ### 默认权重的取舍
 
 排序总分是 `path.score + rank_score`。因此 `rank_score` 里**不能**再放已经计入

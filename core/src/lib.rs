@@ -668,21 +668,38 @@ impl Engine {
             })
             .unwrap_or((0.0, 0.0, 0.0));
 
-        // 上下文：取光标前文本的最后一个词，与候选首词算二元分。
+        // 上下文：用候选首词去查二元分。
+        //
+        // 取键要同时试「上一个词」和「上一个字」：词级 LM 用前者，
+        // 字级 LM（例如从语料统计的字二元）用后者。中文上下文通常没有空格，
+        // 只取 split_whitespace().last() 会把整段文本当成一个词，查不到任何 bigram。
         let (with_context, context_bigram_score) = self
             .context
             .read()
             .map(|context| {
-                let prev_word = context.split_whitespace().last().unwrap_or("");
-                if prev_word.is_empty() {
+                let context = context.trim();
+                let Some(candidate) = path.words.first() else {
+                    return (0.0, 0.0);
+                };
+                if context.is_empty() {
                     return (0.0, 0.0);
                 }
-                let score = path
-                    .words
-                    .first()
-                    .map(|w| self.lm.score(Some(prev_word), &w.text) as f32)
-                    .unwrap_or(0.0);
-                (1.0, score)
+                let mut best: Option<f32> = None;
+                let mut consider = |prev: &str| {
+                    if prev.is_empty() {
+                        return;
+                    }
+                    let score = self.lm.score(Some(prev), &candidate.text) as f32;
+                    best = Some(best.map_or(score, |b: f32| b.max(score)));
+                };
+                if let Some(word) = context.split_whitespace().last() {
+                    consider(word);
+                }
+                let mut buf = [0u8; 4];
+                if let Some(ch) = context.chars().last() {
+                    consider(ch.encode_utf8(&mut buf));
+                }
+                (1.0, best.unwrap_or(0.0))
             })
             .unwrap_or((0.0, 0.0));
 
@@ -1040,6 +1057,28 @@ mod tests {
         assert_eq!(e.input("xian")[0].text, "先");
         e.set_context("我");
         assert_eq!(e.input("xian")[0].text, "西安");
+    }
+
+    #[test]
+    fn context_uses_last_character() {
+        // 中文上下文通常没有空格，必须能退到「最后一个字」去查 bigram
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("shi\t是\t50000\nshi\t事\t30000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(
+            BigramLm::from_bigram_tsv_str(
+                "做\t事\t9990\n做\t是\t10\n是\t的\t100000\n事\t的\t100000\n",
+            )
+            .unwrap(),
+        );
+        let e = Engine::new(lexicon, lm);
+        assert_eq!(e.input("shi")[0].text, "是");
+
+        e.set_context("我今天做");
+        assert_eq!(
+            e.input("shi")[0].text,
+            "事",
+            "多字上下文应当用最后一个字查二元组"
+        );
     }
 
     #[test]
