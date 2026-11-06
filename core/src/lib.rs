@@ -21,7 +21,9 @@ use anyhow::Result;
 
 pub use crate::beam::{beam_search, BeamConfig, BeamPath, BeamWord};
 pub use crate::graph::{Edge, EdgeKind, GraphMode, GraphOptions, SyllableGraph};
-pub use crate::lexicon::{LexEntry, Lexicon, MemoryLexicon, SyllableKey, UserLexicon};
+pub use crate::lexicon::{
+    FuzzyLexicon, LexEntry, Lexicon, MemoryLexicon, SyllableKey, UserLexicon,
+};
 pub use crate::lm::{ArpaLm, BigramLm, LanguageModel};
 pub use crate::rank::{
     Feature, FeatureWeights, LinearRanker, LtrModel, Ranker, FEATURE_COUNT, FEATURE_NAMES,
@@ -56,6 +58,10 @@ pub struct EngineConfig {
     pub max_candidates: usize,
     /// 全拼走不通时是否尝试简拼（zg -> 中国）。
     pub jianpin_fallback: bool,
+    /// 是否启用模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。
+    pub fuzzy: bool,
+    /// 模糊候选的分数惩罚（自然对数），越大越靠后。
+    pub fuzzy_penalty: f64,
 }
 
 impl Default for EngineConfig {
@@ -64,6 +70,8 @@ impl Default for EngineConfig {
             beam: BeamConfig::default(),
             max_candidates: 10,
             jianpin_fallback: true,
+            fuzzy: false,
+            fuzzy_penalty: 2.5,
         }
     }
 }
@@ -167,6 +175,11 @@ impl Engine {
         self.config.beam.beam_size = beam_size.max(1);
     }
 
+    /// 开关模糊音。
+    pub fn set_fuzzy(&mut self, on: bool) {
+        self.config.fuzzy = on;
+    }
+
     pub fn set_max_candidates(&mut self, max_candidates: usize) {
         self.config.max_candidates = max_candidates.max(1);
     }
@@ -233,7 +246,45 @@ impl Engine {
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let normalized = raw.trim().to_ascii_lowercase();
-        let exact = self.try_input_exact(&normalized, at_ms)?;
+        let exact = self.run_query(&normalized, at_ms, false)?;
+        if !self.config.fuzzy {
+            return Ok(exact);
+        }
+        let fuzzy = self.run_query(&normalized, at_ms, true)?;
+        if fuzzy.is_empty() {
+            return Ok(exact);
+        }
+        // 精确结果优先；模糊候选统一扣一点分，避免抢在精确命中前面。
+        let mut merged: HashMap<String, Candidate> = HashMap::new();
+        for candidate in exact {
+            merged.insert(candidate.text.clone(), candidate);
+        }
+        for mut candidate in fuzzy {
+            candidate.score -= self.config.fuzzy_penalty;
+            match merged.entry(candidate.text.clone()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(candidate);
+                }
+                Entry::Occupied(mut slot) => {
+                    if candidate.score > slot.get().score {
+                        slot.insert(candidate);
+                    }
+                }
+            }
+        }
+        let mut result: Vec<Candidate> = merged.into_values().collect();
+        result.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
+        result.truncate(self.config.max_candidates.max(1));
+        Ok(result)
+    }
+
+    /// 跑一次查询：先精确，覆盖率不足时枚举尾部补全；fuzzy=true 时查不到会回退模糊音。
+    fn run_query(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
+        let exact = self.query_once(normalized, at_ms, fuzzy)?;
         // 精确路径质量够好（全覆盖）就直接返回；否则说明尾部是半成品音节
         // 或者走了未登录兜底，此时枚举补全再和精确结果合并排序。
         let covered = exact
@@ -243,7 +294,7 @@ impl Engine {
         if covered {
             return Ok(exact);
         }
-        let completions = partial_completions(&normalized);
+        let completions = partial_completions(normalized);
         if completions.is_empty() {
             return Ok(exact);
         }
@@ -252,7 +303,7 @@ impl Engine {
             merged.insert(candidate.text.clone(), candidate);
         }
         for candidate_input in completions.iter().take(32) {
-            if let Ok(list) = self.try_input_exact(candidate_input, at_ms) {
+            if let Ok(list) = self.query_once(candidate_input, at_ms, fuzzy) {
                 for candidate in list {
                     match merged.entry(candidate.text.clone()) {
                         Entry::Vacant(slot) => {
@@ -278,7 +329,7 @@ impl Engine {
         Ok(result)
     }
 
-    fn try_input_exact(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
+    fn query_once(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
         let parsed = parse(normalized)?;
         if parsed.is_empty() {
             return Ok(Vec::new());
@@ -310,12 +361,15 @@ impl Engine {
             return Ok(Vec::new());
         };
 
-        let mut paths = beam_search(
-            &graph,
-            self.lexicon.as_ref(),
-            self.lm.as_ref(),
-            &self.config.beam,
-        );
+        // fuzzy 时用包装视图：精确查不到再退到模糊音。
+        let fuzzy_view;
+        let lexicon: &dyn Lexicon = if fuzzy {
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            &fuzzy_view
+        } else {
+            self.lexicon.as_ref()
+        };
+        let mut paths = beam_search(&graph, lexicon, self.lm.as_ref(), &self.config.beam);
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -606,6 +660,36 @@ mod tests {
         let e = default_engine();
         let c = e.input("niha");
         assert_eq!(c[0].text, "你好", "niha 应当优先给出 你好");
+    }
+
+    #[test]
+    fn fuzzy_matches_zh_z() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("zhi dao\t知道\t5000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        assert!(
+            !e.input("zidao").iter().any(|c| c.text == "知道"),
+            "默认关闭模糊音时不应命中"
+        );
+        e.set_fuzzy(true);
+        assert!(
+            e.input("zidao").iter().any(|c| c.text == "知道"),
+            "开启后 zi dao 应当匹配 zhi dao"
+        );
+    }
+
+    #[test]
+    fn fuzzy_matches_nasal() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("shang dian\t商店\t5000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_fuzzy(true);
+        assert!(
+            e.input("sangdian").iter().any(|c| c.text == "商店"),
+            "sang dian 应当匹配 shang dian"
+        );
     }
 
     #[test]

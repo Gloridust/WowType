@@ -23,6 +23,7 @@ fn usage(program: &str) {
     println!("  --lm <file>       bigram TSV（prev<TAB>cur<TAB>count），可选");
     println!("  --arpa <file>     ARPA 语言模型（与 --lm 二选一）");
     println!("  --beam <n>        beam size，默认 20");
+    println!("  --fuzzy           开启模糊音（z/zh、an/ang 等）");
     println!("  --max <n>         最多显示候选数，默认 10");
     println!("  -h, --help        显示帮助");
     println!();
@@ -40,6 +41,7 @@ fn main() {
     let mut lm_path: Option<String> = None;
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
+    let mut fuzzy = false;
     let mut max_candidates = 10usize;
     let mut queries: Vec<String> = Vec::new();
 
@@ -75,6 +77,7 @@ fn main() {
                 i += 1;
                 beam = Some(parse_usize(args.get(i), "--beam"));
             }
+            "--fuzzy" => fuzzy = true,
             "--max" => {
                 i += 1;
                 max_candidates = parse_usize(args.get(i), "--max");
@@ -108,6 +111,7 @@ fn main() {
     if let Some(beam) = beam {
         engine.set_beam_size(beam);
     }
+    engine.set_fuzzy(fuzzy);
     engine.set_max_candidates(max_candidates);
 
     if queries.is_empty() {

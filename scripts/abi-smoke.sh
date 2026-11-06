@@ -6,8 +6,9 @@ cd "$(dirname "$0")/.."
 cargo build --release -p wowtype-core
 
 LEXICON=${1:-/tmp/wowtype_abi.tsv}
-if [[ ! -f "$LEXICON" ]]; then
-  printf '# abi smoke\nni hao\t你好\t100000\ntian\t天\t5000\ntian\t田\t2000\nzhong guo\t中国\t8000\n' > "$LEXICON"
+# 旧版本生成的词库可能缺条目，内容不对就重建
+if [[ ! -f "$LEXICON" ]] || ! grep -q 'zhi dao' "$LEXICON" 2>/dev/null; then
+  printf '# abi smoke\nni hao\t你好\t100000\ntian\t天\t5000\ntian\t田\t2000\nzhong guo\t中国\t8000\nzhi dao\t知道\t6000\n' > "$LEXICON"
 fi
 
 BIGRAM=${2:-/tmp/wowtype_abi_bigram.tsv}

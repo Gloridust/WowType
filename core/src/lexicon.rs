@@ -51,6 +51,11 @@ pub trait Lexicon: Send + Sync {
     /// 也能在运行时安全地增删用户词。命中数很小，克隆成本可接受。
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry>;
 
+    /// 模糊音查询（z/zh、an/ang 等）。默认不支持。
+    fn lookup_fuzzy(&self, _query: &[SyllableQuery]) -> Vec<LexEntry> {
+        Vec::new()
+    }
+
     fn total_freq(&self) -> f64;
 
     fn len(&self) -> usize;
@@ -72,6 +77,8 @@ pub struct MemoryLexicon {
     entries: Vec<LexEntry>,
     full_index: HashMap<Vec<SyllableKey>, Vec<usize>>,
     jianpin_index: HashMap<Vec<u8>, Vec<usize>>,
+    /// 模糊音索引：键是各音节的规范形式 ID。
+    fuzzy_index: HashMap<Vec<SyllableId>, Vec<usize>>,
     by_length: HashMap<usize, Vec<usize>>,
     total_freq: f64,
 }
@@ -106,6 +113,13 @@ impl MemoryLexicon {
             keys: keys.clone(),
             initials: initials.clone(),
         });
+        if let Some(fuzzy) = keys
+            .iter()
+            .map(|k| crate::syllable::fuzzy_id(k.id))
+            .collect::<Option<Vec<_>>>()
+        {
+            self.fuzzy_index.entry(fuzzy).or_default().push(idx);
+        }
         self.full_index.entry(keys.clone()).or_default().push(idx);
         self.jianpin_index
             .entry(initials.clone())
@@ -204,12 +218,70 @@ impl Lexicon for MemoryLexicon {
             .unwrap_or_default()
     }
 
+    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let mut key = Vec::with_capacity(query.len());
+        for q in query {
+            match q {
+                SyllableQuery::Full { id, erhua } => {
+                    if *erhua {
+                        return Vec::new();
+                    }
+                    match crate::syllable::fuzzy_id(*id) {
+                        Some(canon) => key.push(canon),
+                        None => return Vec::new(),
+                    }
+                }
+                SyllableQuery::Jianpin { .. } => return Vec::new(),
+            }
+        }
+        self.fuzzy_index
+            .get(&key)
+            .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
+            .unwrap_or_default()
+    }
+
     fn total_freq(&self) -> f64 {
         self.total_freq
     }
 
     fn len(&self) -> usize {
         self.entries.len()
+    }
+}
+
+/// 给束搜索用的视图：精确查不到时回退到模糊音。
+pub struct FuzzyLexicon<'a> {
+    inner: &'a dyn Lexicon,
+}
+
+impl<'a> FuzzyLexicon<'a> {
+    pub fn new(inner: &'a dyn Lexicon) -> Self {
+        Self { inner }
+    }
+}
+
+impl Lexicon for FuzzyLexicon<'_> {
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let exact = self.inner.lookup(query);
+        if !exact.is_empty() {
+            return exact;
+        }
+        self.inner.lookup_fuzzy(query)
+    }
+
+    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        self.inner.lookup_fuzzy(query)
+    }
+
+    fn total_freq(&self) -> f64 {
+        self.inner.total_freq()
+    }
+
+    fn len(&self) -> usize {
+        self.inner.len()
     }
 }
 
@@ -333,6 +405,14 @@ impl Lexicon for UserLexicon {
         let mut result = self.base.lookup(query);
         if let Ok(snapshot) = self.snapshot.read() {
             result.extend(snapshot.lookup(query));
+        }
+        result
+    }
+
+    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let mut result = self.base.lookup_fuzzy(query);
+        if let Ok(snapshot) = self.snapshot.read() {
+            result.extend(snapshot.lookup_fuzzy(query));
         }
         result
     }

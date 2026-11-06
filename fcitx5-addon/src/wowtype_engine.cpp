@@ -75,6 +75,10 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     const char *lmPath = std::getenv("WOWTYPE_LM");
     core_ = wowtype_engine_new(lexiconPath.c_str(), lmPath);
     if (core_) {
+        if (const char *fuzzy = std::getenv("WOWTYPE_FUZZY");
+            fuzzy && *fuzzy && *fuzzy != '0') {
+            wowtype_engine_set_fuzzy(core_, 1);
+        }
         const std::string userDict = userDictPath();
         if (!userDict.empty()) {
             const int loaded = wowtype_engine_load_user_dict(core_, userDict.c_str());

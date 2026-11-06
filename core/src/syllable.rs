@@ -77,6 +77,47 @@ fn bsearch(table: &'static [&'static str], text: &str) -> Option<usize> {
 }
 
 /// 是否为合法拼音音节（小写 ASCII，v 代表 ü）。
+
+/// 模糊音归一：把容易混淆的音节映射到同一个规范形式。
+///
+/// 目前覆盖最常见的三组：
+/// - 平翘舌：zh/ch/sh -> z/c/s
+/// - 前后鼻音：ang/eng/ing -> an/en/in（含 iang/uang）
+///
+/// 返回的规范形式本身也是合法音节（例如 zhang -> zan），所以可以直接用音节 ID 比较。
+pub fn fuzzy_canon(text: &str) -> String {
+    let (head, rest) = if let Some(r) = text.strip_prefix("zh") {
+        ("z", r)
+    } else if let Some(r) = text.strip_prefix("ch") {
+        ("c", r)
+    } else if let Some(r) = text.strip_prefix("sh") {
+        ("s", r)
+    } else {
+        ("", text)
+    };
+    let tail = if let Some(r) = rest.strip_suffix("iang") {
+        format!("{r}ian")
+    } else if let Some(r) = rest.strip_suffix("uang") {
+        format!("{r}uan")
+    } else if let Some(r) = rest.strip_suffix("ang") {
+        format!("{r}an")
+    } else if let Some(r) = rest.strip_suffix("eng") {
+        format!("{r}en")
+    } else if let Some(r) = rest.strip_suffix("ing") {
+        format!("{r}in")
+    } else {
+        rest.to_string()
+    };
+    format!("{head}{tail}")
+}
+
+/// 音节在模糊音下的规范 ID；找不到对应规范音节时返回自身。
+pub fn fuzzy_id(id: SyllableId) -> Option<SyllableId> {
+    let text = *SYLLABLES.get(id as usize)?;
+    let canon = fuzzy_canon(text);
+    Some(Syllable::from_text(&canon).map(|s| s.id).unwrap_or(id))
+}
+
 pub fn is_valid(text: &str) -> bool {
     bsearch(SYLLABLES, text).is_some()
 }

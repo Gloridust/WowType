@@ -325,6 +325,20 @@ pub unsafe extern "C" fn wowtype_engine_load_user_dict(
     }
 }
 
+/// 开关模糊音（z/zh、an/ang 等）。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
+    engine: *mut WowtypeEngineHandle,
+    on: c_int,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_fuzzy(on != 0);
+    0
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {
