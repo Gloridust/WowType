@@ -65,6 +65,8 @@ pub struct EngineConfig {
     pub fuzzy_penalty: f64,
     /// 是否使用双拼（自然码方案）。
     pub shuangpin: bool,
+    /// 是否在候选末尾追加原始输入（英文/未登录串）。
+    pub english_candidate: bool,
 }
 
 impl Default for EngineConfig {
@@ -76,6 +78,7 @@ impl Default for EngineConfig {
             fuzzy: false,
             fuzzy_penalty: 2.5,
             shuangpin: false,
+            english_candidate: true,
         }
     }
 }
@@ -254,14 +257,12 @@ impl Engine {
     }
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        let normalized = raw.trim().to_ascii_lowercase();
+        let display = raw.trim();
+        let normalized = display.to_ascii_lowercase();
 
-        // 双拼：先把键位展开成全拼变体（自然码有少量重叠），每种都跑一遍再合并。
-        if self.config.shuangpin {
+        let mut result = if self.config.shuangpin {
+            // 双拼：先把键位展开成全拼变体（自然码有少量重叠），每种都跑一遍再合并。
             let variants = crate::shuangpin::to_full_pinyin_variants(&normalized);
-            if variants.is_empty() {
-                return Ok(Vec::new());
-            }
             let mut merged: HashMap<String, Candidate> = HashMap::new();
             for variant in &variants {
                 for candidate in self.query_plain(variant, at_ms)? {
@@ -277,17 +278,84 @@ impl Engine {
                     }
                 }
             }
-            let mut result: Vec<Candidate> = merged.into_values().collect();
-            result.sort_by(|a, b| {
+            let mut list: Vec<Candidate> = merged.into_values().collect();
+            list.sort_by(|a, b| {
                 b.score
                     .total_cmp(&a.score)
                     .then_with(|| a.text.cmp(&b.text))
             });
-            result.truncate(self.config.max_candidates.max(1));
-            return Ok(result);
-        }
+            list.truncate(self.config.max_candidates.max(1));
+            list
+        } else {
+            self.query_plain(&normalized, at_ms)?
+        };
 
-        self.query_plain(&normalized, at_ms)
+        self.append_raw_candidate(display, &mut result);
+        Ok(result)
+    }
+
+    /// 英文/未登录输入：保证原始输入本身可以作为候选上屏。
+    ///
+    /// 条件：启用了英文候选、输入含字母、没有被完整词覆盖。分数压到最低一档。
+    fn append_raw_candidate(&self, display: &str, candidates: &mut Vec<Candidate>) {
+        if !self.config.english_candidate || display.is_empty() || display.len() > 32 {
+            return;
+        }
+        if !display.bytes().any(|b| b.is_ascii_alphabetic()) {
+            return;
+        }
+        if candidates
+            .iter()
+            .any(|c| c.text.eq_ignore_ascii_case(display))
+        {
+            return;
+        }
+        let covered = candidates
+            .first()
+            .map(|c| c.features.coverage_score >= 1.0 && !c.words.iter().any(|w| !w.known))
+            .unwrap_or(false);
+        if covered {
+            return;
+        }
+        // 已有候选全是未登录兜底时，原始串更可信，排到最前；
+        // 否则（有真实词但覆盖不全）压到最后一档。
+        let has_known_word = candidates
+            .first()
+            .map(|c| c.words.iter().any(|w| w.known))
+            .unwrap_or(false);
+        let score = if candidates.is_empty() {
+            -1.0
+        } else if has_known_word {
+            candidates
+                .iter()
+                .map(|c| c.score)
+                .fold(f64::INFINITY, f64::min)
+                - 1.0
+        } else {
+            candidates
+                .iter()
+                .map(|c| c.score)
+                .fold(f64::NEG_INFINITY, f64::max)
+                + 1.0
+        };
+        candidates.push(Candidate {
+            text: display.to_string(),
+            pinyin: display.to_ascii_lowercase(),
+            score,
+            features: Feature::default(),
+            words: vec![CandidateWord {
+                text: display.to_string(),
+                pinyin: String::new(),
+                freq: 0.0,
+                known: false,
+            }],
+        });
+        candidates.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
+        candidates.truncate(self.config.max_candidates.max(1));
     }
 
     /// 单条全拼输入的完整查询（精确 + 可选模糊音）。
@@ -757,6 +825,36 @@ mod tests {
         assert!(
             e.input("nihk").iter().any(|c| c.text == "你好"),
             "双拼 nihk 应当命中 你好"
+        );
+    }
+
+    #[test]
+    fn english_input_yields_raw_candidate() {
+        let e = default_engine();
+        let c = e.input("hello");
+        assert_eq!(c.first().map(|x| x.text.as_str()), Some("hello"));
+        assert!(c.iter().any(|x| x.text == "hello"));
+
+        // 原始大小写要保留
+        let c = e.input("Hello");
+        assert_eq!(c[0].text, "Hello");
+
+        // 只有未登录兜底时，原始串排最前
+        let c = e.input("ok");
+        assert_eq!(
+            c[0].text,
+            "ok",
+            "{:?}",
+            c.iter().map(|x| &x.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn full_pinyin_does_not_add_raw_candidate() {
+        let e = default_engine();
+        assert!(
+            !e.input("nihao").iter().any(|c| c.text == "nihao"),
+            "完整覆盖时不应插入原始拼音串"
         );
     }
 

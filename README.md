@@ -73,6 +73,9 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 支持**模糊音**（默认关闭）：`--fuzzy` 或 `WOWTYPE_FUZZY=1` 开启后，
 `zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
 
+英文/未登录串会把原始输入本身作为候选（保留大小写）：`hello` → `hello`，
+纯拼音输入被完整覆盖时不会插入原始串。
+
 支持**双拼**（自然码，默认关闭）：`--shuangpin` 或 `WOWTYPE_SHUANGPIN=1`。
 `vsgo` → 中国，`nihk` → 你好；自然码里少量重叠码（如 `jp`）会同时展开成多种全拼再合并候选。
 

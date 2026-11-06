@@ -47,6 +47,10 @@ int main(int argc, char **argv) {
     check(c && has_candidate(c, "你好"), "partial: nih -> 你好");
     wowtype_candidates_free(c);
 
+    c = wowtype_engine_input(e, "hello");
+    check(c && has_candidate(c, "hello"), "english: hello -> hello");
+    wowtype_candidates_free(c);
+
     check(wowtype_engine_record_selection(e, "你好") == 0, "record_selection");
     check(wowtype_engine_set_context(e, "今天") == 0, "set_context");
 
