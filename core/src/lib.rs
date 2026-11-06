@@ -14,6 +14,7 @@ pub mod rank;
 pub mod shuangpin;
 pub mod syllable;
 pub mod symbols;
+pub mod train;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;

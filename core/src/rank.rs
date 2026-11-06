@@ -377,3 +377,62 @@ mod weight_tests {
         assert!(w.apply_pairs("prob").is_err());
     }
 }
+
+impl FeatureWeights {
+    /// 按 FEATURE_NAMES 顺序导出成数组，便于做数值优化。
+    pub fn to_array(&self) -> [f32; FEATURE_COUNT] {
+        [
+            self.kind,
+            self.typo_count,
+            self.history_count,
+            self.complete_count,
+            self.history_time_diff,
+            self.context_bigram_score,
+            self.user_word_rollback_score,
+            self.lm_score_with_previous_txt,
+            self.head_word_nnlm,
+            self.hot_val_conf,
+            self.with_context,
+            self.user_tail_conf,
+            self.coverage_score,
+            self.ltr_valid,
+            self.history_use_count,
+            self.history_hot_val,
+            self.prob,
+            self.context_flag,
+            self.full_jianpin,
+            self.prefix_completion,
+            self.other_completion,
+            self.typo,
+            self.force_emit,
+        ]
+    }
+
+    pub fn from_array(w: [f32; FEATURE_COUNT]) -> Self {
+        Self {
+            kind: w[0],
+            typo_count: w[1],
+            history_count: w[2],
+            complete_count: w[3],
+            history_time_diff: w[4],
+            context_bigram_score: w[5],
+            user_word_rollback_score: w[6],
+            lm_score_with_previous_txt: w[7],
+            head_word_nnlm: w[8],
+            hot_val_conf: w[9],
+            with_context: w[10],
+            user_tail_conf: w[11],
+            coverage_score: w[12],
+            ltr_valid: w[13],
+            history_use_count: w[14],
+            history_hot_val: w[15],
+            prob: w[16],
+            context_flag: w[17],
+            full_jianpin: w[18],
+            prefix_completion: w[19],
+            other_completion: w[20],
+            typo: w[21],
+            force_emit: w[22],
+        }
+    }
+}

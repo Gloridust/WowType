@@ -126,6 +126,22 @@ cargo run --release -p wowtype-core --bin wowtype-eval -- \
     --weights coverage_score=1.5,prob=0,history_count=0.3
 ```
 
+### 训练权重
+
+有一批「输入 → 我实际想要的词」的标注后，可以直接拟合权重（softmax 交叉熵 + L2）：
+
+```bash
+cargo run --release -p wowtype-core --bin wowtype-train -- \
+    --lexicon rime.tsv --cases cases.tsv --epochs 300 --out weights.txt
+```
+
+输出可以直接喂给 `wowtype-eval --weights`。
+
+实测结论要说清楚：
+- **特征能区分的场景**（例如「先」vs「西安」，分词特征 `kind` 不同）训练有效，0% → 100%
+- **同音词之间**（特征几乎完全相同）训练无效，0% → 0%——这类需要上下文/LM 特征，
+  词库自带的信息不足以区分
+
 输出形如 `用例 200  top1 176 (88.0%)  top3 195 (97.5%)`，并列出没进前三的用例。
 配合 `--fuzzy` / `--shuangpin` / `--arpa` 可以对比不同配置。仓库里的
 `core/data/eval_sample.tsv` 只是演示用的 13 条。

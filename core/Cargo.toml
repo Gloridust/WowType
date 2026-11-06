@@ -26,5 +26,9 @@ path = "src/bin/eval.rs"
 name = "wowtype-check"
 path = "src/bin/check.rs"
 
+[[bin]]
+name = "wowtype-train"
+path = "src/bin/train.rs"
+
 [dependencies]
 anyhow = "1.0"
