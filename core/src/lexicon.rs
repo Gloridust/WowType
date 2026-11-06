@@ -719,19 +719,20 @@ mod tests {
         let entry = &lex.entries[0];
         assert!(lex.cost(entry) > 0.0);
     }
-}
-#[test]
-fn lenient_loading_skips_unknown_syllables() {
-    // 「cei」不在音节表里，整行跳过而不是让整个词库失败
-    let lex = MemoryLexicon::from_tsv_str("ni hao\t你好\t100\ncei\t呲\t5\n").unwrap();
-    assert_eq!(lex.len(), 1);
-    assert_eq!(lex.skipped(), 1);
-}
 
-#[test]
-fn structural_errors_still_fail() {
-    assert!(MemoryLexicon::from_tsv_str("只有两列\t词\n").is_err());
-    assert!(MemoryLexicon::from_tsv_str("ni hao\t你好\tabc\n").is_err());
+    #[test]
+    fn lenient_loading_skips_unknown_syllables() {
+        // 「cei」不在音节表里，整行跳过而不是让整个词库失败
+        let lex = MemoryLexicon::from_tsv_str("ni hao\t你好\t100\ncei\t呲\t5\n").unwrap();
+        assert_eq!(lex.len(), 1);
+        assert_eq!(lex.skipped(), 1);
+    }
+
+    #[test]
+    fn structural_errors_still_fail() {
+        assert!(MemoryLexicon::from_tsv_str("只有两列\t词\n").is_err());
+        assert!(MemoryLexicon::from_tsv_str("ni hao\t你好\tabc\n").is_err());
+    }
 
     fn temp_lexicon(tag: &str, body: &str) -> std::path::PathBuf {
         let path =
@@ -749,12 +750,7 @@ fn structural_errors_still_fail() {
 
     #[test]
     fn cache_roundtrip_matches_tsv() {
-        let path = temp_lexicon(
-            "rt",
-            "ni hao	你好	100
-zhong guo	中国	50
-",
-        );
+        let path = temp_lexicon("rt", "ni hao\t你好\t100\nzhong guo\t中国\t50\n");
         let first = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert!(cache_path(&path).exists(), "第一次加载应当写出快照");
         let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
@@ -766,20 +762,13 @@ zhong guo	中国	50
 
     #[test]
     fn stale_cache_is_ignored() {
-        let path = temp_lexicon(
-            "stale",
-            "ni hao	你好	100
-",
-        );
+        let path = temp_lexicon("stale", "ni hao\t你好\t100\n");
         let first = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert_eq!(first.len(), 1);
         // 源文件变了（内容更长），旧快照必须失效
         std::fs::write(
             &path,
-            "ni hao	你好	100
-zhong guo	中国	50
-shi jie	世界	30
-",
+            "ni hao\t你好\t100\nzhong guo\t中国\t50\nshi jie\t世界\t30\n",
         )
         .unwrap();
         let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
@@ -789,11 +778,7 @@ shi jie	世界	30
 
     #[test]
     fn corrupt_cache_falls_back_to_tsv() {
-        let path = temp_lexicon(
-            "corrupt",
-            "ni hao	你好	100
-",
-        );
+        let path = temp_lexicon("corrupt", "ni hao\t你好\t100\n");
         let _ = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         std::fs::write(cache_path(&path), b"not a cache").unwrap();
         let lex = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
