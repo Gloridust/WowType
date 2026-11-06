@@ -36,7 +36,7 @@ fn main() {
     let t0 = Instant::now();
     let (lexicon, label) = match &lexicon_path {
         Some(path) => {
-            let lex = MemoryLexicon::from_tsv_path(path).expect("载入词库失败");
+            let lex = MemoryLexicon::from_tsv_path_cached(path).expect("载入词库失败");
             (lex, path.clone())
         }
         None => {

@@ -56,6 +56,10 @@ cargo run -p wowtype-core --bin wowtype-check -- \
 ```
 
 预期：`[ok] 词库: 552087 条词 ... 跳过 27 行`，以及符号表/双拼/模糊音三项 ok。
+
+首次加载会在词库旁边生成 `lexicon.tsv.wcache`（约 18MB）。`/usr/share` 只读时
+快照会落到 `~/.cache/wowtype/`，第二次启动就从 1.4s 降到 0.35s。删除快照没有副作用，
+下次自动重建。
 词库缺失时退出码为 1。
 
 顺手试一下真实输入：

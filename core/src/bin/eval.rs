@@ -94,7 +94,7 @@ fn main() {
         fail("需要 --lexicon 与 --eval");
     }
 
-    let lexicon = match MemoryLexicon::from_tsv_path(&lexicon_path) {
+    let lexicon = match MemoryLexicon::from_tsv_path_cached(&lexicon_path) {
         Ok(v) => v,
         Err(e) => fail(&format!("{e:#}")),
     };

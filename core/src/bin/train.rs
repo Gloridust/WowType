@@ -54,7 +54,7 @@ fn main() {
         fail("需要 --lexicon 与 --cases");
     }
 
-    let lexicon = MemoryLexicon::from_tsv_path(&lexicon_path)
+    let lexicon = MemoryLexicon::from_tsv_path_cached(&lexicon_path)
         .unwrap_or_else(|e| fail(&format!("词库载入失败: {e:#}")));
     let lm: Arc<dyn LanguageModel> = if let Some(path) = &arpa {
         Arc::new(ArpaLm::from_arpa_path(path).unwrap_or_else(|e| fail(&format!("{e:#}"))))

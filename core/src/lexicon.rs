@@ -19,6 +19,49 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::syllable::{Syllable, SyllableId, SyllableQuery};
 
+/// 词库快照的魔数与格式版本。格式一变就改版本号，旧快照自动失效。
+const CACHE_MAGIC: &[u8; 4] = b"WLC1";
+const CACHE_VERSION: u32 = 1;
+
+fn cache_path(path: &Path) -> std::path::PathBuf {
+    let mut os = path.as_os_str().to_owned();
+    os.push(".wcache");
+    std::path::PathBuf::from(os)
+}
+
+/// 快照可能落的位置：先放词库旁边，写不进去（比如 /usr/share 只读）
+/// 再放 XDG 缓存目录。
+fn cache_paths(path: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = vec![cache_path(path)];
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
+        });
+    if let Some(base) = base {
+        // 用 FNV-1a 给路径算个短名字，避免不同词库撞在一起
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in path.to_string_lossy().as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x1000_0000_01b3);
+        }
+        out.push(base.join("wowtype").join(format!("{hash:016x}.wcache")));
+    }
+    out
+}
+
+/// 源文件的 (大小, 修改时间秒)。拿不到就不用缓存。
+fn source_stamp(path: &Path) -> Option<(u64, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some((meta.len(), mtime))
+}
+
 /// 词典条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LexEntry {
@@ -112,9 +155,15 @@ impl MemoryLexicon {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        self.add_entry(keys, initials, word.to_string(), freq);
+        Ok(())
+    }
+
+    /// 已经解析好音节的词条入口（缓存加载用，跳过拼音解析）。
+    fn add_entry(&mut self, keys: Vec<SyllableKey>, initials: Vec<u8>, word: String, freq: f64) {
         let idx = self.entries.len();
         self.entries.push(LexEntry {
-            word: word.to_string(),
+            word,
             freq,
             keys: keys.clone(),
             initials: initials.clone(),
@@ -126,7 +175,106 @@ impl MemoryLexicon {
             .push(idx);
         self.by_length.entry(keys.len()).or_default().push(idx);
         self.total_freq += freq;
+    }
+
+    /// 从 TSV 加载，并在旁边维护一份二进制快照。
+    ///
+    /// 55 万词库的 TSV 解析要 1.3 秒，快照能把这部分省掉。快照按
+    /// 「源文件大小 + mtime + 格式版本」校验，词库更新后自动重建。
+    pub fn from_tsv_path_cached<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let path = path.as_ref();
+        let Some((len, mtime)) = source_stamp(path) else {
+            return Self::from_tsv_path(path);
+        };
+        let candidates = cache_paths(path);
+        for cache in &candidates {
+            if let Ok(data) = fs::read(cache) {
+                if let Some(lex) = Self::read_cache(&data, len, mtime) {
+                    return Ok(lex);
+                }
+            }
+        }
+        let lex = Self::from_tsv_path(path)?;
+        // 写失败不算错误：只读目录会退到 XDG 缓存目录，那里也不行就算了
+        for cache in &candidates {
+            if lex.write_cache(cache, len, mtime).is_ok() {
+                break;
+            }
+        }
+        Ok(lex)
+    }
+
+    fn write_cache(&self, cache: &Path, src_len: u64, src_mtime: u64) -> Result<()> {
+        let mut buf: Vec<u8> = Vec::with_capacity(self.entries.len() * 24);
+        buf.extend_from_slice(CACHE_MAGIC);
+        buf.extend_from_slice(&CACHE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&src_len.to_le_bytes());
+        buf.extend_from_slice(&src_mtime.to_le_bytes());
+        buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        for entry in &self.entries {
+            let word = entry.word.as_bytes();
+            buf.extend_from_slice(&(word.len() as u16).to_le_bytes());
+            buf.extend_from_slice(word);
+            buf.extend_from_slice(&entry.freq.to_le_bytes());
+            buf.push(entry.keys.len() as u8);
+            for key in &entry.keys {
+                let raw = (key.id & 0x7fff) | (u16::from(key.erhua) << 15);
+                buf.extend_from_slice(&raw.to_le_bytes());
+            }
+            buf.push(entry.initials.len() as u8);
+            buf.extend_from_slice(&entry.initials);
+        }
+        if let Some(parent) = cache.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        let tmp = cache.with_extension("wcache.tmp");
+        fs::write(&tmp, &buf).with_context(|| format!("写词库快照失败: {}", tmp.display()))?;
+        fs::rename(&tmp, cache)
+            .with_context(|| format!("替换词库快照失败: {}", cache.display()))?;
         Ok(())
+    }
+
+    fn read_cache(data: &[u8], src_len: u64, src_mtime: u64) -> Option<MemoryLexicon> {
+        if data.len() < 24 || &data[0..4] != CACHE_MAGIC {
+            return None;
+        }
+        let version = u32::from_le_bytes(data[4..8].try_into().ok()?);
+        if version != CACHE_VERSION {
+            return None;
+        }
+        if u64::from_le_bytes(data[8..16].try_into().ok()?) != src_len
+            || u64::from_le_bytes(data[16..24].try_into().ok()?) != src_mtime
+        {
+            return None;
+        }
+        let count = u32::from_le_bytes(data[24..28].try_into().ok()?) as usize;
+        let mut cursor = 28usize;
+        let mut lex = MemoryLexicon::new();
+        for _ in 0..count {
+            let word_len =
+                u16::from_le_bytes(data.get(cursor..cursor + 2)?.try_into().ok()?) as usize;
+            cursor += 2;
+            let word = std::str::from_utf8(data.get(cursor..cursor + word_len)?)
+                .ok()?
+                .to_string();
+            cursor += word_len;
+            let freq = f64::from_le_bytes(data.get(cursor..cursor + 8)?.try_into().ok()?);
+            cursor += 8;
+            let n_keys = *data.get(cursor)? as usize;
+            cursor += 1;
+            let mut keys = Vec::with_capacity(n_keys);
+            for _ in 0..n_keys {
+                let raw = u16::from_le_bytes(data.get(cursor..cursor + 2)?.try_into().ok()?);
+                cursor += 2;
+                keys.push(SyllableKey::new(raw & 0x7fff, raw & 0x8000 != 0));
+            }
+            let n_initials = *data.get(cursor)? as usize;
+            cursor += 1;
+            let initials = data.get(cursor..cursor + n_initials)?.to_vec();
+            cursor += n_initials;
+            lex.add_entry(keys, initials, word, freq);
+        }
+        Some(lex)
     }
 
     /// 从 TSV 文本加载。
@@ -584,4 +732,72 @@ fn lenient_loading_skips_unknown_syllables() {
 fn structural_errors_still_fail() {
     assert!(MemoryLexicon::from_tsv_str("只有两列\t词\n").is_err());
     assert!(MemoryLexicon::from_tsv_str("ni hao\t你好\tabc\n").is_err());
+
+    fn temp_lexicon(tag: &str, body: &str) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("wowtype_lex_{}_{}.tsv", tag, std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(cache_path(&path));
+        std::fs::write(&path, body).expect("写临时词库失败");
+        path
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(cache_path(path));
+    }
+
+    #[test]
+    fn cache_roundtrip_matches_tsv() {
+        let path = temp_lexicon(
+            "rt",
+            "ni hao	你好	100
+zhong guo	中国	50
+",
+        );
+        let first = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        assert!(cache_path(&path).exists(), "第一次加载应当写出快照");
+        let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        assert_eq!(first.len(), second.len());
+        assert_eq!(first.entries, second.entries);
+        assert_eq!(first.total_freq, second.total_freq);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn stale_cache_is_ignored() {
+        let path = temp_lexicon(
+            "stale",
+            "ni hao	你好	100
+",
+        );
+        let first = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        assert_eq!(first.len(), 1);
+        // 源文件变了（内容更长），旧快照必须失效
+        std::fs::write(
+            &path,
+            "ni hao	你好	100
+zhong guo	中国	50
+shi jie	世界	30
+",
+        )
+        .unwrap();
+        let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        assert_eq!(second.len(), 3, "源文件更新后应当重新解析");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn corrupt_cache_falls_back_to_tsv() {
+        let path = temp_lexicon(
+            "corrupt",
+            "ni hao	你好	100
+",
+        );
+        let _ = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        std::fs::write(cache_path(&path), b"not a cache").unwrap();
+        let lex = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
+        assert_eq!(lex.len(), 1, "快照损坏时应回退到 TSV");
+        cleanup(&path);
+    }
 }

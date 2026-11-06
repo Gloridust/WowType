@@ -64,7 +64,7 @@ pub unsafe extern "C" fn wowtype_engine_new(
     };
 
     let result = (|| -> anyhow::Result<Engine> {
-        let lexicon = MemoryLexicon::from_tsv_path(lexicon_path)?;
+        let lexicon = MemoryLexicon::from_tsv_path_cached(lexicon_path)?;
         let lexicon: Arc<dyn Lexicon> = Arc::new(lexicon);
         let lm: Arc<dyn LanguageModel> = match unsafe { cstr_to_str(bigram_tsv_path) } {
             Some(path) if !path.is_empty() => Arc::new(BigramLm::from_bigram_tsv_path(path)?),

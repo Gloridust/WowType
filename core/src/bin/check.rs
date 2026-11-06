@@ -90,7 +90,7 @@ fn main() {
         report.fail("词库", "文件不存在；先跑 tools/rime2tsv.py 生成");
         Arc::new(MemoryLexicon::new())
     } else {
-        match MemoryLexicon::from_tsv_path(&lexicon) {
+        match MemoryLexicon::from_tsv_path_cached(&lexicon) {
             Ok(v) => {
                 lexicon_len = v.len();
                 if v.len() == 0 {

@@ -112,7 +112,7 @@ fn main() {
         i += 1;
     }
 
-    let lexicon = match MemoryLexicon::from_tsv_path(&lexicon_path) {
+    let lexicon = match MemoryLexicon::from_tsv_path_cached(&lexicon_path) {
         Ok(lexicon) => lexicon,
         Err(error) => fail(&format!("{error:#}")),
     };

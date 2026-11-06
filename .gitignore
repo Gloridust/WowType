@@ -27,3 +27,7 @@ analysis/wxime_only.txt
 # python
 __pycache__/
 *.pyc
+
+# 词库快照
+*.wcache
+*.wcache.tmp
