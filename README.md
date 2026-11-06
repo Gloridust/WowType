@@ -193,6 +193,23 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 配合 `--fuzzy` / `--shuangpin` / `--arpa` 可以对比不同配置。仓库里的
 `core/data/eval_sample.tsv` 只是演示用的 13 条。
 
+## 半成品输入
+
+即使输入能完整解析（`zhonggu` 就是 zhong+gu），引擎也会把延伸候选（中国）一并给出——
+否则用户打到一半时几乎选不对词。延伸候选按「多打的字母数」扣分（每字母 1.5 nats），
+避免抢掉完整输入的正确结果。
+
+实测（rime-ice 55 万词库）：
+
+| 场景 | top1 | top3 |
+|---|---|---|
+| 完整输入 | 99.2% | 100% |
+| 截断 1 个字母（`zhonggu`） | 85.0% | 94.3% |
+| 截断 2 个字母（`zhongg`） | 51.0% | 67.7% |
+
+惩罚系数的取舍（完整 / 截断 1 字母）：0.5 → 97.2/85.7，1.0 → 98.5/86.3，
+1.5 → 99.2/85.0，2.0 → 99.8/84.0。默认取 1.5。
+
 ## 性能
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：

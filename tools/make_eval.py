@@ -22,6 +22,12 @@ def main():
     ap.add_argument("--max-word", type=int, default=4, help="词的字数上限")
     ap.add_argument("--top", type=int, default=5000, help="只从频次前 N 的词里取")
     ap.add_argument(
+        "--truncate",
+        type=int,
+        default=0,
+        help="截掉末尾 N 个字母，模拟半成品输入（测补全能力）",
+    )
+    ap.add_argument(
         "--rank",
         type=int,
         default=1,
@@ -51,6 +57,10 @@ def main():
 
     for freq, pinyin, word in rows:
         joined = pinyin.replace(" ", "")
+        if args.truncate > 0:
+            if len(joined) <= args.truncate + 1:
+                continue
+            joined = joined[: -args.truncate]
         if not (args.min_len <= len(joined) <= args.max_len):
             continue
         if len(word) > args.max_word:

@@ -498,15 +498,13 @@ impl Engine {
     /// 跑一次查询：先精确，覆盖率不足时枚举尾部补全；fuzzy=true 时查不到会回退模糊音。
     fn run_query(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
         let exact = self.query_once(normalized, at_ms, fuzzy, None)?;
-        // 精确路径质量够好（全覆盖）就直接返回；否则说明尾部是半成品音节
-        // 或者走了未登录兜底，此时枚举补全再和精确结果合并排序。
+        // 即使输入已经能完整解析，也要补全最后一个音节：
+        // 「zhonggu」本身是 zhong+gu 的合法解析，但用户往往还在打「zhongguo」。
+        // 真实输入法都会把延伸候选一起给出来，否则半成品输入几乎选不对。
         let covered = exact
             .first()
             .map(|c| c.features.coverage_score >= 1.0 && !c.words.iter().any(|w| !w.known))
             .unwrap_or(false);
-        if covered {
-            return Ok(exact);
-        }
         let completions = partial_completions(normalized);
         if completions.is_empty() {
             return Ok(exact);
@@ -515,10 +513,19 @@ impl Engine {
         for candidate in exact {
             merged.insert(candidate.text.clone(), candidate);
         }
-        for candidate_input in completions.iter().take(32) {
+        // 已完整覆盖时只补少量延伸候选，保证交互延迟；
+        // 覆盖不足说明尾部确实没打完，多补一些。
+        let completion_budget = if covered { 12 } else { 32 };
+        for candidate_input in completions.iter().take(completion_budget) {
             if let Ok(list) = self.query_once(candidate_input, at_ms, fuzzy, Some(COMPLETION_BEAM))
             {
-                for candidate in list {
+                // 延伸候选是按「更长的输入」打的分，但用户其实没打那些字母，
+                // 必须扣回来，否则会抢掉完整输入的正确结果。
+                let extra = candidate_input.len().saturating_sub(normalized.len()) as f64;
+                for mut candidate in list {
+                    candidate.score -= PREFIX_COMPLETION_PENALTY * extra;
+                    candidate.features.prefix_completion =
+                        (candidate.features.prefix_completion + extra as f32).min(3.0);
                     match merged.entry(candidate.text.clone()) {
                         Entry::Vacant(slot) => {
                             slot.insert(candidate);
@@ -736,6 +743,9 @@ impl Engine {
 /// 补全路径用的束宽。补全要跑几十次完整搜索，用小束宽换延迟；
 /// 实测束宽 5 与 20 在真实词库上的召回一致。
 const COMPLETION_BEAM: usize = 6;
+
+/// 每多打一个字母的补全惩罚（自然对数）。
+const PREFIX_COMPLETION_PENALTY: f64 = 1.5;
 
 /// 把「尾部还没成音节」的输入展开成若干条完整输入。
 ///
