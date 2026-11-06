@@ -126,6 +126,26 @@ cargo run --release -p wowtype-core --bin wowtype-eval -- \
     --weights coverage_score=1.5,prob=0,history_count=0.3
 ```
 
+### 默认权重的取舍
+
+排序总分是 `path.score + rank_score`。因此 `rank_score` 里**不能**再放已经计入
+`path.score` 的特征，否则就是重复计权：
+
+| 特征 | 权重 | 原因 |
+|---|---|---|
+| `prob` | 0 | 是 `path.score` 的单调变换 |
+| `lm_score_with_previous_txt` | 0 | 已计入 `path.score` |
+| `context_bigram_score` | 2.0 | 上下文带来的新信息 |
+
+这样上下文才有机会真正影响结果。例子（词库里「先」远高于「西安」）：
+
+```bash
+wowtype-demo --lexicon lex.tsv --lm lm.tsv xian            # 1. 先
+wowtype-demo --lexicon lex.tsv --lm lm.tsv --context 我 xian  # 1. 西安
+```
+
+改完后在真实词库上回归验证：rank1 top1 100%、rank2/3 的 top10 100%、长输入 top1 100%，均无下降。
+
 ### 训练权重
 
 有一批「输入 → 我实际想要的词」的标注后，可以直接拟合权重（softmax 交叉熵 + L2）：

@@ -1010,6 +1010,39 @@ mod tests {
     }
 
     #[test]
+    fn context_disambiguates_homophones() {
+        // 同一拼音，两个候选：先（高频）、西安（低频）
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("xian\t先\t50000\nxi an\t西安\t1000\n").unwrap());
+        // TSV 加载器会把二元组计数也记进一元，所以这里额外给「先」补一条
+        // 高频搭配，让它在**没有上下文**时仍然靠词频胜出。
+        let lm: Arc<dyn LanguageModel> = Arc::new(
+            BigramLm::from_bigram_tsv_str("我\t西安\t9990\n我\t先\t10\n先\t的\t100000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, lm);
+
+        // 没有上下文时，词频决定：先
+        assert_eq!(e.input("xian")[0].text, "先");
+
+        // 有上下文「我」之后，语言模型应当把 西安 顶上来
+        e.set_context("我");
+        assert_eq!(e.input("xian")[0].text, "西安", "上下文应当消除同音词歧义");
+    }
+
+    #[test]
+    fn arpa_context_disambiguates() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("xian\t先\t50000\nxi an\t西安\t1000\n").unwrap());
+        let arpa = "\\data\\\nngram 1=3\nngram 2=2\n\n\\1-grams:\n-1.0\t我\n-1.0\t先\n-1.0\t西安\n\n\\2-grams:\n-0.01\t我 西安\n-4.0\t我 先\n\n\\end\\\n";
+        let lm: Arc<dyn LanguageModel> =
+            Arc::new(ArpaLm::from_arpa_str(arpa).expect("ARPA 解析失败"));
+        let e = Engine::new(lexicon, lm);
+        assert_eq!(e.input("xian")[0].text, "先");
+        e.set_context("我");
+        assert_eq!(e.input("xian")[0].text, "西安");
+    }
+
+    #[test]
     fn input_xian() {
         let e = default_engine();
         let cands = e.input("xian");

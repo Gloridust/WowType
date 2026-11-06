@@ -27,6 +27,7 @@ fn usage(program: &str) {
     println!("  --shuangpin       使用双拼（自然码）");
     println!("  --traditional     候选输出繁体");
     println!("  --s2t <file>      简繁映射表（简体<TAB>繁体）");
+    println!("  --context <text>  光标前已有文本（上下文排序）");
     println!("  --max <n>         最多显示候选数，默认 10");
     println!("  -h, --help        显示帮助");
     println!();
@@ -48,6 +49,7 @@ fn main() {
     let mut shuangpin = false;
     let mut traditional = false;
     let mut s2t_path: Option<String> = None;
+    let mut context_text: Option<String> = None;
     let mut max_candidates = 10usize;
     let mut queries: Vec<String> = Vec::new();
 
@@ -86,6 +88,13 @@ fn main() {
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
             "--traditional" => traditional = true,
+            "--context" => {
+                i += 1;
+                match args.get(i) {
+                    Some(value) => context_text = Some(value.clone()),
+                    None => fail("--context 需要文本"),
+                }
+            }
             "--s2t" => {
                 i += 1;
                 match args.get(i) {
@@ -129,6 +138,9 @@ fn main() {
     engine.set_fuzzy(fuzzy);
     engine.set_shuangpin(shuangpin);
     engine.set_traditional(traditional);
+    if let Some(text) = &context_text {
+        engine.set_context(text);
+    }
     if let Some(path) = &s2t_path {
         match engine.load_conversion(path) {
             Ok(n) => eprintln!("简繁表：{n} 条"),

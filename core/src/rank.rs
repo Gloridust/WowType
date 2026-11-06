@@ -132,9 +132,11 @@ impl Default for FeatureWeights {
             complete_count: 0.2,
             // 历史时间差用 ln(1+秒)，越久远惩罚越大
             history_time_diff: -0.4,
-            context_bigram_score: 1.0,
+            // 上下文二元分是 path.score 之外的新信息，权重给足
+            context_bigram_score: 2.0,
             user_word_rollback_score: 0.8,
-            lm_score_with_previous_txt: 1.0,
+            // 这一项已经计入 path.score，再叠加就是重复计权
+            lm_score_with_previous_txt: 0.0,
             head_word_nnlm: 0.5,
             hot_val_conf: 0.3,
             with_context: 0.1,
@@ -143,7 +145,8 @@ impl Default for FeatureWeights {
             ltr_valid: 0.0,
             history_use_count: 0.1,
             history_hot_val: 0.2,
-            prob: 3.0,
+            // prob 是 path.score 的单调变换，再乘权重只会放大基础分
+            prob: 0.0,
             context_flag: 0.0,
             full_jianpin: -0.3,
             prefix_completion: -0.2,
