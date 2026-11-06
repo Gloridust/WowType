@@ -201,6 +201,8 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 |---|---|
 | 载入 10 万条词库 | ~140 ms（一次性） |
 | 载入 rime-ice 全量 55 万条 | ~2 s（一次性，进程启动时） |
+| 完整输入（55 万词库） | 0.5~1.0 ms |
+| 半成品输入（触发补全，55 万词库） | ~6 ms |
 | `a` | 0.003 ms |
 | `zhong` | 0.14 ms |
 | `zhongguo` | 0.03 ms |
