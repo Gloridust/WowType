@@ -230,6 +230,101 @@ pub unsafe extern "C" fn wowtype_engine_set_context(
     0
 }
 
+/// 添加用户词。返回 0 成功，-1 失败（拼音非法等）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_add_user_word(
+    engine: *mut WowtypeEngineHandle,
+    pinyin: *const c_char,
+    word: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let (Some(pinyin), Some(word)) = (unsafe { cstr_to_str(pinyin) }, unsafe { cstr_to_str(word) })
+    else {
+        set_last_error("pinyin or word is null/not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }
+        .engine
+        .add_user_word(pinyin, word, 5000.0)
+    {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
+/// 删除用户词。返回 1 删掉了，0 没找到，-1 出错。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_remove_user_word(
+    engine: *mut WowtypeEngineHandle,
+    word: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(word) = (unsafe { cstr_to_str(word) }) else {
+        set_last_error("word is null or not utf8");
+        return -1;
+    };
+    if unsafe { &*engine }.engine.remove_user_word(word) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 保存用户词到 TSV。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_save_user_dict(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.save_user_dict(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
+/// 从 TSV 载入用户词，返回载入条数，-1 表示出错。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_user_dict(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_user_dict(path) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {

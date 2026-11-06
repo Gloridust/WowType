@@ -21,7 +21,7 @@ use anyhow::Result;
 
 pub use crate::beam::{beam_search, BeamConfig, BeamPath, BeamWord};
 pub use crate::graph::{Edge, EdgeKind, GraphMode, GraphOptions, SyllableGraph};
-pub use crate::lexicon::{LexEntry, Lexicon, MemoryLexicon, SyllableKey};
+pub use crate::lexicon::{LexEntry, Lexicon, MemoryLexicon, SyllableKey, UserLexicon};
 pub use crate::lm::{BigramLm, LanguageModel};
 pub use crate::rank::{
     Feature, FeatureWeights, LinearRanker, LtrModel, Ranker, FEATURE_COUNT, FEATURE_NAMES,
@@ -86,7 +86,10 @@ pub fn now_ms() -> u64 {
 
 /// 拼音引擎。
 pub struct Engine {
-    lexicon: Arc<dyn Lexicon>,
+    /// 原始词库（只读）。
+    base_lexicon: Arc<dyn Lexicon>,
+    /// 基础词库 + 用户词的合并视图，束搜索实际用它。
+    lexicon: Arc<UserLexicon>,
     lm: Arc<dyn LanguageModel>,
     ranker: Arc<dyn Ranker>,
     config: EngineConfig,
@@ -98,8 +101,10 @@ pub struct Engine {
 
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
+        let merged = Arc::new(UserLexicon::new(lexicon.clone()));
         Self {
-            lexicon,
+            base_lexicon: lexicon,
+            lexicon: merged,
             lm,
             ranker: Arc::new(LinearRanker::default()),
             config: EngineConfig::default(),
@@ -166,8 +171,34 @@ impl Engine {
         self.config.max_candidates = max_candidates.max(1);
     }
 
-    pub fn lexicon(&self) -> &Arc<dyn Lexicon> {
+    pub fn lexicon(&self) -> &Arc<UserLexicon> {
         &self.lexicon
+    }
+
+    pub fn base_lexicon(&self) -> &Arc<dyn Lexicon> {
+        &self.base_lexicon
+    }
+
+    /// 添加用户词（拼音可以是 ni hao / nihao / xi'an）。
+    pub fn add_user_word(&self, pinyin: &str, word: &str, freq: f64) -> Result<()> {
+        self.lexicon.add(pinyin, word, freq)
+    }
+
+    /// 删除用户词，返回是否删掉了。
+    pub fn remove_user_word(&self, word: &str) -> bool {
+        self.lexicon.remove(word)
+    }
+
+    pub fn user_words(&self) -> Vec<(String, String, f64)> {
+        self.lexicon.words()
+    }
+
+    pub fn save_user_dict<P: AsRef<std::path::Path>>(&self, path: P) -> Result<()> {
+        self.lexicon.save_tsv(path)
+    }
+
+    pub fn load_user_dict<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        self.lexicon.load_tsv(path)
     }
 
     pub fn lm(&self) -> &Arc<dyn LanguageModel> {
@@ -448,6 +479,29 @@ mod tests {
             tian.features.context_bigram_score,
             tian_farm.features.context_bigram_score
         );
+    }
+
+    #[test]
+    fn user_word_is_usable() {
+        let e = engine("ni hao\t你好\t10\n");
+        assert!(e.add_user_word("wo wo te", "我特", 5000.0).is_ok());
+        assert_eq!(e.user_words().len(), 1);
+        let cands = e.input("wowote");
+        assert!(
+            cands.iter().any(|c| c.text == "我特"),
+            "用户词应当能输入: {:?}",
+            cands.iter().map(|c| c.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(e.remove_user_word("我特"));
+        let after = e.input("wowote");
+        assert!(!after.iter().any(|c| c.text == "我特"));
+    }
+
+    #[test]
+    fn invalid_user_pinyin_rejected() {
+        let e = engine("ni hao\t你好\t10\n");
+        assert!(e.add_user_word("zzz", "坏词", 1.0).is_err());
+        assert!(e.user_words().is_empty());
     }
 
     #[test]

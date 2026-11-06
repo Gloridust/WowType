@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -46,7 +47,9 @@ impl SyllableKey {
 /// query 是一段连续音节；返回所有“音节序列恰好等于 query”的词。
 /// 简拼查询用 SyllableQuery::Jianpin，匹配每个音节的首字母。
 pub trait Lexicon: Send + Sync {
-    fn lookup(&self, query: &[SyllableQuery]) -> Vec<&LexEntry>;
+    /// 返回所有权值而非引用：这样「基础词库 + 用户词库」可以合并返回，
+    /// 也能在运行时安全地增删用户词。命中数很小，克隆成本可接受。
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry>;
 
     fn total_freq(&self) -> f64;
 
@@ -147,7 +150,7 @@ impl MemoryLexicon {
 }
 
 impl Lexicon for MemoryLexicon {
-    fn lookup(&self, query: &[SyllableQuery]) -> Vec<&LexEntry> {
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         if query.is_empty() {
             return Vec::new();
         }
@@ -170,7 +173,7 @@ impl Lexicon for MemoryLexicon {
             return self
                 .full_index
                 .get(&key)
-                .map(|idxs| idxs.iter().map(|&i| &self.entries[i]).collect())
+                .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
                 .unwrap_or_default();
         }
 
@@ -185,7 +188,7 @@ impl Lexicon for MemoryLexicon {
             return self
                 .jianpin_index
                 .get(&key)
-                .map(|idxs| idxs.iter().map(|&i| &self.entries[i]).collect())
+                .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
                 .unwrap_or_default();
         }
 
@@ -195,7 +198,7 @@ impl Lexicon for MemoryLexicon {
             .map(|idxs| {
                 idxs.iter()
                     .filter(|&&i| entry_matches(&self.entries[i], query))
-                    .map(|&i| &self.entries[i])
+                    .map(|&i| self.entries[i].clone())
                     .collect()
             })
             .unwrap_or_default()
@@ -207,6 +210,139 @@ impl Lexicon for MemoryLexicon {
 
     fn len(&self) -> usize {
         self.entries.len()
+    }
+}
+
+/// 用户词库：在基础词库之上叠加用户自己添加的词。
+///
+/// 用户词以 (拼音, 词, 频次) 保存，改动时重建一份小的 MemoryLexicon；
+/// 用户词通常只有几百到几千条，重建成本可以忽略。
+pub struct UserLexicon {
+    base: Arc<dyn Lexicon>,
+    words: RwLock<Vec<(String, String, f64)>>,
+    snapshot: RwLock<Arc<MemoryLexicon>>,
+}
+
+impl UserLexicon {
+    pub fn new(base: Arc<dyn Lexicon>) -> Self {
+        Self {
+            base,
+            words: RwLock::new(Vec::new()),
+            snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
+        }
+    }
+
+    /// 添加或更新一个用户词。拼音可以是 ni hao / nihao / xi'an。
+    pub fn add(&self, pinyin: &str, word: &str, freq: f64) -> Result<()> {
+        if word.is_empty() || pinyin.trim().is_empty() {
+            bail!("用户词的拼音和词都不能为空");
+        }
+        // 先单独校验一次，拼音非法时不要污染词库
+        let probe = format!("{}\t{}\t{}\n", pinyin.trim(), word, freq);
+        MemoryLexicon::from_tsv_str(&probe).context("用户词拼音无法解析")?;
+
+        {
+            let mut words = self.words.write().unwrap();
+            if let Some(slot) = words.iter_mut().find(|(_, w, _)| w == word) {
+                slot.0 = pinyin.trim().to_string();
+                slot.2 = freq;
+            } else {
+                words.push((pinyin.trim().to_string(), word.to_string(), freq));
+            }
+        }
+        self.rebuild();
+        Ok(())
+    }
+
+    /// 删除用户词，返回是否删掉了东西。
+    pub fn remove(&self, word: &str) -> bool {
+        let removed = {
+            let mut words = self.words.write().unwrap();
+            let before = words.len();
+            words.retain(|(_, w, _)| w != word);
+            words.len() != before
+        };
+        if removed {
+            self.rebuild();
+        }
+        removed
+    }
+
+    pub fn words(&self) -> Vec<(String, String, f64)> {
+        self.words.read().map(|w| w.clone()).unwrap_or_default()
+    }
+
+    pub fn clear(&self) {
+        if let Ok(mut words) = self.words.write() {
+            words.clear();
+        }
+        self.rebuild();
+    }
+
+    /// 把用户词写成 TSV（与 lexicon 格式一致）。
+    pub fn save_tsv<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let words = self.words();
+        if words.is_empty() {
+            bail!("用户词库为空");
+        }
+        let mut out = String::from("# 用户词库\n");
+        for (pinyin, word, freq) in words {
+            out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));
+        }
+        fs::write(path.as_ref(), out)
+            .with_context(|| format!("写入用户词库失败: {}", path.as_ref().display()))
+    }
+
+    /// 从 TSV 载入用户词，追加到现有内容。
+    pub fn load_tsv<P: AsRef<Path>>(&self, path: P) -> Result<usize> {
+        let data = fs::read_to_string(path.as_ref())
+            .with_context(|| format!("读取用户词库失败: {}", path.as_ref().display()))?;
+        let mut added = 0;
+        for line in data.lines() {
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let (Some(pinyin), Some(word)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            let freq = cols.next().and_then(|f| f.parse().ok()).unwrap_or(1000.0);
+            if self.add(pinyin, word, freq).is_ok() {
+                added += 1;
+            }
+        }
+        Ok(added)
+    }
+
+    fn rebuild(&self) {
+        let words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        let mut tsv = String::new();
+        for (pinyin, word, freq) in &words {
+            tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));
+        }
+        if let Ok(lexicon) = MemoryLexicon::from_tsv_str(&tsv) {
+            if let Ok(mut slot) = self.snapshot.write() {
+                *slot = Arc::new(lexicon);
+            }
+        }
+    }
+}
+
+impl Lexicon for UserLexicon {
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let mut result = self.base.lookup(query);
+        if let Ok(snapshot) = self.snapshot.read() {
+            result.extend(snapshot.lookup(query));
+        }
+        result
+    }
+
+    fn total_freq(&self) -> f64 {
+        self.base.total_freq() + self.snapshot.read().map(|s| s.total_freq()).unwrap_or(0.0)
+    }
+
+    fn len(&self) -> usize {
+        self.base.len() + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
     }
 }
 

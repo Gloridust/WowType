@@ -84,3 +84,25 @@ hpmac_base=262144, swbd*=524291）。
    看它从 ResourceMgr 取的是哪个 dict 类型 → 补进 items（或改用 `wxime_add_cell_dict`）。
 2. 打通后：`process_input` + `wxime_candidate_next` 批量 dump 候选与分数。
 3. 用这份数据产出 `lexicon.tsv` 与排序蒸馏集。
+
+## 5. 在内存里打补丁（调试用）
+
+`__TEXT` 段的 maxprot 是 r-x，`mprotect` 会被拒绝。用调试器那套 `VM_PROT_COPY`：
+
+```c
+mach_vm_protect(mach_task_self(), page, size, FALSE,
+                VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY);  // 触发 COW
+memcpy(pc, stub, n*4);
+sys_icache_invalidate(pc, n*4);
+mach_vm_protect(mach_task_self(), page, size, FALSE, VM_PROT_READ|VM_PROT_EXECUTE);
+```
+
+用这个办法把 `ZhMostLikelySequelSearcherV2` 里对空子词典的虚调用改成
+`mov w0,#0; nop; nop; nop`，崩溃就变成了一个明确的断言错误：
+
+```
+Error: asso_wb_dict_->IsAssociateWbDict() (wxime)
+```
+
+说明这个 searcher 需要的是**五笔联想词库**（`AssociateWbDict`），而不是普通 cell dict。
+这一条是目前创建 session 的最后一个已知障碍。

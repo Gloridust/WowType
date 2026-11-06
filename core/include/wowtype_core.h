@@ -35,6 +35,13 @@ int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *wor
 int wowtype_engine_set_context(WowtypeEngineHandle *engine, const char *text);
 
 /* 输入拼音串；失败返回 NULL。 */
+/* 用户词库 */
+int wowtype_engine_add_user_word(WowtypeEngineHandle *engine, const char *pinyin,
+                                 const char *word);
+int wowtype_engine_remove_user_word(WowtypeEngineHandle *engine, const char *word);
+int wowtype_engine_save_user_dict(WowtypeEngineHandle *engine, const char *path);
+int wowtype_engine_load_user_dict(WowtypeEngineHandle *engine, const char *path);
+
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 
 /**

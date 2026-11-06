@@ -132,10 +132,10 @@ impl State {
     }
 }
 
-struct WordMatch<'a> {
+struct WordMatch {
     end: usize,
     keys: Vec<SyllableQuery>,
-    entry: &'a LexEntry,
+    entry: LexEntry,
 }
 
 /// 在音节图上跑束搜索。
@@ -181,7 +181,7 @@ pub fn beam_search(
                     syllable_count: known,
                     jianpin,
                 };
-                let lexical = config.lexicon_weight * lexicon.cost(m.entry);
+                let lexical = config.lexicon_weight * lexicon.cost(&m.entry);
                 let lm_raw = lm.score(state.last.as_deref(), &m.entry.word);
                 let lm_inc = config.lm_weight * lm_raw;
                 let next_state =
@@ -288,12 +288,12 @@ fn pinyin_of(keys: &[SyllableQuery]) -> String {
         .join(" ")
 }
 
-fn collect_matches<'a>(
+fn collect_matches(
     graph: &SyllableGraph,
-    lexicon: &'a dyn Lexicon,
+    lexicon: &dyn Lexicon,
     start: usize,
     max_syllables: usize,
-) -> Vec<WordMatch<'a>> {
+) -> Vec<WordMatch> {
     let mut out = Vec::new();
     let mut keys = Vec::new();
     collect_matches_dfs(graph, lexicon, start, max_syllables, &mut keys, &mut out);
@@ -306,7 +306,7 @@ fn collect_matches_dfs<'a>(
     pos: usize,
     max_syllables: usize,
     keys: &mut Vec<SyllableQuery>,
-    out: &mut Vec<WordMatch<'a>>,
+    out: &mut Vec<WordMatch>,
 ) {
     if keys.len() >= max_syllables {
         return;
