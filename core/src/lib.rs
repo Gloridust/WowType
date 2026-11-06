@@ -177,9 +177,19 @@ impl Engine {
         if count < self.config.auto_learn_threshold.max(1) {
             return;
         }
+        // 双拼模式下上游传进来的是键位串（如 "vsgo"），要先展开成全拼，
+        // 否则用户词会带着一串无效音节存进去，永远也打不出来。
+        let pinyin = if self.config.shuangpin {
+            crate::shuangpin::to_full_pinyin(pinyin)
+        } else {
+            pinyin.to_string()
+        };
+        if pinyin.trim().is_empty() {
+            return;
+        }
         // 频次随选用次数增长但有上限，避免用户词压过通用高频词
         let freq = (1000.0 * f64::from(count)).min(50_000.0);
-        let _ = self.lexicon.add(pinyin, word, freq);
+        let _ = self.lexicon.add(&pinyin, word, freq);
     }
 
     /// 带时间戳的选词记录（方便测试）。
