@@ -3,6 +3,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
+#include <csignal>
+#include <unistd.h>
 
 struct sp_raw { void* p; void* ctl; };
 typedef struct { void* fd; const char* path; uint32_t id; } item_t;
@@ -13,7 +16,6 @@ static item_t items[] = {
 static void my_log(int l,const char*m,int n){(void)l;(void)m;(void)n;}
 static unsigned long g_base;
 static unsigned long loc(unsigned long v){ return g_base + (v - 0x100000000UL); }
-
 extern "C" void* g_real_get = nullptr;
 extern "C" void my_get(void* self, unsigned short kind, sp_raw* out);
 asm(
@@ -25,8 +27,11 @@ asm(
 "    mov  x8, x2\n"
 "    br   x9\n"
 );
+static void on_segv(int, siginfo_t*, void*){ const char m[]="CRASH\n"; write(2,m,sizeof m-1); _exit(7); }
 
 int main(int argc,char**argv){
+  struct sigaction sa; memset(&sa,0,sizeof sa); sa.sa_sigaction=on_segv; sa.sa_flags=SA_SIGINFO;
+  sigaction(SIGSEGV,&sa,0); sigaction(SIGBUS,&sa,0);
   void* H = dlopen(argv[1], RTLD_NOW|RTLD_LOCAL);
   if(!H){ puts("dlopen fail"); return 1; }
   void* vs = dlsym(H, "wxime_get_version");
@@ -39,23 +44,16 @@ int main(int argc,char**argv){
   init(c);
   static dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
   cfg(&dc);
-
   auto inst  = (void*(*)())loc(0x101c453b4UL);
   auto deref = (void*(*)(void*))loc(0x101c430c4UL);
   g_real_get = (void*)loc(0x1017eccf8UL);
   void* rm = inst();
-  void* res = deref(rm);
-  sp_raw dm = *(sp_raw*)res;
-  printf("rm=%p res=%p dm=%p", rm, res, dm.p); putchar(10);
-  void* dmgr = dm.p ? dm.p : res;
-  { void* vt0 = *(void**)res; Dl_info d0; memset(&d0,0,sizeof d0); dladdr(vt0,&d0);
-    printf("res[0]=%p sym=%s", vt0, d0.dli_sname?d0.dli_sname:"?"); putchar(10); }
-  if(dm.p){ void* vt = *(void**)dm.p; void* ti = ((void**)vt)[-1];
-    const char* nm = *(const char**)((char*)ti+8);
-    printf("dm.p type=%s", nm?nm:"?"); putchar(10); }
-  return 0;
-  void* found = 0;
-  for (unsigned k=0;k<0x300;k++){
+  void* resptr = deref(rm);
+  void* res = *(void**)resptr;
+  void* dmgr = *(void**)((char*)res + 0x0);
+  printf("dmgr=%p", dmgr); putchar(10);
+  int hits=0;
+  for (unsigned k=0;k<0x400;k++){
     sp_raw d; d.p=0; d.ctl=0;
     my_get(dmgr, (unsigned short)k, &d);
     if(!d.p) continue;
@@ -63,8 +61,8 @@ int main(int argc,char**argv){
     void* ti = vt[-1];
     const char* nm = *(const char**)((char*)ti+8);
     printf("kind %u -> %s", k, nm?nm:"?"); putchar(10);
-    if(nm && strstr(nm,"AssociateWb")) found=d.p;
+    hits++;
   }
-  printf("associate_wb found=%p", found); putchar(10);
+  printf("total %d", hits); putchar(10);
   return 0;
 }

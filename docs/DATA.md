@@ -142,3 +142,48 @@ cell_dict_ssrc_zh/1341|1342|1346/cell_dict.ssrc.zh
 ## 6. 复现命令
 
 见 `tools/oracle/README.md`。
+
+## 8. 词典类型系统（已解开）
+
+`_wxime_dict_config.item.id` 的低 16 位就是**词典 kind**，高 16 位是**分组**：
+
+```
+id = (group << 16) | kind
+group: 1 = 拼音族, 2 = 语言模型, 4 = 参数, 8 = 五笔族
+```
+
+`AddDictToResources` 里对 `id & 0xffff` 查跳转表（`0x103191e90`，跳表基址 `adr+16 = 0x101c3d2e4`，
+每项 u16 × 4 字节），表项决定构造哪个类。已验证的对应关系：
+
+| kind | 类 |
+|---|---|
+| 0 | ChineseStaticDict |
+| 8 | **AssociateWbDict** |
+| 14 | StaticWubiDict |
+| 19 | StaticReverseWubiDict |
+| 29 | ChineseStaticDictV2 |
+| 45 | ChineseStaticDictV3（bwcnmacv8） |
+| 86 | CompactKVLargeDict |
+
+`swbd*.bin` 是**复合文件**：group 8 的 id 会被「concat key」拆成两个子词典
+（65550 = StaticWubiDict、65555 = StaticReverseWubiDict），所以低 16 位对它们不起作用。
+
+## 9. 枚举已加载词典（工具已可用）
+
+`tools/oracle/probe_dict_kinds.cpp`：
+
+```
+ResourceMgr::Instance() → operator*() → shared_ptr<Resources> → Resources+0 → DictManager*
+DictManager::GetSharedDictByKind(u16) → shared_ptr<IDict>（x8 隐式返回）
+```
+
+拿到 `IDict*` 后读 `vtable[-1]` 的 typeinfo name 就能看到具体类名。
+当前配置下枚举出 **45 个**词典，其中没有 AssociateWbDict。
+
+## 10. AssociateWbDict 的来源（未定）
+
+- 28 个 `.bin` 逐个用 `id=0x10008` 试过，都没有产出 kind 8
+- `cell_dict.*` 用 `wxime_add_cell_dict(path, 8, ...)` 试过，返回 1 但没有 kind 8
+
+下一步：看 `DictManager::Impl::AddCellDict` 那个 `function<unique_ptr<IDict>(unsigned short)>`
+的 lambda 里对 kind 的分支，确定 cell 类型到 AssociateWbDict 的映射。
