@@ -114,10 +114,12 @@ fn main() {
 
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let ranker = Arc::new(LinearRanker::new(weights));
-    let mut config = EngineConfig::default();
-    config.max_candidates = max_candidates;
-    config.fuzzy = fuzzy;
-    config.shuangpin = shuangpin;
+    let mut config = EngineConfig {
+        max_candidates,
+        fuzzy,
+        shuangpin,
+        ..EngineConfig::default()
+    };
     if let Some(size) = beam {
         config.beam.beam_size = size.max(1);
     }

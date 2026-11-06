@@ -129,10 +129,14 @@ mod tests {
 
     // 用默认权重为 0 的特征，才能看出训练效果
     fn pair(flag_a: f32, flag_b: f32) -> (Feature, Feature) {
-        let mut a = Feature::default();
-        a.prefix_completion = flag_a;
-        let mut b = Feature::default();
-        b.prefix_completion = flag_b;
+        let a = Feature {
+            prefix_completion: flag_a,
+            ..Feature::default()
+        };
+        let b = Feature {
+            prefix_completion: flag_b,
+            ..Feature::default()
+        };
         (a, b)
     }
 

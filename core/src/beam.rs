@@ -300,9 +300,9 @@ fn collect_matches(
     out
 }
 
-fn collect_matches_dfs<'a>(
+fn collect_matches_dfs(
     graph: &SyllableGraph,
-    lexicon: &'a dyn Lexicon,
+    lexicon: &dyn Lexicon,
     pos: usize,
     max_syllables: usize,
     keys: &mut Vec<SyllableQuery>,

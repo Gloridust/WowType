@@ -76,8 +76,6 @@ fn bsearch(table: &'static [&'static str], text: &str) -> Option<usize> {
     table.binary_search_by(|s| (*s).cmp(text)).ok()
 }
 
-/// 是否为合法拼音音节（小写 ASCII，v 代表 ü）。
-
 /// 模糊音归一：把容易混淆的音节映射到同一个规范形式。
 ///
 /// 目前覆盖最常见的三组：

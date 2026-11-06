@@ -62,8 +62,10 @@ fn main() {
         Arc::new(BigramLm::default())
     };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
-    let mut engine_config = EngineConfig::default();
-    engine_config.max_candidates = 10;
+    let engine_config = EngineConfig {
+        max_candidates: 10,
+        ..EngineConfig::default()
+    };
     let engine = Engine::new(lex, lm).with_config(engine_config);
 
     let data = std::fs::read_to_string(&cases_path)

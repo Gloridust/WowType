@@ -68,7 +68,7 @@ fn shuangpin_keeps_raw_candidate() {
 #[test]
 fn repeated_selection_boosts_candidate() {
     // 两个同拼音候选，频次相差不大；连续选低频的那个应当把它顶上来
-    let mut e = engine("shi\t是\t1000\nshi\t事\t900\n");
+    let e = engine("shi\t是\t1000\nshi\t事\t900\n");
     assert_eq!(e.input("shi")[0].text, "是");
     for _ in 0..6 {
         e.record_selection("事");

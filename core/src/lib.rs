@@ -1079,8 +1079,10 @@ mod tests {
         let lexicon: Arc<dyn Lexicon> =
             Arc::new(MemoryLexicon::from_tsv_str("ni hao\t你好\t10000\n").unwrap());
         let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
-        let mut config = EngineConfig::default();
-        config.auto_learn = false;
+        let config = EngineConfig {
+            auto_learn: false,
+            ..EngineConfig::default()
+        };
         let e = Engine::new(lexicon, lm).with_config(config);
         for _ in 0..5 {
             e.record_selection_with_pinyin("我特", Some("wo te"));

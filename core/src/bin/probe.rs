@@ -52,8 +52,10 @@ fn main() {
     let lexicon = MemoryLexicon::from_tsv_path_cached(&lexicon_path)
         .unwrap_or_else(|e| fail(&format!("词库载入失败: {e:#}")));
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
-    let mut config = EngineConfig::default();
-    config.max_candidates = max_candidates;
+    let config = EngineConfig {
+        max_candidates,
+        ..EngineConfig::default()
+    };
     let engine = Engine::new(lex, Arc::new(BigramLm::default())).with_config(config);
 
     let data = std::fs::read_to_string(&cases_path)
