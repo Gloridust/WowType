@@ -59,7 +59,7 @@
 
 **在 macOS 上验证过**：
 
-- 126 项 Rust 测试（`cargo test`）
+- 131 项 Rust 测试（`cargo test`：core 83 + 组合 8 + 会话 5 + voice 35）
 - 22 项 C ABI 契约测试（`./scripts/abi-smoke.sh`）
 - 真实词库 55 万条的排序质量、延迟、加载时间
 - M1 上跑的官方 WeType 引擎作为对照（逆向阶段）
