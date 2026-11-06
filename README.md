@@ -7,7 +7,7 @@
 > 语音的可测部分（VAD/WAV/识别器调用/上屏）也都有测试，但 X11 热键和采集
 > 没在 Linux 上实机跑过。
 >
-> **完整安装步骤见 [docs/INSTALL.md](docs/INSTALL.md)；每项目标的完成度见 [docs/STATUS.md](docs/STATUS.md)。**
+> **接手先看 [docs/HANDOFF.md](docs/HANDOFF.md)**（从哪开始、哪里可能炸）；安装步骤见 [docs/INSTALL.md](docs/INSTALL.md)；目标完成度见 [docs/STATUS.md](docs/STATUS.md)。
 
 ## 目录
 
