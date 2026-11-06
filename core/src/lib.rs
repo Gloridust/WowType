@@ -27,7 +27,7 @@ pub use crate::rank::{
     Feature, FeatureWeights, LinearRanker, LtrModel, Ranker, FEATURE_COUNT, FEATURE_NAMES,
 };
 pub use crate::syllable::{
-    is_valid, parse, split, ParseError, ParsedInput, Syllable, SyllableId, SyllableQuery,
+    is_valid, parse, split, ParseError, ParsedInput, Syllable, SyllableId, SyllableQuery, SYLLABLES,
 };
 
 /// 最终候选。
@@ -233,7 +233,48 @@ impl Engine {
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let normalized = raw.trim().to_ascii_lowercase();
-        let parsed = parse(&normalized)?;
+        let exact = self.try_input_exact(&normalized, at_ms)?;
+        // 精确路径质量够好（全覆盖）就直接返回；否则说明尾部是半成品音节
+        // 或者走了未登录兜底，此时枚举补全再和精确结果合并排序。
+        let covered = exact
+            .first()
+            .map(|c| c.features.coverage_score >= 1.0 && !c.words.iter().any(|w| !w.known))
+            .unwrap_or(false);
+        if covered {
+            return Ok(exact);
+        }
+        let completions = partial_completions(&normalized);
+        if completions.is_empty() {
+            return Ok(exact);
+        }
+        let mut merged: HashMap<String, Candidate> = HashMap::new();
+        for candidate in exact {
+            merged.insert(candidate.text.clone(), candidate);
+        }
+        for candidate_input in completions.iter().take(32) {
+            if let Ok(list) = self.try_input_exact(candidate_input, at_ms) {
+                for candidate in list {
+                    match merged.entry(candidate.text.clone()) {
+                        Entry::Vacant(slot) => {
+                            slot.insert(candidate);
+                        }
+                        Entry::Occupied(mut slot) => {
+                            if candidate.score > slot.get().score {
+                                slot.insert(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut result: Vec<Candidate> = merged.into_values().collect();
+        result.sort_by(|a, b| b.score.total_cmp(&a.score));
+        result.truncate(self.config.max_candidates.max(1));
+        Ok(result)
+    }
+
+    fn try_input_exact(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
+        let parsed = parse(normalized)?;
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
@@ -387,6 +428,35 @@ impl Engine {
     }
 }
 
+/// 把「尾部还没成音节」的输入展开成若干条完整输入。
+///
+/// 例如 zhongg -> [zhongguo, zhonggu, zhongguai, ...]，nih -> [niha, nihai, ...]。
+/// 从最长的可切分前缀往前试，命中就返回，避免组合爆炸。
+fn partial_completions(input: &str) -> Vec<String> {
+    if !(2..=16).contains(&input.len()) || !input.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Vec::new();
+    }
+    for cut in (0..input.len()).rev() {
+        let (head, tail) = input.split_at(cut);
+        if tail.len() > 6 {
+            continue;
+        }
+        if !head.is_empty() && parse(head).is_err() {
+            continue;
+        }
+        let mut out: Vec<String> = Vec::new();
+        for syllable in SYLLABLES {
+            if syllable.starts_with(tail) {
+                out.push(format!("{head}{syllable}"));
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+    Vec::new()
+}
+
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut best: HashMap<String, Candidate> = HashMap::new();
     for candidate in candidates {
@@ -423,6 +493,7 @@ mod tests {
             "xi\t西\t400\n",
             "an\t安\t300\n",
             "zhong guo\t中国\t800\n",
+            "ni hao\t你好\t100000\n",
             "hua r\t花儿\t100\n",
         ))
     }
@@ -502,6 +573,30 @@ mod tests {
         let e = engine("ni hao\t你好\t10\n");
         assert!(e.add_user_word("zzz", "坏词", 1.0).is_err());
         assert!(e.user_words().is_empty());
+    }
+
+    #[test]
+    fn partial_tail_yields_completions() {
+        let e = default_engine();
+        let c = e.input("nih");
+        assert!(
+            c.iter().any(|x| x.text == "你好"),
+            "nih 应当补全出 你好: {:?}",
+            c.iter().map(|x| x.text.as_str()).collect::<Vec<_>>()
+        );
+        let c = e.input("zhongg");
+        assert!(
+            c.iter().any(|x| x.text == "中国"),
+            "zhongg 应当补全出 中国: {:?}",
+            c.iter().map(|x| x.text.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn incomplete_last_syllable_prefers_real_word() {
+        let e = default_engine();
+        let c = e.input("niha");
+        assert_eq!(c[0].text, "你好", "niha 应当优先给出 你好");
     }
 
     #[test]

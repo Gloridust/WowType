@@ -64,6 +64,9 @@ python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
 cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 ```
 
+引擎支持**半成品输入**：尾部还没成音节时会自动补全（`nih` → 你好，`zhongg` → 中国），
+不会出现"打到一半没有候选"。
+
 语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
 WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](docs/DATA.md)。
 
