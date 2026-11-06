@@ -114,3 +114,29 @@ wowtype-voiced --asr-cmd 'sherpa-onnx-offline --tokens=tokens.txt --paraformer=m
 ### WAV 工具
 
 `voice/src/wav.rs` 提供 16kHz 单声道 16bit 的读写，无第三方依赖。
+
+## 上屏后端与中文的坑
+
+`sink.rs` 提供三种后端，**默认是剪贴板**：
+
+| 后端 | 命令 | 中文 | 备注 |
+|---|---|---|---|
+| 剪贴板 | `wl-copy` + `wtype -M ctrl -k v -m ctrl`（Wayland） | ✅ | 需要 `wl-clipboard` |
+| 剪贴板 | `xclip -selection clipboard` + `xdotool key ctrl+v`（X11） | ✅ | 需要 `xclip`、`xdotool` |
+| wtype | `wtype` | ✅ | 仅 wlroots 系合成器 |
+| ydotool | `ydotool type` | ❌ | **打不出汉字** |
+
+`ydotool type` 是通过键码模拟按键的，没有对应 keysym 的字符（也就是汉字）发不出去。
+所以默认没有用 ydotool；要强制指定用 `WOWTYPE_SINK=wtype|ydotool|clipboard|wl|x11`。
+
+识别命令里的 `{wav}` 占位符：
+
+```bash
+# 追加路径（默认）
+wowtype-voiced --asr-cmd 'whisper-cli -m /path/ggml.bin -l zh -nt -f'
+# 需要 --wav= 形式时用占位符
+wowtype-voiced --asr-cmd 'sherpa-onnx-offline --tokens=tokens.txt --paraformer=model.onnx --wav={wav}'
+```
+
+命令行按 shell 规则切分（支持引号），所以模型路径里有空格也没问题；
+结果先读 stdout，为空时再读 stderr（部分识别器把文本打到 stderr）。

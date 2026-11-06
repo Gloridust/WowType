@@ -9,7 +9,7 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::{Duration, Instant};
 use wowtype_voice::{
     asr::{MockChannel, MultiChannel, ProcessChannel},
-    CommandSink, TextSink, VoiceSession,
+    ClipboardSink, CommandSink, TextSink, VoiceSession,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -111,11 +111,28 @@ fn build_channel(opt: &Options) -> MultiChannel {
     }
 }
 
+/// 上屏后端选择。
+///
+/// 默认走剪贴板：`ydotool type` 靠键码模拟按键，发不出汉字；
+/// 环境变量 `WOWTYPE_SINK` 可以强制指定 wtype / ydotool / clipboard / x11 / wl。
 fn build_sink() -> Box<dyn TextSink> {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        Box::new(CommandSink::wtype())
-    } else {
-        Box::new(CommandSink::ydotool())
+    let choice = std::env::var("WOWTYPE_SINK").unwrap_or_default();
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    match choice.as_str() {
+        "wtype" => Box::new(CommandSink::wtype()),
+        "ydotool" => Box::new(CommandSink::ydotool()),
+        "wl" => Box::new(ClipboardSink::wl()),
+        "x11" => Box::new(ClipboardSink::x11()),
+        "clipboard" => Box::new(if wayland {
+            ClipboardSink::wl()
+        } else {
+            ClipboardSink::x11()
+        }),
+        _ => Box::new(if wayland {
+            ClipboardSink::wl()
+        } else {
+            ClipboardSink::x11()
+        }),
     }
 }
 

@@ -109,6 +109,62 @@ pub struct ProcessChannel {
     pcm: Vec<i16>,
 }
 
+/// 把命令行拆成参数，支持单/双引号和反斜杠转义。
+///
+/// 不能直接用 split_whitespace：模型路径里常有空格（如
+/// "/home/me/My Models/ggml.bin"，按空格切会把它拆坏。
+fn split_command(cmdline: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    let mut has_token = false;
+    let mut chars = cmdline.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else if ch == '\\' && q == '"' {
+                    if let Some(next) = chars.next() {
+                        cur.push(next);
+                    }
+                } else {
+                    cur.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    has_token = true;
+                }
+                c if c.is_whitespace() => {
+                    if has_token || !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                        has_token = false;
+                    }
+                }
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        cur.push(next);
+                        has_token = true;
+                    }
+                }
+                c => {
+                    cur.push(c);
+                    has_token = true;
+                }
+            },
+        }
+    }
+    if has_token || !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// 命令行里可以用 \`{wav}\` 指定音频路径的位置；没写的话就追加到末尾。
+pub const WAV_PLACEHOLDER: &str = "{wav}";
+
 impl ProcessChannel {
     pub fn new(name: impl Into<String>, program: Vec<String>) -> Self {
         Self {
@@ -119,8 +175,7 @@ impl ProcessChannel {
     }
 
     pub fn from_command_line(name: impl Into<String>, cmdline: &str) -> Self {
-        let program = cmdline.split_whitespace().map(String::from).collect();
-        Self::new(name, program)
+        Self::new(name, split_command(cmdline))
     }
 
     pub fn sample_count(&self) -> usize {
@@ -160,23 +215,41 @@ impl AsrChannel for ProcessChannel {
         if self.pcm.is_empty() || self.program.is_empty() {
             return None;
         }
-        let path = std::env::temp_dir().join(format!("wowtype-asr-{}.wav", std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "wowtype-asr-{}-{}.wav",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
         if crate::wav::write_wav(&path, &self.pcm).is_err() {
             return None;
         }
-        let (program, args) = self.program.split_first()?;
-        let output = std::process::Command::new(program)
-            .args(args)
-            .arg(&path)
-            .output()
-            .ok();
+        let wav_path = path.to_string_lossy().to_string();
+        let mut argv = self.program.clone();
+        let mut replaced = false;
+        for arg in argv.iter_mut() {
+            if arg.contains(WAV_PLACEHOLDER) {
+                *arg = arg.replace(WAV_PLACEHOLDER, &wav_path);
+                replaced = true;
+            }
+        }
+        if !replaced {
+            argv.push(wav_path);
+        }
+        let (program, args) = argv.split_first()?;
+        let output = std::process::Command::new(program).args(args).output().ok();
         let _ = std::fs::remove_file(&path);
         self.pcm.clear();
         let output = output?;
         if !output.status.success() {
             return None;
         }
-        let text = clean_transcript(&String::from_utf8_lossy(&output.stdout));
+        let mut text = clean_transcript(&String::from_utf8_lossy(&output.stdout));
+        if text.is_empty() {
+            // 有些识别器把结果打到 stderr
+            text = clean_transcript(&String::from_utf8_lossy(&output.stderr));
+        }
         if text.is_empty() {
             None
         } else {
@@ -197,6 +270,37 @@ mod tests {
         ch.feed(&[1i16; 320]);
         let text = ch.finish().expect("应当有结果");
         assert_eq!(text, "你好");
+    }
+
+    #[test]
+    fn split_command_handles_quotes() {
+        assert_eq!(
+            split_command(r#"sh -c "echo 你好 世界""#),
+            vec!["sh", "-c", "echo 你好 世界"]
+        );
+        assert_eq!(
+            split_command("whisper-cli -m '/tmp/My Models/ggml.bin' -l zh"),
+            vec!["whisper-cli", "-m", "/tmp/My Models/ggml.bin", "-l", "zh"]
+        );
+    }
+
+    #[test]
+    fn wav_placeholder_is_substituted() {
+        // 识别器需要 --wav=路径 这种形式时，用占位符指定位置
+        let mut ch =
+            ProcessChannel::from_command_line("probe", r#"sh -c "test -f {wav} && echo ok""#);
+        ch.feed(&[1i16; 160]);
+        assert_eq!(ch.finish().as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn falls_back_to_stderr() {
+        let mut ch = ProcessChannel::new(
+            "err",
+            vec!["sh".into(), "-c".into(), "echo 你好 1>&2".into()],
+        );
+        ch.feed(&[1i16; 160]);
+        assert_eq!(ch.finish().as_deref(), Some("你好"));
     }
 
     #[test]

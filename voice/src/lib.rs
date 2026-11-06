@@ -18,7 +18,7 @@ pub mod wav;
 pub use asr::{AsrChannel, MultiChannel, Transcript};
 pub use audio::{CaptureFormat, Framer, Resampler, FRAME_SAMPLES, TARGET_RATE};
 pub use hotkey::{Action, Mode, TriggerConfig, VoiceTrigger};
-pub use sink::{CommandSink, StdoutSink, TextSink};
+pub use sink::{ClipboardSink, CommandSink, StdoutSink, TextSink};
 pub use typer::Typer;
 pub use vad::Vad;
 pub use wav::{read_wav, write_wav};
