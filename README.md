@@ -3,8 +3,8 @@
 把微信输入法（WeType）的输入体验搬到 Linux：拼音 + 语音，跑在 fcitx5 上。
 
 > 状态：**文字输入可用，语音待实机验证。**
-> 文字引擎功能完整、有 78 项测试，用真实词库（rime-ice 55 万条）测到 top1 100%；
-> 语音的可测部分（VAD/WAV/识别器调用/上屏）有 35 项测试，但 X11 热键和采集
+> 131 项测试全绿；用真实词库（rime-ice 55 万条）测到完整输入 top1 99.2%、半成品 top1 89.7%。
+> 语音的可测部分（VAD/WAV/识别器调用/上屏）也都有测试，但 X11 热键和采集
 > 没在 Linux 上实机跑过。
 >
 > **完整安装步骤见 [docs/INSTALL.md](docs/INSTALL.md)；每项目标的完成度见 [docs/STATUS.md](docs/STATUS.md)。**
@@ -133,6 +133,24 @@ cargo run --release -p wowtype-core --bin wowtype-eval -- \
     --weights coverage_score=1.5,prob=0,history_count=0.3
 ```
 
+常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| `--k n` | 报告 top-n 召回（默认 3） |
+| `--max n` | 候选数量上限 |
+| `--fuzzy` / `--shuangpin` | 用对应模式评测 |
+| `--lm` / `--arpa` | 指定语言模型 |
+
+用例可以从词库自动生成，也可以自己标注：
+
+```bash
+python3 tools/make_eval.py rime.tsv --count 300                 # 每拼音取最高频词
+python3 tools/make_eval.py rime.tsv --rank 2                    # 取第 2 高频（测候选广度）
+python3 tools/make_eval.py rime.tsv --truncate 1                # 截掉末尾 1 字母（测补全）
+python3 tools/make_eval.py rime.tsv --jianpin                   # 换成简拼
+```
+
 ### 语言模型与上下文
 
 `--lm` 吃「prev<TAB>cur<TAB>count」的 bigram TSV，`--arpa` 吃标准 ARPA。
@@ -190,6 +208,12 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
   词库自带的信息不足以区分
 
 输出形如 `用例 200  top1 176 (88.0%)  top3 195 (97.5%)`，并列出没进前三的用例。
+
+还有两个辅助工具：
+
+- `wowtype-probe`：逐键输入探针，从第 2 个字母开始逐位截断，看目标词在每一步是否还在候选里。
+  它靠「出现过又消失」这个信号抓到了补全的 bug（见下）。
+- `wowtype-bench`：真实词库下的载入耗时与逐键延迟。
 配合 `--fuzzy` / `--shuangpin` / `--arpa` 可以对比不同配置。仓库里的
 `core/data/eval_sample.tsv` 只是演示用的 13 条。
 

@@ -20,7 +20,7 @@ sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
 git clone https://github.com/Gloridust/Wowtype.git
 cd Wowtype
 cargo build --release -p wowtype-core
-cargo test                                  # 78 + 31 单元 + 4 集成
+cargo test                                  # 131 项（core 96 + voice 35）
 ./scripts/abi-smoke.sh                      # C ABI 22 项，插件依赖的就是它
 ```
 
