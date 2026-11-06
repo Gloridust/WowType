@@ -320,9 +320,9 @@ impl UserLexicon {
         if word.is_empty() || pinyin.trim().is_empty() {
             bail!("用户词的拼音和词都不能为空");
         }
-        // 先单独校验一次，拼音非法时不要污染词库
-        let probe = format!("{}\t{}\t{}\n", pinyin.trim(), word, freq);
-        MemoryLexicon::from_tsv_str(&probe).context("用户词拼音无法解析")?;
+        // 先单独校验一次，拼音非法时不要污染词库。
+        // 注意不能借用 from_tsv_str：它对未知音节是「跳过」而不是报错。
+        parse_pinyin_keys(pinyin.trim()).context("用户词拼音无法解析")?;
 
         {
             let mut words = self.words.write().unwrap();
@@ -559,3 +559,16 @@ mod tests {
         assert!(lex.cost(entry) > 0.0);
     }
 }
+    #[test]
+    fn lenient_loading_skips_unknown_syllables() {
+        // 「cei」不在音节表里，整行跳过而不是让整个词库失败
+        let lex = MemoryLexicon::from_tsv_str("ni hao\t你好\t100\ncei\t呲\t5\n").unwrap();
+        assert_eq!(lex.len(), 1);
+        assert_eq!(lex.skipped(), 1);
+    }
+
+    #[test]
+    fn structural_errors_still_fail() {
+        assert!(MemoryLexicon::from_tsv_str("只有两列\t词\n").is_err());
+        assert!(MemoryLexicon::from_tsv_str("ni hao\t你好\tabc\n").is_err());
+    }

@@ -23,3 +23,7 @@ analysis/wxime_only.txt
 
 # 本地构建产物
 .cargo-home/
+
+# python
+__pycache__/
+*.pyc
