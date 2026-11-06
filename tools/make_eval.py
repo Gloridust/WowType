@@ -22,6 +22,11 @@ def main():
     ap.add_argument("--max-word", type=int, default=4, help="词的字数上限")
     ap.add_argument("--top", type=int, default=5000, help="只从频次前 N 的词里取")
     ap.add_argument(
+        "--jianpin",
+        action="store_true",
+        help="把输入换成简拼（只取每音节首字母）",
+    )
+    ap.add_argument(
         "--truncate",
         type=int,
         default=0,
@@ -56,7 +61,8 @@ def main():
     rows = rows[: args.top]
 
     for freq, pinyin, word in rows:
-        joined = pinyin.replace(" ", "")
+        syllables = pinyin.split()
+        joined = "".join(s[0] for s in syllables) if args.jianpin else pinyin.replace(" ", "")
         if args.truncate > 0:
             if len(joined) <= args.truncate + 1:
                 continue
