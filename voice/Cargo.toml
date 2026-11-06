@@ -1,0 +1,12 @@
+[package]
+name = "wowtype-voice"
+version = "0.1.0"
+edition = "2021"
+description = "语音输入：热键状态机、音频帧、VAD、ASR 抽象、上屏"
+
+[dependencies]
+
+[features]
+default = []
+# 打开后编译 X11 全局热键（需要系统装 libx11-dev）
+linux-x11 = []

@@ -1,0 +1,18 @@
+[package]
+name = "wowtype-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "WeType 风格拼音输入法引擎骨架（音节图 + 束搜索 + 排序）"
+license = "MIT OR Apache-2.0"
+
+[lib]
+name = "wowtype_core"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "wowtype-demo"
+path = "src/bin/demo.rs"
+
+[dependencies]
+anyhow = "1.0"

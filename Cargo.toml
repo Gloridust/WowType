@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["core", "voice", "voice-daemon"]
+# 桌面端默认只构建与平台无关的部分；Linux 上再显式构建守护进程
+default-members = ["core", "voice"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "debuginfo"

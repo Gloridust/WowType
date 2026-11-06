@@ -1,0 +1,13 @@
+[package]
+name = "wowtype-voiced"
+version = "0.1.0"
+edition = "2021"
+description = "语音输入常驻进程：全局热键 + 麦克风采集 + 上屏"
+
+[dependencies]
+wowtype-voice = { path = "../voice" }
+anyhow = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = "0.15"
+x11rb = { version = "0.13", features = ["xkb"] }

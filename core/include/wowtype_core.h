@@ -1,0 +1,56 @@
+/*
+ * Wowtype Rust 核心的 C ABI。
+ *
+ * 生命周期：
+ * - wowtype_engine_new 成功返回句柄，必须用 wowtype_engine_free 释放；
+ * - wowtype_engine_input 返回的候选句柄必须用 wowtype_candidates_free 释放；
+ * - 返回的字符串指针在对应句柄释放前有效（错误串在下一次 API 调用前有效）。
+ */
+#ifndef WOWTYPE_CORE_H
+#define WOWTYPE_CORE_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct WowtypeEngineHandle WowtypeEngineHandle;
+typedef struct WowtypeCandidates WowtypeCandidates;
+
+/* 创建引擎；bigram_tsv_path 可为 NULL 或空串。失败返回 NULL。 */
+WowtypeEngineHandle *wowtype_engine_new(const char *lexicon_tsv_path,
+                                        const char *bigram_tsv_path);
+
+/* 释放引擎。 */
+void wowtype_engine_free(WowtypeEngineHandle *engine);
+
+/* 设置 beam size；成功返回 0，失败返回 -1。 */
+int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_size);
+
+/* 输入拼音串；失败返回 NULL。 */
+WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
+
+/* 候选数量。 */
+size_t wowtype_candidates_len(const WowtypeCandidates *candidates);
+
+/* 候选文本（UTF-8，NUL 结尾）；索引越界返回 NULL。 */
+const char *wowtype_candidates_text(const WowtypeCandidates *candidates, size_t index);
+
+/* 候选分数；索引越界返回 0。 */
+double wowtype_candidates_score(const WowtypeCandidates *candidates, size_t index);
+
+/* 释放候选集合。 */
+void wowtype_candidates_free(WowtypeCandidates *candidates);
+
+/* 最近一次错误信息，可能为空串。 */
+const char *wowtype_last_error(void);
+
+/* 版本号，例如 0.1.0。 */
+const char *wowtype_version(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* WOWTYPE_CORE_H */

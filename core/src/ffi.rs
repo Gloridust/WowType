@@ -1,0 +1,236 @@
+//! C ABI：供 fcitx5 的 C++ 插件通过 cdylib 调用。
+//!
+//! 设计成“不透明句柄 + 候选句柄”，避免 C++ 侧解析 JSON。字符串一律 UTF-8。
+
+// 安全契约见 core/include/wowtype_core.h：空指针、句柄生命周期由调用方保证。
+#![allow(clippy::missing_safety_doc)]
+
+use std::cell::RefCell;
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
+use std::panic;
+use std::ptr;
+use std::sync::Arc;
+
+use crate::lexicon::{Lexicon, MemoryLexicon};
+use crate::lm::{BigramLm, LanguageModel};
+use crate::Engine;
+
+thread_local! {
+    static LAST_ERROR: RefCell<CString> =
+        RefCell::new(CString::new("no error").expect("static error string"));
+}
+
+fn set_last_error(message: impl Into<String>) {
+    let text = message.into().replace('\0', " ");
+    let value = CString::new(text)
+        .unwrap_or_else(|_| CString::new("unknown error").expect("static error string"));
+    LAST_ERROR.with(|slot| *slot.borrow_mut() = value);
+}
+
+unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+    if ptr.is_null() {
+        return None;
+    }
+    unsafe { CStr::from_ptr(ptr) }.to_str().ok()
+}
+
+/// 引擎句柄。
+pub struct WowtypeEngineHandle {
+    engine: Engine,
+}
+
+/// 一次输入产生的候选集合。
+pub struct WowtypeCandidates {
+    texts: Vec<CString>,
+    scores: Vec<f64>,
+}
+
+/// 创建引擎。
+///
+/// lexicon_tsv_path 必填；bigram_tsv_path 可为 NULL/空串，表示不加载 LM。
+/// 失败返回 NULL，错误信息用 wowtype_last_error 获取。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_new(
+    lexicon_tsv_path: *const c_char,
+    bigram_tsv_path: *const c_char,
+) -> *mut WowtypeEngineHandle {
+    let lexicon_path = match unsafe { cstr_to_str(lexicon_tsv_path) } {
+        Some(path) if !path.is_empty() => path,
+        _ => {
+            set_last_error("lexicon path is null or empty");
+            return ptr::null_mut();
+        }
+    };
+
+    let result = (|| -> anyhow::Result<Engine> {
+        let lexicon = MemoryLexicon::from_tsv_path(lexicon_path)?;
+        let lexicon: Arc<dyn Lexicon> = Arc::new(lexicon);
+        let lm: Arc<dyn LanguageModel> = match unsafe { cstr_to_str(bigram_tsv_path) } {
+            Some(path) if !path.is_empty() => Arc::new(BigramLm::from_bigram_tsv_path(path)?),
+            _ => Arc::new(BigramLm::default()),
+        };
+        Ok(Engine::new(lexicon, lm))
+    })();
+
+    match result {
+        Ok(engine) => Box::into_raw(Box::new(WowtypeEngineHandle { engine })),
+        Err(error) => {
+            set_last_error(format!("{error:#}"));
+            ptr::null_mut()
+        }
+    }
+}
+
+/// 释放引擎。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_free(engine: *mut WowtypeEngineHandle) {
+    if !engine.is_null() {
+        drop(unsafe { Box::from_raw(engine) });
+    }
+}
+
+/// 设置 beam size；返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_beam_size(
+    engine: *mut WowtypeEngineHandle,
+    beam_size: u32,
+) -> c_int {
+    match unsafe { engine.as_mut() } {
+        Some(handle) => {
+            handle.engine.set_beam_size(beam_size as usize);
+            0
+        }
+        None => {
+            set_last_error("engine handle is null");
+            -1
+        }
+    }
+}
+
+/// 输入拼音串，返回候选句柄；失败返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_input(
+    engine: *mut WowtypeEngineHandle,
+    input: *const c_char,
+) -> *mut WowtypeCandidates {
+    let handle = match unsafe { engine.as_ref() } {
+        Some(handle) => handle,
+        None => {
+            set_last_error("engine handle is null");
+            return ptr::null_mut();
+        }
+    };
+    let input = match unsafe { cstr_to_str(input) } {
+        Some(input) => input,
+        None => {
+            set_last_error("input is null or not valid UTF-8");
+            return ptr::null_mut();
+        }
+    };
+
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| handle.engine.try_input(input)));
+    match outcome {
+        Ok(Ok(candidates)) => {
+            let mut texts = Vec::with_capacity(candidates.len());
+            let mut scores = Vec::with_capacity(candidates.len());
+            for candidate in candidates {
+                let text = candidate.text.replace('\0', " ");
+                texts.push(CString::new(text).unwrap_or_default());
+                scores.push(candidate.score);
+            }
+            Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+        }
+        Ok(Err(error)) => {
+            set_last_error(format!("{error:#}"));
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("Rust panic while processing input");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// 候选数量。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {
+    unsafe { candidates.as_ref() }
+        .map(|c| c.texts.len())
+        .unwrap_or(0)
+}
+
+/// 候选文本（UTF-8，以 NUL 结尾）。索引越界返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_text(
+    candidates: *const WowtypeCandidates,
+    index: usize,
+) -> *const c_char {
+    unsafe { candidates.as_ref() }
+        .and_then(|c| c.texts.get(index))
+        .map(|text| text.as_ptr())
+        .unwrap_or(ptr::null())
+}
+
+/// 候选分数。索引越界返回 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_score(
+    candidates: *const WowtypeCandidates,
+    index: usize,
+) -> f64 {
+    unsafe { candidates.as_ref() }
+        .and_then(|c| c.scores.get(index).copied())
+        .unwrap_or(0.0)
+}
+
+/// 释放候选集合。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_free(candidates: *mut WowtypeCandidates) {
+    if !candidates.is_null() {
+        drop(unsafe { Box::from_raw(candidates) });
+    }
+}
+
+/// 最近一次错误。返回的指针在下一次调用本 API 前有效。
+#[no_mangle]
+pub extern "C" fn wowtype_last_error() -> *const c_char {
+    LAST_ERROR.with(|slot| slot.borrow().as_ptr())
+}
+
+/// 版本号。
+#[no_mangle]
+pub extern "C" fn wowtype_version() -> *const c_char {
+    concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ffi_roundtrip() {
+        let lexicon = concat!(env!("CARGO_MANIFEST_DIR"), "/data/demo_lexicon.tsv");
+        let lexicon = CString::new(lexicon).unwrap();
+        let engine = unsafe { wowtype_engine_new(lexicon.as_ptr(), ptr::null()) };
+        assert!(!engine.is_null(), "engine_new 失败: 见 last_error");
+
+        let input = CString::new("xian").unwrap();
+        let candidates = unsafe { wowtype_engine_input(engine, input.as_ptr()) };
+        assert!(!candidates.is_null());
+        let count = unsafe { wowtype_candidates_len(candidates) };
+        assert!(count >= 2, "xian 应至少有 先/西安 两个候选，实际 {count}");
+
+        let first = unsafe { wowtype_candidates_text(candidates, 0) };
+        assert!(!first.is_null());
+        let first = unsafe { CStr::from_ptr(first) }.to_str().unwrap();
+        assert!(!first.is_empty());
+
+        unsafe {
+            wowtype_candidates_free(candidates);
+            wowtype_engine_free(engine);
+        }
+
+        let version = wowtype_version();
+        assert!(!version.is_null());
+    }
+}
