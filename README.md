@@ -73,6 +73,20 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
 WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](docs/DATA.md)。
 
+## 性能
+
+合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
+
+| 输入 | 耗时 |
+|---|---|
+| 载入 10 万条词库 | ~140 ms（一次性） |
+| `a` | 0.003 ms |
+| `zhong` | 0.14 ms |
+| `zhongguo` | 0.03 ms |
+| `zhongg`（半成品，触发 32 路补全） | 0.19 ms |
+
+交互预算（<10ms）有很大余量。
+
 ## 已知限制
 
 - `core/data/demo_lexicon.tsv` 只有十几条演示词，真实词库尚未导出（见下）。

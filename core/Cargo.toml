@@ -14,5 +14,9 @@ crate-type = ["rlib", "cdylib"]
 name = "wowtype-demo"
 path = "src/bin/demo.rs"
 
+[[bin]]
+name = "wowtype-bench"
+path = "src/bin/bench.rs"
+
 [dependencies]
 anyhow = "1.0"
