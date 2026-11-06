@@ -86,6 +86,21 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
 WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](docs/DATA.md)。
 
+## 调排序
+
+排序权重不能靠感觉调。仓库带一个离线评测工具：
+
+```bash
+# 用例格式：输入<TAB>期望（多个可接受答案用 | 分隔）
+cargo run --release -p wowtype-core --bin wowtype-eval -- \
+    --lexicon rime.tsv --eval cases.tsv \
+    --weights coverage_score=1.5,prob=0,history_count=0.3
+```
+
+输出形如 `用例 200  top1 176 (88.0%)  top3 195 (97.5%)`，并列出没进前三的用例。
+配合 `--fuzzy` / `--shuangpin` / `--arpa` 可以对比不同配置。仓库里的
+`core/data/eval_sample.tsv` 只是演示用的 13 条。
+
 ## 性能
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：

@@ -306,3 +306,74 @@ mod tests {
         assert_eq!(v[FEATURE_COUNT - 1], 2.0);
     }
 }
+
+impl FeatureWeights {
+    /// 按特征名改权重，返回是否命中。用于命令行调参。
+    pub fn set_by_name(&mut self, name: &str, value: f32) -> bool {
+        match name {
+            "kind" => self.kind = value,
+            "typo_count" => self.typo_count = value,
+            "history_count" => self.history_count = value,
+            "complete_count" => self.complete_count = value,
+            "history_time_diff" => self.history_time_diff = value,
+            "context_bigram_score" => self.context_bigram_score = value,
+            "user_word_rollback_score" => self.user_word_rollback_score = value,
+            "lm_score_with_previous_txt" => self.lm_score_with_previous_txt = value,
+            "head_word_nnlm" => self.head_word_nnlm = value,
+            "hot_val_conf" => self.hot_val_conf = value,
+            "with_context" => self.with_context = value,
+            "user_tail_conf" => self.user_tail_conf = value,
+            "coverage_score" => self.coverage_score = value,
+            "ltr_valid" => self.ltr_valid = value,
+            "history_use_count" => self.history_use_count = value,
+            "history_hot_val" => self.history_hot_val = value,
+            "prob" => self.prob = value,
+            "context_flag" => self.context_flag = value,
+            "full_jianpin" => self.full_jianpin = value,
+            "prefix_completion" => self.prefix_completion = value,
+            "other_completion" => self.other_completion = value,
+            "typo" => self.typo = value,
+            "force_emit" => self.force_emit = value,
+            _ => return false,
+        }
+        true
+    }
+
+    /// 解析 `a=1,b=-0.5` 形式的覆盖串。
+    pub fn apply_pairs(&mut self, spec: &str) -> Result<(), String> {
+        for pair in spec.split(',').filter(|p| !p.trim().is_empty()) {
+            let (name, value) = pair
+                .split_once('=')
+                .ok_or_else(|| format!("权重项应为 名称=数值: {pair}"))?;
+            let value: f32 = value
+                .trim()
+                .parse()
+                .map_err(|_| format!("权重不是数字: {pair}"))?;
+            if !self.set_by_name(name.trim(), value) {
+                return Err(format!("未知特征名: {name}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod weight_tests {
+    use super::*;
+
+    #[test]
+    fn applies_pairs_by_name() {
+        let mut w = FeatureWeights::default();
+        w.apply_pairs("prob=1.5, coverage_score=-0.5").unwrap();
+        assert_eq!(w.prob, 1.5);
+        assert_eq!(w.coverage_score, -0.5);
+    }
+
+    #[test]
+    fn rejects_unknown_names() {
+        let mut w = FeatureWeights::default();
+        assert!(w.apply_pairs("nope=1").is_err());
+        assert!(w.apply_pairs("prob=abc").is_err());
+        assert!(w.apply_pairs("prob").is_err());
+    }
+}
