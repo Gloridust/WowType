@@ -106,3 +106,30 @@ Error: asso_wb_dict_->IsAssociateWbDict() (wxime)
 
 说明这个 searcher 需要的是**五笔联想词库**（`AssociateWbDict`），而不是普通 cell dict。
 这一条是目前创建 session 的最后一个已知障碍。
+
+## 6. 枚举已加载词典（进行中）
+
+`DictManager::GetSharedDictByKind(unsigned short)` 可以按 kind 取词典。
+
+访问路径：`ResourceMgr::Instance()` → `operator*` 得到 `Resources&` → `Resources+0` 是
+`shared_ptr<DictManager>`。
+
+**坑**：返回 `shared_ptr` 的函数在 arm64 上走 x8 隐式返回（sret），普通函数指针
+签名对不上。需要一个小 trampoline：
+
+```asm
+_my_get:
+  adrp x9, _g_real_get@PAGE
+  add  x9, x9, _g_real_get@PAGEOFF
+  ldr  x9, [x9]
+  mov  x8, x2        // out 走 x8
+  br   x9
+```
+
+目前调用仍会崩，怀疑 `Resources+0` 不是 `DictManager*`（按内存看首字段不像 vtable）。
+下一步先确认 `DictManager` 在 `Resources` 里的真实偏移，再枚举 kind → 类名。
+
+## 7. 当前最后障碍
+
+`ZhMostLikelySequelSearcherV2` 要求一个 `AssociateWbDict`（五笔联想词库）。
+`asso_cell_dict_` / `asso_kv_dict_` / `asso_poem_dict_` 都允许为空，只有这个是硬性的。
