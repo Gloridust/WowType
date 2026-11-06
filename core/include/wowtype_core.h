@@ -31,6 +31,9 @@ int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
 
+/* 开关双拼（自然码方案）。返回 0 成功。 */
+int wowtype_engine_set_shuangpin(WowtypeEngineHandle *engine, int on);
+
 /* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
 

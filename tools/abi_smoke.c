@@ -68,6 +68,12 @@ int main(int argc, char **argv) {
     check(c && has_candidate(c, "知道"), "fuzzy: zidao -> 知道");
     wowtype_candidates_free(c);
 
+    check(wowtype_engine_set_shuangpin(e, 1) == 0, "set_shuangpin");
+    c = wowtype_engine_input(e, "vsgo");
+    check(c && has_candidate(c, "中国"), "shuangpin: vsgo -> 中国");
+    wowtype_candidates_free(c);
+    wowtype_engine_set_shuangpin(e, 0);
+
     check(wowtype_engine_save_user_dict(e, "/tmp/wowtype_abi_user.tsv") == 0, "save_user_dict");
     check(wowtype_engine_remove_user_word(e, "我特") == 1, "remove_user_word");
     check(wowtype_engine_load_user_dict(e, "/tmp/wowtype_abi_user.tsv") >= 1, "load_user_dict");

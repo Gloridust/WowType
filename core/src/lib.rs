@@ -10,6 +10,7 @@ pub mod graph;
 pub mod lexicon;
 pub mod lm;
 pub mod rank;
+pub mod shuangpin;
 pub mod syllable;
 
 use std::collections::hash_map::Entry;
@@ -62,6 +63,8 @@ pub struct EngineConfig {
     pub fuzzy: bool,
     /// 模糊候选的分数惩罚（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
+    /// 是否使用双拼（自然码方案）。
+    pub shuangpin: bool,
 }
 
 impl Default for EngineConfig {
@@ -72,6 +75,7 @@ impl Default for EngineConfig {
             jianpin_fallback: true,
             fuzzy: false,
             fuzzy_penalty: 2.5,
+            shuangpin: false,
         }
     }
 }
@@ -180,6 +184,11 @@ impl Engine {
         self.config.fuzzy = on;
     }
 
+    /// 开关双拼（自然码）。
+    pub fn set_shuangpin(&mut self, on: bool) {
+        self.config.shuangpin = on;
+    }
+
     pub fn set_max_candidates(&mut self, max_candidates: usize) {
         self.config.max_candidates = max_candidates.max(1);
     }
@@ -246,11 +255,48 @@ impl Engine {
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let normalized = raw.trim().to_ascii_lowercase();
-        let exact = self.run_query(&normalized, at_ms, false)?;
+
+        // 双拼：先把键位展开成全拼变体（自然码有少量重叠），每种都跑一遍再合并。
+        if self.config.shuangpin {
+            let variants = crate::shuangpin::to_full_pinyin_variants(&normalized);
+            if variants.is_empty() {
+                return Ok(Vec::new());
+            }
+            let mut merged: HashMap<String, Candidate> = HashMap::new();
+            for variant in &variants {
+                for candidate in self.query_plain(variant, at_ms)? {
+                    match merged.entry(candidate.text.clone()) {
+                        Entry::Vacant(slot) => {
+                            slot.insert(candidate);
+                        }
+                        Entry::Occupied(mut slot) => {
+                            if candidate.score > slot.get().score {
+                                slot.insert(candidate);
+                            }
+                        }
+                    }
+                }
+            }
+            let mut result: Vec<Candidate> = merged.into_values().collect();
+            result.sort_by(|a, b| {
+                b.score
+                    .total_cmp(&a.score)
+                    .then_with(|| a.text.cmp(&b.text))
+            });
+            result.truncate(self.config.max_candidates.max(1));
+            return Ok(result);
+        }
+
+        self.query_plain(&normalized, at_ms)
+    }
+
+    /// 单条全拼输入的完整查询（精确 + 可选模糊音）。
+    fn query_plain(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
+        let exact = self.run_query(normalized, at_ms, false)?;
         if !self.config.fuzzy {
             return Ok(exact);
         }
-        let fuzzy = self.run_query(&normalized, at_ms, true)?;
+        let fuzzy = self.run_query(normalized, at_ms, true)?;
         if fuzzy.is_empty() {
             return Ok(exact);
         }
@@ -689,6 +735,28 @@ mod tests {
         assert!(
             e.input("sangdian").iter().any(|c| c.text == "商店"),
             "sang dian 应当匹配 shang dian"
+        );
+    }
+
+    #[test]
+    fn shuangpin_input() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("zhong guo\t中国\t8000\nni hao\t你好\t10000\n").unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        assert!(
+            !e.input("vsgo").iter().any(|c| c.text == "中国"),
+            "默认全拼模式下 vsgo 不应命中"
+        );
+        e.set_shuangpin(true);
+        assert!(
+            e.input("vsgo").iter().any(|c| c.text == "中国"),
+            "双拼 vsgo 应当命中 中国"
+        );
+        assert!(
+            e.input("nihk").iter().any(|c| c.text == "你好"),
+            "双拼 nihk 应当命中 你好"
         );
     }
 

@@ -79,6 +79,10 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
             fuzzy && *fuzzy && *fuzzy != '0') {
             wowtype_engine_set_fuzzy(core_, 1);
         }
+        if (const char *sp = std::getenv("WOWTYPE_SHUANGPIN");
+            sp && *sp && *sp != '0') {
+            wowtype_engine_set_shuangpin(core_, 1);
+        }
         const std::string userDict = userDictPath();
         if (!userDict.empty()) {
             const int loaded = wowtype_engine_load_user_dict(core_, userDict.c_str());
