@@ -40,10 +40,16 @@ public:
 
 private:
     void refreshCandidates(WowtypeState *state);
+    /// 统一的上屏入口：提交文本、记录选词、更新上下文。
+    void commitText(fcitx::InputContext *ic, WowtypeState *state,
+                    const std::string &text);
+    std::string userDictPath() const;
 
     fcitx::Instance *instance_;
     WowtypeEngineHandle *core_;
     fcitx::FactoryFor<WowtypeState> factory_;
+    /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字符）。
+    std::string recent_;
 };
 
 #endif /* WOWTYPE_FCITX5_ENGINE_H */

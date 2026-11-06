@@ -74,6 +74,15 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
 
     const char *lmPath = std::getenv("WOWTYPE_LM");
     core_ = wowtype_engine_new(lexiconPath.c_str(), lmPath);
+    if (core_) {
+        const std::string userDict = userDictPath();
+        if (!userDict.empty()) {
+            const int loaded = wowtype_engine_load_user_dict(core_, userDict.c_str());
+            if (loaded > 0) {
+                FCITX_INFO() << "Wowtype: 载入用户词 " << loaded << " 条";
+            }
+        }
+    }
     if (!core_) {
         FCITX_ERROR() << "Wowtype: 初始化 Rust 核心失败，词典=" << lexiconPath
                       << "，错误="
@@ -84,9 +93,52 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
 
 WowtypeEngine::~WowtypeEngine() {
     if (core_) {
+        const std::string userDict = userDictPath();
+        if (!userDict.empty()) {
+            wowtype_engine_save_user_dict(core_, userDict.c_str());
+        }
         wowtype_engine_free(core_);
         core_ = nullptr;
     }
+}
+
+std::string WowtypeEngine::userDictPath() const {
+    const char *env = std::getenv("WOWTYPE_USER_DICT");
+    if (env && *env) {
+        return env;
+    }
+    std::string base;
+    if (const char *data = std::getenv("XDG_DATA_HOME"); data && *data) {
+        base = data;
+    } else if (const char *home = std::getenv("HOME"); home && *home) {
+        base = std::string(home) + "/.local/share";
+    } else {
+        return {};
+    }
+    const std::string dir = base + "/wowtype";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir + "/user.tsv";
+}
+
+void WowtypeEngine::commitText(fcitx::InputContext *ic, WowtypeState *state,
+                               const std::string &text) {
+    if (!ic || text.empty()) {
+        return;
+    }
+    ic->commitString(text);
+    if (core_) {
+        wowtype_engine_record_selection(core_, text.c_str());
+        // 上下文只保留尾部：bigram 特征只看紧邻的上文。
+        recent_ += text;
+        if (recent_.size() > 24) {
+            recent_ = recent_.substr(recent_.size() - 24);
+        }
+        wowtype_engine_set_context(core_, recent_.c_str());
+    }
+    state->buffer_.clear();
+    state->candidates_.clear();
+    state->scores_.clear();
 }
 
 void WowtypeEngine::refreshCandidates(WowtypeState *state) {
@@ -144,10 +196,7 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     if (!ic || !state || index >= state->candidates_.size()) {
         return;
     }
-    ic->commitString(state->candidates_[index]);
-    state->buffer_.clear();
-    state->candidates_.clear();
-    state->scores_.clear();
+    commitText(ic, state, state->candidates_[index]);
     updateInputPanel(ic, state);
 }
 
@@ -193,8 +242,8 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         if (!state->candidates_.empty()) {
             commitCandidate(ic, state, 0);
         } else {
-            ic->commitString(state->buffer_);
-            state->buffer_.clear();
+            const std::string raw = state->buffer_;
+            commitText(ic, state, raw);
             updateInputPanel(ic, state);
         }
         event.filterAndAccept();
@@ -202,10 +251,8 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     }
 
     if (sym == FcitxKey_Return && !state->buffer_.empty()) {
-        ic->commitString(state->buffer_);
-        state->buffer_.clear();
-        state->candidates_.clear();
-        state->scores_.clear();
+        const std::string raw = state->buffer_;
+        commitText(ic, state, raw);
         updateInputPanel(ic, state);
         event.filterAndAccept();
         return;
@@ -217,6 +264,47 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             if (index < state->candidates_.size()) {
                 commitCandidate(ic, state, index);
             }
+            event.filterAndAccept();
+            return;
+        }
+    }
+
+    // 翻页/移动（↑↓、PgUp/PgDn、-/=）交给候选列表自己处理。
+    if (auto *list = ic->inputPanel().candidateList()) {
+        if (list->size() > 0 && list->keyEvent(event)) {
+            event.filterAndAccept();
+            ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+            return;
+        }
+    }
+
+    // 没有正在输入的拼音时，把 ASCII 标点转成中文标点。
+    if (state->buffer_.empty()) {
+        const char *punct = nullptr;
+        switch (sym) {
+        case FcitxKey_comma:
+            punct = "，";
+            break;
+        case FcitxKey_period:
+            punct = "。";
+            break;
+        case FcitxKey_question:
+            punct = "？";
+            break;
+        case FcitxKey_exclam:
+            punct = "！";
+            break;
+        case FcitxKey_semicolon:
+            punct = "；";
+            break;
+        case FcitxKey_colon:
+            punct = "：";
+            break;
+        default:
+            break;
+        }
+        if (punct) {
+            commitText(ic, state, punct);
             event.filterAndAccept();
             return;
         }

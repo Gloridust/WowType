@@ -134,3 +134,27 @@ bigram 格式（可选）：
 - 本目录的 C++ 没有在 macOS 开发机上编译（缺少 fcitx5 头文件）。代码按
   fcitx5 5.1.x 的 InputMethodEngineV2 / AddonFactory API 编写；在 Ubuntu
   上如果 fcitx5 版本不同，可能需要按头文件微调。
+
+## 环境变量
+
+| 变量 | 作用 |
+|---|---|
+| `WOWTYPE_LEXICON` | 词库 TSV 路径，默认 `/usr/share/wowtype/lexicon.tsv` |
+| `WOWTYPE_LM` | bigram TSV 路径（可选） |
+| `WOWTYPE_USER_DICT` | 用户词库路径，默认 `$XDG_DATA_HOME/wowtype/user.tsv` |
+
+## 交互行为
+
+- 字母 / 隔音符 `'` 进入拼音缓冲，实时出候选
+- `空格` 上屏第一个候选；无候选时上屏原始拼音
+- `回车` 直接上屏原始拼音
+- `1`–`9` 选择对应候选
+- `退格` 删一个字母，`Esc` 清空
+- `↑↓` / `PgUp` `PgDn` / `-` `=` 翻页（交给 fcitx 的候选列表处理）
+- 缓冲为空时，`,` `.` `?` `!` `;` `:` 自动转成中文标点
+
+## 选词学习
+
+每次上屏都会调用 `wowtype_engine_record_selection`，历史计数参与排序；
+同时把最近 24 字节的已上屏文本通过 `wowtype_engine_set_context` 传给引擎，
+用于上下文 bigram 特征。用户词库在插件析构时落盘。
