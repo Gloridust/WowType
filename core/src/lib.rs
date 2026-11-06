@@ -751,6 +751,32 @@ const PREFIX_COMPLETION_PENALTY: f64 = 1.5;
 ///
 /// 例如 zhongg -> [zhongguo, zhonggu, zhongguai, ...]，nih -> [niha, nihai, ...]。
 /// 从最长的可切分前缀往前试，命中就返回，避免组合爆炸。
+/// head 是否能**完整**拆成已知音节（不留未知残片）。
+///
+/// 不能用 parse(head).is_ok() 判断：parse 对未知音节是宽容的，
+/// 会把 "shesh" 也当成合法输入，导致补全去拼 "shesh"+任意音节。
+fn fully_splittable(text: &str) -> bool {
+    let bytes: Vec<u8> = text.bytes().filter(|b| b.is_ascii_lowercase()).collect();
+    if bytes.is_empty() {
+        return true;
+    }
+    let n = bytes.len();
+    let mut reachable = vec![false; n + 1];
+    reachable[0] = true;
+    for i in 0..n {
+        if !reachable[i] {
+            continue;
+        }
+        for len in 1..=6.min(n - i) {
+            let candidate = std::str::from_utf8(&bytes[i..i + len]).unwrap_or("");
+            if crate::syllable::Syllable::from_text(candidate).is_some() {
+                reachable[i + len] = true;
+            }
+        }
+    }
+    reachable[n]
+}
+
 fn partial_completions(input: &str) -> Vec<String> {
     if !(2..=16).contains(&input.len()) || !input.bytes().all(|b| b.is_ascii_lowercase()) {
         return Vec::new();
@@ -760,7 +786,7 @@ fn partial_completions(input: &str) -> Vec<String> {
         if tail.len() > 6 {
             continue;
         }
-        if !head.is_empty() && parse(head).is_err() {
+        if !head.is_empty() && !fully_splittable(head) {
             continue;
         }
         let mut out: Vec<String> = Vec::new();
@@ -1104,6 +1130,34 @@ mod tests {
             e.input("shi")[0].text,
             "事",
             "多字上下文应当用最后一个字查二元组"
+        );
+    }
+
+    #[test]
+    fn fully_splittable_requires_known_syllables() {
+        assert!(fully_splittable("she"));
+        assert!(fully_splittable("zhongguo"));
+        assert!(fully_splittable("xi'an"));
+        // 尾部没打完，不是完整的音节序列
+        assert!(!fully_splittable("shesh"));
+        assert!(!fully_splittable("zhongg"));
+    }
+
+    #[test]
+    fn completion_extends_the_last_syllable() {
+        // 「shesh」尾巴是 sh，应当能补成 设施(she shi)
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "she shi\t设施\t9000\nshe sha\t射杀\t500\nshe shou\t射手\t400\n",
+            )
+            .unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(BigramLm::default()));
+        let list = e.input("shesh");
+        assert!(
+            list.iter().take(3).any(|c| c.text == "设施"),
+            "应当补出 设施: {:?}",
+            list.iter().map(|c| &c.text).collect::<Vec<_>>()
         );
     }
 
