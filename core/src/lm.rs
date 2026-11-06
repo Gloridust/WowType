@@ -24,6 +24,14 @@ pub trait LanguageModel: Send + Sync {
         }
         total
     }
+
+    /// 给定上一个词，返回最可能的后续词（按概率降序，最多 limit 个）。
+    ///
+    /// 这是「预测词库」的接口：默认实现不提供预测，接入了 bigram/神经网络
+    /// 的模型自行覆写。
+    fn top_next(&self, _prev: &str, _limit: usize) -> Vec<(String, f64)> {
+        Vec::new()
+    }
 }
 
 /// 内存二元语言模型。
@@ -160,6 +168,28 @@ impl LanguageModel for BigramLm {
         }
         self.backoff.ln() + unigram
     }
+
+    fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
+        let Some(row) = self.bigram.get(prev) else {
+            return Vec::new();
+        };
+        let prev_count = self.unigram.get(prev).copied().unwrap_or(0.0);
+        if prev_count <= 0.0 {
+            return Vec::new();
+        }
+        let mut items: Vec<(String, f64)> = row
+            .iter()
+            .filter(|(_, count)| **count > 0.0)
+            .map(|(word, count)| (word.clone(), (count / prev_count).ln()))
+            .collect();
+        items.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        items.truncate(limit);
+        items
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +226,23 @@ mod tests {
         lm.add_unigram("你", 5.0);
         lm.add_bigram("<s>", "你", 3.0);
         assert!((lm.score(None, "你") - (0.3f64).ln()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn predicts_following_words() {
+        let mut lm = BigramLm::new();
+        lm.add_unigram("中国", 100.0);
+        lm.add_bigram("中国", "人", 60.0);
+        lm.add_bigram("中国", "队", 30.0);
+        lm.add_bigram("中国", "的", 10.0);
+
+        let top = lm.top_next("中国", 2);
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].0, "人");
+        assert_eq!(top[1].0, "队");
+        // 概率是 ln(count/prev_count)
+        assert!((top[0].1 - (0.6f64).ln()).abs() < 1e-9);
+        assert!(lm.top_next("不存在", 3).is_empty());
     }
 
     #[test]

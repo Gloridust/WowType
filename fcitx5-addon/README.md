@@ -68,7 +68,7 @@ multiarch 通常是 x86_64-linux-gnu。libwowtype.so 的 RPATH 是 $ORIGIN/..，
 
 如果 CMake 没有把文件放到 fcitx5 期望的位置，可以手动安装：
 
-    sudo install -Dm755 core/target/release/libwowtype_core.so \
+    sudo install -Dm755 target/release/libwowtype_core.so \
         /usr/lib/x86_64-linux-gnu/libwowtype_core.so
     sudo install -Dm755 fcitx5-addon/build/libwowtype.so \
         /usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so

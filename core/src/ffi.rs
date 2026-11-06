@@ -40,7 +40,7 @@ pub struct WowtypeEngineHandle {
     engine: Engine,
 }
 
-/// 一次输入产生的候选集合。
+/// 一次输入产生的候选集合（预测结果也用这个结构承载）。
 pub struct WowtypeCandidates {
     texts: Vec<CString>,
     scores: Vec<f64>,
@@ -147,6 +147,48 @@ pub unsafe extern "C" fn wowtype_engine_input(
         }
         Err(_) => {
             set_last_error("Rust panic while processing input");
+            ptr::null_mut()
+        }
+    }
+}
+
+/// 基于上一词的预测（预测词库）。
+///
+/// 成功返回候选集合句柄（text 是预测词，score 是对数概率），
+/// 失败返回 NULL；结果同样用 wowtype_candidates_free 释放。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_predict_next(
+    engine: *const WowtypeEngineHandle,
+    prev_word: *const c_char,
+    limit: usize,
+) -> *mut WowtypeCandidates {
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        if engine.is_null() {
+            set_last_error("engine is null");
+            return ptr::null_mut();
+        }
+        let Some(prev) = (unsafe { cstr_to_str(prev_word) }) else {
+            set_last_error("prev_word is null or not utf8");
+            return ptr::null_mut();
+        };
+        let items = unsafe { &*engine }.engine.predict_next(prev, limit);
+        let mut texts = Vec::with_capacity(items.len());
+        let mut scores = Vec::with_capacity(items.len());
+        for (word, score) in items {
+            match CString::new(word) {
+                Ok(text) => {
+                    texts.push(text);
+                    scores.push(score);
+                }
+                Err(_) => continue,
+            }
+        }
+        Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+    }));
+    match outcome {
+        Ok(candidates) => candidates,
+        Err(_) => {
+            set_last_error("panic in wowtype_engine_predict_next");
             ptr::null_mut()
         }
     }

@@ -116,6 +116,13 @@ impl Engine {
     }
 
     /// 输入拼音串，返回候选；解析失败时返回空列表。
+    /// 基于上一词的候选预测（「预测词库」）。
+    ///
+    /// 返回 (词, 对数概率)，按概率降序。语言模型没接入预测能力时返回空。
+    pub fn predict_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
+        self.lm.top_next(prev, limit)
+    }
+
     pub fn input(&self, raw: &str) -> Vec<Candidate> {
         self.try_input(raw).unwrap_or_default()
     }

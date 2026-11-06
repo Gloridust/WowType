@@ -12,13 +12,13 @@ find_package(Fcitx5Core REQUIRED)
 find_package(Fcitx5Config REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
 
-# Rust 核心产物。先执行：cd core && cargo build --release
+# Rust 核心产物。先执行：cargo build --release -p wowtype-core（产物在 workspace 根 target/）
 set(WOWTYPE_CORE_LIB
-    "${CMAKE_CURRENT_SOURCE_DIR}/../core/target/release/libwowtype_core.so"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libwowtype_core.so"
     CACHE FILEPATH "Path to libwowtype_core.so")
 if(NOT EXISTS "${WOWTYPE_CORE_LIB}")
     message(FATAL_ERROR
-        "找不到 ${WOWTYPE_CORE_LIB}。请先在 core/ 下执行 cargo build --release，"
+        "找不到 ${WOWTYPE_CORE_LIB}。请先在仓库根目录执行 cargo build --release -p wowtype-core，"
         "或用 -DWOWTYPE_CORE_LIB=/path/to/libwowtype_core.so 指定。")
 endif()
 
@@ -42,7 +42,7 @@ target_link_libraries(wowtype PRIVATE
 
 set_target_properties(wowtype PROPERTIES
     INSTALL_RPATH "$ORIGIN/.."
-    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../core/target/release"
+    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../target/release"
 )
 
 install(TARGETS wowtype

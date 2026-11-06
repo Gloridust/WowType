@@ -31,6 +31,15 @@ int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_
 /* 输入拼音串；失败返回 NULL。 */
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 
+/**
+ * 基于上一词的预测（预测词库）。
+ * 成功返回候选集合（text 为预测词，score 为对数概率），必须 wowtype_candidates_free；
+ * 失败返回 NULL，用 wowtype_last_error 取原因。
+ */
+WowtypeCandidates *wowtype_engine_predict_next(const WowtypeEngineHandle *engine,
+                                               const char *prev_word,
+                                               size_t limit);
+
 /* 候选数量。 */
 size_t wowtype_candidates_len(const WowtypeCandidates *candidates);
 
