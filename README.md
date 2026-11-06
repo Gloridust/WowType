@@ -64,6 +64,9 @@ python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
 cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 ```
 
+语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
+WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](docs/DATA.md)。
+
 ## 已知限制
 
 - `core/data/demo_lexicon.tsv` 只有十几条演示词，真实词库尚未导出（见下）。

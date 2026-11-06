@@ -22,7 +22,7 @@ use anyhow::Result;
 pub use crate::beam::{beam_search, BeamConfig, BeamPath, BeamWord};
 pub use crate::graph::{Edge, EdgeKind, GraphMode, GraphOptions, SyllableGraph};
 pub use crate::lexicon::{LexEntry, Lexicon, MemoryLexicon, SyllableKey, UserLexicon};
-pub use crate::lm::{BigramLm, LanguageModel};
+pub use crate::lm::{ArpaLm, BigramLm, LanguageModel};
 pub use crate::rank::{
     Feature, FeatureWeights, LinearRanker, LtrModel, Ranker, FEATURE_COUNT, FEATURE_NAMES,
 };

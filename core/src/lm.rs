@@ -192,6 +192,149 @@ impl LanguageModel for BigramLm {
     }
 }
 
+/// ARPA 格式的二元语言模型（kenlm / SRILM 通用格式）。
+///
+/// 只解析 \\1-grams: 和 \\2-grams: 两段，够中文输入法用：
+///
+/// ```text
+/// \\data\\
+/// ngram 1=3
+/// ngram 2=2
+/// \\1-grams:
+/// -1.5\t你好\t-0.3
+/// \\2-grams:
+/// -0.7\t你好 世界
+/// \\end\\
+/// ```
+///
+/// 数值都是 log10 概率，内部转成自然对数。
+#[derive(Clone, Debug, Default)]
+pub struct ArpaLm {
+    unigram: HashMap<String, (f64, f64)>,
+    bigram: HashMap<(String, String), f64>,
+    /// 未登录词的 log10 概率，缺省 -6。
+    unk_log10: f64,
+}
+
+impl ArpaLm {
+    pub fn new() -> Self {
+        Self {
+            unigram: HashMap::new(),
+            bigram: HashMap::new(),
+            unk_log10: -6.0,
+        }
+    }
+
+    pub fn vocab(&self) -> usize {
+        self.unigram.len()
+    }
+
+    pub fn bigram_count(&self) -> usize {
+        self.bigram.len()
+    }
+
+    pub fn from_arpa_str(data: &str) -> Result<Self> {
+        let mut lm = Self::new();
+        let mut section = 0u8;
+        for (line_no, raw) in data.lines().enumerate() {
+            let line = raw.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.starts_with('\\') {
+                if line.starts_with("\\1-grams") {
+                    section = 1;
+                } else if line.starts_with("\\2-grams") {
+                    section = 2;
+                } else if line.starts_with("\\end") {
+                    section = 0;
+                }
+                continue;
+            }
+            match section {
+                1 => {
+                    let cols: Vec<&str> = line.split('\t').collect();
+                    if cols.len() < 2 {
+                        continue;
+                    }
+                    let log10: f64 = cols[0]
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("ARPA 第 {} 行一元概率非法", line_no + 1))?;
+                    let backoff = cols
+                        .get(2)
+                        .and_then(|s| s.trim().parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    lm.unigram.insert(cols[1].to_string(), (log10, backoff));
+                }
+                2 => {
+                    let cols: Vec<&str> = line.split('\t').collect();
+                    if cols.len() < 2 {
+                        continue;
+                    }
+                    let log10: f64 = cols[0]
+                        .trim()
+                        .parse()
+                        .with_context(|| format!("ARPA 第 {} 行二元概率非法", line_no + 1))?;
+                    let mut words = cols[1].split_whitespace();
+                    let (Some(a), Some(b)) = (words.next(), words.next()) else {
+                        continue;
+                    };
+                    lm.bigram.insert((a.to_string(), b.to_string()), log10);
+                }
+                _ => {}
+            }
+        }
+        Ok(lm)
+    }
+
+    pub fn from_arpa_path<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let data = fs::read_to_string(path.as_ref())
+            .with_context(|| format!("读取 ARPA 失败: {}", path.as_ref().display()))?;
+        Self::from_arpa_str(&data)
+    }
+
+    fn uni(&self, word: &str) -> f64 {
+        self.unigram
+            .get(word)
+            .map(|(p, _)| p * std::f64::consts::LN_10)
+            .unwrap_or(self.unk_log10 * std::f64::consts::LN_10)
+    }
+}
+
+impl LanguageModel for ArpaLm {
+    fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+        if let Some(prev) = prev {
+            if let Some(log10) = self.bigram.get(&(prev.to_string(), cur.to_string())) {
+                return log10 * std::f64::consts::LN_10;
+            }
+            let bow = self
+                .unigram
+                .get(prev)
+                .map(|(_, b)| b * std::f64::consts::LN_10)
+                .unwrap_or(0.0);
+            return bow + self.uni(cur);
+        }
+        self.uni(cur)
+    }
+
+    fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
+        let mut items: Vec<(String, f64)> = self
+            .bigram
+            .iter()
+            .filter(|((a, _), _)| a == prev)
+            .map(|((_, b), log10)| (b.clone(), log10 * std::f64::consts::LN_10))
+            .collect();
+        items.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        items.truncate(limit);
+        items
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +369,35 @@ mod tests {
         lm.add_unigram("你", 5.0);
         lm.add_bigram("<s>", "你", 3.0);
         assert!((lm.score(None, "你") - (0.3f64).ln()).abs() < 1e-9);
+    }
+
+    #[test]
+    fn arpa_scores_and_predicts() {
+        let text = r#"\data\
+ngram 1=3
+ngram 2=2
+
+\1-grams:
+-1.0	你	-0.3
+-1.3	好	-0.2
+-2.0	世界
+
+\2-grams:
+-0.3	你 好
+-1.0	好 世界
+
+\end\
+"#;
+        let lm = ArpaLm::from_arpa_str(text).unwrap();
+        assert_eq!(lm.vocab(), 3);
+        assert_eq!(lm.bigram_count(), 2);
+        let hit = lm.score(Some("你"), "好");
+        assert!((hit - (-0.3f64 * std::f64::consts::LN_10)).abs() < 1e-9);
+        let top = lm.top_next("你", 5);
+        assert_eq!(top[0].0, "好");
+        // 未登录词回退到 unigram
+        let unseen = lm.score(Some("好"), "你");
+        assert!(unseen < 0.0);
     }
 
     #[test]

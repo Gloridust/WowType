@@ -12,7 +12,7 @@ use std::io::{self, BufRead};
 use std::process;
 use std::sync::Arc;
 
-use wowtype_core::lm::{BigramLm, LanguageModel};
+use wowtype_core::lm::{ArpaLm, BigramLm, LanguageModel};
 use wowtype_core::{Engine, Lexicon, MemoryLexicon};
 
 fn usage(program: &str) {
@@ -21,6 +21,7 @@ fn usage(program: &str) {
     println!("选项:");
     println!("  --lexicon <file>  TSV 词典（拼音<TAB>词<TAB>频次）");
     println!("  --lm <file>       bigram TSV（prev<TAB>cur<TAB>count），可选");
+    println!("  --arpa <file>     ARPA 语言模型（与 --lm 二选一）");
     println!("  --beam <n>        beam size，默认 20");
     println!("  --max <n>         最多显示候选数，默认 10");
     println!("  -h, --help        显示帮助");
@@ -37,6 +38,7 @@ fn main() {
     let program = args.first().map(String::as_str).unwrap_or("wowtype-demo");
     let mut lexicon_path = default_lexicon_path();
     let mut lm_path: Option<String> = None;
+    let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
     let mut max_candidates = 10usize;
     let mut queries: Vec<String> = Vec::new();
@@ -62,6 +64,13 @@ fn main() {
                     None => fail("--lm 需要一个文件路径"),
                 }
             }
+            "--arpa" => {
+                i += 1;
+                match args.get(i) {
+                    Some(value) => arpa_path = Some(value.clone()),
+                    None => fail("--arpa 需要一个文件路径"),
+                }
+            }
             "--beam" => {
                 i += 1;
                 beam = Some(parse_usize(args.get(i), "--beam"));
@@ -80,12 +89,19 @@ fn main() {
         Ok(lexicon) => lexicon,
         Err(error) => fail(&format!("{error:#}")),
     };
-    let lm: Arc<dyn LanguageModel> = match &lm_path {
-        Some(path) => match BigramLm::from_bigram_tsv_path(path) {
+    let lm: Arc<dyn LanguageModel> = if let Some(path) = &arpa_path {
+        match ArpaLm::from_arpa_path(path) {
             Ok(lm) => Arc::new(lm),
             Err(error) => fail(&format!("{error:#}")),
-        },
-        None => Arc::new(BigramLm::default()),
+        }
+    } else {
+        match &lm_path {
+            Some(path) => match BigramLm::from_bigram_tsv_path(path) {
+                Ok(lm) => Arc::new(lm),
+                Err(error) => fail(&format!("{error:#}")),
+            },
+            None => Arc::new(BigramLm::default()),
+        }
     };
     let lexicon: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut engine = Engine::new(lexicon, lm);
