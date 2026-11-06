@@ -16,6 +16,9 @@ echo "== Rust 核心 =="
 cargo build --release -p wowtype-core
 cargo test -p wowtype-core
 
+echo "== C ABI 冒烟测试 =="
+./scripts/abi-smoke.sh
+
 echo "== 语音核心 =="
 cargo build --release -p wowtype-voice
 cargo test -p wowtype-voice

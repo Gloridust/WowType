@@ -28,6 +28,9 @@ sudo apt install -y build-essential pkg-config libasound2-dev libx11-dev \
 # 2. 测试核心算法
 cargo test -p wowtype-core -p wowtype-voice
 
+# 2.5 验证 C ABI（fcitx5 插件依赖的就是这套）
+./scripts/abi-smoke.sh
+
 # 3. 跑一下拼音 demo
 cargo run -p wowtype-core --bin wowtype-demo -- xian
 
