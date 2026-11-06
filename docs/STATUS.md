@@ -1,0 +1,80 @@
+# 项目状态对照
+
+这份文档把最初目标逐条对照代码，标明**哪些真做了、哪些是占位、哪些没做成**。
+写它的目的不是美化进度，而是让你清楚现在拿到的是什么。
+
+一句话：文字输入的引擎是完整的、在真实词库上验证过；
+**词库/语言模型的二进制逆向没有做成**，排序里的神经网络重排和 MixRank 只是接口。
+
+## 目标逐条对照
+
+| 目标 | 状态 | 证据 / 差距 |
+|---|---|---|
+| 逆向 `bwcnmacv8` 词库格式并导出数据 | ❌ **未完成** | 能加载官方 dylib、能遍历 V3 trie，但叶子只给「音节序列 + 频次」，词条在值区的 Huffman 编码里。已确认「遍历 trie 导出词库」这条路走不通，见 `docs/DATA.md` §13 |
+| 逆向 `lmcnmac` 语言模型并导出 | ❌ **未完成** | LM 的 key 是「上下文 + 候选词拼接后反转」再哈希，无法枚举；就算能读也不能导出成可用的 n-gram |
+| 音节图 | ✅ 完成 | `core/src/graph.rs`，支持全拼、简拼、隔音符、儿化 |
+| 束搜索 | ✅ 完成 | `core/src/beam.rs`，可配置束宽/扩展数/未登录惩罚 |
+| 频次 + LM + 覆盖率打分 | ✅ 完成 | `core/src/beam.rs` 的路径打分 + `core/src/lm.rs`（bigram TSV、ARPA 两种） |
+| LTR 重排 | 🟡 **线性版** | `core/src/rank.rs`：23 维特征 + 可训练线性权重 + `LtrModel` 接口。没有神经网络模型，`head_word_nnlm` 恒为 0 |
+| MixRank 融合 | ❌ **未实现** | WeType 的 MixRank 是 NNLM + LM + LR 三路融合；我们只有 `path.score + rank_score` 的线性加权，没有独立实现 |
+| 蒸馏对齐排序 | ❌ **未做** | 训练器 `wowtype-train` 能从标注数据拟合权重，但没有教师模型的输出可供蒸馏 |
+| 产出可在 Ubuntu 日常使用的输入法 | 🟡 **待实机** | 引擎与插件代码完整，插件 API 已逐项核对；但插件从未编译过，语音的 X11/采集从未在 Linux 上跑过 |
+
+## 文字输入：实测能力
+
+词库用 rime-ice 全量（552,087 条）。
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 全拼 / 简拼 / 混输 | ✅ | 简拼 top1 95.3%（300 例） |
+| 半成品补全 | ✅ | 截断 1 字母 top1 89.7%、top3 99.0% |
+| 模糊音 | ✅ 可开关 | zh/z、ch/c、sh/s、ang/an、eng/en、ing/in |
+| 双拼（自然码） | ✅ 可开关 | 全音节往返一致性测试 |
+| 英文 / 未登录串 | ✅ | 保留原始大小写 |
+| 简繁转换 | 🟡 字符级 | 不处理「发/髮」这类词组歧义 |
+| 标点 / 符号面板 | ✅ | 57 个符号，拼音或中文名检索 |
+| 用户词库 / 自动学习 | ✅ | 选够 3 次自动入库 |
+| 上下文消歧 | ✅ | 需要真实 LM 才有意义 |
+| 完整输入排序 | ✅ | top1 99.2%、top3 100%（400 例） |
+
+## 排序特征的真实填充情况
+
+23 个特征里**只有 11 个有数据来源**：
+
+| 有值 | 来源 |
+|---|---|
+| `kind` | 分词数量 |
+| `prob` | 路径分数归一 |
+| `coverage_score` | 音节图覆盖 |
+| `lm_score_with_previous_txt` | 二元 LM |
+| `full_jianpin` / `ltr_valid` | 路径/排序器状态 |
+| `history_count` / `history_use_count` / `history_time_diff` | 选词历史 |
+| `with_context` / `context_bigram_score` | 光标前文本 |
+
+恒为 0 的 12 个：`typo_count`、`complete_count`、`user_word_rollback_score`、`head_word_nnlm`、`hot_val_conf`、`user_tail_conf`、`context_flag`、`prefix_completion`（仅补全路径有值）、`other_completion`、`typo`、`force_emit`、`history_hot_val`。
+
+它们要么需要神经网络模型（`head_word_nnlm`），要么需要官方那种热度数据（`hot_val_conf`），我们没有数据源。
+
+## 已验证 / 未验证
+
+**在 macOS 上验证过**：
+
+- 126 项 Rust 测试（`cargo test`）
+- 22 项 C ABI 契约测试（`./scripts/abi-smoke.sh`）
+- 真实词库 55 万条的排序质量、延迟、加载时间
+- M1 上跑的官方 WeType 引擎作为对照（逆向阶段）
+
+**没验证过**：
+
+- fcitx5 插件从未编译（API 已逐项核对，签名一致）
+- Linux 的 X11 全局热键、cpal 采集、剪贴板上屏
+- 语音端到端（录音 → 识别 → 上屏）
+
+## 如果要对齐 WeType 还差什么
+
+按投入产出排序：
+
+1. **真实语言模型**（ARPA 或训练好的 bigram）。这是排序质量的最大变量，也是上下文消歧的前提
+2. **神经网络重排**（`head_word_nnlm`）。WeType 用 TFLite 跑 NNLM，我们要么训一个小模型，要么接 llama.cpp 之类的推理
+3. **MixRank 融合**。有了 1 和 2 之后，三路融合才有意义
+4. **词库数据**。WeType 的原库解不出来，只能用开源词库（目前 rime-ice 效果已经不错）
