@@ -170,8 +170,17 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
         return;
     }
 
-    WowtypeCandidates *raw =
-        wowtype_engine_input(core_, state->buffer_.c_str());
+    WowtypeCandidates *raw = nullptr;
+    if (state->buffer_.front() == '/') {
+        // 符号面板：/ 后面是拼音或中文名前缀
+        const std::string query = state->buffer_.substr(1);
+        if (query.empty()) {
+            return;
+        }
+        raw = wowtype_symbol_search(query.c_str(), 9);
+    } else {
+        raw = wowtype_engine_input(core_, state->buffer_.c_str());
+    }
     if (!raw) {
         return;
     }
@@ -300,32 +309,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     }
 
-    // 没有正在输入的拼音时，把 ASCII 标点转成中文标点。
+    // 没有正在输入的拼音时，把 ASCII 标点转成中文标点（映射表在 Rust 侧）。
     if (state->buffer_.empty()) {
-        const char *punct = nullptr;
-        switch (sym) {
-        case FcitxKey_comma:
-            punct = "，";
-            break;
-        case FcitxKey_period:
-            punct = "。";
-            break;
-        case FcitxKey_question:
-            punct = "？";
-            break;
-        case FcitxKey_exclam:
-            punct = "！";
-            break;
-        case FcitxKey_semicolon:
-            punct = "；";
-            break;
-        case FcitxKey_colon:
-            punct = "：";
-            break;
-        default:
-            break;
-        }
-        if (punct) {
+        if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym))) {
             commitText(ic, state, punct);
             event.filterAndAccept();
             return;
@@ -339,6 +325,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         input = static_cast<char>('a' + (sym - FcitxKey_A));
     } else if (sym == FcitxKey_apostrophe) {
         input = '\'';
+    } else if (sym == FcitxKey_slash && state->buffer_.empty()) {
+        // / 开头进入符号面板
+        input = '/';
     }
 
     if (input != 0) {

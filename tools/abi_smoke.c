@@ -92,6 +92,16 @@ int main(int argc, char **argv) {
     check(wowtype_engine_remove_user_word(e, "我特") == 1, "remove_user_word");
     check(wowtype_engine_load_user_dict(e, "/tmp/wowtype_abi_user.tsv") >= 1, "load_user_dict");
 
+    c = wowtype_symbol_search("juhao", 3);
+    check(c && wowtype_candidates_len(c) > 0 &&
+              strcmp(wowtype_candidates_text(c, 0), "。") == 0,
+          "symbol: juhao -> 。");
+    wowtype_candidates_free(c);
+    {
+        const char *p = wowtype_fullwidth_punct(',');
+        check(p && strcmp(p, "，") == 0, "punct: comma -> ，");
+    }
+
     printf("version=%s", wowtype_version());
     putchar(10);
     wowtype_engine_free(e);

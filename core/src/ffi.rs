@@ -390,6 +390,50 @@ pub unsafe extern "C" fn wowtype_engine_load_conversion(
     }
 }
 
+thread_local! {
+    static PUNCT_BUF: RefCell<CString> =
+        RefCell::new(CString::new("，").expect("static punct"));
+}
+
+/// ASCII 标点转中文标点。返回的指针在下一次调用前有效，未收录返回 NULL。
+#[no_mangle]
+pub extern "C" fn wowtype_fullwidth_punct(code: c_int) -> *const c_char {
+    let Some(ch) = char::from_u32(code as u32) else {
+        return ptr::null();
+    };
+    let Some(text) = crate::symbols::fullwidth_punct(ch) else {
+        return ptr::null();
+    };
+    PUNCT_BUF.with(|slot| {
+        *slot.borrow_mut() = CString::new(text).unwrap_or_default();
+        slot.borrow().as_ptr()
+    })
+}
+
+/// 符号检索。query 为拼音或中文名前缀，结果放在候选结构里（score 恒为 0）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_symbol_search(
+    query: *const c_char,
+    limit: usize,
+) -> *mut WowtypeCandidates {
+    let Some(query) = (unsafe { cstr_to_str(query) }) else {
+        set_last_error("query is null or not utf8");
+        return ptr::null_mut();
+    };
+    let mut texts = Vec::new();
+    let mut scores = Vec::new();
+    for symbol in crate::symbols::search(query, limit) {
+        match CString::new(symbol.text) {
+            Ok(text) => {
+                texts.push(text);
+                scores.push(0.0);
+            }
+            Err(_) => continue,
+        }
+    }
+    Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {

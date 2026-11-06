@@ -13,6 +13,7 @@ pub mod lm;
 pub mod rank;
 pub mod shuangpin;
 pub mod syllable;
+pub mod symbols;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;

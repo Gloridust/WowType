@@ -40,6 +40,12 @@ int wowtype_engine_set_traditional(WowtypeEngineHandle *engine, int on);
 /* 载入简繁映射表（简体<TAB>繁体）。返回条目数，失败返回 -1。 */
 int wowtype_engine_load_conversion(WowtypeEngineHandle *engine, const char *path);
 
+/* ASCII 标点转中文标点；未收录返回 NULL。指针在下一次调用前有效。 */
+const char *wowtype_fullwidth_punct(int ascii_codepoint);
+
+/* 符号检索（拼音/中文名前缀），结果用 wowtype_candidates_* 读取并释放。 */
+WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
+
 /* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
 
