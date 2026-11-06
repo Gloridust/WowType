@@ -66,6 +66,7 @@ WeType 自己的词库还在逆向（见下）。在那之前可以直接用开�
 
 ```bash
 # 雾凇拼音：https://github.com/iDvel/rime-ice
+# 会自动顺着 import_tables 递归合并被引用的词库（rime-ice 的条目都在被引用文件里）
 python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
 cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 ```
@@ -114,6 +115,7 @@ cargo run --release -p wowtype-core --bin wowtype-eval -- \
 | 输入 | 耗时 |
 |---|---|
 | 载入 10 万条词库 | ~140 ms（一次性） |
+| 载入 rime-ice 全量 55 万条 | ~2 s（一次性，进程启动时） |
 | `a` | 0.003 ms |
 | `zhong` | 0.14 ms |
 | `zhongguo` | 0.03 ms |

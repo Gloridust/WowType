@@ -81,6 +81,8 @@ pub struct MemoryLexicon {
     fuzzy_index: HashMap<Vec<SyllableId>, Vec<usize>>,
     by_length: HashMap<usize, Vec<usize>>,
     total_freq: f64,
+    /// 加载时被跳过的行数（未知音节等）。
+    skipped: usize,
 }
 
 impl MemoryLexicon {
@@ -148,10 +150,19 @@ impl MemoryLexicon {
             let freq: f64 = freq
                 .parse()
                 .with_context(|| format!("第 {} 行频次不是数字: {freq}", line_no + 1))?;
-            lex.insert(pinyin, word, freq)
-                .with_context(|| format!("第 {} 行加载失败", line_no + 1))?;
+            // 音节不认识（各地方言音、冷僻拼音）时跳过这一行，
+            // 不要让一条脏数据毁掉整个词库。
+            match lex.insert(pinyin, word, freq) {
+                Ok(()) => {}
+                Err(_) => lex.skipped += 1,
+            }
         }
         Ok(lex)
+    }
+
+    /// 加载时被跳过的行数。
+    pub fn skipped(&self) -> usize {
+        self.skipped
     }
 
     /// 从 TSV 文件加载。

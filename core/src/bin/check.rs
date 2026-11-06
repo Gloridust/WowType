@@ -98,7 +98,12 @@ fn main() {
                 } else {
                     report.ok(
                         "词库",
-                        &format!("{} 条词，总频次 {:.0}", v.len(), v.total_freq()),
+                        &format!(
+                            "{} 条词，总频次 {:.0}，跳过 {} 行",
+                            v.len(),
+                            v.total_freq(),
+                            v.skipped()
+                        ),
                     );
                 }
                 Arc::new(v)
