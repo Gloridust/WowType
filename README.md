@@ -72,5 +72,5 @@ sudo cmake --install fcitx5-addon/build
 | `hpmac_base.bin` 超参数 | 已读出浮点值 |
 | 候选排序 oracle（官方引擎直接吐分数） | 卡在 create_session 的一个空指针 |
 
-详见 [analysis/REPORT.md](analysis/REPORT.md)、[tools/oracle/README.md](tools/oracle/README.md)、
-[docs/VOICE.md](docs/VOICE.md)。
+详见 [analysis/REPORT.md](analysis/REPORT.md)、[docs/DATA.md](docs/DATA.md)、
+[tools/oracle/README.md](tools/oracle/README.md)、[docs/VOICE.md](docs/VOICE.md)。
