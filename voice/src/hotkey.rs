@@ -220,4 +220,29 @@ mod tests {
         assert!(tr.on_down(t0 + Duration::from_millis(50)).is_empty());
         assert!(tr.is_recording());
     }
+
+    #[test]
+    fn up_without_down_is_noop() {
+        let t0 = Instant::now();
+        let mut tr = VoiceTrigger::new(cfg());
+        assert!(tr.on_up(t0).is_empty());
+        assert!(!tr.is_recording());
+    }
+
+    #[test]
+    fn tick_when_idle_is_none() {
+        let t0 = Instant::now();
+        let mut tr = VoiceTrigger::new(cfg());
+        assert_eq!(tr.tick(t0 + Duration::from_secs(10)), None);
+    }
+
+    #[test]
+    fn hold_mode_tick_never_stops() {
+        // 长按模式靠松手结束，不该被静音超时打断
+        let t0 = Instant::now();
+        let mut tr = VoiceTrigger::new(cfg());
+        tr.on_down(t0);
+        assert_eq!(tr.tick(t0 + Duration::from_secs(5)), None);
+        assert!(tr.is_recording());
+    }
 }
