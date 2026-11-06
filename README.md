@@ -54,6 +54,16 @@ sudo cmake --install fcitx5-addon/build
                               └─ 边说边上屏 / 定稿上屏
 ```
 
+## 词库从哪来
+
+WeType 自己的词库还在逆向（见下）。在那之前可以直接用开源词库跑通：
+
+```bash
+# 雾凇拼音：https://github.com/iDvel/rime-ice
+python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
+cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
+```
+
 ## 已知限制
 
 - `core/data/demo_lexicon.tsv` 只有十几条演示词，真实词库尚未导出（见下）。
