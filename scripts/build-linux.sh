@@ -19,6 +19,11 @@ cargo test -p wowtype-core
 echo "== C ABI 冒烟测试 =="
 ./scripts/abi-smoke.sh
 
+echo "== 数据自检 =="
+cargo run -q -p wowtype-core --bin wowtype-check -- \
+  --lexicon "${WOWTYPE_LEXICON:-/usr/share/wowtype/lexicon.tsv}" \
+  --s2t "${WOWTYPE_S2T:-/usr/share/wowtype/s2t.tsv}" || true
+
 echo "== 语音核心 =="
 cargo build --release -p wowtype-voice
 cargo test -p wowtype-voice

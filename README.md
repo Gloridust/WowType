@@ -31,6 +31,9 @@ cargo test -p wowtype-core -p wowtype-voice
 # 2.5 验证 C ABI（fcitx5 插件依赖的就是这套）
 ./scripts/abi-smoke.sh
 
+# 2.6 数据自检：词库/语言模型/简繁表/用户词是否就位
+cargo run -p wowtype-core --bin wowtype-check -- --lexicon lexicon.tsv --s2t core/data/s2t.tsv
+
 # 3. 跑一下拼音 demo
 cargo run -p wowtype-core --bin wowtype-demo -- xian
 

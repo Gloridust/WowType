@@ -22,5 +22,9 @@ path = "src/bin/bench.rs"
 name = "wowtype-eval"
 path = "src/bin/eval.rs"
 
+[[bin]]
+name = "wowtype-check"
+path = "src/bin/check.rs"
+
 [dependencies]
 anyhow = "1.0"
