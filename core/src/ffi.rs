@@ -353,6 +353,43 @@ pub unsafe extern "C" fn wowtype_engine_set_shuangpin(
     0
 }
 
+/// 开关繁体输出。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_traditional(
+    engine: *mut WowtypeEngineHandle,
+    on: c_int,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_traditional(on != 0);
+    0
+}
+
+/// 载入简繁映射表（简体<TAB>繁体），返回条目数；失败返回 -1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_conversion(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_conversion(path) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 候选数量。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_len(candidates: *const WowtypeCandidates) -> usize {

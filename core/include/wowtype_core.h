@@ -34,6 +34,12 @@ int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
 /* 开关双拼（自然码方案）。返回 0 成功。 */
 int wowtype_engine_set_shuangpin(WowtypeEngineHandle *engine, int on);
 
+/* 开关繁体输出。返回 0 成功。 */
+int wowtype_engine_set_traditional(WowtypeEngineHandle *engine, int on);
+
+/* 载入简繁映射表（简体<TAB>繁体）。返回条目数，失败返回 -1。 */
+int wowtype_engine_load_conversion(WowtypeEngineHandle *engine, const char *path);
+
 /* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
 

@@ -24,4 +24,5 @@ case "$(uname -s)" in
 esac
 
 cc -O2 -I"$INCLUDE" -L"$LIBDIR" -lwowtype_core -o /tmp/wowtype_abi_smoke tools/abi_smoke.c
-env $RUNENV /tmp/wowtype_abi_smoke "$LEXICON" "$BIGRAM"
+S2T="$PWD/core/data/s2t.tsv"
+env $RUNENV /tmp/wowtype_abi_smoke "$LEXICON" "$BIGRAM" "$S2T"

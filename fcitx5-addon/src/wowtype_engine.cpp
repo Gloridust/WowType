@@ -83,6 +83,20 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
             sp && *sp && *sp != '0') {
             wowtype_engine_set_shuangpin(core_, 1);
         }
+        if (const char *tr = std::getenv("WOWTYPE_TRADITIONAL");
+            tr && *tr && *tr != '0') {
+            const char *s2t = std::getenv("WOWTYPE_S2T");
+            const std::string path =
+                (s2t && *s2t) ? std::string(s2t)
+                              : std::string("/usr/share/wowtype/s2t.tsv");
+            const int loaded = wowtype_engine_load_conversion(core_, path.c_str());
+            if (loaded > 0) {
+                wowtype_engine_set_traditional(core_, 1);
+                FCITX_INFO() << "Wowtype: 载入简繁表 " << loaded << " 条";
+            } else {
+                FCITX_WARN() << "Wowtype: 简繁表载入失败 " << path;
+            }
+        }
         const std::string userDict = userDictPath();
         if (!userDict.empty()) {
             const int loaded = wowtype_engine_load_user_dict(core_, userDict.c_str());

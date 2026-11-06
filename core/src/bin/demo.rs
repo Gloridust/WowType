@@ -25,6 +25,8 @@ fn usage(program: &str) {
     println!("  --beam <n>        beam size，默认 20");
     println!("  --fuzzy           开启模糊音（z/zh、an/ang 等）");
     println!("  --shuangpin       使用双拼（自然码）");
+    println!("  --traditional     候选输出繁体");
+    println!("  --s2t <file>      简繁映射表（简体<TAB>繁体）");
     println!("  --max <n>         最多显示候选数，默认 10");
     println!("  -h, --help        显示帮助");
     println!();
@@ -44,6 +46,8 @@ fn main() {
     let mut beam: Option<usize> = None;
     let mut fuzzy = false;
     let mut shuangpin = false;
+    let mut traditional = false;
+    let mut s2t_path: Option<String> = None;
     let mut max_candidates = 10usize;
     let mut queries: Vec<String> = Vec::new();
 
@@ -81,6 +85,14 @@ fn main() {
             }
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
+            "--traditional" => traditional = true,
+            "--s2t" => {
+                i += 1;
+                match args.get(i) {
+                    Some(value) => s2t_path = Some(value.clone()),
+                    None => fail("--s2t 需要一个文件路径"),
+                }
+            }
             "--max" => {
                 i += 1;
                 max_candidates = parse_usize(args.get(i), "--max");
@@ -116,6 +128,13 @@ fn main() {
     }
     engine.set_fuzzy(fuzzy);
     engine.set_shuangpin(shuangpin);
+    engine.set_traditional(traditional);
+    if let Some(path) = &s2t_path {
+        match engine.load_conversion(path) {
+            Ok(n) => eprintln!("简繁表：{n} 条"),
+            Err(error) => fail(&format!("{error:#}")),
+        }
+    }
     engine.set_max_candidates(max_candidates);
 
     if queries.is_empty() {

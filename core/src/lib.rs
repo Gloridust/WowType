@@ -5,6 +5,7 @@
 //! LTR / 神经重排 / MixRank 只在接口上预留，尚未接入真实模型。
 
 pub mod beam;
+pub mod convert;
 pub mod ffi;
 pub mod graph;
 pub mod lexicon;
@@ -21,6 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 
 pub use crate::beam::{beam_search, BeamConfig, BeamPath, BeamWord};
+pub use crate::convert::Converter;
 pub use crate::graph::{Edge, EdgeKind, GraphMode, GraphOptions, SyllableGraph};
 pub use crate::lexicon::{
     FuzzyLexicon, LexEntry, Lexicon, MemoryLexicon, SyllableKey, UserLexicon,
@@ -67,6 +69,8 @@ pub struct EngineConfig {
     pub shuangpin: bool,
     /// 是否在候选末尾追加原始输入（英文/未登录串）。
     pub english_candidate: bool,
+    /// 是否把候选转成繁体。
+    pub traditional: bool,
 }
 
 impl Default for EngineConfig {
@@ -79,6 +83,7 @@ impl Default for EngineConfig {
             fuzzy_penalty: 2.5,
             shuangpin: false,
             english_candidate: true,
+            traditional: false,
         }
     }
 }
@@ -112,6 +117,8 @@ pub struct Engine {
     history: RwLock<HashMap<String, HistoryEntry>>,
     /// 光标前已上屏的文本，用于上下文 bigram 特征。
     context: RwLock<String>,
+    /// 简繁字符映射表。
+    converter: RwLock<Arc<Converter>>,
 }
 
 impl Engine {
@@ -125,6 +132,7 @@ impl Engine {
             config: EngineConfig::default(),
             history: RwLock::new(HashMap::new()),
             context: RwLock::new(String::new()),
+            converter: RwLock::new(Arc::new(Converter::new())),
         }
     }
 
@@ -190,6 +198,65 @@ impl Engine {
     /// 开关双拼（自然码）。
     pub fn set_shuangpin(&mut self, on: bool) {
         self.config.shuangpin = on;
+    }
+
+    /// 开关繁体输出。
+    pub fn set_traditional(&mut self, on: bool) {
+        self.config.traditional = on;
+    }
+
+    /// 载入简繁映射表，返回条目数。
+    pub fn load_conversion<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let conv = Converter::from_tsv_path(path)?;
+        let len = conv.len();
+        if let Ok(mut slot) = self.converter.write() {
+            *slot = Arc::new(conv);
+        }
+        Ok(len)
+    }
+
+    /// 直接装载一张映射表（测试或程序内生成时用）。
+    pub fn install_converter(&self, conv: Converter) {
+        if let Ok(mut slot) = self.converter.write() {
+            *slot = Arc::new(conv);
+        }
+    }
+
+    pub fn conversion_len(&self) -> usize {
+        self.converter.read().map(|c| c.len()).unwrap_or(0)
+    }
+
+    /// 把候选（含分词）转成繁体，并合并转换后重复的候选。
+    fn apply_traditional(&self, candidates: &mut Vec<Candidate>) {
+        let conv = match self.converter.read() {
+            Ok(slot) if !slot.is_empty() => slot.clone(),
+            _ => return,
+        };
+        let mut best: HashMap<String, Candidate> = HashMap::new();
+        for mut candidate in std::mem::take(candidates) {
+            candidate.text = conv.convert(&candidate.text);
+            for word in &mut candidate.words {
+                word.text = conv.convert(&word.text);
+            }
+            match best.entry(candidate.text.clone()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(candidate);
+                }
+                Entry::Occupied(mut slot) => {
+                    if candidate.score > slot.get().score {
+                        slot.insert(candidate);
+                    }
+                }
+            }
+        }
+        let mut list: Vec<Candidate> = best.into_values().collect();
+        list.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
+        list.truncate(self.config.max_candidates.max(1));
+        *candidates = list;
     }
 
     pub fn set_max_candidates(&mut self, max_candidates: usize) {
@@ -291,6 +358,9 @@ impl Engine {
         };
 
         self.append_raw_candidate(display, &mut result);
+        if self.config.traditional {
+            self.apply_traditional(&mut result);
+        }
         Ok(result)
     }
 
@@ -856,6 +926,20 @@ mod tests {
             !e.input("nihao").iter().any(|c| c.text == "nihao"),
             "完整覆盖时不应插入原始拼音串"
         );
+    }
+
+    #[test]
+    fn traditional_candidates() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("zhong guo\t中国\t8000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.install_converter(Converter::from_tsv_str("国\t國\n").unwrap());
+        assert_eq!(e.input("zhongguo")[0].text, "中国");
+        e.set_traditional(true);
+        assert_eq!(e.input("zhongguo")[0].text, "中國");
+        // 分词文本也要跟着转
+        assert_eq!(e.input("zhongguo")[0].words[0].text, "中國");
     }
 
     #[test]

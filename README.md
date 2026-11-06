@@ -73,6 +73,10 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 支持**模糊音**（默认关闭）：`--fuzzy` 或 `WOWTYPE_FUZZY=1` 开启后，
 `zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
 
+支持**繁体输出**：`--traditional`（插件用 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
+`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
+字符级转换，暂不处理「发/髮」这类词组歧义。
+
 英文/未登录串会把原始输入本身作为候选（保留大小写）：`hello` → `hello`，
 纯拼音输入被完整覆盖时不会插入原始串。
 

@@ -57,11 +57,16 @@ install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../core/include/wowtype_core.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/wowtype"
 )
 
-# demo 词典（不是真实词库）
+# demo 词典（不是真实词库）与简繁映射表
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../core/data/demo_lexicon.tsv"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/wowtype"
     RENAME demo_lexicon.tsv
 )
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../core/data/s2t.tsv")
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../core/data/s2t.tsv"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/wowtype"
+    )
+endif()
 
 configure_file(conf/wowtype.conf.in
     "${CMAKE_CURRENT_BINARY_DIR}/wowtype.conf" @ONLY)

@@ -78,6 +78,16 @@ int main(int argc, char **argv) {
     wowtype_candidates_free(c);
     wowtype_engine_set_shuangpin(e, 0);
 
+    const char *s2t = argc > 3 ? argv[3] : "";
+    if (*s2t) {
+        check(wowtype_engine_load_conversion(e, s2t) > 0, "load_conversion");
+        check(wowtype_engine_set_traditional(e, 1) == 0, "set_traditional");
+        c = wowtype_engine_input(e, "zhongguo");
+        check(c && has_candidate(c, "中國"), "traditional: zhongguo -> 中國");
+        wowtype_candidates_free(c);
+        wowtype_engine_set_traditional(e, 0);
+    }
+
     check(wowtype_engine_save_user_dict(e, "/tmp/wowtype_abi_user.tsv") == 0, "save_user_dict");
     check(wowtype_engine_remove_user_word(e, "我特") == 1, "remove_user_word");
     check(wowtype_engine_load_user_dict(e, "/tmp/wowtype_abi_user.tsv") >= 1, "load_user_dict");
