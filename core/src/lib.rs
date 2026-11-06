@@ -268,7 +268,12 @@ impl Engine {
             }
         }
         let mut result: Vec<Candidate> = merged.into_values().collect();
-        result.sort_by(|a, b| b.score.total_cmp(&a.score));
+        // 分数并列时按文本排序，保证结果稳定（HashMap 迭代顺序不固定）
+        result.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
         result.truncate(self.config.max_candidates.max(1));
         Ok(result)
     }
@@ -334,7 +339,11 @@ impl Engine {
             .collect();
 
         let mut deduped = dedupe_by_text(candidates);
-        deduped.sort_by(|a, b| b.score.total_cmp(&a.score));
+        deduped.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.text.cmp(&b.text))
+        });
         deduped.truncate(self.config.max_candidates.max(1));
         Ok(deduped)
     }
