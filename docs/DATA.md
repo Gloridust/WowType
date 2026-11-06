@@ -187,3 +187,30 @@ DictManager::GetSharedDictByKind(u16) → shared_ptr<IDict>（x8 隐式返回）
 
 下一步：看 `DictManager::Impl::AddCellDict` 那个 `function<unique_ptr<IDict>(unsigned short)>`
 的 lambda 里对 kind 的分支，确定 cell 类型到 AssociateWbDict 的映射。
+
+## 11. 直接遍历 trie（已跑通一半）
+
+拿到 `IDict*` 后可以走它的 Cursor 接口，这条路比静态解析二进制省事得多：
+
+```c
+// GetRootCursor() 返回 Cursor（96 字节，x8 隐式返回）
+// Cursor 布局：
+//   +0x00 dict 指针
+//   +0x0c 当前节点 freq
+//   +0x18 是否为词尾（IsLeaf）
+//   +0x1c / +0x20 / +0x24 / +0x28 节点索引与累加值
+//   +0x44 std::string（Apple 备用布局：短串 data 在 0，长度在第 23 字节）
+
+bool Move(int label);      // 成功返回 true（普通返回值，无 sret）
+void TryMove(int, out);    // 返回 optional<Cursor>，x8 隐式返回 —— 别用这个
+uint64 Freq();             // 低 32 位是频次，bit32 是有效标志
+bool IsLeaf();
+```
+
+实测 root → Move(0..11) 都能成功，读到频次 21578 / 12911 / 13442 …，
+说明 DFS 可用。
+
+**未解**：label id → 文本的映射。`MoveImpl` 里从全局 `0x10367a768` 取表，
+`base + label*16` 是 `{ptr,len}`，但实测越界/乱码，说明那是个分页表而不是扁平数组，
+或者 label 空间不是从 0 连续。下一步要么解分页表，要么用 `Cursor::ToSyllable()`
+（返回 Cursor+0x44 的引用）配合正确的字符串布局。
