@@ -27,6 +27,7 @@ fn main() {
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
     let mut max_candidates = 10usize;
+    let mut top_k = 3usize;
     let mut weights = FeatureWeights::default();
     let mut fuzzy = false;
     let mut shuangpin = false;
@@ -64,6 +65,10 @@ fn main() {
                 i += 1;
                 max_candidates = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(10);
             }
+            "--k" => {
+                i += 1;
+                top_k = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(3).max(1);
+            }
             "--weights" => {
                 i += 1;
                 let spec = args.get(i).cloned().unwrap_or_default();
@@ -75,7 +80,7 @@ fn main() {
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
                 println!(
-                    "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n]"
+                    "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
                 println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
                 return;
@@ -145,7 +150,7 @@ fn main() {
         if hit1 {
             top1 += 1;
         }
-        let hit3 = texts.iter().take(3).any(|t| accepted.contains(t));
+        let hit3 = texts.iter().take(top_k).any(|t| accepted.contains(t));
         if hit3 {
             top3 += 1;
         }
@@ -163,12 +168,12 @@ fn main() {
     }
     let pct = |n: usize| n as f64 * 100.0 / total as f64;
     println!(
-        "用例 {total}  top1 {top1} ({:.1}%)  top3 {top3} ({:.1}%)",
+        "用例 {total}  top1 {top1} ({:.1}%)  top{top_k} {top3} ({:.1}%)",
         pct(top1),
         pct(top3)
     );
     if !misses.is_empty() {
-        println!("未进前三：");
+        println!("未进前 {top_k}：");
         for line in misses {
             println!("{line}");
         }
