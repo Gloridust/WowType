@@ -241,3 +241,41 @@ DFS 实测输出：
 即「音节路径 + 频次」已经能读，但 `+0x2c` 那个字符串一直是空的，
 所以**中文词条本体还没拿到**。`MoveImpl` 里确实会写 `+0x2c`（`stur x9,[x19,#0x2c]`），
 说明它由某种条件触发，下一步要找到触发条件。
+
+## 13. 字符串布局与 DFS 结论（本轮）
+
+### libc++ 备用字符串布局（Apple）
+
+```
+长串: [0]=data  [8]=size  [16]=capacity（最低位为 1 作为长串标志）
+短串: [0..22]=内联数据  [23]=长度（低 7 位）
+```
+
+之前按 data@16 读，导致词条永远是空；按上面的布局读才正确。
+判长串要用 `(*(u64*)(b+16) & 1)`，并且要加 size < 4096、指针范围合理 之类的校验，
+否则短串会被误判成长串而崩溃。
+
+### V3 cursor 能给什么
+
+DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
+
+```
+\ta\t21578
+\ta,a\t10686
+\ta,ai\t3978
+\ta,ba\t10245
+```
+
+即：**音节路径 + 频次**。
+`Cursor::Path()`（+0x2c）在所有叶子上都是空的，说明中文词条不在 cursor 里，
+而是存在值区（`LargeDictValueHuffmanCodec` 编码），需要通过 LookUp 的结果拿。
+
+### 其他类
+
+- kind 29（ChineseStaticDictV2）用同一套 cursor 接口没有子节点，说明 API 不同。
+- kind 0（ChineseStaticDict）直接崩溃。
+
+### 结论
+
+「遍历 trie 导出词库」这条路走不通：trie 只存音节序列和频次，词条在另一套值编码里。
+要拿词条还是得解 `LargeDictValueHuffmanCodec` + 音节 ID 映射，或者换个思路。

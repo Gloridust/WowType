@@ -41,11 +41,17 @@ static void on_segv(int, siginfo_t*, void*){ const char m[]="CRASH\n"; write(2,m
 
 static std::string read_str(const void* s){
   const unsigned char* b=(const unsigned char*)s;
+  unsigned long long cap=*(const unsigned long long*)(b+16);
+  unsigned long long sz=*(const unsigned long long*)(b+8);
+  unsigned long long dp=*(const unsigned long long*)(b);
+  // 长串：data@0 / size@8 / cap@16（LSB 标记）；做个合理性检查，避免把短串误判成长串
+  if((cap & 1ULL) && sz < 4096 && dp > 0x10000ULL && dp < 0x800000000000ULL){
+    return std::string((const char*)dp, (size_t)sz);
+  }
   unsigned char last=b[23];
-  if((last & 0x80)==0 && last<=22){ return std::string((const char*)b,last); }
-  const char* p=*(const char* const*)(b+16); size_t n=*(const size_t*)(b+8);
-  if(!p) return std::string();
-  return std::string(p,n);
+  size_t n=last & 0x7f;
+  if(n>22) n=22;
+  return std::string((const char*)b,n);
 }
 typedef bool (*movefn)(void*, int);
 typedef unsigned long long (*freqfn)(const void*);
