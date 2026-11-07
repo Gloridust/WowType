@@ -469,6 +469,7 @@ impl Engine {
             self.query_plain(&normalized, at_ms)?
         };
 
+        protect_exact_input(&mut result);
         self.append_raw_candidate(display, &mut result);
         if self.config.traditional {
             self.apply_traditional(&mut result);
@@ -479,6 +480,7 @@ impl Engine {
         if !self.config.shuangpin && self.config.prefix_candidates > 0 {
             let leading = raw.len() - raw.trim_start().len();
             let mut prefix = self.prefix_candidates(&normalized)?;
+            prefix_on_syllable_boundaries(&result, &normalized, &mut prefix);
             for candidate in &mut prefix {
                 candidate.consumed = leading + letters_to_bytes(display, candidate.consumed);
                 if self.config.traditional {
@@ -489,7 +491,7 @@ impl Engine {
                     }
                 }
             }
-            merge_prefix_candidates(&mut result, prefix);
+            merge_prefix_candidates(&mut result, prefix, self.config.max_candidates.max(1));
         }
         Ok(result)
     }
@@ -593,7 +595,7 @@ impl Engine {
     /// - 拼音完整、没纠错的中文排前面，原始串垫底（she -> 社 设 ……）；
     /// - 输入是已知英文词，而中文要靠纠错才凑得出来：英文排第一
     ///   （hello、github、python 不该被改成乱码中文）；中文只差最后一个音节没打完
-    ///   （bug、diy）时排第二；拼音本身就完整（she、long）时排第三；
+    ///   （bug、diy）时排第二；拼音本身就完整（she、long）时排第六；
     /// - 不认识的串：中文全是未登录兜底时排第一，中文纠了 2 处以上排第二，其余垫底。
     ///
     /// 原始串一定留在列表里，不会被截断挤掉。
@@ -636,7 +638,8 @@ impl Engine {
             .unwrap_or(false);
         let position = if english.is_some() {
             if exact {
-                Some(2)
+                // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
+                Some(5)
             } else if top_typos == 0.0 && has_known_word {
                 // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
                 // 用户多半还在打拼音，英文排第二
@@ -956,26 +959,178 @@ fn letters_to_bytes(raw: &str, letters: usize) -> usize {
 ///
 /// 整句是一个词时（shijie -> 世界）句首词放在最后；整句由多个词拼成时
 /// （长句）第二名往后的整句只是小改动，价值不如句首词，所以句首词紧跟第一名。
-fn merge_prefix_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>) {
-    let mut prefix: Vec<Candidate> = prefix
+/// 词频低于这个数的词不受「精确优先」保护（rime-ice 里约排在 20 万名以后，多是生僻或凑出来的条目）。
+const EXACT_PROTECT_MIN_FREQ: f64 = 1000.0;
+
+/// 拼音打全了、而且正好是一个实在的词时，这个词必须排第一。
+///
+/// 补全和纠错的分数里带着词频，高频词补出来以后可能比用户打全了的低频词还高：
+/// `zhongdi` 会出「重点」（zhong dian）而不是「种地」，`ka` 出「看」，`beiji` 出「北京」。
+/// 用户按空格上屏的是第一个——打到一半时补全排第二只是多按一个键，
+/// 打全了却被换成别的词就是打错字。所以排在这个词前面的补全/纠错候选都挪到它后面。
+///
+/// 同理，整个输入就是一个词时，几个单字硬凑出来的候选（`shidan` 拆成「是 | 但」）
+/// 也不该压过它（「实弹」）。
+///
+/// 「实在的词」：精确匹配（不靠纠错和补全）、要么整个输入是一个词，要么最后一个词
+/// 至少两个字（这时只和「前面的词一样、只有最后一个词不同」的候选比）；每个词的词频不低于 [`EXACT_PROTECT_MIN_FREQ`]，或者是用户选过的。
+/// 最后是个单字的精确结果（`zhonggu` 拆成「中 | 骨」）不算，用户多半还没打完，
+/// 补全照常可以排第一。
+fn protect_exact_input(candidates: &mut Vec<Candidate>) {
+    let multi = |w: &CandidateWord| w.pinyin.split_whitespace().count() >= 2;
+    let is_exact = |c: &Candidate| {
+        c.features.coverage_score >= 1.0
+            && c.features.typo_count == 0.0
+            && c.features.prefix_completion == 0.0
+            && !c.words.is_empty()
+            && c.words.iter().all(|w| w.known)
+    };
+    let solid = |c: &Candidate| {
+        is_exact(c)
+            && (c.words.len() == 1 || c.words.last().map(multi).unwrap_or(false))
+            && (c.features.history_count > 0.0
+                || c.words.iter().all(|w| w.freq >= EXACT_PROTECT_MIN_FREQ))
+    };
+    let Some(anchor) = candidates.iter().position(solid) else {
+        return;
+    };
+    if anchor == 0 {
+        return;
+    }
+    let whole_word = candidates[anchor].words.len() == 1;
+    // 精确结果是几个词拼的（我在 | 种地）时，只管开头一样、只是后面换了词的拼凑结果
+    // （我 | 在重点）；一个整词盖住全部输入的（从善如流 vs 从善 | 入理）是更强的证据，不动
+    let head_text: String = {
+        let words = &candidates[anchor].words;
+        words[..words.len() - 1].iter().map(|w| w.text.as_str()).collect()
+    };
+    let same_head = |c: &Candidate| whole_word || (c.words.len() >= 2 && c.text.starts_with(&head_text));
+    let yields = |c: &Candidate| {
+        let corrected = c.features.typo_count > 0.0 || c.features.prefix_completion > 0.0;
+        (corrected && same_head(c))
+            || (whole_word && c.words.len() >= 2 && !c.words.iter().any(multi))
+    };
+    if !candidates[..anchor].iter().any(yields) {
+        return;
+    }
+    let mut ahead = Vec::new();
+    let mut keep = Vec::with_capacity(candidates.len());
+    for (i, c) in candidates.drain(..).enumerate() {
+        if i < anchor && yields(&c) {
+            ahead.push(c);
+        } else {
+            keep.push(c);
+        }
+    }
+    let at = keep.iter().position(solid).map(|i| i + 1).unwrap_or(keep.len());
+    keep.splice(at..at, ahead);
+    // 分数改成单调递减，后面再按分数重排（繁体转换）顺序也不变
+    for i in 1..keep.len() {
+        if keep[i].score >= keep[i - 1].score {
+            keep[i].score = keep[i - 1].score - 1e-3;
+        }
+    }
+    *candidates = keep;
+}
+
+/// 句首词只在多音节输入里有意义，而且只能在音节边界上切。
+///
+/// 单音节的 `dan` 不该出「大」（da + 剩个 n），`xian` 不该出「下」：
+/// 那是把一个打完的音节拆开了，只会把第一页塞满没用的字。
+/// 第一个整句候选是精确全拼时，句首词必须正好用完它的前几个音节；
+/// 是简拼或纠错结果时没法对齐字母，只要求它至少两个音节。
+fn prefix_on_syllable_boundaries(result: &[Candidate], normalized: &str, prefix: &mut Vec<Candidate>) {
+    let Some(top) = result.iter().find(|c| !is_raw_candidate(c)) else {
+        prefix.clear();
+        return;
+    };
+    let syllables: Vec<&str> = top.pinyin.split_whitespace().collect();
+    if syllables.len() < 2 {
+        prefix.clear();
+        return;
+    }
+    let letters: String = normalized.chars().filter(|c| c.is_ascii_alphabetic()).collect();
+    if top.features.full_jianpin > 0.0 || syllables.concat().len() > letters.len() + 2 {
+        // 简拼（zgrm）字母和音节对不上，不按边界筛
+        return;
+    }
+    // 从头对齐：补全和纠错只改动对不上的那一段，前面对得上的音节边界照样可信
+    let mut boundaries = Vec::new();
+    let mut at = 0;
+    for syllable in &syllables[..syllables.len() - 1] {
+        if !letters[at..].starts_with(syllable) {
+            break;
+        }
+        at += syllable.len();
+        boundaries.push(at);
+    }
+    let exact = top.features.typo_count == 0.0;
+    // consumed 此时还是字母数（隔音符也算一个字符）
+    prefix.retain(|p| {
+        let used = normalized
+            .chars()
+            .take(p.consumed)
+            .filter(|c| c.is_ascii_alphabetic())
+            .count();
+        boundaries.contains(&used) && (!exact || p.features.typo_count == 0.0)
+    });
+    // 整句候选本身的开头（你好中国 -> 你好）最可能是对的，越长越省事，排最前
+    let head = |p: &Candidate| top.text.starts_with(&p.text);
+    prefix.sort_by_key(|p| std::cmp::Reverse(if head(p) { p.text.chars().count() } else { 0 }));
+}
+
+/// 原始串 / 英文候选（append_raw_candidate 插进来的）。
+fn is_raw_candidate(c: &Candidate) -> bool {
+    c.words.len() == 1 && c.words[0].pinyin.is_empty() && c.features.coverage_score == 0.0
+}
+
+/// 把句首词并进候选，总数不超过 max（原始串/英文候选不会被截掉）。
+///
+/// 4 个音节以上的长输入整句常常不全对，最好的句首词放第二位，再放 4 个整句，再放 2 个句首词；
+/// 短输入（`nihao` 的「你」）最多放 3 个，排在整句候选后面，别挤掉同音词。
+fn merge_prefix_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: usize) {
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    let prefix: Vec<Candidate> = prefix
         .into_iter()
         .filter(|p| !result.iter().any(|r| r.text == p.text))
+        .filter(|p| seen.insert(p.text.clone(), ()).is_none())
         .collect();
     if prefix.is_empty() {
         return;
     }
-    let mut seen: HashMap<String, ()> = HashMap::new();
-    prefix.retain(|p| seen.insert(p.text.clone(), ()).is_none());
-    // 4 个音节以上的长输入，整句常常不全对，先选开头的词更实用，放第二位；
-    // 短输入（dejian）放在整句候选后面，别把「得见」挤出前几位
     let sentence = result
         .first()
         .map(|c| c.words.len() >= 2 && c.pinyin.split_whitespace().count() >= 4)
         .unwrap_or(false);
-    let at = if sentence { 1.min(result.len()) } else { result.len() };
-    let tail = result.split_off(at);
-    result.extend(prefix);
-    result.extend(tail);
+    let mut prefix = prefix.into_iter();
+    let mut whole = std::mem::take(result).into_iter();
+    let mut merged = Vec::new();
+    if sentence {
+        // 第一页（9 个）：整句、最好的句首词、再 4 个整句、再 2 个句首词
+        merged.extend(whole.by_ref().take(1));
+        merged.extend(prefix.by_ref().take(1));
+        merged.extend(whole.by_ref().take(4));
+        merged.extend(prefix.by_ref().take(2));
+        merged.extend(whole);
+    } else {
+        let whole: Vec<Candidate> = whole.collect();
+        let extra: Vec<Candidate> = prefix.take(3).collect();
+        let keep = max.saturating_sub(extra.len()).max(1);
+        merged.extend(whole.into_iter().enumerate().filter_map(|(i, c)| {
+            (i < keep || is_raw_candidate(&c)).then_some(c)
+        }));
+        merged.extend(extra);
+    }
+    // 截到 max，原始串保留
+    while merged.len() > max {
+        match merged.iter().rposition(|c| !is_raw_candidate(c)) {
+            Some(i) => {
+                merged.remove(i);
+            }
+            None => break,
+        }
+    }
+    *result = merged;
 }
 
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
@@ -1214,12 +1369,65 @@ mod tests {
         // 全小写输入用词表里的写法，自己打了大写就照原样
         assert_eq!(texts("github")[0], "GitHub");
         assert_eq!(texts("Github")[0], "Github");
-        // 本身就是完整拼音的英文词，中文在前，英文排第 3（候选不足时排最后）
+        // 本身就是完整拼音的英文词，中文在前，英文排第 6（候选不足时排最后）
         let she = texts("she");
         let pos = she.iter().position(|t| t == "she").expect("应当有 she");
-        assert!(pos >= 1 && pos <= 2, "{she:?}");
+        assert!(pos == 5 || (pos >= 1 && pos == she.len() - 1), "{she:?}");
         // 缩写编码（Jan -> January）不当作英文词
         assert!(!texts("jan").iter().any(|t| t == "January"));
+    }
+
+    #[test]
+    fn exact_word_is_not_overridden_by_completion_or_typo() {
+        // 重点的词频比种地高 20 倍，补全（zhongdi -> zhong dian）的分数会比精确词高
+        let e = engine(concat!(
+            "zhong dian\t重点\t500988\n",
+            "zhong di\t种地\t25085\n",
+            "zhong\t中\t900000\n",
+            "di\t地\t800000\n",
+            "ka\t卡\t402256\n",
+            "kan\t看\t1500000\n",
+            "zhong guo\t中国\t500000\n",
+            "gu\t骨\t90000\n",
+            "shi\t是\t9000000\n",
+            "dan\t但\t900000\n",
+            "shi dan\t实弹\t3175\n",
+            "shi dang\t适当\t300000\n",
+            "ta\t他\t3000000\n",
+            "ta me\t他么\t333\n",
+            "ta men\t他们\t3000000\n",
+        ));
+        let texts = |input: &str| -> Vec<String> {
+            e.input(input).into_iter().map(|c| c.text).collect()
+        };
+        let zhongdi = texts("zhongdi");
+        assert_eq!(zhongdi[0], "种地", "{zhongdi:?}");
+        assert!(zhongdi.iter().any(|t| t == "重点"), "补全仍然在候选里：{zhongdi:?}");
+        assert_eq!(texts("ka")[0], "卡");
+        // 整个输入是一个词时，单字凑出来的（是 | 但）也不能压过它
+        assert_eq!(texts("shidan")[0], "实弹");
+        // 精确结果只是单字拼凑（中 | 骨）时用户多半没打完，补全照常排第一
+        assert_eq!(texts("zhonggu")[0], "中国");
+        // 生僻词（词频低于下限）不受保护
+        assert_eq!(texts("tame")[0], "他们");
+    }
+
+    #[test]
+    fn prefix_candidates_do_not_split_a_syllable() {
+        let e = engine(concat!(
+            "dan\t但\t900000\n",
+            "da\t大\t900000\n",
+            "ni hao\t你好\t100000\n",
+            "ni\t你\t900000\n",
+            "zhong guo\t中国\t500000\n",
+        ));
+        let dan: Vec<String> = e.input("dan").into_iter().map(|c| c.text).collect();
+        assert!(!dan.iter().any(|t| t == "大"), "单音节不出句首词：{dan:?}");
+        let long = e.input("nihaozhongguo");
+        assert_eq!(long[0].text, "你好中国");
+        let head = long.iter().position(|c| c.text == "你好").expect("应当有句首词 你好");
+        assert!(head <= 1, "{:?}", long.iter().map(|c| &c.text).collect::<Vec<_>>());
+        assert!(long.len() <= e.config.max_candidates.max(1));
     }
 
     #[test]

@@ -168,6 +168,23 @@ void runCases(Instance &instance) {
     type(ic.get(), "Hello<sp>");
     check(ic->committed == "Hello", "大写保留 Hello，实际 " + ic->committed);
 
+    // 打全了的拼音正好是一个词：它排第一，不被高频补全（重点）、单字（看）换掉
+    fresh(ic.get());
+    type(ic.get(), "zhongdi<sp>");
+    check(ic->committed == "种地", "zhongdi 空格 -> 种地，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "ka<sp>");
+    check(ic->committed == "卡", "ka 空格 -> 卡，实际 " + ic->committed);
+    // 单音节不出拆开音节的句首词（dan -> 大）
+    fresh(ic.get());
+    type(ic.get(), "dan");
+    {
+        const auto dan = page(ic.get());
+        bool split = false;
+        for (const auto &t : dan) split = split || t == "大";
+        check(!dan.empty() && !split, "dan 第一页没有 大：" + join(dan));
+    }
+
     // 长句先选开头的词
     fresh(ic.get());
     type(ic.get(), "nihaozhongguo");

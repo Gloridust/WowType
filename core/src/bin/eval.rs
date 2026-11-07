@@ -35,6 +35,7 @@ fn main() {
     let mut completion_cost: Option<f64> = None;
     let mut no_typo = false;
     let mut english_path: Option<String> = None;
+    let mut show_top1 = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -93,6 +94,7 @@ fn main() {
                 i += 1;
                 english_path = args.get(i).cloned();
             }
+            "--show-top1" => show_top1 = true,
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
@@ -100,7 +102,7 @@ fn main() {
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
                 println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
-                println!("            [--typo-cost x] [--completion-cost x] [--no-typo] [--english <file>]");
+                println!("            [--typo-cost x] [--completion-cost x] [--no-typo] [--english <file>] [--show-top1]");
                 return;
             }
             other => fail(&format!("未知参数: {other}")),
@@ -166,6 +168,8 @@ fn main() {
     let mut top1 = 0usize;
     let mut top3 = 0usize;
     let mut misses: Vec<String> = Vec::new();
+    // top1 没中时，排在第一的是什么东西抢走了位置
+    let mut causes: std::collections::BTreeMap<&'static str, usize> = Default::default();
 
     for line in data.lines() {
         let line = line.trim_end();
@@ -183,6 +187,18 @@ fn main() {
         let hit1 = texts.first().map(|t| accepted.contains(t)).unwrap_or(false);
         if hit1 {
             top1 += 1;
+        } else if let Some(first) = candidates.first() {
+            if show_top1 {
+                println!(
+                    "  top1 未中 [{}] {input:<14} 期望 {expected:<6} 实际 {}",
+                    miss_cause(input, first),
+                    texts.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+            causes
+                .entry(miss_cause(input, first))
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
         }
         let hit3 = texts.iter().take(top_k).any(|t| accepted.contains(t));
         if hit3 {
@@ -206,10 +222,29 @@ fn main() {
         pct(top1),
         pct(top3)
     );
+    if !causes.is_empty() {
+        let parts: Vec<String> = causes.iter().map(|(k, v)| format!("{k} {v}")).collect();
+        println!("top1 被谁占了：{}", parts.join("  "));
+    }
     if !misses.is_empty() {
         println!("未进前 {top_k}：");
         for line in misses {
             println!("{line}");
         }
+    }
+}
+
+/// 排第一的候选是怎么来的（只在 top1 没中时统计）。
+fn miss_cause(input: &str, first: &wowtype_core::Candidate) -> &'static str {
+    if first.consumed < input.len() {
+        "句首词"
+    } else if first.words.len() == 1 && first.words[0].pinyin.is_empty() {
+        "原始串/英文"
+    } else if first.features.typo_count > 0.0 {
+        "纠错"
+    } else if first.features.prefix_completion > 0.0 {
+        "补全"
+    } else {
+        "同音排序"
     }
 }
