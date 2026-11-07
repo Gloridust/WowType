@@ -11,6 +11,7 @@ pub mod graph;
 pub mod learn;
 pub mod lexicon;
 pub mod lm;
+pub mod preedit;
 pub mod rank;
 pub mod shuangpin;
 pub mod syllable;

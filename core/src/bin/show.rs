@@ -84,6 +84,12 @@ fn main() {
                 }
             })
             .collect();
-        println!("{input}: {}", line.join(" "));
+        // 编辑区的分词和插件一样：按第一个用完整个输入的候选切
+        let shown = candidates
+            .iter()
+            .find(|c| c.consumed >= input.len())
+            .and_then(|c| wowtype_core::preedit::segment_input(input, &c.pinyin))
+            .unwrap_or_else(|| input.clone());
+        println!("{input} [{shown}]: {}", line.join(" "));
     }
 }

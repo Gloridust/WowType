@@ -49,6 +49,7 @@ private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
     bool coreReady();
     void refreshCandidates(WowtypeState *state);
+    std::string segmentedRemaining(WowtypeState *state) const;
     /// 上屏：已选的词 + tail 一起提交，记录选词、更新上下文，清空状态。
     void commitAll(fcitx::InputContext *ic, WowtypeState *state,
                    const std::string &tail, const std::string &tailPinyin);

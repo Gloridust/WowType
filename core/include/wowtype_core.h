@@ -110,6 +110,11 @@ size_t wowtype_candidates_consumed(const WowtypeCandidates *candidates, size_t i
 /* 释放候选集合。 */
 void wowtype_candidates_free(WowtypeCandidates *candidates);
 
+/* 编辑区显示用：按候选拼音（空格分隔，wowtype_candidates_pinyin）给输入分词，
+ * hengxiang + "heng xiang" -> heng'xiang。保留用户打的字母（大小写、按错的键）。
+ * 切不了（英文、双拼、差得太多）返回 NULL；返回的串在同一线程下一次调用前有效。 */
+const char *wowtype_segment_input(const char *input, const char *pinyin);
+
 /* 最近一次错误信息，可能为空串。 */
 const char *wowtype_last_error(void);
 

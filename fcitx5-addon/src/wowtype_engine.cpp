@@ -445,6 +445,22 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     wowtype_candidates_free(raw);
 }
 
+/// 还没选词的拼音，按第一个用完它的候选分好音节（hengxiang -> heng'xiang）。
+/// 显示的还是用户打的字母；英文、双拼等切不了的原样显示。
+std::string WowtypeEngine::segmentedRemaining(WowtypeState *state) const {
+    const std::string input = state->remaining();
+    for (const auto &candidate : state->candidates_) {
+        if (candidate.consumed >= input.size()) {
+            if (const char *shown =
+                    wowtype_segment_input(input.c_str(), candidate.pinyin.c_str())) {
+                return shown;
+            }
+            break;
+        }
+    }
+    return input;
+}
+
 void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
                                      WowtypeState *state) {
     auto &panel = ic->inputPanel();
@@ -459,7 +475,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
     // 编辑区：已选的词 + 还没选的拼音（带下划线）
     fcitx::Text preedit;
     preedit.append(state->selectedText());
-    preedit.append(state->remaining(), fcitx::TextFormatFlag::Underline);
+    preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
     preedit.setCursor(static_cast<int>(preedit.textLength()));
     panel.setPreedit(preedit);
 

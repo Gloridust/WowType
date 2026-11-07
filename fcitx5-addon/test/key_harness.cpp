@@ -231,12 +231,12 @@ void runCases(Instance &instance) {
     if (prefix >= 0) {
         type(ic.get(), std::string(1, static_cast<char>('1' + prefix)));
         check(ic->committed.empty(), "选句首词不上屏，实际 " + ic->committed);
-        check(preedit(ic.get()) == "你好zhongguo", "编辑区 = 已选 + 剩余拼音，实际 " + preedit(ic.get()));
+        check(preedit(ic.get()) == "你好zhong'guo", "编辑区 = 已选 + 剩余拼音（分好音节），实际 " + preedit(ic.get()));
         // 删掉剩余拼音，再退格撤销选词
         type(ic.get(), "<bs><bs><bs><bs><bs><bs><bs><bs>");
         check(preedit(ic.get()) == "你好", "删完剩余拼音，实际 " + preedit(ic.get()));
         type(ic.get(), "<bs>");
-        check(preedit(ic.get()) == "nihao", "再退格撤销选词，实际 " + preedit(ic.get()));
+        check(preedit(ic.get()) == "ni'hao", "再退格撤销选词，实际 " + preedit(ic.get()));
         type(ic.get(), "zhongguo");
         cands = page(ic.get());
         for (std::size_t i = 0; i < cands.size(); ++i) {
@@ -313,6 +313,16 @@ void runCases(Instance &instance) {
     }
     type(ic.get(), "renmin<sp>");
     check(ic->committed.size() > 30 * 6, "连续上屏 31 次没出错");
+
+    // 编辑区给拼音分音节，回车仍上屏原始字母
+    fresh(ic.get());
+    type(ic.get(), "hengxiang");
+    check(preedit(ic.get()) == "heng'xiang", "编辑区分音节，实际 " + preedit(ic.get()));
+    type(ic.get(), "<cr>");
+    check(ic->committed == "hengxiang", "回车上屏原始字母（不带隔音符），实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "zhongg");
+    check(preedit(ic.get()) == "zhong'g", "打了一半也分，实际 " + preedit(ic.get()));
 
     // 打拼音时按语音热键（右 Alt）：不抢，编辑区不动
     fresh(ic.get());
