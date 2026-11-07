@@ -351,6 +351,30 @@ pub unsafe extern "C" fn wowtype_engine_load_user_dict(
     }
 }
 
+/// 读自定义词文件（`拼音<TAB>词[<TAB>频次]`，设置界面写的 custom.tsv），整体替换上一次读到的；
+/// 文件不存在就清空。返回收下的条数，-1 出错。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_custom_words(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_custom_words(path) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 保存用户输入习惯（选过的词的热度、词搭配）到 TSV。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_save_history(
@@ -655,8 +679,9 @@ pub unsafe extern "C" fn wowtype_segment_input(
     input: *const c_char,
     pinyin: *const c_char,
 ) -> *const c_char {
-    let (Some(input), Some(pinyin)) = (unsafe { cstr_to_str(input) }, unsafe { cstr_to_str(pinyin) })
-    else {
+    let (Some(input), Some(pinyin)) = (unsafe { cstr_to_str(input) }, unsafe {
+        cstr_to_str(pinyin)
+    }) else {
         return ptr::null();
     };
     match crate::preedit::segment_input(input, pinyin).and_then(|s| CString::new(s).ok()) {

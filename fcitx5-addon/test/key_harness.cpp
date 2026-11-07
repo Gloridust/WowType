@@ -5,12 +5,15 @@
 
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <fcitx/addoninstance.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputmethodentry.h>
@@ -329,6 +332,48 @@ void runCases(Instance &instance) {
     type(ic.get(), "ni");
     const bool tookAlt = send(ic.get(), Key(FcitxKey_Alt_R));
     check(!tookAlt && preedit(ic.get()) == "ni", "打拼音时右 Alt 交给应用、编辑区不动");
+
+    // 设置：改配置文件和自定义词，reloadConfig 后立刻生效（设置界面走的就是这条路）
+    fresh(ic.get());
+    const std::string configDir = std::string(std::getenv("XDG_CONFIG_HOME")) + "/fcitx5/conf";
+    const std::string customFile = std::string(std::getenv("XDG_DATA_HOME")) + "/wowtype/custom.tsv";
+    std::filesystem::create_directories(configDir);
+    std::filesystem::create_directories(std::filesystem::path(customFile).parent_path());
+    auto *addon = instance.addonManager().addon("wowtype");
+    check(addon && addon->getConfig(), "插件有配置项");
+    {
+        std::ofstream(configDir + "/wowtype.conf")
+            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\n";
+        std::ofstream(customFile) << "# 测试\nni hao\t妮好\nwo de you xiang\t我的邮箱\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao");
+    auto panelList = ic->inputPanel().candidateList();
+    check(panelList && panelList->layoutHint() == CandidateLayoutHint::Vertical, "设置竖排后候选竖排");
+    check(page(ic.get()).size() == 5, "每页 5 个：" + join(page(ic.get())));
+    check(!page(ic.get()).empty() && page(ic.get())[0] == "妮好",
+          "自定义词排第一：" + join(page(ic.get())));
+    // 竖排时下键移动光标（不翻页）
+    const auto vertical = page(ic.get());
+    type(ic.get(), "<down><sp>");
+    check(vertical.size() > 1 && ic->committed == vertical[1],
+          "竖排下键选第二个，实际 " + ic->committed);
+    fresh(ic.get());
+    check(!send(ic.get(), Key(FcitxKey_Alt_R)), "关掉语音后右 Alt 交给应用");
+    type(ic.get(), "wdyx<sp>");
+    check(ic->committed == "我的邮箱", "自定义词也能简拼：wdyx -> " + ic->committed);
+
+    // 删掉文件再 reload：回到默认
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    std::filesystem::remove(customFile);
+    addon->reloadConfig();
+    fresh(ic.get());
+    type(ic.get(), "nihao");
+    panelList = ic->inputPanel().candidateList();
+    check(panelList && panelList->layoutHint() == CandidateLayoutHint::Horizontal &&
+              page(ic.get()).size() == 9 && page(ic.get())[0] == "你好",
+          "恢复默认：横排、9 个、你好第一：" + join(page(ic.get())));
+    fresh(ic.get());
 
     ic.reset();
 }
