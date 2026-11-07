@@ -50,6 +50,8 @@ public:
 };
 
 int failures = 0;
+/// main 里建的事件分发器（fcitx5 5.1.7 的 Instance 还没有 eventDispatcher()）。
+EventDispatcher *dispatcher = nullptr;
 
 void check(bool ok, const std::string &what) {
     std::printf("%s %s\n", ok ? "ok  " : "FAIL", what.c_str());
@@ -375,7 +377,7 @@ void runVoiceCase(Instance &instance, std::function<void()> done) {
             c->ic.reset();
             done();
             // 定时器自己的回调里不能删定时器，交给下一轮事件循环
-            c->instance.eventDispatcher().schedule([c]() { delete c; });
+            dispatcher->schedule([c]() { delete c; });
             return true;
         });
 }
@@ -391,9 +393,10 @@ int main(int argc, char **argv) {
     char *args[] = {arg0, arg1, arg2};
     Instance instance(3, args);
     instance.addonManager().registerDefaultLoader(nullptr);
-    EventDispatcher dispatcher;
-    dispatcher.attach(&instance.eventLoop());
-    dispatcher.schedule([&instance]() {
+    EventDispatcher mainDispatcher;
+    mainDispatcher.attach(&instance.eventLoop());
+    dispatcher = &mainDispatcher;
+    mainDispatcher.schedule([&instance]() {
         runCases(instance);
         runVoiceCase(instance, [&instance]() {
             std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
