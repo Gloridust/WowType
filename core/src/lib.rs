@@ -730,6 +730,9 @@ impl Engine {
         let inner_abbrev = candidates
             .first()
             .is_some_and(|c| is_mixed_jianpin(c) && abbrev_before_last(c));
+        // 打了大写（Hello）却只能凑成混简拼（he l l o -> 合理了哦）：要的是原样上屏
+        let literal = display.bytes().any(|b| b.is_ascii_uppercase())
+            && candidates.first().is_some_and(is_mixed_jianpin);
         let top_typos = candidates
             .first()
             .map(|c| c.features.typo_count)
@@ -753,6 +756,8 @@ impl Engine {
             // 拼音完整的中文，原始拼音串没必要出现
             return;
         } else if !has_known_word {
+            Some(0)
+        } else if literal {
             Some(0)
         } else if top_typos >= 2.0 {
             Some(1)
@@ -2130,6 +2135,19 @@ mod tests {
         // 打全了照旧
         assert_eq!(e.input("keyi")[0].text, "可以");
         assert_eq!(e.input("yongzhongwen")[0].text, "用中文");
+    }
+
+    #[test]
+    fn stretched_mixed_parse_does_not_bury_raw_input() {
+        // 没有英文词表时，Hello 被混简拼凑成「合理了哦」，原样输入不能垫底
+        let e = engine(concat!(
+            "he li\t合理\t50000\n",
+            "le o\t了哦\t30000\n",
+            "ke yi\t可以\t50000\n",
+        ));
+        assert_eq!(e.input("Hello")[0].text, "Hello");
+        // 省略在词里面的照旧
+        assert_eq!(e.input("kyi")[0].text, "可以");
     }
 
     #[test]
