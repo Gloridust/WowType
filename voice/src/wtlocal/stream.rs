@@ -13,6 +13,17 @@ const PAD: usize = 50;
 /// 整段解码的上限（特征帧）：20 秒内定稿等待约 0.5 秒，70 秒要近 4 秒
 const WHOLE_MAX: usize = 2000;
 
+/// 定稿算法。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinalMode {
+    /// 整段一次解码（20 秒以内），不补静音
+    Whole,
+    /// 整段一次解码，末尾补静音
+    WholePad,
+    /// 和中间结果一样分块解码（官方配置 use_bypass_as_final=false 的做法）
+    Blocks,
+}
+
 pub struct Stream {
     m: Arc<Model>,
     fb: Fbank,
@@ -73,17 +84,34 @@ impl Stream {
 
     /// 中间结果：已定稿部分 + 尾部临时解码（前文减半以省算力）；去掉末尾标点，避免边说边打时句号反复增删
     pub fn partial(&mut self) -> String {
+        self.partial_with(PREV / 2)
+    }
+
+    /// 中间结果，尾部临时解码带 `prev` 帧前文（评测用）。
+    pub fn partial_with(&mut self, prev: usize) -> String {
         self.fresh = 0;
         let mut ids = self.ids.clone();
         if self.feats.len() > self.s {
-            ids.extend(self.decode(PREV / 2, self.feats.len(), PAD));
+            ids.extend(self.decode(prev, self.feats.len(), PAD));
         }
         tidy(&self.m.text(&ids)).trim_end_matches(PUNCT).to_string()
     }
 
     pub fn finish(&mut self) -> String {
-        if self.feats.len() <= WHOLE_MAX {
-            let ids = self.m.forward(&self.feats);
+        self.finish_with(FinalMode::Whole)
+    }
+
+    /// 定稿的几种算法（评测用，`wowtype-asr-eval` 比较它们）。
+    pub fn finish_with(&mut self, mode: FinalMode) -> String {
+        let whole = match mode {
+            FinalMode::Whole => Some(0),
+            FinalMode::WholePad => Some(PAD),
+            FinalMode::Blocks => None,
+        };
+        if let Some(pad) = whole.filter(|_| self.feats.len() <= WHOLE_MAX) {
+            let mut x = self.feats.clone();
+            x.resize(x.len() + pad, self.fb.silence());
+            let ids = self.m.forward(&x);
             return tidy(&self.m.text(&ids));
         }
         if self.feats.len() > self.s {
@@ -104,4 +132,59 @@ fn tidy(t: &str) -> String {
         .filter(|&(i, ch)| !(PUNCT.contains(ch) && c.get(i + 1).is_some_and(|n| PUNCT.contains(n))))
         .map(|(_, ch)| ch)
         .collect()
+}
+
+/// 中间结果去抖：已经显示的字只有连着两次都被改掉才改。
+///
+/// 尾部那一段每次都是没有后文时临时解出来的，常常这次「在」下次「再」又改回「在」。
+/// 新结果只是在后面多了字就马上显示；要改已经显示的字，得两次解码都这么改才改。
+#[derive(Default, Debug, Clone)]
+pub struct Stabilizer {
+    last: Vec<char>,
+    shown: Vec<char>,
+}
+
+fn common(a: &[char], b: &[char]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+impl Stabilizer {
+    pub fn update(&mut self, text: &str) -> String {
+        let cur: Vec<char> = text.chars().collect();
+        if cur.starts_with(&self.shown) {
+            self.shown = cur.clone();
+        } else {
+            // 两次解码都同意的那一段如果和显示的不一样，说明真要改
+            let agreed = common(&cur, &self.last);
+            let kept = common(&self.shown, &cur[..agreed]);
+            if kept < agreed.min(self.shown.len()) {
+                self.shown = cur.clone();
+            }
+        }
+        self.last = cur;
+        self.shown.iter().collect()
+    }
+
+    pub fn clear(&mut self) {
+        self.last.clear();
+        self.shown.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Stabilizer;
+
+    #[test]
+    fn extensions_show_at_once_and_one_off_flips_are_ignored() {
+        let mut s = Stabilizer::default();
+        assert_eq!(s.update("我今天"), "我今天");
+        assert_eq!(s.update("我今天晚上"), "我今天晚上");
+        // 只闪一次的改动不显示
+        assert_eq!(s.update("我金天晚上"), "我今天晚上");
+        assert_eq!(s.update("我今天晚上想"), "我今天晚上想");
+        // 连着两次都改：跟着改
+        assert_eq!(s.update("我今天晚饭"), "我今天晚上想");
+        assert_eq!(s.update("我今天晚饭吃"), "我今天晚饭吃");
+    }
 }

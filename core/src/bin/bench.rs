@@ -4,7 +4,7 @@
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
-//!   加 --no-prefix 关掉句首词候选，对比它的开销
+//!   加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -18,6 +18,7 @@ fn main() {
     let mut total = 100_000usize;
     let mut typing_path: Option<String> = None;
     let mut no_prefix = false;
+    let mut max_candidates: Option<usize> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,6 +32,10 @@ fn main() {
                 typing_path = args.get(i).cloned();
             }
             "--no-prefix" => no_prefix = true,
+            "--max" => {
+                i += 1;
+                max_candidates = args.get(i).and_then(|v| v.parse().ok());
+            }
             other => {
                 if let Ok(n) = other.parse() {
                     total = n;
@@ -82,6 +87,9 @@ fn main() {
     let lm: Arc<dyn wowtype_core::LanguageModel> = Arc::new(BigramLm::default());
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut config = EngineConfig::default();
+    if let Some(max) = max_candidates {
+        config.max_candidates = max;
+    }
     if no_prefix {
         config.prefix_candidates = 0;
     }

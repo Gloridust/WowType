@@ -28,6 +28,8 @@
 namespace {
 
 constexpr const char *kSystemDataDir = "/usr/share/wowtype";
+/// 候选总数上限（约 33 页 × 9 个）。
+constexpr unsigned int kMaxCandidates = 300;
 /// 上下文只保留尾部这么多字节：bigram 特征只看紧邻的上文。
 constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
@@ -305,7 +307,9 @@ void WowtypeEngine::applyConfig() {
 }
 
 void WowtypeEngine::applyCoreSettings() {
-    wowtype_engine_set_max_candidates(core_, std::max<std::size_t>(18, pageSize_ * 2));
+    // 前两页是排好序的整句、词和句首词，后面把能对上的同音词、句首词、单字全补上，
+    // 翻页能一直翻到生僻字（每次按键多花不到 1ms）
+    wowtype_engine_set_max_candidates(core_, kMaxCandidates);
     wowtype_engine_set_fuzzy(core_, fuzzy_ ? 1 : 0);
     wowtype_engine_set_shuangpin(core_, shuangpin_ ? 1 : 0);
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);

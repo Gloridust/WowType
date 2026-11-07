@@ -13,6 +13,10 @@ cpal = { version = "0.15", optional = true }
 name = "wowtype-asr"
 path = "src/bin/asr.rs"
 
+[[bin]]
+name = "wowtype-asr-eval"
+path = "src/bin/asr_eval.rs"
+
 [features]
 default = []
 # 打开后编译麦克风采集（Linux 需要 libasound2-dev）
