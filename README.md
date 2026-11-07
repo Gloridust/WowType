@@ -27,8 +27,9 @@
 - **越用越懂你**：记住你选过的词和常连着用的词（选过一次「我们再讨论」，下次就不会出「我们在讨论」），30 天不用会慢慢淡掉。
 - **简拼、省略韵母、中英混打**：`bjdx` → 北京大学；有的音节只打声母也行，`kyi` → 可以、`yongzwen` → 用中文；`github` → GitHub。
 - **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
+- **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
-- **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑。
+- **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次）。
 
 ## 示例
 
@@ -111,12 +112,12 @@ sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
 #### 方式二：从源码构建
 
 适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
-（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、Rust 1.70+、Python 3、git）。
+（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git）。
 
 ```bash
 # 1. 依赖
 sudo apt install build-essential pkg-config cmake extra-cmake-modules \
-  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev git python3 curl
+  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev git python3 curl
 curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
 
 # 2. 代码
@@ -176,11 +177,26 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | `'` | 分隔音节，比如 `xi'an` → 西安 |
 | `/` + 拼音 | 符号：`/juhao` → 。，`/kuo` → （） |
 | 左 `Shift` | 临时切英文（fcitx5 的设置），打了一半的字母原样上屏 |
+| 右 `Alt` | 语音输入，见下 |
 
 **长句可以分段上屏**：打完一整句，候选里除了整句，还有它的前半截（比如「我今天晚上要」）。
 选了前半截就只上屏这一段，剩下的拼音留着继续选。
 
 中文标点自动转全角（`,` → ，`?` → ？）。
+
+### 语音输入
+
+在 Wowtype 打字的地方（没在打拼音时）：
+
+- **按住右 `Alt` 说话，松开**：说的话上屏。
+- **点一下右 `Alt`**：开始听，说完停 1.5 秒自动上屏，或者再点一下右 `Alt` 马上结束。
+- 说话时编辑区里能看到正在识别的字；按 `Esc` 不要这次说的话；按别的键也会放弃这次说的话，那个键照常打字。
+
+识别用的是微信输入法的离线语音模型，在你的电脑上算，录音不上传。模型不随 Wowtype 分发：
+**第一次按右 `Alt` 时**会从腾讯的服务器下载（约 100MB，存到 `~/.local/share/wowtype/wtlocal/`），
+下载完之后再说话才能识别。载入后常驻内存，约 150MB。
+
+用别的键：`WOWTYPE_VOICE_KEY=Control_R`（fcitx5 的键名）；不想要语音：`WOWTYPE_VOICE_KEY=none`。
 
 ### 设置
 
@@ -200,6 +216,8 @@ WOWTYPE_FUZZY=1
 | `WOWTYPE_TRADITIONAL=1` | 繁体输出（字符级转换） | 关 |
 | `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
 | `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
+| `WOWTYPE_VOICE_KEY` | 语音热键（fcitx5 键名，如 `Control_R`、`F8`）；`none` 关掉语音 | `Alt_R`（右 Alt） |
+| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录 | `~/.local/share/wowtype/wtlocal` |
 | `WOWTYPE_LEXICON` | 词库路径 | 见下 |
 | `WOWTYPE_ENGLISH` | 英文词表路径 | 见下 |
 | `WOWTYPE_LM` | 二元语言模型（`前词<TAB>后词<TAB>次数`） | 无 |
@@ -219,6 +237,7 @@ WOWTYPE_FUZZY=1
 | `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
 | `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
+| `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
 
 想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动。
 
@@ -232,6 +251,8 @@ WOWTYPE_FUZZY=1
 | 某个程序里打不了中文，别的程序可以 | 重启 fcitx5 以后 Chrome / Electron 程序要彻底退出再打开 |
 | 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。装 `wowtype-data-rime-ice`，或把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 Wowtype 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
+| 按右 Alt 提示「开不了麦克风」 | 在系统设置的「声音」里确认有输入设备；`arecord -l` 应该能列出麦克风 |
+| 按右 Alt 没反应 | 只在 Wowtype 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，用 `WOWTYPE_VOICE_KEY` 换个键 |
 | 想看日志 | 终端里运行 `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype`，日志里有载入了哪个词库、用了多久 |
 | 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
 
@@ -262,15 +283,18 @@ rm -rf ~/.local/share/wowtype ~/.cache/wowtype
 ```
 
 引擎用 Rust 写，编成静态库链进 fcitx5 插件。设计思路参考了微信输入法（WeType）3.0 的公开行为和引擎里的符号名，
-但没有用它的任何代码、词库或模型；词库来自开源的雾凇拼音。实现细节、评测数字和调参方法见 [docs/ENGINE.md](docs/ENGINE.md)。
+但拼音引擎没有用它的任何代码、词库或模型；词库来自开源的雾凇拼音。
+语音识别用的是微信输入法的离线模型：不随 Wowtype 分发，第一次用语音时从腾讯的服务器下载，推理代码来自 voicekey（纯 Rust）。实现细节、评测数字和调参方法见 [docs/ENGINE.md](docs/ENGINE.md)。
 
 ## 参与开发
 
 ```bash
-cargo test --workspace                     # Rust 测试（语音部分需要 libasound2-dev libx11-dev libxkbcommon-dev）
+cargo test --workspace                     # Rust 测试（需要 libasound2-dev，语音守护进程还要 libx11-dev libxkbcommon-dev）
 ./scripts/abi-smoke.sh                     # C 接口冒烟测试
 scripts/addon-test.sh ~/.local/share/wowtype/lexicon.tsv ~/.local/share/wowtype/english.txt
                                            # 插件按键测试：起一个私有的 fcitx5，不影响你正在用的输入法
+WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-test.sh ...
+                                           # 加跑语音用例：用 WAV 代替麦克风，要先下载好语音模型
 ```
 
 改了排序，用 `wowtype-eval` 在几百个用例上对比改前改后（用法见 [docs/ENGINE.md](docs/ENGINE.md#调排序)）。
@@ -280,7 +304,8 @@ scripts/addon-test.sh ~/.local/share/wowtype/lexicon.tsv ~/.local/share/wowtype/
 |---|---|
 | `core/` | 拼音引擎和 C 接口 |
 | `fcitx5-addon/` | fcitx5 插件 |
-| `voice/`、`voice-daemon/` | 语音输入（还没在真机上验证，没进安装包） |
+| `voice/` | 语音输入：热键状态机、麦克风采集、微信离线模型推理（插件通过 `core/src/voice_ffi.rs` 调用） |
+| `voice-daemon/` | 不依赖输入法的语音守护进程（X11，实验性，没进安装包） |
 | `tools/` | 词库转换、评测用例生成 |
 | `docs/` | [引擎细节](docs/ENGINE.md)、[体验审查](docs/UX-AUDIT.md)、[接手指南](docs/HANDOFF.md)、[语音](docs/VOICE.md)、[数据格式](docs/DATA.md) |
 
@@ -289,7 +314,7 @@ scripts/addon-test.sh ~/.local/share/wowtype/lexicon.tsv ~/.local/share/wowtype/
 - 没有图形设置界面，设置靠环境变量
 - 只有 x86_64 的安装包；Arch、Fedora 等要从源码构建
 - 没有用语料训练的语言模型，「祝你 / 祝您」「在 / 再」这类同音词，没用过时只能靠词频排
-- 语音输入还没做完
+- 语音输入只有一个识别结果，不能在候选里改；不能选麦克风（用系统默认的输入设备）
 
 ## 致谢
 

@@ -54,6 +54,13 @@ if(WOWTYPE_CORE_STATIC)
     # 静态库里的符号不导出，免得和别的插件冲突
     find_package(Threads REQUIRED)
     target_link_libraries(wowtype PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+    # 核心默认带语音输入（cargo 特性 voice），麦克风走 ALSA。
+    # 核心用 --no-default-features 编译时可以 -DWOWTYPE_VOICE=OFF 去掉这个依赖
+    option(WOWTYPE_VOICE "Rust core was built with the voice feature" ON)
+    if(WOWTYPE_VOICE)
+        find_package(ALSA REQUIRED)
+        target_link_libraries(wowtype PRIVATE ALSA::ALSA)
+    endif()
     target_link_options(wowtype PRIVATE "LINKER:--exclude-libs,ALL")
 else()
     set_target_properties(wowtype PROPERTIES

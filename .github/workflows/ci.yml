@@ -73,7 +73,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential pkg-config cmake extra-cmake-modules \
-            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
+            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
             fcitx5 fcitx5-modules \
             ca-certificates curl git dpkg-dev file python3
       - uses: actions/checkout@v4

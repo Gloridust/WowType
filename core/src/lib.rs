@@ -16,6 +16,10 @@ pub mod shuangpin;
 pub mod syllable;
 pub mod symbols;
 pub mod train;
+#[cfg(feature = "voice")]
+pub mod voice_ffi;
+#[cfg(not(feature = "voice"))]
+pub mod voice_stub;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
