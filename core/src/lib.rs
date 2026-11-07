@@ -45,6 +45,11 @@ pub struct Candidate {
     pub score: f64,
     pub features: Feature,
     pub words: Vec<CandidateWord>,
+    /// 这个候选用掉了原始输入的前多少字节。
+    ///
+    /// 整句候选等于输入长度；句首词候选（长句先选「你好」，剩下的接着打）更短，
+    /// 前端上屏后应把剩余部分留在输入框里继续转换。
+    pub consumed: usize,
 }
 
 /// 候选内的一个分词。
@@ -77,6 +82,10 @@ pub struct EngineConfig {
     pub auto_learn: bool,
     /// 自动学习阈值（选多少次后进用户词库）。
     pub auto_learn_threshold: u32,
+    /// 按错键纠错（相邻键、两键按反、多按/漏按）。双拼下不生效。
+    pub typo_correction: bool,
+    /// 句首词候选最多几个（0 表示不给）。长句打错时可以先选开头的词。
+    pub prefix_candidates: usize,
 }
 
 impl Default for EngineConfig {
@@ -92,6 +101,8 @@ impl Default for EngineConfig {
             traditional: false,
             auto_learn: true,
             auto_learn_threshold: 3,
+            typo_correction: true,
+            prefix_candidates: 12,
         }
     }
 }
@@ -127,6 +138,8 @@ pub struct Engine {
     context: RwLock<String>,
     /// 简繁字符映射表。
     converter: RwLock<Arc<Converter>>,
+    /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
+    english: RwLock<Arc<HashMap<String, String>>>,
 }
 
 impl Engine {
@@ -141,6 +154,7 @@ impl Engine {
             history: RwLock::new(HashMap::new()),
             context: RwLock::new(String::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
+            english: RwLock::new(Arc::new(HashMap::new())),
         }
     }
 
@@ -235,6 +249,10 @@ impl Engine {
     }
 
     /// 开关双拼（自然码）。
+    pub fn set_typo_correction(&mut self, on: bool) {
+        self.config.typo_correction = on;
+    }
+
     pub fn set_shuangpin(&mut self, on: bool) {
         self.config.shuangpin = on;
     }
@@ -245,6 +263,61 @@ impl Engine {
     }
 
     /// 载入简繁映射表，返回条目数。
+    /// 载入英文词表，返回词条数。
+    ///
+    /// 每行一个词；也直接接受 rime 的 en.dict.yaml（「上屏<TAB>编码」，
+    /// 注释和 YAML 头会被跳过）。只收 2~32 个字母的编码。
+    pub fn load_english<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let text = std::fs::read_to_string(path)?;
+        Ok(self.load_english_str(&text))
+    }
+
+    /// 从字符串载入英文词表（追加），返回累计词条数。
+    pub fn load_english_str(&self, text: &str) -> usize {
+        let mut map: HashMap<String, String> = self
+            .english
+            .read()
+            .map(|m| m.as_ref().clone())
+            .unwrap_or_default();
+        for line in text.lines() {
+            let line = line.trim_end_matches('\r');
+            if line.starts_with('#') || line.trim().is_empty() {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let word = cols.next().unwrap_or("").trim();
+            let code = cols.next().map(str::trim).unwrap_or(word);
+            if code.len() < 2 || code.len() > 32 || !code.bytes().all(|b| b.is_ascii_alphabetic()) {
+                continue;
+            }
+            if word.is_empty() || !word.eq_ignore_ascii_case(code) {
+                // 缩写（January<TAB>Jan）只认上屏与编码一致的条目
+                continue;
+            }
+            let key = code.to_ascii_lowercase();
+            match map.entry(key) {
+                Entry::Vacant(slot) => {
+                    slot.insert(word.to_string());
+                }
+                Entry::Occupied(mut slot) => {
+                    // 同一个词有大小写两种写法时，留全小写的（march 而不是 March）
+                    if word.bytes().all(|b| !b.is_ascii_uppercase()) {
+                        slot.insert(word.to_string());
+                    }
+                }
+            }
+        }
+        let len = map.len();
+        if let Ok(mut slot) = self.english.write() {
+            *slot = Arc::new(map);
+        }
+        len
+    }
+
+    pub fn english_len(&self) -> usize {
+        self.english.read().map(|m| m.len()).unwrap_or(0)
+    }
+
     pub fn load_conversion<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
         let conv = Converter::from_tsv_path(path)?;
         let len = conv.len();
@@ -400,12 +473,130 @@ impl Engine {
         if self.config.traditional {
             self.apply_traditional(&mut result);
         }
+        for candidate in &mut result {
+            candidate.consumed = raw.len();
+        }
+        if !self.config.shuangpin && self.config.prefix_candidates > 0 {
+            let leading = raw.len() - raw.trim_start().len();
+            let mut prefix = self.prefix_candidates(&normalized)?;
+            for candidate in &mut prefix {
+                candidate.consumed = leading + letters_to_bytes(display, candidate.consumed);
+                if self.config.traditional {
+                    if let Ok(conv) = self.converter.read() {
+                        if !conv.is_empty() {
+                            candidate.text = conv.convert(&candidate.text);
+                        }
+                    }
+                }
+            }
+            merge_prefix_candidates(&mut result, prefix);
+        }
         Ok(result)
+    }
+
+    /// 句首词候选：从输入开头起、但没有用完整个输入的词。
+    ///
+    /// candidate.consumed 先存「用掉的字母数」，由调用方换算成字节。
+    fn prefix_candidates(&self, normalized: &str) -> Result<Vec<Candidate>> {
+        let Ok(parsed) = parse(normalized) else {
+            return Ok(Vec::new());
+        };
+        if parsed.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let typo = self.config.typo_correction;
+        let full = SyllableGraph::build(
+            &parsed,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: true,
+                typo,
+                completion: false,
+            },
+        );
+        let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
+            full
+        } else {
+            let jianpin = SyllableGraph::build(
+                &parsed,
+                GraphOptions {
+                    mode: GraphMode::Jianpin,
+                    allow_erhua: false,
+                    typo: false,
+                    completion: false,
+                },
+            );
+            if jianpin.has_complete_path() {
+                jianpin
+            } else {
+                full
+            }
+        };
+        let fuzzy_view;
+        let lexicon: &dyn Lexicon = if self.config.fuzzy {
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            &fuzzy_view
+        } else {
+            self.lexicon.as_ref()
+        };
+        let words = crate::beam::first_words(
+            &graph,
+            lexicon,
+            &self.config.beam,
+            self.config.prefix_candidates,
+        );
+        Ok(words
+            .into_iter()
+            .map(|(word, cost)| Candidate {
+                text: word.text.clone(),
+                pinyin: word.pinyin.clone(),
+                score: -cost,
+                features: Feature {
+                    typo_count: word.typos as f32,
+                    typo: if word.typos > 0 { 1.0 } else { 0.0 },
+                    ..Feature::default()
+                },
+                consumed: word.end,
+                words: vec![CandidateWord {
+                    text: word.text,
+                    pinyin: word.pinyin,
+                    freq: word.freq,
+                    known: true,
+                }],
+            })
+            .collect())
+    }
+
+    /// 全拼下输入能否不靠纠错、补全切成完整音节。
+    fn is_plain_pinyin(&self, display: &str) -> bool {
+        if self.config.shuangpin {
+            return false;
+        }
+        let Ok(parsed) = parse(&display.to_ascii_lowercase()) else {
+            return false;
+        };
+        SyllableGraph::build(
+            &parsed,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: true,
+                typo: false,
+                completion: false,
+            },
+        )
+        .has_complete_path()
     }
 
     /// 英文/未登录输入：保证原始输入本身可以作为候选上屏。
     ///
-    /// 条件：启用了英文候选、输入含字母、没有被完整词覆盖。分数压到最低一档。
+    /// 放在第几位：
+    /// - 拼音完整、没纠错的中文排前面，原始串垫底（she -> 社 设 ……）；
+    /// - 输入是已知英文词，而中文要靠纠错才凑得出来：英文排第一
+    ///   （hello、github、python 不该被改成乱码中文）；中文只差最后一个音节没打完
+    ///   （bug、diy）时排第二；拼音本身就完整（she、long）时排第三；
+    /// - 不认识的串：中文全是未登录兜底时排第一，中文纠了 2 处以上排第二，其余垫底。
+    ///
+    /// 原始串一定留在列表里，不会被截断挤掉。
     fn append_raw_candidate(&self, display: &str, candidates: &mut Vec<Candidate>) {
         if !self.config.english_candidate || display.is_empty() || display.len() > 32 {
             return;
@@ -413,42 +604,67 @@ impl Engine {
         if !display.bytes().any(|b| b.is_ascii_alphabetic()) {
             return;
         }
-        if candidates
-            .iter()
-            .any(|c| c.text.eq_ignore_ascii_case(display))
-        {
+        // 全小写输入且词表里有标准写法时用标准写法（github -> GitHub）
+        let english = self
+            .english
+            .read()
+            .ok()
+            .and_then(|m| m.get(&display.to_ascii_lowercase()).cloned());
+        let text = match &english {
+            Some(word) if display.bytes().all(|b| !b.is_ascii_uppercase()) => word.clone(),
+            _ => display.to_string(),
+        };
+        if candidates.iter().any(|c| c.text.eq_ignore_ascii_case(&text)) {
             return;
         }
-        let covered = candidates
+        // 输入本身是不是一串完整的拼音（she、me、long），或者已经有不靠纠错和
+        // 补全的完整中文候选（双拼下只能看后者）
+        let exact = self.is_plain_pinyin(display)
+            || candidates.iter().any(|c| {
+                c.features.coverage_score >= 1.0
+                    && c.features.typo_count == 0.0
+                    && c.features.prefix_completion == 0.0
+                    && !c.words.iter().any(|w| !w.known)
+            });
+        let top_typos = candidates
             .first()
-            .map(|c| c.features.coverage_score >= 1.0 && !c.words.iter().any(|w| !w.known))
-            .unwrap_or(false);
-        if covered {
-            return;
-        }
-        // 已有候选全是未登录兜底时，原始串更可信，排到最前；
-        // 否则（有真实词但覆盖不全）压到最后一档。
+            .map(|c| c.features.typo_count)
+            .unwrap_or(0.0);
         let has_known_word = candidates
             .first()
             .map(|c| c.words.iter().any(|w| w.known))
             .unwrap_or(false);
-        let score = if candidates.is_empty() {
-            -1.0
-        } else if has_known_word {
-            candidates
-                .iter()
-                .map(|c| c.score)
-                .fold(f64::INFINITY, f64::min)
-                - 1.0
+        let position = if english.is_some() {
+            if exact {
+                Some(2)
+            } else if top_typos == 0.0 && has_known_word {
+                // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
+                // 用户多半还在打拼音，英文排第二
+                Some(1)
+            } else {
+                Some(0)
+            }
+        } else if exact {
+            // 拼音完整的中文，原始拼音串没必要出现
+            return;
+        } else if !has_known_word {
+            Some(0)
+        } else if top_typos >= 2.0 {
+            Some(1)
         } else {
-            candidates
-                .iter()
-                .map(|c| c.score)
-                .fold(f64::NEG_INFINITY, f64::max)
-                + 1.0
+            None
         };
-        candidates.push(Candidate {
-            text: display.to_string(),
+        let max = self.config.max_candidates.max(1);
+        let at = position.unwrap_or(candidates.len()).min(candidates.len());
+        // 分数夹在前后两个候选之间，后面无论怎么重新排序（繁体转换会重排）位置都不变
+        let score = match (at.checked_sub(1).and_then(|i| candidates.get(i)), candidates.get(at)) {
+            (None, None) => -1.0,
+            (None, Some(next)) => next.score + 1.0,
+            (Some(prev), None) => prev.score - 1.0,
+            (Some(prev), Some(next)) => (prev.score + next.score) / 2.0,
+        };
+        let raw = Candidate {
+            text,
             pinyin: display.to_ascii_lowercase(),
             score,
             features: Feature::default(),
@@ -456,15 +672,20 @@ impl Engine {
                 text: display.to_string(),
                 pinyin: String::new(),
                 freq: 0.0,
-                known: false,
+                known: english.is_some(),
             }],
-        });
-        candidates.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then_with(|| a.text.cmp(&b.text))
-        });
-        candidates.truncate(self.config.max_candidates.max(1));
+            consumed: display.len(),
+        };
+        candidates.insert(at, raw);
+        if candidates.len() > max {
+            // 截掉的是原始串以外的最后一个
+            let drop = if at == candidates.len() - 1 {
+                candidates.len() - 2
+            } else {
+                candidates.len() - 1
+            };
+            candidates.remove(drop);
+        }
     }
 
     /// 单条全拼输入的完整查询（精确 + 可选模糊音）。
@@ -505,52 +726,49 @@ impl Engine {
         Ok(result)
     }
 
-    /// 跑一次查询：先精确，覆盖率不足时枚举尾部补全；fuzzy=true 时查不到会回退模糊音。
+    /// 跑一次查询；fuzzy=true 时查不到会回退模糊音。
+    ///
+    /// 末音节补全（zhongg -> 中国、zhonggu -> 中国）和纠错都做成了音节图里的边，
+    /// 一次搜索就能同时给出精确、补全、纠错三类候选。
     fn run_query(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
-        let exact = self.query_once(normalized, at_ms, fuzzy, None)?;
-        // 即使输入已经能完整解析，也要补全最后一个音节：
-        // 「zhonggu」本身是 zhong+gu 的合法解析，但用户往往还在打「zhongguo」。
-        // 真实输入法都会把延伸候选一起给出来，否则半成品输入几乎选不对。
-        let covered = exact
-            .first()
-            .map(|c| c.features.coverage_score >= 1.0 && !c.words.iter().any(|w| !w.known))
-            .unwrap_or(false);
-        let completions = partial_completions(normalized);
-        if completions.is_empty() {
-            return Ok(exact);
+        let parsed = parse(normalized)?;
+        if parsed.is_empty() {
+            return Ok(Vec::new());
         }
-        let mut merged: HashMap<String, Candidate> = HashMap::new();
-        for candidate in exact {
-            merged.insert(candidate.text.clone(), candidate);
+        let typo = self.config.typo_correction && !self.config.shuangpin;
+        let full = SyllableGraph::build(
+            &parsed,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: true,
+                typo,
+                completion: true,
+            },
+        );
+        // 不靠补全、纠错就能完整解析：直接用全拼
+        if full.has_exact_path() {
+            return self.query_once(&full, at_ms, fuzzy);
         }
-        // 已完整覆盖时只补少量延伸候选，保证交互延迟；
-        // 覆盖不足说明尾部确实没打完，多补一些。
-        let completion_budget = if covered { 12 } else { 32 };
-        for candidate_input in completions.iter().take(completion_budget) {
-            if let Ok(list) = self.query_once(candidate_input, at_ms, fuzzy, Some(COMPLETION_BEAM))
-            {
-                // 延伸候选是按「更长的输入」打的分，但用户其实没打那些字母，
-                // 必须扣回来，否则会抢掉完整输入的正确结果。
-                let extra = candidate_input.len().saturating_sub(normalized.len()) as f64;
-                for mut candidate in list {
-                    candidate.score -= PREFIX_COMPLETION_PENALTY * extra;
-                    candidate.features.prefix_completion =
-                        (candidate.features.prefix_completion + extra as f32).min(3.0);
-                    match merged.entry(candidate.text.clone()) {
-                        Entry::Vacant(slot) => {
-                            slot.insert(candidate);
-                        }
-                        Entry::Occupied(mut slot) => {
-                            if candidate.score > slot.get().score {
-                                slot.insert(candidate);
-                            }
-                        }
-                    }
-                }
+        // 否则简拼（zg、jzm）与全拼补全/纠错都试，按分数合并
+        let mut merged: Vec<Candidate> = Vec::new();
+        if self.config.jianpin_fallback {
+            let jianpin = SyllableGraph::build(
+                &parsed,
+                GraphOptions {
+                    mode: GraphMode::Jianpin,
+                    allow_erhua: false,
+                    typo: false,
+                    completion: false,
+                },
+            );
+            if jianpin.has_complete_path() {
+                merged.extend(self.query_once(&jianpin, at_ms, fuzzy)?);
             }
         }
-        let mut result: Vec<Candidate> = merged.into_values().collect();
-        // 分数并列时按文本排序，保证结果稳定（HashMap 迭代顺序不固定）
+        if full.has_complete_path() {
+            merged.extend(self.query_once(&full, at_ms, fuzzy)?);
+        }
+        let mut result = dedupe_by_text(merged);
         result.sort_by(|a, b| {
             b.score
                 .total_cmp(&a.score)
@@ -562,42 +780,10 @@ impl Engine {
 
     fn query_once(
         &self,
-        normalized: &str,
+        graph: &SyllableGraph,
         at_ms: u64,
         fuzzy: bool,
-        beam_limit: Option<usize>,
     ) -> Result<Vec<Candidate>> {
-        let parsed = parse(normalized)?;
-        if parsed.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // 先全拼；走不通再简拼。混合模式留给显式配置。
-        let full = SyllableGraph::build(
-            &parsed,
-            GraphOptions {
-                mode: GraphMode::Full,
-                allow_erhua: true,
-            },
-        );
-        let graph = if full.has_complete_path() {
-            full
-        } else if self.config.jianpin_fallback {
-            let jianpin = SyllableGraph::build(
-                &parsed,
-                GraphOptions {
-                    mode: GraphMode::Jianpin,
-                    allow_erhua: false,
-                },
-            );
-            if !jianpin.has_complete_path() {
-                return Ok(Vec::new());
-            }
-            jianpin
-        } else {
-            return Ok(Vec::new());
-        };
-
         // fuzzy 时用包装视图：精确查不到再退到模糊音。
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if fuzzy {
@@ -606,12 +792,7 @@ impl Engine {
         } else {
             self.lexicon.as_ref()
         };
-        let mut beam_config = self.config.beam.clone();
-        if let Some(limit) = beam_limit {
-            // 补全路径要跑几十次，用小束宽换取交互延迟
-            beam_config.beam_size = beam_config.beam_size.min(limit.max(1));
-        }
-        let mut paths = beam_search(&graph, lexicon, self.lm.as_ref(), &beam_config);
+        let mut paths = beam_search(graph, lexicon, self.lm.as_ref(), &self.config.beam);
         if paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -663,6 +844,7 @@ impl Engine {
                     known: w.known,
                 })
                 .collect(),
+            consumed: 0,
         }
     }
 
@@ -744,72 +926,51 @@ impl Engine {
             history_time_diff,
             with_context,
             context_bigram_score,
-            // 用户词、NNLM、typo、补全等特征还没有数据源，保持 0。
+            typo_count: path.typos as f32,
+            prefix_completion: (path.completion as f32).min(3.0),
+            typo: if path.typos > 0 { 1.0 } else { 0.0 },
+            // 用户词、NNLM、补全等特征还没有数据源，保持 0。
             ..Feature::default()
         }
     }
 }
 
-/// 补全路径用的束宽。补全要跑几十次完整搜索，用小束宽换延迟；
-/// 实测束宽 5 与 20 在真实词库上的召回一致。
-const COMPLETION_BEAM: usize = 6;
-
-/// 每多打一个字母的补全惩罚（自然对数）。
-const PREFIX_COMPLETION_PENALTY: f64 = 1.5;
-
-/// 把「尾部还没成音节」的输入展开成若干条完整输入。
-///
-/// 例如 zhongg -> [zhongguo, zhonggu, zhongguai, ...]，nih -> [niha, nihai, ...]。
-/// 从最长的可切分前缀往前试，命中就返回，避免组合爆炸。
-/// head 是否能**完整**拆成已知音节（不留未知残片）。
-///
-/// 不能用 parse(head).is_ok() 判断：parse 对未知音节是宽容的，
-/// 会把 "shesh" 也当成合法输入，导致补全去拼 "shesh"+任意音节。
-fn fully_splittable(text: &str) -> bool {
-    let bytes: Vec<u8> = text.bytes().filter(|b| b.is_ascii_lowercase()).collect();
-    if bytes.is_empty() {
-        return true;
-    }
-    let n = bytes.len();
-    let mut reachable = vec![false; n + 1];
-    reachable[0] = true;
-    for i in 0..n {
-        if !reachable[i] {
-            continue;
+/// 第 k 个字母之后在原始串里的字节位置（跳过紧随其后的隔音符）。
+fn letters_to_bytes(raw: &str, letters: usize) -> usize {
+    let bytes = raw.as_bytes();
+    let mut seen = 0usize;
+    let mut idx = 0usize;
+    while idx < bytes.len() && seen < letters {
+        if bytes[idx].is_ascii_alphabetic() {
+            seen += 1;
         }
-        for len in 1..=6.min(n - i) {
-            let candidate = std::str::from_utf8(&bytes[i..i + len]).unwrap_or("");
-            if crate::syllable::Syllable::from_text(candidate).is_some() {
-                reachable[i + len] = true;
-            }
-        }
+        idx += 1;
     }
-    reachable[n]
+    while idx < bytes.len() && bytes[idx] == b'\'' {
+        idx += 1;
+    }
+    idx
 }
 
-fn partial_completions(input: &str) -> Vec<String> {
-    if !(2..=16).contains(&input.len()) || !input.bytes().all(|b| b.is_ascii_lowercase()) {
-        return Vec::new();
+/// 把句首词候选并入整句候选。
+///
+/// 整句是一个词时（shijie -> 世界）句首词放在最后；整句由多个词拼成时
+/// （长句）第二名往后的整句只是小改动，价值不如句首词，所以句首词紧跟第一名。
+fn merge_prefix_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>) {
+    let mut prefix: Vec<Candidate> = prefix
+        .into_iter()
+        .filter(|p| !result.iter().any(|r| r.text == p.text))
+        .collect();
+    if prefix.is_empty() {
+        return;
     }
-    for cut in (0..input.len()).rev() {
-        let (head, tail) = input.split_at(cut);
-        if tail.len() > 6 {
-            continue;
-        }
-        if !head.is_empty() && !fully_splittable(head) {
-            continue;
-        }
-        let mut out: Vec<String> = Vec::new();
-        for syllable in SYLLABLES {
-            if syllable.starts_with(tail) {
-                out.push(format!("{head}{syllable}"));
-            }
-        }
-        if !out.is_empty() {
-            return out;
-        }
-    }
-    Vec::new()
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    prefix.retain(|p| seen.insert(p.text.clone(), ()).is_none());
+    let sentence = result.first().map(|c| c.words.len() >= 2).unwrap_or(false);
+    let at = if sentence { 1.min(result.len()) } else { result.len() };
+    let tail = result.split_off(at);
+    result.extend(prefix);
+    result.extend(tail);
 }
 
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
@@ -960,6 +1121,8 @@ mod tests {
             Arc::new(MemoryLexicon::from_tsv_str("zhi dao\t知道\t5000\n").unwrap());
         let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
         let mut e = Engine::new(lexicon, lm);
+        // 纠错会把 zidao 当成漏按 h，这里只测模糊音开关
+        e.set_typo_correction(false);
         assert!(
             !e.input("zidao").iter().any(|c| c.text == "知道"),
             "默认关闭模糊音时不应命中"
@@ -1023,6 +1186,49 @@ mod tests {
             c[0].text,
             "ok",
             "{:?}",
+            c.iter().map(|x| &x.text).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn known_english_word_beats_typo_corrected_chinese() {
+        let e = engine(concat!(
+            "he\t和\t9000\n",
+            "lo\t咯\t500\n",
+            "she\t设\t5000\n",
+            "shen\t神\t9000\n",
+            "ni hao\t你好\t100000\n",
+        ));
+        assert_eq!(e.load_english_str("hello\thello\nshe\tshe\nGitHub\tGitHub\nJanuary\tJan\n"), 3);
+        let texts = |input: &str| -> Vec<String> {
+            e.input(input).into_iter().map(|c| c.text).collect()
+        };
+
+        // 中文只能靠纠错凑出来时，已知英文词排第一
+        assert_eq!(texts("hello")[0], "hello");
+        // 全小写输入用词表里的写法，自己打了大写就照原样
+        assert_eq!(texts("github")[0], "GitHub");
+        assert_eq!(texts("Github")[0], "Github");
+        // 本身就是完整拼音的英文词，中文在前，英文排第 3（候选不足时排最后）
+        let she = texts("she");
+        let pos = she.iter().position(|t| t == "she").expect("应当有 she");
+        assert!(pos >= 1 && pos <= 2, "{she:?}");
+        // 缩写编码（Jan -> January）不当作英文词
+        assert!(!texts("jan").iter().any(|t| t == "January"));
+    }
+
+    #[test]
+    fn raw_candidate_survives_a_full_list() {
+        let mut e = engine(concat!(
+            "he\t和\t9000\nhe\t何\t8000\nhe\t合\t7000\n",
+            "lo\t咯\t500\nluo\t落\t400\n",
+        ));
+        e.set_max_candidates(3);
+        // hrlo 不是拼音（r 是 e 的邻键），中文全靠纠错，列表还是满的
+        let c = e.input("hrlo");
+        assert!(
+            c.iter().any(|x| x.text == "hrlo"),
+            "原始串不该被截掉: {:?}",
             c.iter().map(|x| &x.text).collect::<Vec<_>>()
         );
     }
@@ -1146,13 +1352,10 @@ mod tests {
     }
 
     #[test]
-    fn fully_splittable_requires_known_syllables() {
-        assert!(fully_splittable("she"));
-        assert!(fully_splittable("zhongguo"));
-        assert!(fully_splittable("xi'an"));
-        // 尾部没打完，不是完整的音节序列
-        assert!(!fully_splittable("shesh"));
-        assert!(!fully_splittable("zhongg"));
+    fn completion_does_not_extend_unknown_head() {
+        // shesh：只能是 she + sh*，不能把 shesh 整体当成能解析的头
+        let e = engine("she shi\t设施\t500\nshe\t设\t100\n");
+        assert!(e.input("shesh").iter().any(|c| c.text == "设施"));
     }
 
     #[test]

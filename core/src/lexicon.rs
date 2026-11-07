@@ -9,7 +9,7 @@
 //! - 儿化用独立的 r 标记，例如：hua r
 //! - 以 # 开头的行和空行会被忽略。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -62,6 +62,19 @@ fn source_stamp(path: &Path) -> Option<(u64, u64)> {
     Some((meta.len(), mtime))
 }
 
+const KEY_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// 音节键序列的滚动哈希（FNV-1a）。
+fn key_hash_step(hash: u64, key: SyllableKey) -> u64 {
+    let raw = u64::from(key.id) | (u64::from(key.erhua) << 16);
+    let mut h = hash;
+    for byte in raw.to_le_bytes().iter().take(3) {
+        h ^= u64::from(*byte);
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
+}
+
 /// 词典条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LexEntry {
@@ -100,6 +113,13 @@ pub trait Lexicon: Send + Sync {
         Vec::new()
     }
 
+    /// 是否存在比 query 更长、且以 query 开头的词。
+    ///
+    /// 束搜索靠它剪掉不可能成词的音节串；不确定时返回 true（只影响速度，不影响结果）。
+    fn has_longer(&self, _query: &[SyllableQuery]) -> bool {
+        true
+    }
+
     fn total_freq(&self) -> f64;
 
     fn len(&self) -> usize;
@@ -127,6 +147,8 @@ pub struct MemoryLexicon {
     /// 第一次模糊查询时再建。
     fuzzy_index: OnceLock<HashMap<Vec<SyllableId>, Vec<usize>>>,
     by_length: HashMap<usize, Vec<usize>>,
+    /// 全拼词条所有「真前缀」的哈希，供 has_longer 剪枝（哈希碰撞只会少剪，不会错剪）。
+    full_prefixes: HashSet<u64>,
     total_freq: f64,
     /// 加载时被跳过的行数（未知音节等）。
     skipped: usize,
@@ -174,6 +196,11 @@ impl MemoryLexicon {
             .or_default()
             .push(idx);
         self.by_length.entry(keys.len()).or_default().push(idx);
+        let mut hash = KEY_HASH_SEED;
+        for key in keys.iter().take(keys.len().saturating_sub(1)) {
+            hash = key_hash_step(hash, *key);
+            self.full_prefixes.insert(hash);
+        }
         self.total_freq += freq;
     }
 
@@ -389,6 +416,20 @@ impl Lexicon for MemoryLexicon {
             .unwrap_or_default()
     }
 
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        let mut hash = KEY_HASH_SEED;
+        for q in query {
+            match q {
+                SyllableQuery::Full { id, erhua } => {
+                    hash = key_hash_step(hash, SyllableKey::new(*id, *erhua));
+                }
+                // 简拼/混合查询的分支很少，不剪
+                SyllableQuery::Jianpin { .. } => return true,
+            }
+        }
+        self.full_prefixes.contains(&hash)
+    }
+
     fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         if query.is_empty() {
             return Vec::new();
@@ -579,6 +620,15 @@ impl Lexicon for UserLexicon {
             result.extend(snapshot.lookup(query));
         }
         result
+    }
+
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        self.base.has_longer(query)
+            || self
+                .snapshot
+                .read()
+                .map(|s| s.has_longer(query))
+                .unwrap_or(true)
     }
 
     fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {

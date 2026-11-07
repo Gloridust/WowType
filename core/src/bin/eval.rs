@@ -31,6 +31,10 @@ fn main() {
     let mut weights = FeatureWeights::default();
     let mut fuzzy = false;
     let mut shuangpin = false;
+    let mut typo_cost: Option<f64> = None;
+    let mut completion_cost: Option<f64> = None;
+    let mut no_typo = false;
+    let mut english_path: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -76,6 +80,19 @@ fn main() {
                     fail(&e);
                 }
             }
+            "--typo-cost" => {
+                i += 1;
+                typo_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--completion-cost" => {
+                i += 1;
+                completion_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--no-typo" => no_typo = true,
+            "--english" => {
+                i += 1;
+                english_path = args.get(i).cloned();
+            }
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
@@ -83,6 +100,7 @@ fn main() {
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
                 println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
+                println!("            [--typo-cost x] [--completion-cost x] [--no-typo] [--english <file>]");
                 return;
             }
             other => fail(&format!("未知参数: {other}")),
@@ -123,7 +141,21 @@ fn main() {
     if let Some(size) = beam {
         config.beam.beam_size = size.max(1);
     }
+    if let Some(cost) = typo_cost {
+        config.beam.typo_cost = cost;
+    }
+    if let Some(cost) = completion_cost {
+        config.beam.completion_cost = cost;
+    }
+    if no_typo {
+        config.typo_correction = false;
+    }
     let engine = Engine::new(lex, lm).with_config(config).with_ranker(ranker);
+    if let Some(path) = &english_path {
+        if let Err(e) = engine.load_english(path) {
+            fail(&format!("{e:#}"));
+        }
+    }
 
     let data = match std::fs::read_to_string(&eval_path) {
         Ok(v) => v,
