@@ -51,6 +51,33 @@ int main(int argc, char **argv) {
     check(c && has_candidate(c, "hello"), "english: hello -> hello");
     wowtype_candidates_free(c);
 
+    /* 句首词候选：consumed 小于输入长度，剩下的部分留给下一轮 */
+    c = wowtype_engine_input(e, "nihaozhongguo");
+    {
+        int found = 0;
+        size_t n = wowtype_candidates_len(c);
+        for (size_t i = 0; c && i < n; i++) {
+            const char *t = wowtype_candidates_text(c, i);
+            if (t && strcmp(t, "你好") == 0 && wowtype_candidates_consumed(c, i) == 5) found = 1;
+        }
+        check(found, "prefix: nihaozhongguo 有 你好(用掉 5 字节)");
+        check(c && wowtype_candidates_consumed(c, 0) == 13, "整句候选用掉全部输入");
+        const char *py = c ? wowtype_candidates_pinyin(c, 0) : NULL;
+        check(py && strcmp(py, "ni hao zhong guo") == 0, "candidates_pinyin");
+    }
+    wowtype_candidates_free(c);
+
+    /* 按错键：zhonggup（o 旁边的 p） */
+    c = wowtype_engine_input(e, "zhonggup");
+    check(c && has_candidate(c, "中国"), "typo: zhonggup -> 中国");
+    wowtype_candidates_free(c);
+    check(wowtype_engine_set_typo_correction(e, 0) == 0, "set_typo_correction");
+    c = wowtype_engine_input(e, "zhonggup");
+    check(c && !has_candidate(c, "中国"), "纠错关闭后 zhonggup 不出 中国");
+    wowtype_candidates_free(c);
+    wowtype_engine_set_typo_correction(e, 1);
+    check(wowtype_engine_set_max_candidates(e, 5) == 0, "set_max_candidates");
+
     check(wowtype_engine_record_selection(e, "你好") == 0, "record_selection");
     check(wowtype_engine_set_context(e, "今天") == 0, "set_context");
 
