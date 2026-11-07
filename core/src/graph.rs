@@ -180,6 +180,11 @@ impl SyllableGraph {
         self.has_path(|_| true)
     }
 
+    /// 不靠纠错边能否走完（补全可以）。
+    pub fn has_path_without_typo(&self) -> bool {
+        self.has_path(|e| !e.typo)
+    }
+
     /// 不靠纠错边、补全边能否走完。
     pub fn has_exact_path(&self) -> bool {
         self.has_path(|e| !e.typo && e.completion == 0)

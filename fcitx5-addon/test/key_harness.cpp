@@ -203,6 +203,16 @@ void runCases(Instance &instance) {
               "hengxianghouxuanci 第一页：整句 + 词 + 单字：" + join(heng));
     }
 
+    // 有的音节只打声母（省略韵母）：k yi -> 可以，yong z wen -> 用中文
+    for (const auto &[keys, want] : {std::pair<const char *, const char *>{"kyi", "可以"},
+                                     {"yongzwen", "用中文"}}) {
+        fresh(ic.get());
+        type(ic.get(), keys);
+        const auto got = page(ic.get());
+        check(!got.empty() && got[0] == want,
+              std::string(keys) + " 第一个是 " + want + "：" + join(got));
+    }
+
     // 长句先选开头的词
     fresh(ic.get());
     type(ic.get(), "nihaozhongguo");

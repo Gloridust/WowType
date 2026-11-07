@@ -614,20 +614,17 @@ impl Engine {
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
             full
         } else {
-            let jianpin = SyllableGraph::build(
+            let completion_explains = SyllableGraph::build(
                 &parsed,
                 GraphOptions {
-                    mode: GraphMode::Jianpin,
-                    allow_erhua: false,
+                    mode: GraphMode::Full,
+                    allow_erhua: true,
                     typo: false,
-                    completion: false,
+                    completion: true,
                 },
-            );
-            if jianpin.has_complete_path() {
-                jianpin
-            } else {
-                full
-            }
+            )
+            .has_path_without_typo();
+            abbrev_graph(&parsed, completion_explains).unwrap_or(full)
         };
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if self.config.fuzzy {
@@ -719,13 +716,20 @@ impl Engine {
         }
         // 输入本身是不是一串完整的拼音（she、me、long），或者已经有不靠纠错和
         // 补全的完整中文候选（双拼下只能看后者）
+        // 全拼混简拼（he l l o -> 合理了哦）是硬凑出来的，不算
         let exact = self.is_plain_pinyin(display)
             || candidates.iter().any(|c| {
                 c.features.coverage_score >= 1.0
                     && c.features.typo_count == 0.0
                     && c.features.prefix_completion == 0.0
                     && !c.words.iter().any(|w| !w.known)
+                    && !is_mixed_jianpin(c)
             });
+        // 第一个中文候选在中间就有只打了声母的音节（hello -> he l l o）：
+        // 不像是还在打拼音，英文排第一
+        let inner_abbrev = candidates
+            .first()
+            .is_some_and(|c| is_mixed_jianpin(c) && abbrev_before_last(c));
         let top_typos = candidates
             .first()
             .map(|c| c.features.typo_count)
@@ -738,7 +742,7 @@ impl Engine {
             if exact {
                 // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
                 Some(5)
-            } else if top_typos == 0.0 && has_known_word {
+            } else if top_typos == 0.0 && has_known_word && !inner_abbrev {
                 // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
                 // 用户多半还在打拼音，英文排第二
                 Some(1)
@@ -853,20 +857,16 @@ impl Engine {
         if full.has_exact_path() {
             return self.query_once(&full, at_ms, fuzzy);
         }
-        // 否则简拼（zg、jzm）与全拼补全/纠错都试，按分数合并
+        // 否则简拼（zg、jzm）、全拼混简拼（kyi、yongzwen）与全拼补全/纠错都试，按分数合并
         let mut merged: Vec<Candidate> = Vec::new();
         if self.config.jianpin_fallback {
-            let jianpin = SyllableGraph::build(
-                &parsed,
-                GraphOptions {
-                    mode: GraphMode::Jianpin,
-                    allow_erhua: false,
-                    typo: false,
-                    completion: false,
-                },
-            );
-            if jianpin.has_complete_path() {
-                merged.extend(self.query_once(&jianpin, at_ms, fuzzy)?);
+            if let Some(jianpin) = abbrev_graph(&parsed, full.has_path_without_typo()) {
+                let mut found = self.query_once(&jianpin, at_ms, fuzzy)?;
+                if jianpin.mode() == GraphMode::Mixed {
+                    // 混简拼里拿声母、单个字母兜底凑出来的（h e l l o -> "hello"）没有意义
+                    found.retain(|c| c.words.iter().all(|w| w.known));
+                }
+                merged.extend(found);
             }
         }
         if full.has_complete_path() {
@@ -1275,6 +1275,56 @@ fn prefix_on_syllable_boundaries(
     // 整句候选本身的开头（你好中国 -> 你好）最可能是对的，越长越省事，排最前
     let head = |p: &Candidate| top.text.starts_with(&p.text);
     prefix.sort_by_key(|p| std::cmp::Reverse(if head(p) { p.text.chars().count() } else { 0 }));
+}
+
+/// 全拼对不上时用的简拼图；走不通时返回 None。
+///
+/// - 全是声母（zg、jzm）：纯简拼，和以前一样；
+/// - 有韵母（kyi、yongzwen）：全拼混简拼，每个音节可以打全也可以只打声母。
+///   全拼加补全已经能解释时（打到一半的 yanzhon）不用：结果一样，混简拼的路径却多得多，
+///   长句逐键会从几毫秒涨到几十毫秒。`completion_explains` 是「全拼加补全、不靠纠错能走完」。
+fn abbrev_graph(
+    parsed: &crate::syllable::ParsedInput,
+    completion_explains: bool,
+) -> Option<SyllableGraph> {
+    let all_initials = parsed
+        .letters
+        .iter()
+        .all(|&b| crate::syllable::is_jianpin_letter(b));
+    if !all_initials && completion_explains {
+        return None;
+    }
+    let graph = SyllableGraph::build(
+        parsed,
+        GraphOptions {
+            mode: if all_initials {
+                GraphMode::Jianpin
+            } else {
+                GraphMode::Mixed
+            },
+            allow_erhua: false,
+            typo: false,
+            completion: false,
+        },
+    );
+    graph.has_complete_path().then_some(graph)
+}
+
+/// 全拼和只打声母的音节混着的候选（k yi -> 可以，yong z wen -> 用中文）。
+fn is_mixed_jianpin(c: &Candidate) -> bool {
+    c.features.full_jianpin > 0.0
+        && c.pinyin
+            .split_whitespace()
+            .any(|s| s.len() > 1 || !crate::syllable::is_jianpin_letter(s.as_bytes()[0]))
+}
+
+/// 最后一个音节之前就有只打了声母的音节。
+fn abbrev_before_last(c: &Candidate) -> bool {
+    let syllables: Vec<&str> = c.pinyin.split_whitespace().collect();
+    syllables.len() >= 2
+        && syllables[..syllables.len() - 1]
+            .iter()
+            .any(|s| s.len() == 1 && crate::syllable::is_jianpin_letter(s.as_bytes()[0]))
 }
 
 /// 原始串 / 英文候选（append_raw_candidate 插进来的）。
@@ -2059,6 +2109,27 @@ mod tests {
         let e = default_engine();
         let cands = e.input("zg");
         assert!(cands.iter().any(|c| c.text == "中国"), "{:?}", cands);
+    }
+
+    #[test]
+    fn mixed_full_and_initial_only_syllables() {
+        // 有的音节只打声母（省略韵母）：k yi -> 可以，yong z wen -> 用中文
+        let e = engine(concat!(
+            "ke yi\t可以\t50000\n",
+            "ke\t可\t20000\n",
+            "kui\t亏\t3000\n",
+            "yi\t一\t100000\n",
+            "yong\t用\t30000\n",
+            "zhong wen\t中文\t20000\n",
+            "zheng wen\t正文\t2000\n",
+            "zen\t怎\t5000\n",
+            "wen\t文\t10000\n",
+        ));
+        assert_eq!(e.input("kyi")[0].text, "可以");
+        assert_eq!(e.input("yongzwen")[0].text, "用中文");
+        // 打全了照旧
+        assert_eq!(e.input("keyi")[0].text, "可以");
+        assert_eq!(e.input("yongzhongwen")[0].text, "用中文");
     }
 
     #[test]

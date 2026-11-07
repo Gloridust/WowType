@@ -32,6 +32,8 @@ fn main() {
     let mut fuzzy = false;
     let mut shuangpin = false;
     let mut typo_cost: Option<f64> = None;
+    let mut abbrev_cost: Option<f64> = None;
+    let mut tail_abbrev_cost: Option<f64> = None;
     let mut completion_cost: Option<f64> = None;
     let mut no_typo = false;
     let mut english_path: Option<String> = None;
@@ -83,6 +85,14 @@ fn main() {
                     fail(&e);
                 }
             }
+            "--abbrev-cost" => {
+                i += 1;
+                abbrev_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--tail-abbrev-cost" => {
+                i += 1;
+                tail_abbrev_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
             "--typo-cost" => {
                 i += 1;
                 typo_cost = args.get(i).and_then(|v| v.parse().ok());
@@ -110,7 +120,7 @@ fn main() {
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
                 println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
-                println!("            [--typo-cost x] [--completion-cost x] [--no-typo] [--english <file>] [--show-top1]");
+                println!("            [--typo-cost x] [--completion-cost x] [--abbrev-cost x] [--tail-abbrev-cost x] [--no-typo] [--english <file>] [--show-top1]");
                 return;
             }
             other => fail(&format!("未知参数: {other}")),
@@ -150,6 +160,12 @@ fn main() {
     };
     if let Some(size) = beam {
         config.beam.beam_size = size.max(1);
+    }
+    if let Some(cost) = abbrev_cost {
+        config.beam.abbrev_cost = cost;
+    }
+    if let Some(cost) = tail_abbrev_cost {
+        config.beam.tail_abbrev_cost = cost;
     }
     if let Some(cost) = typo_cost {
         config.beam.typo_cost = cost;

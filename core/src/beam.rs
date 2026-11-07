@@ -11,7 +11,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::graph::{Edge, SyllableGraph};
+use crate::graph::{Edge, GraphMode, SyllableGraph};
 use crate::lexicon::Lexicon;
 use crate::lm::LanguageModel;
 use crate::syllable::SyllableQuery;
@@ -39,6 +39,16 @@ pub struct BeamConfig {
     pub max_typos: usize,
     /// 一个词最多纠几处。
     pub max_typos_per_word: usize,
+    /// 全拼混简拼（k yi -> 可以，yong z wen -> 用中文）时，每个只打了声母的音节的惩罚。
+    ///
+    /// 错键的全拼常常也能读成混简拼（jifu 打成 jifk -> 积分卡），罚得太轻会把纠错挤下去，
+    /// 太重又打不出混简拼。2.0 时纠错的前三命中不变，混简拼前三从 27% 升到 84%。
+    pub abbrev_cost: f64,
+    /// 全拼混简拼时，输入的最后一个字母当省略的声母（yuluj -> 与路径）再加的惩罚。
+    ///
+    /// 末尾没打完的音节由补全处理（woxiangch -> 我想吃），补全按缺了几个字母扣分，
+    /// 比这里更准；这里只在补全也凑不出来时兜底。
+    pub tail_abbrev_cost: f64,
 }
 
 impl Default for BeamConfig {
@@ -54,6 +64,8 @@ impl Default for BeamConfig {
             completion_cost: 1.2,
             max_typos: 2,
             max_typos_per_word: 1,
+            abbrev_cost: 2.0,
+            tail_abbrev_cost: 4.0,
         }
     }
 }
@@ -67,6 +79,10 @@ pub struct BeamWord {
     pub known: bool,
     pub syllable_count: usize,
     pub jianpin: bool,
+    /// 只打了声母的音节数。
+    pub abbrev: usize,
+    /// 最后一个音节只打了声母。
+    pub ends_abbrev: bool,
     /// 这个词用了几处纠错。
     pub typos: usize,
     /// 补全多出的字母数（用户还没打的部分）。
@@ -188,7 +204,8 @@ pub fn beam_search(
                     (0.0, 0)
                 };
                 let typo_cost = config.typo_cost * word.typos as f64
-                    + config.completion_cost * word.completion as f64;
+                    + config.completion_cost * word.completion as f64
+                    + abbrev_penalty(graph, word, config);
                 let next = Node {
                     parent: Some(parent),
                     word: Some((pos, idx)),
@@ -291,7 +308,9 @@ pub fn first_words(
     .into_iter()
     .filter(|s| s.word.known && s.word.end < n)
     .map(|s| {
-        let cost = s.lexical + config.typo_cost * s.word.typos as f64;
+        let cost = s.lexical
+            + config.typo_cost * s.word.typos as f64
+            + abbrev_penalty(graph, &s.word, config);
         (s.word, cost)
     })
     .collect();
@@ -402,7 +421,8 @@ fn collect_dfs(
             keys.truncate(before);
             continue;
         }
-        let jianpin = keys.iter().any(|q| q.is_jianpin());
+        let abbrev = keys.iter().filter(|q| q.is_jianpin()).count();
+        let jianpin = abbrev > 0;
         for entry in lexicon.lookup(keys) {
             let lexical = config.lexicon_weight * lexicon.cost(&entry);
             out.push(Span {
@@ -413,6 +433,8 @@ fn collect_dfs(
                     known: true,
                     syllable_count: keys.len(),
                     jianpin,
+                    abbrev,
+                    ends_abbrev: keys.last().is_some_and(|q| q.is_jianpin()),
                     typos: edge_typos,
                     completion: usize::from(edge.completion),
                     start,
@@ -438,6 +460,19 @@ fn collect_dfs(
     }
 }
 
+/// 全拼混简拼时省略韵母的惩罚（纯全拼、纯简拼的图不罚）。
+fn abbrev_penalty(graph: &SyllableGraph, word: &BeamWord, config: &BeamConfig) -> f64 {
+    if graph.mode() != GraphMode::Mixed || word.abbrev == 0 {
+        return 0.0;
+    }
+    let tail = if word.ends_abbrev && word.end == graph.len() {
+        config.tail_abbrev_cost
+    } else {
+        0.0
+    };
+    config.abbrev_cost * word.abbrev as f64 + tail
+}
+
 fn unknown_word(edge: &Edge) -> BeamWord {
     let query = edge.query();
     BeamWord {
@@ -447,6 +482,8 @@ fn unknown_word(edge: &Edge) -> BeamWord {
         known: false,
         syllable_count: edge.syllable_count(),
         jianpin: query.is_jianpin(),
+        abbrev: usize::from(query.is_jianpin()),
+        ends_abbrev: query.is_jianpin(),
         typos: 0,
         completion: 0,
         start: edge.start,
