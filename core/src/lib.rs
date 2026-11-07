@@ -966,7 +966,12 @@ fn merge_prefix_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>) 
     }
     let mut seen: HashMap<String, ()> = HashMap::new();
     prefix.retain(|p| seen.insert(p.text.clone(), ()).is_none());
-    let sentence = result.first().map(|c| c.words.len() >= 2).unwrap_or(false);
+    // 4 个音节以上的长输入，整句常常不全对，先选开头的词更实用，放第二位；
+    // 短输入（dejian）放在整句候选后面，别把「得见」挤出前几位
+    let sentence = result
+        .first()
+        .map(|c| c.words.len() >= 2 && c.pinyin.split_whitespace().count() >= 4)
+        .unwrap_or(false);
     let at = if sentence { 1.min(result.len()) } else { result.len() };
     let tail = result.split_off(at);
     result.extend(prefix);
