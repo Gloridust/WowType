@@ -9,6 +9,7 @@
 #include <system_error>
 #include <utility>
 
+#include <fcitx-config/iniparser.h>
 #include <fcitx/addonfactory.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
@@ -27,7 +28,6 @@
 namespace {
 
 constexpr const char *kSystemDataDir = "/usr/share/wowtype";
-constexpr std::size_t kPageSize = 9;
 /// 上下文只保留尾部这么多字节：bigram 特征只看紧邻的上文。
 constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
@@ -41,11 +41,7 @@ bool envFlag(const char *name, bool fallback) {
     return *value != '0';
 }
 
-/// 候选横排（默认，和微信输入法一样）；WOWTYPE_VERTICAL=1 改回竖排。
-bool horizontalLayout() {
-    static const bool horizontal = !envFlag("WOWTYPE_VERTICAL", false);
-    return horizontal;
-}
+constexpr const char *kConfigFile = "conf/wowtype.conf";
 
 std::string userDataDir() {
     std::string base;
@@ -100,23 +96,6 @@ std::string utf8Tail(const std::string &text, std::size_t maxBytes) {
     return text.substr(start);
 }
 
-/// 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8），默认右 Alt；
-/// 设成 none 关掉语音输入。
-fcitx::KeySym voiceKeyFromEnv(std::string &name) {
-    const char *env = std::getenv("WOWTYPE_VOICE_KEY");
-    name = env && *env ? env : "Alt_R";
-    if (name == "none" || name == "0") {
-        return FcitxKey_None;
-    }
-    const fcitx::Key key(name);
-    if (key.sym() == FcitxKey_None) {
-        FCITX_WARN() << "Wowtype: 不认识语音热键 " << name << "，改用 Alt_R";
-        name = "Alt_R";
-        return FcitxKey_Alt_R;
-    }
-    return key.sym();
-}
-
 constexpr uint64_t kVoicePollUsec = 50 * 1000;
 constexpr std::size_t kVoiceBars = 6;
 
@@ -162,27 +141,12 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
                       << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         return nullptr;
     }
-    wowtype_engine_set_max_candidates(core, 18);
-    wowtype_engine_set_fuzzy(core, envFlag("WOWTYPE_FUZZY", false) ? 1 : 0);
-    wowtype_engine_set_shuangpin(core, envFlag("WOWTYPE_SHUANGPIN", false) ? 1 : 0);
-    wowtype_engine_set_typo_correction(core, envFlag("WOWTYPE_TYPO", true) ? 1 : 0);
 
     const std::string english = findDataFile("WOWTYPE_ENGLISH", "english.txt");
     if (!english.empty()) {
         const int loaded = wowtype_engine_load_english(core, english.c_str());
         if (loaded > 0) {
             FCITX_INFO() << "Wowtype: 载入英文词 " << loaded << " 个";
-        }
-    }
-    if (envFlag("WOWTYPE_TRADITIONAL", false)) {
-        std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
-        const int loaded =
-            s2t.empty() ? -1 : wowtype_engine_load_conversion(core, s2t.c_str());
-        if (loaded > 0) {
-            wowtype_engine_set_traditional(core, 1);
-            FCITX_INFO() << "Wowtype: 载入简繁表 " << loaded << " 条";
-        } else {
-            FCITX_WARN() << "Wowtype: 简繁表载入失败 " << s2t;
         }
     }
     if (!userDict.empty()) {
@@ -285,12 +249,108 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     instance_->inputContextManager().registerProperty("wowtype", &factory_);
     // 全量词库载入要几百毫秒，放后台，别卡住 fcitx 启动
     loading_ = std::async(std::launch::async, loadCore, userDictPath());
-    voiceKey_ = voiceKeyFromEnv(voiceKeyName_);
-    if (voiceKey_ != FcitxKey_None) {
+    fcitx::readAsIni(config_, kConfigFile);
+    applyConfig();
+}
+
+void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
+    config_.load(config, true);
+    fcitx::safeSaveAsIni(config_, kConfigFile);
+    applyConfig();
+}
+
+void WowtypeEngine::reloadConfig() {
+    // 文件里没写的项回到默认值（设置界面删掉一项就是想恢复默认）
+    config_ = WowtypeConfig();
+    fcitx::readAsIni(config_, kConfigFile);
+    applyConfig();
+}
+
+void WowtypeEngine::applyConfig() {
+    const auto envOr = [](const char *name, bool configured) {
+        return envFlag(name, configured);
+    };
+    horizontal_ = !envOr("WOWTYPE_VERTICAL", *config_.layout == WowtypeLayout::Vertical);
+    pageSize_ = static_cast<std::size_t>(std::clamp(*config_.pageSize, 3, 9));
+    fuzzy_ = envOr("WOWTYPE_FUZZY", *config_.fuzzy);
+    typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
+    shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
+    traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
+
+    // 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8）优先，none 关掉
+    fcitx::Key key = *config_.voice ? *config_.voiceKey : fcitx::Key();
+    if (const char *env = std::getenv("WOWTYPE_VOICE_KEY"); env && *env) {
+        const std::string name = env;
+        key = name == "none" || name == "0" ? fcitx::Key() : fcitx::Key(name);
+        if (key.sym() == FcitxKey_None && name != "none" && name != "0") {
+            FCITX_WARN() << "Wowtype: 不认识语音热键 " << name << "，改用 Alt_R";
+            key = fcitx::Key(FcitxKey_Alt_R);
+        }
+    }
+    if (key.sym() != voiceKey_.sym() || key.states() != voiceKey_.states()) {
+        if (voiceActive()) {
+            cancelVoice();
+        }
+        voiceKeyDown_ = false;
+    }
+    voiceKey_ = key;
+    if (voiceKey_.sym() != FcitxKey_None && !voice_) {
         // 只建句柄：不开麦克风、不下载模型，第一次按热键时才做
         const char *dir = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
         voice_ = wowtype_voice_new(dir);
     }
+    if (core_) {
+        applyCoreSettings();
+    }
+}
+
+void WowtypeEngine::applyCoreSettings() {
+    wowtype_engine_set_max_candidates(core_, std::max<std::size_t>(18, pageSize_ * 2));
+    wowtype_engine_set_fuzzy(core_, fuzzy_ ? 1 : 0);
+    wowtype_engine_set_shuangpin(core_, shuangpin_ ? 1 : 0);
+    wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
+    if (traditional_ && !conversionLoaded_) {
+        const std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
+        const int loaded =
+            s2t.empty() ? -1 : wowtype_engine_load_conversion(core_, s2t.c_str());
+        if (loaded > 0) {
+            conversionLoaded_ = true;
+            FCITX_INFO() << "Wowtype: 载入简繁表 " << loaded << " 条";
+        } else {
+            FCITX_WARN() << "Wowtype: 简繁表载入失败 " << s2t;
+        }
+    }
+    wowtype_engine_set_traditional(core_, traditional_ && conversionLoaded_ ? 1 : 0);
+
+    if (const std::string custom = customWordsPath(); !custom.empty()) {
+        const int loaded = wowtype_engine_load_custom_words(core_, custom.c_str());
+        if (loaded < 0) {
+            FCITX_WARN() << "Wowtype: 自定义词载入失败 " << custom << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        } else if (loaded > 0) {
+            FCITX_INFO() << "Wowtype: 载入自定义词 " << loaded << " 条";
+        }
+    }
+}
+
+std::string WowtypeEngine::customWordsPath() const {
+    if (const char *env = std::getenv("WOWTYPE_CUSTOM"); env && *env) {
+        return env;
+    }
+    const std::string dir = userDataDir();
+    return dir.empty() ? std::string() : dir + "/custom.tsv";
+}
+
+bool WowtypeEngine::isVoiceKey(const fcitx::Key &key) const {
+    if (voiceKey_.sym() == FcitxKey_None || key.sym() != voiceKey_.sym()) {
+        return false;
+    }
+    // 单按修饰键（右 Alt 等）不管状态位；松开时状态位里会带着它自己
+    if (voiceKey_.isModifier() || voiceKeyDown_) {
+        return true;
+    }
+    const fcitx::KeyStates mask{fcitx::KeyState::SimpleMask};
+    return (key.states() & mask) == (voiceKey_.states() & mask);
 }
 
 WowtypeEngine::~WowtypeEngine() {
@@ -316,8 +376,11 @@ bool WowtypeEngine::coreReady() {
     if (loading_.valid() &&
         loading_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         core_ = loading_.get();
-        if (core_ && !recent_.empty()) {
-            wowtype_engine_set_context(core_, recent_.c_str());
+        if (core_) {
+            applyCoreSettings();
+            if (!recent_.empty()) {
+                wowtype_engine_set_context(core_, recent_.c_str());
+            }
         }
     }
     return core_ != nullptr;
@@ -418,7 +481,7 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
         if (query.empty()) {
             return;
         }
-        raw = wowtype_symbol_search(query.c_str(), kPageSize);
+        raw = wowtype_symbol_search(query.c_str(), pageSize_);
     } else {
         // 已经选了开头的词时，把它当上文，剩下的部分排序更准
         const std::string context = utf8Tail(recent_ + state->selectedText(), kContextBytes);
@@ -481,10 +544,10 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
 
     if (!state->candidates_.empty()) {
         auto candidates = std::make_unique<fcitx::CommonCandidateList>();
-        candidates->setLayoutHint(horizontalLayout()
+        candidates->setLayoutHint(horizontal_
                                       ? fcitx::CandidateLayoutHint::Horizontal
                                       : fcitx::CandidateLayoutHint::Vertical);
-        candidates->setPageSize(static_cast<int>(kPageSize));
+        candidates->setPageSize(static_cast<int>(pageSize_));
         candidates->setSelectionKey(fcitx::KeyList{
             fcitx::Key(FcitxKey_1), fcitx::Key(FcitxKey_2), fcitx::Key(FcitxKey_3),
             fcitx::Key(FcitxKey_4), fcitx::Key(FcitxKey_5), fcitx::Key(FcitxKey_6),
@@ -613,7 +676,7 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             auto *pageable = list->toPageable();
             auto *movable = list->toCursorMovable();
             // 横排时左右键移动候选、上下键翻页；竖排反过来
-            const bool horizontal = horizontalLayout();
+            const bool horizontal = horizontal_;
             const auto prevKey = horizontal ? FcitxKey_Left : FcitxKey_Up;
             const auto nextKey = horizontal ? FcitxKey_Right : FcitxKey_Down;
             const auto prevPageKey = horizontal ? FcitxKey_Up : FcitxKey_Left;
@@ -738,7 +801,7 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
 bool WowtypeEngine::handleVoiceKey(fcitx::InputContext *ic, WowtypeState *state,
                                    fcitx::KeyEvent &event) {
     const fcitx::Key key = event.key();
-    if (key.sym() == voiceKey_) {
+    if (isVoiceKey(key)) {
         if (event.isRelease()) {
             if (!voiceKeyDown_) {
                 return false;

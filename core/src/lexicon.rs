@@ -519,14 +519,20 @@ impl Lexicon for FuzzyLexicon<'_> {
 pub struct UserLexicon {
     base: Arc<dyn Lexicon>,
     words: RwLock<Vec<(String, String, f64)>>,
+    /// 自定义词（设置里添加的，存在 custom.tsv）：只读，整份替换，不写回用户词库。
+    custom: RwLock<Vec<(String, String, f64)>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
+
+/// 自定义词默认频次：和最常用的词差不多，所以排在同音词前面。
+pub const CUSTOM_WORD_FREQ: f64 = 5_000_000.0;
 
 impl UserLexicon {
     pub fn new(base: Arc<dyn Lexicon>) -> Self {
         Self {
             base,
             words: RwLock::new(Vec::new()),
+            custom: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -613,8 +619,63 @@ impl UserLexicon {
         Ok(added)
     }
 
+    /// 用一份自定义词整体替换现有的。格式 `拼音<TAB>词[<TAB>频次]`，
+    /// 拼音不合法的行跳过。返回收下的条数。
+    pub fn set_custom_tsv(&self, data: &str) -> usize {
+        let mut custom = Vec::new();
+        for line in data.lines() {
+            let line = line.trim_end_matches('\r');
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let (Some(pinyin), Some(word)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            let (pinyin, word) = (pinyin.trim(), word.trim());
+            if pinyin.is_empty() || word.is_empty() || parse_pinyin_keys(pinyin).is_err() {
+                continue;
+            }
+            let freq = cols
+                .next()
+                .and_then(|f| f.trim().parse::<f64>().ok())
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .unwrap_or(CUSTOM_WORD_FREQ);
+            custom.push((pinyin.to_string(), word.to_string(), freq));
+        }
+        let count = custom.len();
+        if let Ok(mut slot) = self.custom.write() {
+            *slot = custom;
+        }
+        self.rebuild();
+        count
+    }
+
+    /// 从文件读自定义词（整体替换）；文件不存在就清空。
+    pub fn load_custom<P: AsRef<Path>>(&self, path: P) -> Result<usize> {
+        let path = path.as_ref();
+        match fs::read_to_string(path) {
+            Ok(data) => Ok(self.set_custom_tsv(&data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(self.set_custom_tsv("")),
+            Err(e) => Err(e).with_context(|| format!("读取自定义词失败: {}", path.display())),
+        }
+    }
+
+    /// 是不是设置里添加的自定义词。
+    pub fn is_custom(&self, word: &str) -> bool {
+        self.custom
+            .read()
+            .map(|c| c.iter().any(|(_, w, _)| w == word))
+            .unwrap_or(false)
+    }
+
+    pub fn custom_words(&self) -> Vec<(String, String, f64)> {
+        self.custom.read().map(|w| w.clone()).unwrap_or_default()
+    }
+
     fn rebuild(&self) {
-        let words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        let mut words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        words.extend(self.custom_words());
         let mut tsv = String::new();
         for (pinyin, word, freq) in &words {
             tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));

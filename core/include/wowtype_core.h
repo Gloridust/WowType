@@ -72,6 +72,9 @@ int wowtype_engine_add_user_word(WowtypeEngineHandle *engine, const char *pinyin
 int wowtype_engine_remove_user_word(WowtypeEngineHandle *engine, const char *word);
 int wowtype_engine_save_user_dict(WowtypeEngineHandle *engine, const char *path);
 int wowtype_engine_load_user_dict(WowtypeEngineHandle *engine, const char *path);
+/* 自定义词（设置里添加的，custom.tsv：拼音<TAB>词[<TAB>频次]）：整体替换上一次读到的，
+ * 文件不存在就清空；不写回用户词库。返回收下的条数，-1 表示出错。 */
+int wowtype_engine_load_custom_words(WowtypeEngineHandle *engine, const char *path);
 
 /* 用户输入习惯：选过的词的热度（30 天半衰期）和词搭配（上一个词 -> 这个词），
  * 参与排序，存成 TSV。save 返回 0 成功；load 返回条数，-1 表示出错。 */

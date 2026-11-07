@@ -331,11 +331,11 @@ impl Engine {
         self.config.fuzzy = on;
     }
 
-    /// 开关双拼（自然码）。
     pub fn set_typo_correction(&mut self, on: bool) {
         self.config.typo_correction = on;
     }
 
+    /// 开关双拼（自然码）。
     pub fn set_shuangpin(&mut self, on: bool) {
         self.config.shuangpin = on;
     }
@@ -488,6 +488,11 @@ impl Engine {
         self.lexicon.load_tsv(path)
     }
 
+    /// 读自定义词文件（custom.tsv），整体替换上一次读到的；文件不存在就清空。
+    pub fn load_custom_words<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        self.lexicon.load_custom(path)
+    }
+
     pub fn lm(&self) -> &Arc<dyn LanguageModel> {
         &self.lm
     }
@@ -554,6 +559,7 @@ impl Engine {
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
+        self.promote_custom(&mut result);
         self.append_raw_candidate(display, &mut result);
         if self.config.traditional {
             self.apply_traditional(&mut result);
@@ -1191,6 +1197,17 @@ fn protect_exact_input(candidates: &mut Vec<Candidate>) {
 ///
 /// 只看「这个候选本身被选过」（不算末词命中），而且要精确匹配（不是纠错、补全出来的），
 /// 比第一个候选被选得更多才换。
+/// 用户在设置里加的自定义词排最前（语言模型不认识它们，光靠词频排不上来）。
+impl Engine {
+    fn promote_custom(&self, candidates: &mut [Candidate]) {
+        let custom = |c: &Candidate| c.words.len() == 1 && self.lexicon.is_custom(&c.text);
+        if candidates.iter().any(custom) {
+            // 稳定排序：自定义词之间、其余候选之间都保持原来的顺序
+            candidates.sort_by_key(|c| !custom(c));
+        }
+    }
+}
+
 fn promote_picked(candidates: &mut Vec<Candidate>) {
     let picked = |c: &Candidate| {
         c.features.history_use_count > 0.0
@@ -1571,6 +1588,29 @@ mod tests {
         // 半年不用就退回去
         let later = e.input_at("shi", 180 * day);
         assert_eq!(later[0].text, "是");
+    }
+
+    #[test]
+    fn custom_words_rank_first_and_reload_replaces() {
+        let e = engine(concat!(
+            "ni hao\t你好\t332885\n",
+            "zhang san\t张三\t20000\n",
+            "zhang\t张\t500000\n",
+            "san\t三\t500000\n",
+        ));
+        e.lexicon()
+            .set_custom_tsv("# 注释\nni hao\t妮好\nwo de you xiang\t我的邮箱\nbad xx\t坏\n");
+        assert_eq!(e.lexicon().custom_words().len(), 2, "不合法的拼音跳过");
+        assert_eq!(e.input_at("nihao", 1)[0].text, "妮好");
+        assert_eq!(e.input_at("wodeyouxiang", 1)[0].text, "我的邮箱");
+        // 自定义词不进用户词库，保存时不会写出去
+        assert!(e.user_words().is_empty());
+
+        e.lexicon().set_custom_tsv("zhang san\t章三\n");
+        assert_eq!(e.input_at("nihao", 1)[0].text, "你好", "旧的自定义词去掉了");
+        assert_eq!(e.input_at("zhangsan", 1)[0].text, "章三");
+        e.lexicon().set_custom_tsv("");
+        assert_eq!(e.input_at("zhangsan", 1)[0].text, "张三");
     }
 
     #[test]

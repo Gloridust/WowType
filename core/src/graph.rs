@@ -55,10 +55,18 @@ pub struct Edge {
 /// 边的类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EdgeKind {
-    Full { syllable: Syllable, erhua: bool },
-    Jianpin { letter: u8 },
+    Full {
+        syllable: Syllable,
+        erhua: bool,
+    },
+    Jianpin {
+        letter: u8,
+    },
     /// 跨音节的两键按反（nhiao -> ni hao）：一条边消耗两个音节。
-    Pair { first: Syllable, second: Syllable },
+    Pair {
+        first: Syllable,
+        second: Syllable,
+    },
 }
 
 impl Edge {
@@ -198,9 +206,7 @@ impl SyllableGraph {
         let mut reachable = vec![false; n + 1];
         reachable[n] = true;
         for pos in (0..n).rev() {
-            reachable[pos] = self.edges[pos]
-                .iter()
-                .any(|e| allow(e) && reachable[e.end]);
+            reachable[pos] = self.edges[pos].iter().any(|e| allow(e) && reachable[e.end]);
         }
         reachable[0]
     }
@@ -317,7 +323,9 @@ fn is_neighbor(a: u8, b: u8) -> bool {
 }
 
 fn syllable_of(bytes: &[u8]) -> Option<Syllable> {
-    std::str::from_utf8(bytes).ok().and_then(Syllable::from_text)
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(Syllable::from_text)
 }
 
 /// 纠错边：每条边只纠一处。

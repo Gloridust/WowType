@@ -156,7 +156,11 @@ fn level_of(pcm: &[i16]) -> u8 {
     if pcm.is_empty() {
         return 0;
     }
-    let energy = pcm.iter().map(|&v| (v as f64 / 32768.0).powi(2)).sum::<f64>() / pcm.len() as f64;
+    let energy = pcm
+        .iter()
+        .map(|&v| (v as f64 / 32768.0).powi(2))
+        .sum::<f64>()
+        / pcm.len() as f64;
     let db = 10.0 * energy.max(1e-10).log10();
     (((db + 60.0) / 50.0).clamp(0.0, 1.0) * 100.0).round() as u8
 }
