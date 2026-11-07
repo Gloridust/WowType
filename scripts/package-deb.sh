@@ -14,7 +14,7 @@ MODE=${1:?用法: package-deb.sh engine <版本> | data <数据目录>}
 ARG=${2:?缺少参数}
 OUT=$(realpath -m "${3:-dist}")
 mkdir -p "$OUT"
-HOMEPAGE=https://github.com/Gloridust/Wowtype
+HOMEPAGE=https://github.com/Gloridust/WowType
 MAINTAINER="Gloridust <gloridust@users.noreply.github.com>"
 
 work=$(mktemp -d)

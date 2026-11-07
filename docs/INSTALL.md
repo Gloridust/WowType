@@ -18,8 +18,8 @@ sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
 ## 1. 构建核心并验证
 
 ```bash
-git clone https://github.com/Gloridust/Wowtype.git
-cd Wowtype
+git clone https://github.com/Gloridust/WowType.git
+cd WowType
 cargo build --release -p wowtype-core
 cargo test --workspace                      # 142 项
 ./scripts/abi-smoke.sh                      # C ABI 22 项，插件依赖的就是它

@@ -6,8 +6,8 @@
 
 一个 fcitx5 拼音输入法：长句一次打完、打一半就有词、按错键也能认出来，越用越懂你。
 
-[![CI](https://github.com/Gloridust/Wowtype/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloridust/Wowtype/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/Gloridust/Wowtype?include_prereleases&label=release)](https://github.com/Gloridust/Wowtype/releases)
+[![CI](https://github.com/Gloridust/WowType/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloridust/WowType/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Gloridust/WowType?include_prereleases&label=release)](https://github.com/Gloridust/WowType/releases)
 ![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
@@ -104,7 +104,7 @@ im-config -n fcitx5
 
 #### 方式一：安装包（推荐）
 
-到 [Releases](https://github.com/Gloridust/Wowtype/releases) 页面下载两个文件：
+到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载两个文件：
 
 | 文件 | 内容 |
 |---|---|
@@ -127,7 +127,7 @@ sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
 
 ```bash
 . /etc/os-release
-curl -s https://api.github.com/repos/Gloridust/Wowtype/releases/latest \
+curl -s https://api.github.com/repos/Gloridust/WowType/releases/latest \
   | grep -oE "https://[^\"]+(_${ID}${VERSION_ID}_amd64|_all)\.deb" \
   | xargs -n1 curl -LO
 sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
@@ -145,8 +145,8 @@ sudo apt install build-essential pkg-config cmake extra-cmake-modules \
 curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
 
 # 2. 代码
-git clone https://github.com/Gloridust/Wowtype.git
-cd Wowtype
+git clone https://github.com/Gloridust/WowType.git
+cd WowType
 
 # 3. 编译并安装插件（Rust 核心静态链接进插件，不用另装 .so）
 cargo build --release -p wowtype-core
@@ -283,7 +283,7 @@ WOWTYPE_FUZZY=1
 | 想看日志 | 终端里运行 `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype`，日志里有载入了哪个词库、用了多久 |
 | 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
 
-问题没解决，欢迎[提 issue](https://github.com/Gloridust/Wowtype/issues)，附上发行版、桌面环境（GNOME / KDE……，X11 还是 Wayland）和上面的日志。
+问题没解决，欢迎[提 issue](https://github.com/Gloridust/WowType/issues)，附上发行版、桌面环境（GNOME / KDE……，X11 还是 Wayland）和上面的日志。
 
 ## 卸载
 
