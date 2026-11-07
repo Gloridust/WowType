@@ -13,15 +13,15 @@
 
 [安装](#安装) · [使用](#使用) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
 
-<!-- 截图：docs/images/candidates.png（横排候选条），补上后删掉这行注释
-<img src="docs/images/candidates.png" width="640" alt="Wowtype 横排候选条">
--->
+<img src="docs/images/candidates.png" width="640" alt="打 hengxianghouxuanci 时的横排候选条：横向候选词、横向、横向后选词……">
+
+<sub>候选横排，和微信输入法一样：整句只留几个，后面是词，最后是单字</sub>
 
 </div>
 
 ## 特性
 
-- **整句输入**：`wojintianwanshangyaojiaban` 直接出「我今天晚上要加班」；后面跟着句子的前半截，可以先上屏一段，剩下的拼音接着改。
+- **整句输入**：`xiangquzijieshangban` 直接出「想去字节上班」；后面跟着句子的前半截，可以先上屏一段，剩下的拼音接着改。
 - **半成品也有词**：`zhongg` 就有「中国」，不用打全。打全了的拼音正好是个词时，它一定排第一。
 - **按错键能认出来**：按成相邻键、两个键按反、多按或漏按一个键（`zhognguo` → 中国）。本来就打对的输入不受影响。
 - **越用越懂你**：记住你选过的词和常连着用的词（选过一次「我们再讨论」，下次就不会出「我们在讨论」），30 天不用会慢慢淡掉。
@@ -31,26 +31,50 @@
 - **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次）。
 
+<table>
+<tr>
+<td align="center" width="50%">
+<img src="docs/images/sentence-head.png" alt="打 xiangquzijieshangban 时的候选：想去字节上班、想去字节……"><br>
+<b>长句一口气打完</b><br>
+<sub>还能只上屏前半截「想去字节」，剩下的接着选</sub>
+</td>
+<td align="center" width="50%">
+<img src="docs/images/typo.png" alt="打 weixni 时第一个候选是微信"><br>
+<b>按错顺序，没关系</b><br>
+<sub><code>weixni</code> 照样是「微信」</sub>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/images/mixed-jianpin.png" alt="打 wanqky 时第一个候选是完全可以"><br>
+<b>全简拼混打，也没问题</b><br>
+<sub><code>wanqky</code> → 完全可以</sub>
+</td>
+<td align="center">
+<img src="docs/images/english.png" alt="打 wechat 时第一个候选是 WeChat"><br>
+<b>中英混打，不用切换</b><br>
+<sub><code>wechat</code> → WeChat，大小写按词表来</sub>
+</td>
+</tr>
+</table>
+
 ## 示例
 
-下面是用默认词库（雾凇拼音）实际打出来的候选，可以用 `wowtype-show` 自己试：
+更多例子（默认词库雾凇拼音实际打出来的候选，可以用 `wowtype-show` 自己试）：
 
 | 输入 | 候选（前几个） | 说明 |
 |---|---|---|
-| `wojintianwanshangyaojiaban` | **我今天晚上要加班** · 我今天晚上要 · 我今天晚上要甲板 · … | 整句；第 2 个是句子前半截，选了只上屏这一段 |
+| `xiangquzijieshangban` | **想去字节上班** · 想去字节 · 想去字节商办 · 想去自解上班 · 想去 | 整句；第 2 个是句子前半截，选了只上屏这一段 |
 | `hengxianghouxuanci` | **横向候选词** · 横向 · 横向后选词 · 横 · 哼 · 衡 | 整句只留几个，然后是词，再是单字 |
 | `zhongg` | **中国** · 中共 · 忠告 · 中高 · 重工 | 没打完也有词 |
+| `weixni` | **微信** · 威信 · 唯心 · 为新 | 两个键按反了（`xin` 打成 `xni`） |
 | `zhognguo` | **中国** · 种过 · 重过 | 两个键按反了 |
 | `bjdx` | **北京大学** · 北京电信 · 半径大小 | 简拼 |
 | `sz` | **设置** · 甚至 · 随着 · 深圳 · 是指 | 简拼 |
+| `wanqky` | **完全可以** · 晚期一 · 完企业 · 完其余 · 完全开源 | 全拼和简拼混着打 |
 | `yongzwen` | **用中文** · 用正文 · 拥着我 · 用在 · 用作 | 全拼和只打声母的音节混着打 |
-| `github` | **GitHub** | 英文词按词表里的写法给出 |
-
-<!-- 截图（补上后删掉这行注释）：
-| 长句先上屏前半截 | 按错键 |
-|---|---|
-| <img src="docs/images/sentence-head.png" width="380"> | <img src="docs/images/typo.png" width="380"> |
--->
+| `wechat` | **WeChat** · 色差他 · 色插图 | 英文词按词表里的写法给出 |
+| `github` | **GitHub** | 同上 |
 
 ## 安装
 
