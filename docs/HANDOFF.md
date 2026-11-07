@@ -15,8 +15,8 @@
 ## 最短上手（5 条）
 
 ```bash
-cargo test                 # 131 项，应当全绿
-./scripts/abi-smoke.sh     # 22 项 C ABI 契约
+cargo test --workspace     # 140 项，应当全绿
+./scripts/abi-smoke.sh     # C ABI 契约
 # 词库（唯一需要自己准备的数据）
 git clone --depth 1 https://github.com/iDvel/rime-ice /tmp/rime-ice
 python3 tools/rime2tsv.py /tmp/rime-ice/rime_ice.dict.yaml > /tmp/lexicon.tsv
@@ -30,15 +30,16 @@ cargo run --release -p wowtype-core --bin wowtype-demo -- --lexicon /tmp/lexicon
 
 按「最可能出问题」排序。每项都给了怎么验、炸了看什么。
 
-### 1. fcitx5 插件从未编译
+### 1. fcitx5 插件：编过了，还没日常用过
+
+已在 Ubuntu 26.04 + fcitx5 5.1.19 上编译（需要 `libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev extra-cmake-modules`）：
 
 ```bash
-cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
+scripts/build-linux.sh --addon          # 编 Rust 核心 + 插件，并跑按键测试
+scripts/addon-test.sh /tmp/lexicon.tsv  # 单独跑按键测试（私有 fcitx5 实例，不碰正在用的）
 ```
 
-**最可能的原因**：头文件包名不对（`libfcitx5core-dev` 没装）、或 `libwowtype_core.so` 没先生成。
-API 用法我逐项对过头文件（见 `fcitx5-addon/README.md` 的核对表），签名应该没问题。
+还没做的是装进正在用的 fcitx5、在真实应用里打字（候选窗位置、和各家前端的配合）。
 
 ### 2. 语音的 X11 热键与采集
 

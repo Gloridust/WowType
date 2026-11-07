@@ -18,7 +18,7 @@
 | LTR 重排 | 🟡 **线性版** | `core/src/rank.rs`：23 维特征 + 可训练线性权重 + `LtrModel` 接口。没有神经网络模型，`head_word_nnlm` 恒为 0 |
 | MixRank 融合 | ❌ **未实现** | WeType 的 MixRank 是 NNLM + LM + LR 三路融合；我们只有 `path.score + rank_score` 的线性加权，没有独立实现 |
 | 蒸馏对齐排序 | ❌ **未做** | 训练器 `wowtype-train` 能从标注数据拟合权重，但没有教师模型的输出可供蒸馏 |
-| 产出可在 Ubuntu 日常使用的输入法 | 🟡 **待实机** | 引擎与插件代码完整，插件 API 已逐项核对；**离线语音引擎已用真实语音验证通过**（TTS 5/5 正确），但 Linux 的 X11 热键、麦克风采集、插件编译仍未验证 |
+| 产出可在 Ubuntu 日常使用的输入法 | 🟡 **待实机** | 引擎与插件代码完整，插件 API 已逐项核对；**离线语音引擎已用真实语音验证通过**（TTS 5/5 正确），插件已在 Ubuntu 26.04 + fcitx5 5.1.19 上编译并通过按键测试；Linux 的 X11 热键、麦克风采集、日常实际打字仍未验证 |
 
 ## 文字输入：实测能力
 
@@ -27,10 +27,14 @@
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 全拼 / 简拼 / 混输 | ✅ | 简拼 top1 95.3%（300 例） |
-| 半成品补全 | ✅ | 截断 1 字母 top1 89.7%、top3 99.0% |
+| 半成品补全 | ✅ | 截断 1 字母 top1 92.3%、top3 98.0% |
+| 按错相邻键 / 两键按反 / 多按一键 | ✅ 可开关 | top1 85.7% / 93.0% / 95.9% |
+| 漏按一键 | 🟡 | top1 35.9%：少一个字母常常正好是另一个合法拼音 |
+| 长句 | ✅ | 整句 top1 72%（改前 16%）；带一处按反 60% |
+| 长句分段选词 | ✅ | 先选句首词、剩下的继续打，插件里退格可撤销 |
 | 模糊音 | ✅ 可开关 | zh/z、ch/c、sh/s、ang/an、eng/en、ing/in |
 | 双拼（自然码） | ✅ 可开关 | 全音节往返一致性测试 |
-| 英文 / 未登录串 | ✅ | 保留原始大小写 |
+| 英文 / 未登录串 | ✅ | 保留原始大小写；加载英文词表后按词表写法（github → GitHub） |
 | 简繁转换 | 🟡 字符级 | 不处理「发/髮」这类词组歧义 |
 | 标点 / 符号面板 | ✅ | 57 个符号，拼音或中文名检索 |
 | 用户词库 / 自动学习 | ✅ | 选够 3 次自动入库 |
@@ -39,7 +43,7 @@
 
 ## 排序特征的真实填充情况
 
-23 个特征里**只有 11 个有数据来源**：
+23 个特征里**只有 13 个有数据来源**：
 
 | 有值 | 来源 |
 |---|---|
@@ -50,8 +54,10 @@
 | `full_jianpin` / `ltr_valid` | 路径/排序器状态 |
 | `history_count` / `history_use_count` / `history_time_diff` | 选词历史 |
 | `with_context` / `context_bigram_score` | 光标前文本 |
+| `typo_count` | 路径上的纠错次数 |
+| `prefix_completion` | 补全的字母数（最多 3） |
 
-恒为 0 的 12 个：`typo_count`、`complete_count`、`user_word_rollback_score`、`head_word_nnlm`、`hot_val_conf`、`user_tail_conf`、`context_flag`、`prefix_completion`（仅补全路径有值）、`other_completion`、`typo`、`force_emit`、`history_hot_val`。
+恒为 0 的 10 个：`complete_count`、`user_word_rollback_score`、`head_word_nnlm`、`hot_val_conf`、`user_tail_conf`、`context_flag`、`other_completion`、`typo`、`force_emit`、`history_hot_val`。
 
 它们要么需要神经网络模型（`head_word_nnlm`），要么需要官方那种热度数据（`hot_val_conf`），我们没有数据源。
 
@@ -59,14 +65,19 @@
 
 **在 macOS 上验证过**：
 
-- 131 项 Rust 测试（`cargo test`：core 83 + 组合 8 + 会话 5 + voice 35）
-- 22 项 C ABI 契约测试（`./scripts/abi-smoke.sh`）
+- 140 项 Rust 测试（`cargo test --workspace`：core 87 + 组合 8 + 会话 5 + voice 36 + 管线 4）
+- C ABI 契约测试（`./scripts/abi-smoke.sh`，含纠错、句首词、候选拼音）
+
+**在 Ubuntu 26.04 上验证过**：
+
+- fcitx5 插件编译（fcitx5 5.1.19，C++20，Rust 核心静态链接）
+- 插件按键测试 21 项（`scripts/addon-test.sh`，私有无界面 fcitx5 实例）：上屏、标点、纠错、英文词、分段选词、退格撤销、翻页选词、切换输入法时上屏
 - 真实词库 55 万条的排序质量、延迟、加载时间
 - M1 上跑的官方 WeType 引擎作为对照（行为对照阶段）
 
 **没验证过**：
 
-- fcitx5 插件从未编译（API 已逐项核对，签名一致）
+- 插件没装进日常使用的 fcitx5 里实际打字
 - Linux 的 X11 全局热键、cpal 采集、剪贴板上屏
 - 语音端到端（录音 → 识别 → 上屏）
 
