@@ -16,7 +16,7 @@ mod xnet;
 pub mod download;
 
 pub use model::Model;
-pub use stream::Stream;
+pub use stream::{FinalMode, Stabilizer, Stream};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,7 @@ pub fn load(dir: &Path) -> Result<Arc<Model>> {
 /// 离线识别渠道：喂 16kHz 单声道 PCM，结束时取文本。
 pub struct WtLocalChannel {
     stream: Stream,
+    stabilizer: Stabilizer,
     last: String,
     computed: Instant,
     cost: Duration,
@@ -57,10 +58,32 @@ impl WtLocalChannel {
         let model = load(&dir.into())?;
         Ok(Self {
             stream: Stream::new(model),
+            stabilizer: Stabilizer::default(),
             last: String::new(),
             computed: Instant::now(),
             cost: Duration::ZERO,
         })
+    }
+
+    /// 只收音频、不算中间结果（录音线程积压时先把音频收完，再用 [`Self::refresh`] 算一次）。
+    pub fn push(&mut self, pcm: &[i16]) {
+        self.stream.push(pcm);
+    }
+
+    /// 新音频够 [`PARTIAL_EVERY`] 帧就重算中间结果；返回中间结果是否变了。
+    ///
+    /// 和 `feed` 不同，这里不按上次耗时限频：调用方只在音频收完、没有积压时调，
+    /// 每次都用最新的音频，中间结果不会越拖越晚。
+    pub fn refresh(&mut self) -> bool {
+        if self.stream.fresh() < PARTIAL_EVERY {
+            return false;
+        }
+        let text = self.stabilizer.update(&self.stream.partial());
+        if !text.is_empty() && text != self.last {
+            self.last = text;
+            return true;
+        }
+        false
     }
 }
 
@@ -73,7 +96,7 @@ impl AsrChannel for WtLocalChannel {
         self.stream.push(pcm);
         if self.stream.fresh() >= PARTIAL_EVERY && self.computed.elapsed() >= self.cost * 3 {
             let start = Instant::now();
-            let text = self.stream.partial();
+            let text = self.stabilizer.update(&self.stream.partial());
             self.cost = start.elapsed();
             self.computed = Instant::now();
             if !text.is_empty() && text != self.last {

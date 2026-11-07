@@ -17,7 +17,7 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -386,31 +386,51 @@ impl Worker {
                     }
                 }
             }
+            let mut batch: Vec<Vec<i16>> = Vec::new();
+            let mut end: Option<bool> = None;
             match msg {
-                Ok(Msg::Pcm(pcm)) => {
-                    let level = level_of(&pcm);
-                    self.update(|s| s.level = level);
-                    let mut voiced = false;
-                    for frame in framer.push(&pcm) {
-                        voiced |= vad.push(&frame);
-                    }
-                    if voiced {
-                        self.update(|s| s.voice_at = Some(Instant::now()));
-                    }
-                    match asr.as_mut() {
-                        Some(ch) => ch.feed(&pcm),
-                        None => pending.extend_from_slice(&pcm),
-                    }
-                    if let Some(text) = asr.as_ref().and_then(|ch| ch.partial()) {
+                Ok(Msg::Pcm(pcm)) => batch.push(pcm),
+                Ok(Msg::Stop) => end = Some(true),
+                Ok(Msg::Cancel) | Err(RecvTimeoutError::Disconnected) => end = Some(false),
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            // 算中间结果的时候麦克风还在送音频：先把积压的都收下，再用最新的音频算一次，
+            // 中间结果就不会越来越落后
+            while end.is_none() {
+                match rx.try_recv() {
+                    Ok(Msg::Pcm(pcm)) => batch.push(pcm),
+                    Ok(Msg::Stop) => end = Some(true),
+                    Ok(Msg::Cancel) | Err(TryRecvError::Disconnected) => end = Some(false),
+                    Err(TryRecvError::Empty) => break,
+                }
+            }
+            for pcm in &batch {
+                let level = level_of(pcm);
+                self.update(|s| s.level = level);
+                let mut voiced = false;
+                for frame in framer.push(pcm) {
+                    voiced |= vad.push(&frame);
+                }
+                if voiced {
+                    self.update(|s| s.voice_at = Some(Instant::now()));
+                }
+                match asr.as_mut() {
+                    Some(ch) => ch.push(pcm),
+                    None => pending.extend_from_slice(pcm),
+                }
+            }
+            if let Some(stopped) = end {
+                break stopped;
+            }
+            if let Some(ch) = asr.as_mut() {
+                if ch.refresh() {
+                    if let Some(text) = ch.partial() {
                         if text != shown {
                             shown = text.to_string();
                             self.update(|s| s.text = shown.clone());
                         }
                     }
                 }
-                Ok(Msg::Stop) => break true,
-                Ok(Msg::Cancel) | Err(RecvTimeoutError::Disconnected) => break false,
-                Err(RecvTimeoutError::Timeout) => {}
             }
         };
         drop(source);
@@ -421,7 +441,7 @@ impl Worker {
         while let Ok(msg) = rx.try_recv() {
             match msg {
                 Msg::Pcm(pcm) => match asr.as_mut() {
-                    Some(ch) => ch.feed(&pcm),
+                    Some(ch) => ch.push(&pcm),
                     None => pending.extend_from_slice(&pcm),
                 },
                 Msg::Cancel => return,
