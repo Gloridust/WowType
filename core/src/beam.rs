@@ -180,7 +180,10 @@ pub fn beam_search(
                     continue;
                 }
                 let (lm_raw, covered) = if word.known {
-                    (lm.score(prev_text.as_deref(), &word.text), word.syllable_count)
+                    (
+                        lm.score(prev_text.as_deref(), &word.text),
+                        word.syllable_count,
+                    )
                 } else {
                     (0.0, 0)
                 };
@@ -277,27 +280,35 @@ pub fn first_words(
         return Vec::new();
     }
     let per_span = config.max_expansions_per_state.max(1);
-    let mut words: Vec<(BeamWord, f64)> =
-        collect_spans(graph, lexicon, 0, config.max_word_syllables.max(1), per_span, config)
-            .into_iter()
-            .filter(|s| s.word.known && s.word.end < n)
-            .map(|s| {
-                let cost = s.lexical + config.typo_cost * s.word.typos as f64;
-                (s.word, cost)
-            })
-            .collect();
+    let mut words: Vec<(BeamWord, f64)> = collect_spans(
+        graph,
+        lexicon,
+        0,
+        config.max_word_syllables.max(1),
+        per_span,
+        config,
+    )
+    .into_iter()
+    .filter(|s| s.word.known && s.word.end < n)
+    .map(|s| {
+        let cost = s.lexical + config.typo_cost * s.word.typos as f64;
+        (s.word, cost)
+    })
+    .collect();
     words.sort_by(|a, b| {
         b.0.end
             .cmp(&a.0.end)
             .then_with(|| a.1.total_cmp(&b.1))
             .then_with(|| a.0.text.cmp(&b.0.text))
     });
-    // 每个长度最多取几个，避免两字词把单字全部挤掉
+    // 每个长度最多取几个，避免两字词把单字全部挤掉；单字多留几个，
+    // 整句和词都不对时用户靠它一个字一个字地选
     let mut per_end: HashMap<usize, usize> = HashMap::new();
     words.retain(|(w, _)| {
         let count = per_end.entry(w.end).or_insert(0);
         *count += 1;
-        *count <= 4
+        let single = w.pinyin.split_whitespace().count() <= 1;
+        *count <= if single { 6 } else { 3 }
     });
     words.truncate(limit);
     words
@@ -345,7 +356,8 @@ fn collect_spans(
             };
             let ca = a.lexical + extra(a);
             let cb = b.lexical + extra(b);
-            ca.total_cmp(&cb).then_with(|| a.word.text.cmp(&b.word.text))
+            ca.total_cmp(&cb)
+                .then_with(|| a.word.text.cmp(&b.word.text))
         });
         // 同一个词可能经由不同切分到达，留代价最低的那个
         let mut seen: HashMap<String, ()> = HashMap::new();

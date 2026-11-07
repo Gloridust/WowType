@@ -67,7 +67,7 @@ bool send(HarnessInputContext *ic, Key key) {
     return handled;
 }
 
-/// 按一串键。<sp> <bs> <cr> <esc> <down> <pgdn> 是特殊键，其余按字符。
+/// 按一串键。<sp> <bs> <cr> <esc> <down> <right> <pgdn> 是特殊键，其余按字符。
 void type(HarnessInputContext *ic, const std::string &keys) {
     for (std::size_t i = 0; i < keys.size(); ++i) {
         if (keys[i] == '<') {
@@ -80,6 +80,7 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "cr") sym = FcitxKey_Return;
             else if (name == "esc") sym = FcitxKey_Escape;
             else if (name == "down") sym = FcitxKey_Down;
+            else if (name == "right") sym = FcitxKey_Right;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
             send(ic, Key(sym));
             continue;
@@ -185,6 +186,23 @@ void runCases(Instance &instance) {
         check(!dan.empty() && !split, "dan 第一页没有 大：" + join(dan));
     }
 
+    // 长句第一页不能全是只差最后一个字的整句，要有词和单字（截图里的问题）
+    fresh(ic.get());
+    type(ic.get(), "hengxianghouxuanci");
+    {
+        const auto heng = page(ic.get());
+        int tailVariants = 0;
+        bool single = false;
+        for (const auto &t : heng) {
+            if (t.rfind("横向候选", 0) == 0 && t.size() == std::string("横向候选词").size()) {
+                ++tailVariants;
+            }
+            single = single || t == "横";
+        }
+        check(!heng.empty() && heng[0] == "横向候选词" && tailVariants == 1 && single,
+              "hengxianghouxuanci 第一页：整句 + 词 + 单字：" + join(heng));
+    }
+
     // 长句先选开头的词
     fresh(ic.get());
     type(ic.get(), "nihaozhongguo");
@@ -229,12 +247,24 @@ void runCases(Instance &instance) {
         check(ic->committed == second[0], "第二页按 1 选第二页第一个，实际 " + ic->committed);
     }
 
+    // 候选横排（和微信输入法一样）：下键翻页，右键移动光标
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        auto list = ic->inputPanel().candidateList();
+        auto *common = list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
+        check(common && common->layoutHint() == CandidateLayoutHint::Horizontal, "候选横排");
+    }
+    const auto firstPage = page(ic.get());
+    type(ic.get(), "<down>");
+    check(page(ic.get()) != firstPage, "横排时下键翻页：" + join(page(ic.get())));
+
     // 空格选光标所在的候选
     fresh(ic.get());
-    type(ic.get(), "shi<down>");
+    type(ic.get(), "shi<right>");
     const auto list = page(ic.get());
     type(ic.get(), "<sp>");
-    check(list.size() > 1 && ic->committed == list[1], "下移光标后空格选第二个，实际 " + ic->committed);
+    check(list.size() > 1 && ic->committed == list[1], "右移光标后空格选第二个，实际 " + ic->committed);
 
     // 退格删到空，编辑区关闭
     fresh(ic.get());

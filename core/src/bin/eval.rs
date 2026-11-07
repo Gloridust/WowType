@@ -36,6 +36,8 @@ fn main() {
     let mut no_typo = false;
     let mut english_path: Option<String> = None;
     let mut show_top1 = false;
+    let mut learn = false;
+    let mut learn_from = String::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -95,6 +97,12 @@ fn main() {
                 english_path = args.get(i).cloned();
             }
             "--show-top1" => show_top1 = true,
+            "--learn" => learn = true,
+            "--learn-from" => {
+                i += 1;
+                learn_from = args.get(i).cloned().unwrap_or_default();
+                learn = true;
+            }
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
@@ -163,6 +171,59 @@ fn main() {
         Ok(v) => v,
         Err(e) => fail(&format!("读取用例失败: {e}")),
     };
+
+    // --learn：先把每个用例「打一遍、上屏正确答案」，再测。看用户用过一次以后能不能记住。
+    if learn {
+        let replay = if learn_from.is_empty() {
+            data.clone()
+        } else {
+            std::fs::read_to_string(&learn_from)
+                .unwrap_or_else(|e| fail(&format!("读不了 {learn_from}: {e}")))
+        };
+        for line in replay.lines() {
+            let mut cols = line.trim_end().split('\t');
+            let (Some(input), Some(expected)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            if input.starts_with('#') {
+                continue;
+            }
+            let expected = expected.split('|').next().unwrap_or("").trim();
+            // 照插件里真实的选法：整句对就选整句；不对就选最长的、对得上的句首候选，
+            // 剩下的拼音接着打；最后把拼出来的整句也记一次
+            engine.set_context("");
+            let mut rest = input.to_string();
+            let mut done = String::new();
+            for _ in 0..16 {
+                let candidates = engine.input(&rest);
+                let want = &expected[done.len().min(expected.len())..];
+                if let Some(c) = candidates
+                    .iter()
+                    .find(|c| c.text == want && c.consumed >= rest.len())
+                {
+                    engine.record_selection(&c.text);
+                    done.push_str(&c.text);
+                    break;
+                }
+                let head = candidates
+                    .iter()
+                    .filter(|c| c.consumed < rest.len() && want.starts_with(c.text.as_str()))
+                    .max_by_key(|c| c.text.len());
+                let Some(head) = head else {
+                    break;
+                };
+                engine.record_selection(&head.text);
+                done.push_str(&head.text);
+                rest = rest[head.consumed..].to_string();
+                engine.set_context(&done);
+            }
+            if done == expected && done != input {
+                engine.set_context("");
+                engine.record_selection(expected);
+            }
+        }
+        engine.set_context("");
+    }
 
     let mut total = 0usize;
     let mut top1 = 0usize;

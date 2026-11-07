@@ -73,6 +73,11 @@ int wowtype_engine_remove_user_word(WowtypeEngineHandle *engine, const char *wor
 int wowtype_engine_save_user_dict(WowtypeEngineHandle *engine, const char *path);
 int wowtype_engine_load_user_dict(WowtypeEngineHandle *engine, const char *path);
 
+/* 用户输入习惯：选过的词的热度（30 天半衰期）和词搭配（上一个词 -> 这个词），
+ * 参与排序，存成 TSV。save 返回 0 成功；load 返回条数，-1 表示出错。 */
+int wowtype_engine_save_history(WowtypeEngineHandle *engine, const char *path);
+int wowtype_engine_load_history(WowtypeEngineHandle *engine, const char *path);
+
 /* 输入拼音串；失败返回 NULL。 */
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 

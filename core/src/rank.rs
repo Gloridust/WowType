@@ -128,10 +128,11 @@ impl Default for FeatureWeights {
         Self {
             kind: 0.0,
             typo_count: -1.5,
-            history_count: 0.15,
+            // 历史只看热度（history_hot_val）：次数线性加分会无限涨，
+            // 时间差的 ln(1+秒) 会让「一小时前选过」比「从没选过」还靠后
+            history_count: 0.0,
             complete_count: 0.2,
-            // 历史时间差用 ln(1+秒)，越久远惩罚越大
-            history_time_diff: -0.4,
+            history_time_diff: 0.0,
             // 上下文二元分是 path.score 之外的新信息，权重给足
             context_bigram_score: 2.0,
             user_word_rollback_score: 0.8,
@@ -143,8 +144,9 @@ impl Default for FeatureWeights {
             user_tail_conf: 0.3,
             coverage_score: 2.0,
             ltr_valid: 0.0,
-            history_use_count: 0.1,
-            history_hot_val: 0.2,
+            history_use_count: 0.0,
+            // ln(1+热度)：选过一次约 +2.1，两次 +3.3，五次 +5.4
+            history_hot_val: 3.0,
             // prob 是 path.score 的单调变换，再乘权重只会放大基础分
             prob: 0.0,
             context_flag: 0.0,

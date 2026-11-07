@@ -351,6 +351,52 @@ pub unsafe extern "C" fn wowtype_engine_load_user_dict(
     }
 }
 
+/// 保存用户输入习惯（选过的词的热度、词搭配）到 TSV。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_save_history(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.save_history(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
+/// 读回用户输入习惯，返回条数，-1 表示出错（文件不存在也是 -1）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_history(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_history(path) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 每次输入最多返回多少个整句候选（句首词候选另算）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_max_candidates(

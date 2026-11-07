@@ -39,6 +39,12 @@ bool envFlag(const char *name, bool fallback) {
     return *value != '0';
 }
 
+/// 候选横排（默认，和微信输入法一样）；WOWTYPE_VERTICAL=1 改回竖排。
+bool horizontalLayout() {
+    static const bool horizontal = !envFlag("WOWTYPE_VERTICAL", false);
+    return horizontal;
+}
+
 std::string userDataDir() {
     std::string base;
     if (const char *data = std::getenv("XDG_DATA_HOME"); data && *data) {
@@ -92,6 +98,17 @@ std::string utf8Tail(const std::string &text, std::size_t maxBytes) {
     return text.substr(start);
 }
 
+/// 用户输入习惯（词的热度、词搭配）和用户词库放在同一个目录：history.tsv。
+std::string historyPathFor(const std::string &userDict) {
+    if (const char *env = std::getenv("WOWTYPE_HISTORY"); env && *env) {
+        return env;
+    }
+    if (userDict.empty()) {
+        return {};
+    }
+    return (std::filesystem::path(userDict).parent_path() / "history.tsv").string();
+}
+
 /// 在后台线程里做的事：载入词库、语言模型、各种开关和用户词。
 WowtypeEngineHandle *loadCore(const std::string &userDict) {
     std::string lexicon = findDataFile("WOWTYPE_LEXICON", "lexicon.tsv");
@@ -136,6 +153,16 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
             FCITX_INFO() << "Wowtype: 载入用户词 " << loaded << " 条";
+        }
+    }
+    if (const std::string history = historyPathFor(userDict);
+        !history.empty() && std::filesystem::exists(history)) {
+        const int loaded = wowtype_engine_load_history(core, history.c_str());
+        if (loaded >= 0) {
+            FCITX_INFO() << "Wowtype: 载入输入习惯 " << loaded << " 条";
+        } else {
+            FCITX_WARN() << "Wowtype: 输入习惯载入失败 " << history << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -267,7 +294,18 @@ void WowtypeEngine::maybeSaveUserDict(bool force) {
         return;
     }
     const std::string path = userDictPath();
-    if (!path.empty() && wowtype_engine_save_user_dict(core_, path.c_str()) == 0) {
+    if (path.empty()) {
+        return;
+    }
+    const bool dictSaved = wowtype_engine_save_user_dict(core_, path.c_str()) == 0;
+    const std::string history = historyPathFor(path);
+    const bool historySaved =
+        !history.empty() && wowtype_engine_save_history(core_, history.c_str()) == 0;
+    if (!historySaved) {
+        FCITX_WARN() << "Wowtype: 输入习惯保存失败 " << history << "："
+                     << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+    }
+    if (dictSaved && historySaved) {
         unsavedCommits_ = 0;
     }
 }
@@ -380,7 +418,9 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
 
     if (!state->candidates_.empty()) {
         auto candidates = std::make_unique<fcitx::CommonCandidateList>();
-        candidates->setLayoutHint(fcitx::CandidateLayoutHint::Vertical);
+        candidates->setLayoutHint(horizontalLayout()
+                                      ? fcitx::CandidateLayoutHint::Horizontal
+                                      : fcitx::CandidateLayoutHint::Vertical);
         candidates->setPageSize(static_cast<int>(kPageSize));
         candidates->setSelectionKey(fcitx::KeyList{
             fcitx::Key(FcitxKey_1), fcitx::Key(FcitxKey_2), fcitx::Key(FcitxKey_3),
@@ -505,20 +545,28 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         if (auto list = ic->inputPanel().candidateList(); list && list->size() > 0) {
             auto *pageable = list->toPageable();
             auto *movable = list->toCursorMovable();
+            // 横排时左右键移动候选、上下键翻页；竖排反过来
+            const bool horizontal = horizontalLayout();
+            const auto prevKey = horizontal ? FcitxKey_Left : FcitxKey_Up;
+            const auto nextKey = horizontal ? FcitxKey_Right : FcitxKey_Down;
+            const auto prevPageKey = horizontal ? FcitxKey_Up : FcitxKey_Left;
+            const auto nextPageKey = horizontal ? FcitxKey_Down : FcitxKey_Right;
             bool handled = false;
-            if (movable && sym == FcitxKey_Up) {
+            if (movable && sym == prevKey) {
                 movable->prevCandidate();
                 handled = true;
-            } else if (movable && sym == FcitxKey_Down) {
+            } else if (movable && sym == nextKey) {
                 movable->nextCandidate();
                 handled = true;
             } else if (pageable &&
-                       (sym == FcitxKey_Page_Up || sym == FcitxKey_minus) &&
+                       (sym == FcitxKey_Page_Up || sym == FcitxKey_minus ||
+                        sym == prevPageKey) &&
                        pageable->hasPrev()) {
                 pageable->prev();
                 handled = true;
             } else if (pageable &&
-                       (sym == FcitxKey_Page_Down || sym == FcitxKey_equal) &&
+                       (sym == FcitxKey_Page_Down || sym == FcitxKey_equal ||
+                        sym == nextPageKey) &&
                        pageable->hasNext()) {
                 pageable->next();
                 handled = true;

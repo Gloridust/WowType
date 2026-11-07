@@ -31,6 +31,10 @@ name = "wowtype-train"
 path = "src/bin/train.rs"
 
 [[bin]]
+name = "wowtype-show"
+path = "src/bin/show.rs"
+
+[[bin]]
 name = "wowtype-probe"
 path = "src/bin/probe.rs"
 
