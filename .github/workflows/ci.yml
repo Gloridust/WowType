@@ -87,7 +87,8 @@ jobs:
             build-essential pkg-config cmake extra-cmake-modules \
             libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
             fcitx5 fcitx5-modules \
-            ca-certificates curl git dpkg-dev file python3
+            ca-certificates curl git dpkg-dev file python3 \
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
       - uses: actions/checkout@v4
       - name: Rust
         run: |
@@ -120,6 +121,8 @@ jobs:
           wowtype-check --lexicon dist/data/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
           wowtype-show --lexicon dist/data/lexicon.tsv nihao | tee /tmp/show.txt
           grep -q '1\.你好' /tmp/show.txt
+          # 设置界面：能 import GTK 4 / libadwaita，拼音整理逻辑正确
+          wowtype-config --self-test
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}
