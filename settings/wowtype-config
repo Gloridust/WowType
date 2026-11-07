@@ -674,7 +674,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_about(self, *_args):
         about = Adw.AboutDialog(
             application_name="WowType",
-            application_icon="input-keyboard",
+            application_icon="wowtype",
             developer_name="Gloridust",
             version=VERSION if not VERSION.startswith("@") else "dev",
             website=HOMEPAGE,
@@ -702,6 +702,7 @@ class SettingsApp(Adw.Application):
         return 0
 
     def do_activate(self):
+        Gtk.Window.set_default_icon_name("wowtype")
         window = self.props.active_window
         if not window:
             window = SettingsWindow(self, self.page)
