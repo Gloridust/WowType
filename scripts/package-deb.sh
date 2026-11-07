@@ -63,7 +63,7 @@ engine)
   install -Dm644 README.md "$doc/README.md"
   cat > "$doc/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: Wowtype
+Upstream-Name: WowType
 Source: $HOMEPAGE
 
 Files: *
@@ -85,7 +85,7 @@ EOF
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \
     "WeChat-style pinyin input method for fcitx5" \
 "拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-装完在 fcitx5 配置里添加「Wowtype」。需要词库包 wowtype-data-rime-ice，
+装完在 fcitx5 配置里添加「WowType」。需要词库包 wowtype-data-rime-ice，
 或者自己把 lexicon.tsv 放到 ~/.local/share/wowtype/。"
   ;;
 
@@ -111,9 +111,9 @@ data)
     sed 's/^$/./; s/^/ /' "$data/LICENSE"
   } > "$doc/copyright"
   build_deb wowtype-data-rime-ice "$version" all "" \
-    "Chinese lexicon for Wowtype (from rime-ice)" \
-"雾凇拼音（rime-ice）的中文词库与英文词表，转换成 Wowtype 的格式。
-装到 /usr/share/wowtype/，Wowtype 启动时自动载入。"
+    "Chinese lexicon for WowType (from rime-ice)" \
+"雾凇拼音（rime-ice）的中文词库与英文词表，转换成 WowType 的格式。
+装到 /usr/share/wowtype/，WowType 启动时自动载入。"
 
   # 不用 deb 的系统：解压到 ~/.local/share/wowtype/ 即可
   tarball="$OUT/wowtype-data-rime-ice-$version.tar.gz"

@@ -1,6 +1,6 @@
 [Addon]
-Name=Wowtype Pinyin
-Name[zh_CN]=Wowtype 拼音引擎
+Name=WowType Pinyin
+Name[zh_CN]=WowType 拼音引擎
 Category=InputMethod
 Version=@PROJECT_VERSION@
 Enabled=True

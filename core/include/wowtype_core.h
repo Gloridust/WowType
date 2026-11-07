@@ -1,5 +1,5 @@
 /*
- * Wowtype Rust 核心的 C ABI。
+ * WowType Rust 核心的 C ABI。
  *
  * 生命周期：
  * - wowtype_engine_new 成功返回句柄，必须用 wowtype_engine_free 释放；
