@@ -15,7 +15,7 @@
 ## 最短上手（5 条）
 
 ```bash
-cargo test --workspace     # 140 项，应当全绿
+cargo test --workspace     # 142 项，应当全绿
 ./scripts/abi-smoke.sh     # C ABI 契约
 # 词库（唯一需要自己准备的数据）
 git clone --depth 1 https://github.com/iDvel/rime-ice /tmp/rime-ice
