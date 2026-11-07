@@ -24,21 +24,17 @@ pub fn quant(x: &[f32], k: usize) -> QAct {
     QAct { q, s, k }
 }
 
-#[derive(Clone, Copy)]
-struct Out(*mut f32);
-unsafe impl Send for Out {}
-unsafe impl Sync for Out {}
-
 /// out[t×n] = (x · wᵀ) * scale + bias，w 为 [n, k] 行主序 int8
+#[allow(clippy::needless_range_loop)] // 行/列索引运算，不是简单遍历
 pub fn qgemm(x: &QAct, w: &[i8], n: usize, ws: f32, bias: Option<&[f32]>) -> Vec<f32> {
     let k = x.k;
     let t = x.s.len();
     debug_assert_eq!(w.len(), n * k);
     let mut out = vec![0f32; t * n];
-    let o = Out(out.as_mut_ptr());
+    // 用 usize 传递基址：裸指针不是 Send，闭包按字段捕获时会被拒
+    let base = out.as_mut_ptr() as usize;
     const TILE: usize = 32;
-    parallel::for_each_index(n.div_ceil(TILE), |ti| {
-        let o = o;
+    parallel::for_each_index(n.div_ceil(TILE), move |ti| {
         let n0 = ti * TILE;
         let n1 = (n0 + TILE).min(n);
         let mut j = n0;
@@ -52,7 +48,7 @@ pub fn qgemm(x: &QAct, w: &[i8], n: usize, ws: f32, bias: Option<&[f32]>) -> Vec
                     for b in 0..rows {
                         let v =
                             acc[a][b] as f32 * x.s[i + a] * ws + bias.map_or(0.0, |bb| bb[j + b]);
-                        unsafe { *o.0.add((i + a) * n + j + b) = v };
+                        unsafe { *((base as *mut f32).add((i + a) * n + j + b)) = v };
                     }
                 }
                 i += r2;
@@ -133,6 +129,7 @@ mod neon {
         vgetq_lane_s32(v, 0) + vgetq_lane_s32(v, 1) + vgetq_lane_s32(v, 2) + vgetq_lane_s32(v, 3)
     }
 
+    #[allow(clippy::needless_range_loop)] // 列索引与累加器槽位一一对应
     pub unsafe fn dot2x4(x: [*const i8; 2], w: [*const i8; 4], k: usize) -> [[i32; 4]; 2] {
         let mut a = [vdupq_n_s32(0); 8];
         let mut i = 0;

@@ -77,8 +77,5 @@ fn main() {
             }
         }
     }
-    match channel.finish() {
-        Some(text) => println!("{text}"),
-        None => println!(""),
-    }
+    println!("{}", channel.finish().unwrap_or_default());
 }
