@@ -35,6 +35,8 @@ if [[ "${1:-}" == "--addon" ]]; then
   echo "== fcitx5 插件 =="
   cmake -S fcitx5-addon -B fcitx5-addon/build -DCMAKE_BUILD_TYPE=Release
   cmake --build fcitx5-addon/build -j
+  echo "== 插件按键测试（私有 fcitx5 实例，不影响正在用的输入法）=="
+  ./scripts/addon-test.sh "${WOWTYPE_LEXICON:-$PWD/core/data/demo_lexicon.tsv}" "${WOWTYPE_ENGLISH:-}" || true
 fi
 
 echo "完成"

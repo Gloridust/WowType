@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [lib]
 name = "wowtype_core"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [[bin]]
 name = "wowtype-demo"
