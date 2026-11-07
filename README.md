@@ -15,6 +15,8 @@
 
 <img src="docs/images/candidates.png" width="640" alt="打 hengxianghouxuanci 时的横排候选条：横向候选词、横向、横向后选词……">
 
+<sub>候选横排，和微信输入法一样：整句只留几个，后面是词，最后是单字</sub>
+
 </div>
 
 ## 特性
@@ -28,9 +30,36 @@
 - **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑。
 
+<table>
+<tr>
+<td align="center" width="50%">
+<img src="docs/images/sentence-head.png" alt="打 xiangquzijieshangban 时的候选：想去字节上班、想去字节……"><br>
+<b>长句一口气打完</b><br>
+<sub>还能只上屏前半截「想去字节」，剩下的接着选</sub>
+</td>
+<td align="center" width="50%">
+<img src="docs/images/typo.png" alt="打 weixni 时第一个候选是微信"><br>
+<b>按错顺序，没关系</b><br>
+<sub><code>weixni</code> 照样是「微信」</sub>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/images/mixed-jianpin.png" alt="打 wanqky 时第一个候选是完全可以"><br>
+<b>全简拼混打，也没问题</b><br>
+<sub><code>wanqky</code> → 完全可以</sub>
+</td>
+<td align="center">
+<img src="docs/images/english.png" alt="打 wechat 时第一个候选是 WeChat"><br>
+<b>中英混打，不用切换</b><br>
+<sub><code>wechat</code> → WeChat，大小写按词表来</sub>
+</td>
+</tr>
+</table>
+
 ## 示例
 
-下面是用默认词库（雾凇拼音）实际打出来的候选，可以用 `wowtype-show` 自己试：
+更多例子（默认词库雾凇拼音实际打出来的候选，可以用 `wowtype-show` 自己试）：
 
 | 输入 | 候选（前几个） | 说明 |
 |---|---|---|
@@ -41,12 +70,10 @@
 | `zhognguo` | **中国** · 种过 · 重过 | 两个键按反了 |
 | `bjdx` | **北京大学** · 北京电信 · 半径大小 | 简拼 |
 | `sz` | **设置** · 甚至 · 随着 · 深圳 · 是指 | 简拼 |
+| `wanqky` | **完全可以** · 晚期一 · 完企业 · 完其余 · 完全开源 | 全拼和简拼混着打 |
 | `yongzwen` | **用中文** · 用正文 · 拥着我 · 用在 · 用作 | 全拼和只打声母的音节混着打 |
-| `github` | **GitHub** | 英文词按词表里的写法给出 |
-
-| 长句：第 2 个是句子前半截，选它只上屏这一段 | 按反了键：`weixni` 也能出「微信」 |
-|---|---|
-| <img src="docs/images/sentence-head.png" width="420" alt="打 xiangquzijieshangban 时的候选：想去字节上班、想去字节……"> | <img src="docs/images/typo.png" width="420" alt="打 weixni 时第一个候选是微信"> |
+| `wechat` | **WeChat** · 色差他 · 色插图 | 英文词按词表里的写法给出 |
+| `github` | **GitHub** | 同上 |
 
 ## 安装
 
