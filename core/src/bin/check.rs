@@ -81,7 +81,7 @@ fn main() {
     }
 
     let mut report = Report::new();
-    println!("Wowtype 自检  (core {})", env!("CARGO_PKG_VERSION"));
+    println!("WowType 自检  (core {})", env!("CARGO_PKG_VERSION"));
 
     // 1. 词库（必需）
     println!("\n[词库] {lexicon}");

@@ -1,6 +1,6 @@
 # 引擎细节、评测与调参
 
-这里是 Wowtype 拼音引擎的实现说明和实测数字，原先放在 README 里。
+这里是 WowType 拼音引擎的实现说明和实测数字，原先放在 README 里。
 怎么安装、怎么用见 [README](../README.md)；接手开发先看 [HANDOFF.md](HANDOFF.md)。
 
 ## 词库从哪来

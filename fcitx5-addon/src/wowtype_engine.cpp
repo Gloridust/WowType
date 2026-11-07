@@ -129,14 +129,14 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     std::string lexicon = findDataFile("WOWTYPE_LEXICON", "lexicon.tsv");
     if (lexicon.empty()) {
         lexicon = std::string(kSystemDataDir) + "/demo_lexicon.tsv";
-        FCITX_WARN() << "Wowtype: 没找到 lexicon.tsv，用 demo 词典（只有几十个词）";
+        FCITX_WARN() << "WowType: 没找到 lexicon.tsv，用 demo 词典（只有几十个词）";
     }
     const std::string lm = findDataFile("WOWTYPE_LM", "bigram.tsv");
     const auto started = std::chrono::steady_clock::now();
     WowtypeEngineHandle *core =
         wowtype_engine_new(lexicon.c_str(), lm.empty() ? nullptr : lm.c_str());
     if (!core) {
-        FCITX_ERROR() << "Wowtype: 初始化 Rust 核心失败，词典=" << lexicon
+        FCITX_ERROR() << "WowType: 初始化 Rust 核心失败，词典=" << lexicon
                       << "，错误="
                       << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         return nullptr;
@@ -146,29 +146,29 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     if (!english.empty()) {
         const int loaded = wowtype_engine_load_english(core, english.c_str());
         if (loaded > 0) {
-            FCITX_INFO() << "Wowtype: 载入英文词 " << loaded << " 个";
+            FCITX_INFO() << "WowType: 载入英文词 " << loaded << " 个";
         }
     }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
-            FCITX_INFO() << "Wowtype: 载入用户词 " << loaded << " 条";
+            FCITX_INFO() << "WowType: 载入用户词 " << loaded << " 条";
         }
     }
     if (const std::string history = historyPathFor(userDict);
         !history.empty() && std::filesystem::exists(history)) {
         const int loaded = wowtype_engine_load_history(core, history.c_str());
         if (loaded >= 0) {
-            FCITX_INFO() << "Wowtype: 载入输入习惯 " << loaded << " 条";
+            FCITX_INFO() << "WowType: 载入输入习惯 " << loaded << " 条";
         } else {
-            FCITX_WARN() << "Wowtype: 输入习惯载入失败 " << history << "："
+            FCITX_WARN() << "WowType: 输入习惯载入失败 " << history << "："
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - started)
                         .count();
-    FCITX_INFO() << "Wowtype: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms";
+    FCITX_INFO() << "WowType: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms";
     return core;
 }
 
@@ -283,7 +283,7 @@ void WowtypeEngine::applyConfig() {
         const std::string name = env;
         key = name == "none" || name == "0" ? fcitx::Key() : fcitx::Key(name);
         if (key.sym() == FcitxKey_None && name != "none" && name != "0") {
-            FCITX_WARN() << "Wowtype: 不认识语音热键 " << name << "，改用 Alt_R";
+            FCITX_WARN() << "WowType: 不认识语音热键 " << name << "，改用 Alt_R";
             key = fcitx::Key(FcitxKey_Alt_R);
         }
     }
@@ -315,9 +315,9 @@ void WowtypeEngine::applyCoreSettings() {
             s2t.empty() ? -1 : wowtype_engine_load_conversion(core_, s2t.c_str());
         if (loaded > 0) {
             conversionLoaded_ = true;
-            FCITX_INFO() << "Wowtype: 载入简繁表 " << loaded << " 条";
+            FCITX_INFO() << "WowType: 载入简繁表 " << loaded << " 条";
         } else {
-            FCITX_WARN() << "Wowtype: 简繁表载入失败 " << s2t;
+            FCITX_WARN() << "WowType: 简繁表载入失败 " << s2t;
         }
     }
     wowtype_engine_set_traditional(core_, traditional_ && conversionLoaded_ ? 1 : 0);
@@ -325,10 +325,10 @@ void WowtypeEngine::applyCoreSettings() {
     if (const std::string custom = customWordsPath(); !custom.empty()) {
         const int loaded = wowtype_engine_load_custom_words(core_, custom.c_str());
         if (loaded < 0) {
-            FCITX_WARN() << "Wowtype: 自定义词载入失败 " << custom << "："
+            FCITX_WARN() << "WowType: 自定义词载入失败 " << custom << "："
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         } else if (loaded > 0) {
-            FCITX_INFO() << "Wowtype: 载入自定义词 " << loaded << " 条";
+            FCITX_INFO() << "WowType: 载入自定义词 " << loaded << " 条";
         }
     }
 }
@@ -412,7 +412,7 @@ void WowtypeEngine::maybeSaveUserDict(bool force) {
     const bool historySaved =
         !history.empty() && wowtype_engine_save_history(core_, history.c_str()) == 0;
     if (!historySaved) {
-        FCITX_WARN() << "Wowtype: 输入习惯保存失败 " << history << "："
+        FCITX_WARN() << "WowType: 输入习惯保存失败 " << history << "："
                      << (wowtype_last_error() ? wowtype_last_error() : "unknown");
     }
     if (dictSaved && historySaved) {
@@ -902,7 +902,7 @@ bool WowtypeEngine::pollVoice() {
         commitPlain(ic, text);
         return false;
     case WOWTYPE_VOICE_ERROR:
-        FCITX_INFO() << "Wowtype: 语音 " << text;
+        FCITX_INFO() << "WowType: 语音 " << text;
         showVoice(ic, "🎙 " + text, {});
         voiceErrorUntil_ = fcitx::now(CLOCK_MONOTONIC) + kVoiceErrorUsec;
         return true;

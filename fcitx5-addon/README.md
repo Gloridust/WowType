@@ -1,4 +1,4 @@
-# Wowtype fcitx5 插件骨架
+# WowType fcitx5 插件骨架
 
 这是把 WeType（微信输入法）拼音排序思路移植到 Linux 的外壳层：
 
@@ -73,11 +73,11 @@ Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲�
 
     fcitx5 -r
 
-然后打开配置工具，添加 Wowtype：
+然后打开配置工具，添加 WowType：
 
     fcitx5-configtool
 
-或者在“输入法”页把 Wowtype 加到当前分组。切换过去后输入 xian，应能看到
+或者在“输入法”页把 WowType 加到当前分组。切换过去后输入 xian，应能看到
 “先 / 西安”等候选；输入 zg 会走简拼并给出“中国”。
 
 ## 数据

@@ -85,7 +85,7 @@ wowtype-asr --download 音频.wav        # 或直接转写一个 WAV（16kHz 单
 
 ## 4. 与 fcitx5 的集成（已落地）
 
-插件在 Wowtype 是当前输入法时接住语音热键（默认右 Alt，`WOWTYPE_VOICE_KEY` 可改，`none` 关掉）。
+插件在 WowType 是当前输入法时接住语音热键（默认右 Alt，`WOWTYPE_VOICE_KEY` 可改，`none` 关掉）。
 Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入法。
 
 | 层 | 文件 | 做什么 |

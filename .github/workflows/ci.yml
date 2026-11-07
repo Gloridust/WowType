@@ -1,13 +1,25 @@
 name: CI
 
-# 每次推送 / PR：跑测试，在三个发行版上编插件、跑按键测试、打 .deb（结果在 Actions 页的 Artifacts 里）。
-# 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：再把这些包发到 GitHub Release。
+# PR 和推送到 main：跑测试，在三个发行版上编插件、跑按键测试、打 .deb（结果在 Actions 页的 Artifacts 里）。
+# 只改了文档（*.md、docs/、截图）的提交不跑。
+# 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：总是跑，并把这些包发到 GitHub Release。
+# 其他分支想跑一次：Actions 页手动运行（workflow_dispatch）。
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags: ["v*"]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".gitignore"
+      - "LICENSE*"
   workflow_dispatch:
 
 permissions:
@@ -144,12 +156,12 @@ jobs:
           fcitx5 -r -d
           \`\`\`
 
-          然后在 fcitx5 配置里添加「Wowtype」。完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
+          然后在 fcitx5 配置里添加「WowType」。完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           词库包的数据来自 [rime-ice](https://github.com/iDvel/rime-ice)，许可证 GPL-3.0。
 
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --verify-tag \
-            --title "Wowtype $GITHUB_REF_NAME" \
+            --title "WowType $GITHUB_REF_NAME" \
             --notes-file notes.md --generate-notes

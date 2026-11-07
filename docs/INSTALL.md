@@ -18,8 +18,8 @@ sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
 ## 1. 构建核心并验证
 
 ```bash
-git clone https://github.com/Gloridust/Wowtype.git
-cd Wowtype
+git clone https://github.com/Gloridust/WowType.git
+cd WowType
 cargo build --release -p wowtype-core
 cargo test --workspace                      # 142 项
 ./scripts/abi-smoke.sh                      # C ABI 22 项，插件依赖的就是它
@@ -99,7 +99,7 @@ fcitx5 -rd                      # 重启
 fcitx5-configtool               # 或在托盘里「配置」
 ```
 
-在「输入法」页把 **Wowtype** 加进列表，然后切过去试打 `nihao`。
+在「输入法」页把 **WowType** 加进列表，然后切过去试打 `nihao`。
 
 如果托盘里根本没有 fcitx5，先确认输入法框架是它：
 
