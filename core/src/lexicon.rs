@@ -632,8 +632,16 @@ impl UserLexicon {
             let (Some(pinyin), Some(word)) = (cols.next(), cols.next()) else {
                 continue;
             };
-            let (pinyin, word) = (pinyin.trim(), word.trim());
-            if pinyin.is_empty() || word.is_empty() || parse_pinyin_keys(pinyin).is_err() {
+            let (pinyin, word) = (pinyin.trim().to_ascii_lowercase(), word.trim());
+            // 手写的 custom.tsv 可能不分音节（nihao）：自己切开
+            let Some(pinyin) = (if parse_pinyin_keys(&pinyin).is_ok() {
+                Some(pinyin)
+            } else {
+                split_syllables(&pinyin)
+            }) else {
+                continue;
+            };
+            if word.is_empty() {
                 continue;
             }
             let freq = cols
@@ -641,7 +649,7 @@ impl UserLexicon {
                 .and_then(|f| f.trim().parse::<f64>().ok())
                 .filter(|f| f.is_finite() && *f > 0.0)
                 .unwrap_or(CUSTOM_WORD_FREQ);
-            custom.push((pinyin.to_string(), word.to_string(), freq));
+            custom.push((pinyin, word.to_string(), freq));
         }
         let count = custom.len();
         if let Ok(mut slot) = self.custom.write() {
@@ -760,6 +768,40 @@ fn entry_matches(entry: &LexEntry, query: &[SyllableQuery]) -> bool {
 /// - 儿化：hua r
 ///
 /// 多音节不允许写成无分隔的连写，因为无法唯一切分（如 fangan）。
+/// 把连着写的拼音切成音节（`nihao` -> `ni hao`）：音节数最少，一样多时前面的音节取长的
+/// （`fangan` -> `fang an`，想要 fan gan 就自己加空格或隔音符）。切不开返回 None。
+pub fn split_syllables(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    let n = text.len();
+    // best[i]：text[i..] 最少切成几个音节，以及第一个音节的长度
+    let mut best: Vec<Option<(usize, usize)>> = vec![None; n + 1];
+    best[n] = Some((0, 0));
+    for i in (0..n).rev() {
+        for len in (1..=crate::syllable::MAX_SYLLABLE_LEN.min(n - i)).rev() {
+            if !crate::syllable::is_valid(&text[i..i + len]) {
+                continue;
+            }
+            if let Some((count, _)) = best[i + len] {
+                if best[i].map_or(true, |(c, _)| count + 1 < c) {
+                    best[i] = Some((count + 1, len));
+                }
+            }
+        }
+    }
+    best[0]?;
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let (_, len) = best[i]?;
+        parts.push(&text[i..i + len]);
+        i += len;
+    }
+    Some(parts.join(" "))
+}
+
 pub fn parse_pinyin_keys(pinyin: &str) -> Result<Vec<SyllableKey>> {
     let pinyin = pinyin.trim();
     if pinyin.is_empty() {
@@ -905,6 +947,19 @@ mod tests {
     fn cleanup(path: &std::path::Path) {
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(cache_path(path));
+    }
+
+    #[test]
+    fn split_syllables_prefers_fewest_and_longest_first() {
+        assert_eq!(split_syllables("nihao").as_deref(), Some("ni hao"));
+        assert_eq!(split_syllables("fangan").as_deref(), Some("fang an"));
+        assert_eq!(split_syllables("xian").as_deref(), Some("xian"));
+        assert_eq!(
+            split_syllables("zhongguoren").as_deref(),
+            Some("zhong guo ren")
+        );
+        assert_eq!(split_syllables("github"), None);
+        assert_eq!(split_syllables("Ni"), None);
     }
 
     #[test]

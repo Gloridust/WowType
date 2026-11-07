@@ -1,0 +1,724 @@
+#!/usr/bin/python3
+"""WowType 设置：候选排列、模糊音、语音输入键、自定义词。
+
+改的是 fcitx5 读的同一个配置文件（~/.config/fcitx5/conf/wowtype.conf）和自定义词文件
+（~/.local/share/wowtype/custom.tsv），改完经 D-Bus 让 fcitx5 重新读，立刻生效。
+
+用系统的 python3（要 PyGObject、GTK 4、libadwaita 1.4+）：
+  Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+"""
+
+import os
+import sys
+import threading
+import unicodedata
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gio, GLib, GObject, Gtk  # noqa: E402
+
+APP_ID = "io.github.Gloridust.WowType.Config"
+VERSION = "@VERSION@"
+HOMEPAGE = "https://github.com/Gloridust/WowType"
+
+
+def _xdg(name, fallback):
+    value = os.environ.get(name)
+    return value if value else os.path.expanduser(fallback)
+
+
+CONFIG_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "conf", "wowtype.conf")
+DATA_DIR = os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "wowtype")
+CUSTOM_FILE = os.environ.get("WOWTYPE_CUSTOM") or os.path.join(DATA_DIR, "custom.tsv")
+VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
+LEXICON_CANDIDATES = [
+    os.environ.get("WOWTYPE_LEXICON", ""),
+    os.path.join(DATA_DIR, "lexicon.tsv"),
+    "/usr/share/wowtype/lexicon.tsv",
+]
+
+# 和插件里的默认值一致（fcitx5-addon/src/wowtype_engine.h 的 WowtypeConfig）
+DEFAULTS = {
+    "CandidateLayout": "Horizontal",
+    "PageSize": "9",
+    "Fuzzy": "False",
+    "TypoCorrection": "True",
+    "Shuangpin": "False",
+    "Traditional": "False",
+    "Voice": "True",
+    "VoiceKey": "Alt_R",
+}
+
+VOICE_KEYS = [
+    ("右 Alt", "Alt_R"),
+    ("右 Ctrl", "Control_R"),
+    ("菜单键", "Menu"),
+    ("F8", "F8"),
+    ("F9", "F9"),
+    ("F10", "F10"),
+]
+
+# 合法拼音音节（和 core/src/syllable.rs 的 SYLLABLES 一致）
+SYLLABLES = frozenset("""
+a ai an ang ao ba bai ban bang bao bei ben beng bi bian biao bie bin bing bo bu ca cai
+can cang cao ce cen ceng cha chai chan chang chao che chen cheng chi chong chou chu chua
+chuai chuan chuang chui chun chuo ci cong cou cu cuan cui cun cuo da dai dan dang dao de
+dei den deng di dia dian diao die ding diu dong dou du duan dui dun duo e ei en eng er
+fa fan fang fei fen feng fiao fo fou fu ga gai gan gang gao ge gei gen geng gong gou gu
+gua guai guan guang gui gun guo ha hai han hang hao he hei hen heng hm hng hong hou hu
+hua huai huan huang hui hun huo ji jia jian jiang jiao jie jin jing jiong jiu ju juan
+jue jun jv jvan jve jvn ka kai kan kang kao ke kei ken keng kong kou ku kua kuai kuan
+kuang kui kun kuo la lai lan lang lao le lei leng li lia lian liang liao lie lin ling
+liu lo long lou lu luan lun luo lv lve ma mai man mang mao me mei men meng mi mian miao
+mie min ming miu mo mou mu na nai nan nang nao ne nei nen neng ng ni nian niang niao nie
+nin ning niu nong nou nu nuan nun nuo nv nve o ou pa pai pan pang pao pei pen peng pi
+pian piao pie pin ping po pou pu qi qia qian qiang qiao qie qin qing qiong qiu qu quan
+que qun qv qvan qve qvn ran rang rao re ren reng ri rong rou ru rua ruan rui run ruo sa
+sai san sang sao se sen seng sha shai shan shang shao she shei shen sheng shi shou shu
+shua shuai shuan shuang shui shun shuo si song sou su suan sui sun suo ta tai tan tang
+tao te tei teng ti tian tiao tie ting tong tou tu tuan tui tun tuo wa wai wan wang wei
+wen weng wo wu xi xia xian xiang xiao xie xin xing xiong xiu xu xuan xue xun xv xvan xve
+xvn ya yan yang yao ye yi yin ying yo yong you yu yuan yue yun yv yvan yve yvn za zai
+zan zang zao ze zei zen zeng zha zhai zhan zhang zhao zhe zhei zhen zheng zhi zhong zhou
+zhu zhua zhuai zhuan zhuang zhui zhun zhuo zi zong zou zu zuan zui zun zuo
+""".split())
+
+
+# ---------------------------------------------------------------- 文件读写
+
+
+def read_config():
+    """读 wowtype.conf，返回 (值, 原文里不认识的行)。"""
+    values = dict(DEFAULTS)
+    extra = []
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return values, extra
+    for line in lines:
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if sep and key in DEFAULTS:
+            values[key] = value.strip().strip('"')
+        elif line.strip():
+            extra.append(line)
+    return values, extra
+
+
+def write_atomic(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, path)
+
+
+def write_config(values, extra):
+    lines = [f"{key}={values[key]}" for key in DEFAULTS]
+    write_atomic(CONFIG_FILE, "\n".join(lines + extra) + "\n")
+
+
+def read_custom_words():
+    words = []
+    try:
+        with open(CUSTOM_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\r\n")
+                if not line.strip() or line.startswith("#"):
+                    continue
+                cols = line.split("\t")
+                if len(cols) >= 2 and cols[1].strip():
+                    words.append((cols[0].strip(), cols[1].strip()))
+    except OSError:
+        pass
+    return words
+
+
+def write_custom_words(words):
+    out = ["# WowType 自定义词：拼音<TAB>词。由 WowType 设置维护，也可以手动编辑。"]
+    out += [f"{pinyin}\t{word}" for pinyin, word in words]
+    write_atomic(CUSTOM_FILE, "\n".join(out) + "\n")
+
+
+# ---------------------------------------------------------------- 拼音
+
+
+def split_syllables(text):
+    """nihao -> ['ni', 'hao']：音节数最少，一样多时前面的取长的。切不开返回 None。"""
+    n = len(text)
+    best = [None] * (n + 1)
+    best[n] = (0, 0)
+    for i in range(n - 1, -1, -1):
+        for length in range(min(6, n - i), 0, -1):
+            if text[i:i + length] in SYLLABLES and best[i + length] is not None:
+                count = best[i + length][0] + 1
+                if best[i] is None or count < best[i][0]:
+                    best[i] = (count, length)
+    if best[0] is None:
+        return None
+    parts, i = [], 0
+    while i < n:
+        length = best[i][1]
+        parts.append(text[i:i + length])
+        i += length
+    return parts
+
+
+def normalize_pinyin(text):
+    """把用户打的拼音整理成空格分隔的音节：Ni Hǎo / nihao / ni'hao -> ni hao。不合法返回 None。"""
+    text = unicodedata.normalize("NFD", text.strip().lower())
+    text = text.replace("u\u0308", "v").replace("u:", "v")
+    # 去掉声调符号和数字声调
+    text = "".join(c for c in text if not unicodedata.combining(c))
+    text = "".join(c for c in text if not c.isdigit())
+    syllables = []
+    for token in text.replace("'", " ").replace("’", " ").split():
+        if token in SYLLABLES:
+            syllables.append(token)
+        elif token == "r" and syllables:
+            syllables.append(token)  # 儿化
+        else:
+            parts = split_syllables(token)
+            if parts is None:
+                return None
+            syllables += parts
+    return " ".join(syllables) if syllables else None
+
+
+class PinyinGuesser:
+    """在词库里查词的拼音（后台载入，查词时在内存里找，几十毫秒）。"""
+
+    def __init__(self):
+        self.data = None
+        threading.Thread(target=self._load, daemon=True).start()
+
+    def _load(self):
+        for path in LEXICON_CANDIDATES:
+            if path and os.path.exists(path):
+                try:
+                    with open(path, "rb") as f:
+                        self.data = f.read()
+                    return
+                except OSError:
+                    continue
+
+    def _lookup(self, word):
+        data = self.data
+        needle = b"\t" + word.encode("utf-8") + b"\t"
+        best, best_freq = None, -1.0
+        pos = data.find(needle)
+        while pos >= 0:
+            start = data.rfind(b"\n", 0, pos) + 1
+            end = data.find(b"\n", pos)
+            end = len(data) if end < 0 else end
+            freq_text = data[pos + len(needle):end].strip()
+            try:
+                freq = float(freq_text)
+            except ValueError:
+                freq = 0.0
+            if freq > best_freq:
+                best, best_freq = data[start:pos].decode("utf-8", "replace"), freq
+            pos = data.find(needle, end)
+        return best
+
+    def guess(self, word):
+        """返回拼音，猜不出（有生僻字、英文、词库还没载入）返回 None。"""
+        if not self.data or not word:
+            return None
+        found = self._lookup(word)
+        if found:
+            return normalize_pinyin(found)
+        readings = []
+        for char in word:
+            reading = self._lookup(char)
+            if not reading:
+                return None
+            readings.append(reading)
+        return normalize_pinyin(" ".join(readings))
+
+
+# ---------------------------------------------------------------- fcitx5
+
+
+class Fcitx:
+    NAME = "org.fcitx.Fcitx5"
+    PATH = "/controller"
+    IFACE = "org.fcitx.Fcitx.Controller1"
+
+    def __init__(self):
+        try:
+            self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        except GLib.Error:
+            self.bus = None
+
+    def call(self, method, params=None, reply=None, done=None):
+        """异步调 fcitx5；done(结果或 None)。fcitx5 没在跑时 done(None)。"""
+        if not self.bus:
+            if done:
+                done(None)
+            return
+
+        def finished(bus, result):
+            try:
+                value = bus.call_finish(result)
+            except GLib.Error:
+                value = None
+            if done:
+                done(value)
+
+        self.bus.call(self.NAME, self.PATH, self.IFACE, method, params,
+                      GLib.VariantType(reply) if reply else None,
+                      Gio.DBusCallFlags.NO_AUTO_START, 2000, None, finished)
+
+    def reload(self):
+        self.call("ReloadAddonConfig", GLib.Variant("(s)", ("wowtype",)))
+
+    def group_info(self, done):
+        """done((组名, 键盘布局, [(输入法, 布局)…]) 或 None)。"""
+        def got_group(value):
+            if value is None:
+                done(None)
+                return
+            group = value.unpack()[0]
+            self.call("InputMethodGroupInfo", GLib.Variant("(s)", (group,)), "(sa(ss))",
+                      lambda info: done(None if info is None else (group, *info.unpack())))
+        self.call("CurrentInputMethodGroup", None, "(s)", got_group)
+
+    def add_to_group(self, group, layout, items, done):
+        items = list(items) + [("wowtype", "")]
+        self.call("SetInputMethodGroupInfo", GLib.Variant("(ssa(ss))", (group, layout, items)),
+                  done=lambda value: done(value is not None))
+
+
+# ---------------------------------------------------------------- 界面
+
+
+def dir_size(path):
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
+
+
+class SettingsWindow(Adw.ApplicationWindow):
+    def __init__(self, app, page=None):
+        super().__init__(application=app, title="WowType 设置")
+        self.set_default_size(620, 720)
+        self.fcitx = Fcitx()
+        self.guesser = PinyinGuesser()
+        self.values, self.extra = read_config()
+        self.words = read_custom_words()
+        self.save_source = 0
+        self.guess_source = 0
+        self.pinyin_edited = False
+
+        self.toasts = Adw.ToastOverlay()
+        self.stack = Adw.ViewStack()
+        self.stack.add_titled_with_icon(self.build_general(), "general", "常规",
+                                        "preferences-system-symbolic")
+        self.stack.add_titled_with_icon(self.build_voice(), "voice", "语音",
+                                        "audio-input-microphone-symbolic")
+        self.stack.add_titled_with_icon(self.build_words(), "words", "自定义词",
+                                        "accessories-dictionary-symbolic")
+        if page:
+            self.stack.set_visible_child_name(page)
+
+        header = Adw.HeaderBar()
+        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
+        header.set_title_widget(switcher)
+        menu = Gio.Menu()
+        menu.append("用文本编辑器打开自定义词", "win.open-custom")
+        menu.append("恢复默认设置", "win.reset")
+        menu.append("关于 WowType", "win.about")
+        header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu,
+                                       tooltip_text="菜单"))
+        for name, handler in (("open-custom", self.on_open_custom), ("reset", self.on_reset),
+                              ("about", self.on_about)):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", handler)
+            self.add_action(action)
+
+        view = Adw.ToolbarView()
+        view.add_top_bar(header)
+        self.toasts.set_child(self.stack)
+        view.set_content(self.toasts)
+        self.set_content(view)
+        self.set_size_request(420, 400)
+
+        self.refresh_status()
+
+    # ---------------- 常规
+
+    def build_general(self):
+        page = Adw.PreferencesPage()
+
+        status = Adw.PreferencesGroup(title="输入法")
+        self.status_row = Adw.ActionRow(title="正在检查 fcitx5…")
+        self.status_button = Gtk.Button(label="添加", valign=Gtk.Align.CENTER, visible=False)
+        self.status_button.add_css_class("suggested-action")
+        self.status_button.connect("clicked", self.on_add_to_group)
+        self.status_row.add_suffix(self.status_button)
+        status.add(self.status_row)
+        page.add(status)
+
+        cands = Adw.PreferencesGroup(title="候选词")
+        self.layout_row = Adw.ComboRow(title="排列方向",
+                                       model=Gtk.StringList.new(["横排", "竖排"]))
+        self.layout_row.set_selected(1 if self.values["CandidateLayout"] == "Vertical" else 0)
+        self.layout_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "CandidateLayout", "Vertical" if row.get_selected() == 1 else "Horizontal"))
+        cands.add(self.layout_row)
+
+        self.page_row = Adw.SpinRow.new_with_range(3, 9, 1)
+        self.page_row.set_title("每页个数")
+        self.page_row.set_subtitle("用数字键 1–9 选词")
+        try:
+            self.page_row.set_value(int(self.values["PageSize"]))
+        except ValueError:
+            self.page_row.set_value(9)
+        self.page_row.connect("notify::value", lambda row, _p: self.set_value(
+            "PageSize", str(int(row.get_value()))))
+        cands.add(self.page_row)
+        page.add(cands)
+
+        pinyin = Adw.PreferencesGroup(title="拼音")
+        self.switches = {}
+        for key, title, subtitle in (
+            ("Fuzzy", "模糊音", "z 和 zh、c 和 ch、s 和 sh，an 和 ang、en 和 eng、in 和 ing 不分"),
+            ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」"),
+            ("Shuangpin", "双拼", "自然码方案"),
+            ("Traditional", "繁体字", "候选词转成繁体"),
+        ):
+            pinyin.add(self.make_switch(key, title, subtitle))
+        page.add(pinyin)
+
+        tips = Adw.PreferencesGroup(title="小技巧")
+        for title, subtitle in (
+            ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以"),
+            ("长句分段选", "第一个候选不对时，先选开头的词，剩下的接着选"),
+            ("符号", "打 / 加名字找符号，比如 /gou → ✓、/youjiantou → →"),
+        ):
+            tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
+        page.add(tips)
+        return page
+
+    def make_switch(self, key, title, subtitle):
+        row = Adw.SwitchRow(title=title, subtitle=subtitle)
+        row.set_active(self.values[key] == "True")
+        row.connect("notify::active", lambda r, _p: self.set_value(
+            key, "True" if r.get_active() else "False"))
+        self.switches[key] = row
+        return row
+
+    def refresh_status(self):
+        def done(info):
+            if info is None:
+                self.status_row.set_title("没检测到 fcitx5")
+                self.status_row.set_subtitle("先启动 fcitx5，设置会在它下次启动时生效")
+                self.status_button.set_visible(False)
+                self.group_info = None
+                return
+            group, layout, items = info
+            self.group_info = info
+            if any(name == "wowtype" for name, _ in items):
+                self.status_row.set_title("WowType 已在输入法列表里")
+                self.status_row.set_subtitle("用 Ctrl+空格（或你设的快捷键）切换到 WowType")
+                self.status_button.set_visible(False)
+            else:
+                self.status_row.set_title("WowType 还没加到输入法列表")
+                self.status_row.set_subtitle(
+                    GLib.markup_escape_text(f"加到「{group}」里就能切换过去用"))
+                self.status_button.set_visible(True)
+        self.fcitx.group_info(done)
+
+    def on_add_to_group(self, _button):
+        if not self.group_info:
+            return
+        group, layout, items = self.group_info
+
+        def done(ok):
+            self.toast("已添加，可以切换到 WowType 了" if ok else "添加失败")
+            self.refresh_status()
+        self.fcitx.add_to_group(group, layout, items, done)
+
+    # ---------------- 语音
+
+    def build_voice(self):
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(
+            title="语音输入",
+            description="按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
+                        "说的时候按 Esc 取消。正在打拼音时语音键不起作用。")
+        group.add(self.make_switch("Voice", "语音输入", "用微信输入法的离线模型，在本机识别，不联网"))
+
+        current = self.values["VoiceKey"]
+        labels = [label for label, _ in VOICE_KEYS]
+        self.voice_keys = [name for _, name in VOICE_KEYS]
+        if current not in self.voice_keys:
+            labels.append(f"其他（{current}）")
+            self.voice_keys.append(current)
+        self.key_row = Adw.ComboRow(title="语音键", model=Gtk.StringList.new(labels))
+        self.key_row.set_selected(self.voice_keys.index(current))
+        self.key_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "VoiceKey", self.voice_keys[row.get_selected()]))
+        self.switches["Voice"].bind_property("active", self.key_row, "sensitive",
+                                             GObject.BindingFlags.SYNC_CREATE)
+        group.add(self.key_row)
+        page.add(group)
+
+        model = Adw.PreferencesGroup(title="识别模型")
+        self.model_row = Adw.ActionRow()
+        model.add(self.model_row)
+        self.update_model_row()
+        page.add(model)
+        return page
+
+    def update_model_row(self):
+        size = dir_size(VOICE_MODEL_DIR) if os.path.isdir(VOICE_MODEL_DIR) else 0
+        if size > 10 * 1024 * 1024:
+            self.model_row.set_title(f"已下载（{size / 1024 / 1024:.0f} MB）")
+            self.model_row.set_subtitle(VOICE_MODEL_DIR)
+        else:
+            self.model_row.set_title("还没下载")
+            self.model_row.set_subtitle("第一次按语音键时自动下载，约 130 MB，来自微信输入法的服务器")
+
+    # ---------------- 自定义词
+
+    def build_words(self):
+        page = Adw.PreferencesPage()
+        add = Adw.PreferencesGroup(
+            title="添加自定义词",
+            description="人名、公司名、常用的长句都可以加。加进来的词总是排在候选第一个，"
+                        "简拼也能打出来。")
+        self.word_entry = Adw.EntryRow(title="词")
+        self.word_entry.connect("changed", self.on_word_changed)
+        self.word_entry.connect("entry-activated", self.on_add_word)
+        self.pinyin_entry = Adw.EntryRow(title="拼音（自动填好，多音字请检查）")
+        self.pinyin_entry.connect("changed", self.on_pinyin_changed)
+        self.pinyin_entry.connect("entry-activated", self.on_add_word)
+        self.add_button = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="添加",
+                                     valign=Gtk.Align.CENTER, sensitive=False)
+        self.add_button.add_css_class("suggested-action")
+        self.add_button.connect("clicked", self.on_add_word)
+        self.pinyin_entry.add_suffix(self.add_button)
+        add.add(self.word_entry)
+        add.add(self.pinyin_entry)
+        page.add(add)
+
+        self.list_group = Adw.PreferencesGroup()
+        self.search = Gtk.SearchEntry(placeholder_text="搜索", valign=Gtk.Align.CENTER)
+        self.search.connect("search-changed", lambda _e: self.rebuild_word_list())
+        self.list_group.set_header_suffix(self.search)
+        self.word_box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.word_box.add_css_class("boxed-list")
+        self.list_group.add(self.word_box)
+        page.add(self.list_group)
+        self.rebuild_word_list()
+        return page
+
+    def on_word_changed(self, _entry):
+        # 查词库要几十毫秒，打字停一下再查
+        if self.guess_source:
+            GLib.source_remove(self.guess_source)
+        self.guess_source = GLib.timeout_add(150, self.fill_pinyin)
+        self.update_add_button()
+
+    def fill_pinyin(self):
+        self.guess_source = 0
+        word = self.word_entry.get_text().strip()
+        if not self.pinyin_edited:
+            guess = self.guesser.guess(word) if word else ""
+            self.pinyin_entry.handler_block_by_func(self.on_pinyin_changed)
+            self.pinyin_entry.set_text(guess or "")
+            self.pinyin_entry.handler_unblock_by_func(self.on_pinyin_changed)
+        self.update_add_button()
+        return GLib.SOURCE_REMOVE
+
+    def on_pinyin_changed(self, entry):
+        self.pinyin_edited = bool(entry.get_text().strip())
+        self.update_add_button()
+
+    def update_add_button(self):
+        word = self.word_entry.get_text().strip()
+        pinyin = normalize_pinyin(self.pinyin_entry.get_text())
+        ok = bool(word) and pinyin is not None and "\t" not in word
+        self.add_button.set_sensitive(ok)
+        if self.pinyin_entry.get_text().strip() and pinyin is None:
+            self.pinyin_entry.add_css_class("error")
+        else:
+            self.pinyin_entry.remove_css_class("error")
+
+    def on_add_word(self, *_args):
+        if self.guess_source:
+            GLib.source_remove(self.guess_source)
+            self.fill_pinyin()
+        word = self.word_entry.get_text().strip()
+        pinyin = normalize_pinyin(self.pinyin_entry.get_text())
+        if not word or pinyin is None:
+            if word:
+                self.toast("拼音不对：用空格隔开音节，比如 zhang san")
+            return
+        replaced = any(w == word for _, w in self.words)
+        self.words = [(p, w) for p, w in self.words if w != word] + [(pinyin, word)]
+        self.save_words()
+        self.word_entry.set_text("")
+        self.pinyin_edited = False
+        self.pinyin_entry.set_text("")
+        self.pinyin_edited = False
+        self.update_add_button()
+        self.word_entry.grab_focus()
+        self.toast(f"已更新「{word}」" if replaced else f"已添加「{word}」，打 {pinyin.replace(' ', '')} 试试")
+
+    def remove_word(self, word):
+        removed = [(p, w) for p, w in self.words if w == word]
+        self.words = [(p, w) for p, w in self.words if w != word]
+        self.save_words()
+        toast = Adw.Toast(title=GLib.markup_escape_text(f"已删除「{word}」"), button_label="撤销")
+
+        def undo(_toast):
+            self.words += removed
+            self.save_words()
+        toast.connect("button-clicked", undo)
+        self.toasts.add_toast(toast)
+
+    def save_words(self):
+        try:
+            write_custom_words(self.words)
+        except OSError as e:
+            self.toast(f"保存失败：{e.strerror}")
+            return
+        self.fcitx.reload()
+        self.rebuild_word_list()
+
+    def rebuild_word_list(self):
+        while (child := self.word_box.get_first_child()) is not None:
+            self.word_box.remove(child)
+        query = self.search.get_text().strip().lower()
+        shown = [(p, w) for p, w in reversed(self.words)
+                 if not query or query in w.lower() or query.replace(" ", "") in p.replace(" ", "")]
+        self.list_group.set_title(f"我的词（{len(self.words)}）" if self.words else "我的词")
+        self.search.set_visible(len(self.words) > 8)
+        if not shown:
+            empty = Adw.ActionRow(title="还没有自定义词" if not self.words else "没找到")
+            empty.add_css_class("dim-label")
+            self.word_box.append(empty)
+            return
+        for pinyin, word in shown[:500]:
+            row = Adw.ActionRow(title=GLib.markup_escape_text(word), subtitle=pinyin)
+            button = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="删除",
+                                valign=Gtk.Align.CENTER)
+            button.add_css_class("flat")
+            button.connect("clicked", lambda _b, w=word: self.remove_word(w))
+            row.add_suffix(button)
+            self.word_box.append(row)
+
+    # ---------------- 保存
+
+    def set_value(self, key, value):
+        if self.values.get(key) == value:
+            return
+        self.values[key] = value
+        # 拖动数字框时不要每一下都写文件
+        if self.save_source:
+            GLib.source_remove(self.save_source)
+        self.save_source = GLib.timeout_add(250, self.save_config)
+
+    def save_config(self):
+        self.save_source = 0
+        try:
+            write_config(self.values, self.extra)
+        except OSError as e:
+            self.toast(f"保存失败：{e.strerror}")
+            return GLib.SOURCE_REMOVE
+        self.fcitx.reload()
+        return GLib.SOURCE_REMOVE
+
+    def toast(self, text):
+        self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=3))
+
+    # ---------------- 菜单
+
+    def on_open_custom(self, *_args):
+        if not os.path.exists(CUSTOM_FILE):
+            write_custom_words(self.words)
+        Gtk.FileLauncher.new(Gio.File.new_for_path(CUSTOM_FILE)).launch(self, None, None)
+
+    def on_reset(self, *_args):
+        dialog = Adw.AlertDialog(heading="恢复默认设置？",
+                                 body="排列方向、模糊音、语音键等回到默认值。自定义词不受影响。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("reset", "恢复默认")
+        dialog.set_response_appearance("reset", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def answered(_dialog, response):
+            if response != "reset":
+                return
+            self.values = dict(DEFAULTS)
+            self.save_config()
+            self.layout_row.set_selected(0)
+            self.page_row.set_value(9)
+            for key, row in self.switches.items():
+                row.set_active(DEFAULTS[key] == "True")
+            self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
+            self.toast("已恢复默认设置")
+        dialog.connect("response", answered)
+        dialog.present(self)
+
+    def on_about(self, *_args):
+        about = Adw.AboutDialog(
+            application_name="WowType",
+            application_icon="input-keyboard",
+            developer_name="Gloridust",
+            version=VERSION if not VERSION.startswith("@") else "dev",
+            website=HOMEPAGE,
+            issue_url=HOMEPAGE + "/issues",
+            license_type=Gtk.License.CUSTOM,
+            license="代码按 MIT 或 Apache-2.0 双许可证发布。\n"
+                    "词库数据来自 rime-ice（GPL-3.0）。\n"
+                    "语音模型属于腾讯微信输入法，使用时从腾讯服务器下载，不随 WowType 分发。",
+            comments="好用的拼音输入法：整句、简拼、按错键纠正、语音输入。")
+        about.present(self)
+
+
+class SettingsApp(Adw.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID,
+                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        self.page = None
+        self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
+                             "打开时显示的页面：general、voice、words", "页面")
+
+    def do_command_line(self, command_line):
+        options = command_line.get_options_dict().end().unpack()
+        self.page = options.get("page")
+        self.activate()
+        return 0
+
+    def do_activate(self):
+        window = self.props.active_window
+        if not window:
+            window = SettingsWindow(self, self.page)
+        elif self.page:
+            window.stack.set_visible_child_name(self.page)
+        window.present()
+
+
+if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        assert normalize_pinyin("Ni Hǎo") == "ni hao"
+        assert normalize_pinyin("nihao") == "ni hao"
+        assert normalize_pinyin("xi'an") == "xi an"
+        assert normalize_pinyin("lǜ") == "lv"
+        assert normalize_pinyin("hua r") == "hua r"
+        assert normalize_pinyin("github") is None
+        assert len(SYLLABLES) == 432
+        print("self-test ok")
+        sys.exit(0)
+    sys.exit(SettingsApp().run(sys.argv))

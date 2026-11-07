@@ -31,6 +31,7 @@ build_deb() { # <包名> <版本> <架构> <依赖> <简介> <详细说明>
     echo "Maintainer: $MAINTAINER"
     echo "Installed-Size: $(du -sk --exclude=DEBIAN "$stage" | cut -f1)"
     [[ -n "$depends" ]] && echo "Depends: $depends"
+    [[ -n "${RECOMMENDS:-}" ]] && echo "Recommends: $RECOMMENDS"
     echo "Section: utils"
     echo "Priority: optional"
     echo "Homepage: $HOMEPAGE"
@@ -50,14 +51,19 @@ engine)
   debver="${version}-1~${distro}"
 
   cargo build --release --locked -p wowtype-core
-  cmake -S fcitx5-addon -B "$work/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr >/dev/null
+  cmake -S fcitx5-addon -B "$work/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+    -DWOWTYPE_VERSION="$version" >/dev/null
   cmake --build "$work/build" -j"$(nproc)"
   DESTDIR="$stage" cmake --install "$work/build" >/dev/null
   rm -rf "$stage/usr/include"          # 头文件只给开发用
   for bin in wowtype-check wowtype-show; do
     install -Dm755 "target/release/$bin" "$stage/usr/bin/$bin"
   done
-  find "$stage/usr" -type f \( -name '*.so' -o -path '*/bin/*' \) -exec strip --strip-unneeded {} +
+  # 只处理 ELF（/usr/bin 里还有 Python 写的设置界面 wowtype-config）
+  is_elf() { [[ "$(head -c4 "$1" | od -An -c | tr -d ' ')" == '177ELF' ]]; }
+  mapfile -t elfs < <(find "$stage/usr" -type f \( -name '*.so' -o -path '*/bin/*' \) |
+                      while read -r f; do is_elf "$f" && echo "$f"; done)
+  strip --strip-unneeded "${elfs[@]}"
 
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
@@ -77,15 +83,17 @@ EOF
   # 运行时依赖交给 dpkg-shlibdeps 从 .so 里算（libfcitx5core、libstdc++ 等）
   mkdir -p "$work/debian"
   printf 'Source: wowtype\n\nPackage: wowtype\nArchitecture: any\n' > "$work/debian/control"
-  mapfile -t elfs < <(find "$stage/usr" -type f \( -name '*.so' -o -path '*/bin/*' \))
   shlibs=$(cd "$work" && dpkg-shlibdeps -O "${elfs[@]}" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
   depends="${shlibs:+$shlibs, }fcitx5"
 
+  # 设置界面要 PyGObject + GTK 4 + libadwaita；不装也不影响打字
+  RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1" \
   DEB_FILE="wowtype_${version}_${distro}_$(dpkg --print-architecture).deb" \
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \
     "WeChat-style pinyin input method for fcitx5" \
 "拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-装完在 fcitx5 配置里添加「WowType」。需要词库包 wowtype-data-rime-ice，
+装完在 fcitx5 配置里添加「WowType」，设置在应用菜单「WowType 设置」里。
+需要词库包 wowtype-data-rime-ice，
 或者自己把 lexicon.tsv 放到 ~/.local/share/wowtype/。"
   ;;
 
