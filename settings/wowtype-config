@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""WowType 设置：候选排列、模糊音、语音输入键、自定义词。
+"""WowType 设置：候选排列、模糊音、语音输入键、自定义词、检查更新。
 
 改的是 fcitx5 读的同一个配置文件（~/.config/fcitx5/conf/wowtype.conf）和自定义词文件
 （~/.local/share/wowtype/custom.tsv），改完经 D-Bus 让 fcitx5 重新读，立刻生效。
@@ -8,10 +8,16 @@
   Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 """
 
+import hashlib
+import json
 import os
+import re
+import subprocess
 import sys
 import threading
+import time
 import unicodedata
+import urllib.request
 
 import gi
 
@@ -49,6 +55,7 @@ DEFAULTS = {
     "Traditional": "False",
     "Voice": "True",
     "VoiceKey": "Alt_R",
+    "CheckUpdate": "True",
 }
 
 VOICE_KEYS = [
@@ -276,6 +283,9 @@ class Fcitx:
     def reload(self):
         self.call("ReloadAddonConfig", GLib.Variant("(s)", ("wowtype",)))
 
+    def restart(self, done=None):
+        self.call("Restart", done=lambda value: done and done(value is not None))
+
     def group_info(self, done):
         """done((组名, 键盘布局, [(输入法, 布局)…]) 或 None)。"""
         def got_group(value):
@@ -292,6 +302,187 @@ class Fcitx:
         self.call("SetInputMethodGroupInfo", GLib.Variant("(ssa(ss))", (group, layout, items)),
                   done=lambda value: done(value is not None))
 
+
+
+# ---------------------------------------------------------------- 更新
+
+REPO = "Gloridust/WowType"
+RELEASE_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASES_PAGE = f"{HOMEPAGE}/releases"
+CACHE_DIR = os.path.join(_xdg("XDG_CACHE_HOME", "~/.cache"), "wowtype")
+UPDATE_DIR = os.path.join(CACHE_DIR, "updates")
+UPDATE_STATE = os.path.join(CACHE_DIR, "update-check.json")
+ENGINE_PKG = "wowtype"
+DATA_PKG = "wowtype-data-rime-ice"
+# 自动检查最多这么久一次
+CHECK_INTERVAL = 20 * 3600
+
+
+def current_version():
+    return VERSION if not VERSION.startswith("@") else "0"
+
+
+def parse_version(text):
+    """`v0.2.1`、`0.2.1-1~ubuntu26.04`、`2026.10.31` -> 数字元组。"""
+    text = text.strip().lstrip("vV").split("-")[0].split("~")[0]
+    return tuple(int(n) for n in re.findall(r"\d+", text))
+
+
+def dpkg_version(package):
+    """已装 deb 包的版本；没装（或不是 Debian 系）返回 None。"""
+    try:
+        out = subprocess.run(["dpkg-query", "-W", "-f=${Status}\t${Version}", package],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    status, _, version = out.stdout.partition("\t")
+    return version if out.returncode == 0 and status.endswith(" installed") else None
+
+
+def distro_tag():
+    """和发布包文件名里的一样：ubuntu26.04、debian13。"""
+    info = {}
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            for line in f:
+                key, sep, value = line.strip().partition("=")
+                if sep:
+                    info[key] = value.strip('"')
+    except OSError:
+        return ""
+    return info.get("ID", "") + info.get("VERSION_ID", "")
+
+
+def deb_arch():
+    try:
+        return subprocess.run(["dpkg", "--print-architecture"], capture_output=True,
+                              text=True, timeout=10).stdout.strip() or "amd64"
+    except (OSError, subprocess.SubprocessError):
+        return "amd64"
+
+
+def http_open(url, timeout=30):
+    request = urllib.request.Request(url, headers={
+        "User-Agent": f"WowType-Updater/{current_version()}",
+        "Accept": "application/vnd.github+json" if "api.github.com" in url else "*/*",
+    })
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def fetch_latest():
+    """GitHub 上最新的正式版：{tag, version, notes, url, assets: {文件名: 下载地址}}。"""
+    with http_open(RELEASE_API, timeout=20) as response:
+        data = json.load(response)
+    return {
+        "tag": data.get("tag_name", ""),
+        "version": data.get("tag_name", "").lstrip("vV"),
+        "notes": data.get("body") or "",
+        "url": data.get("html_url") or RELEASES_PAGE,
+        "assets": {a["name"]: a["browser_download_url"] for a in data.get("assets", [])},
+    }
+
+
+def is_newer(release):
+    return parse_version(release["version"]) > parse_version(current_version())
+
+
+def plan_update(release):
+    """要下载的包：[(文件名, 地址)]，和一段说明。装不了时列表为空，说明里写原因。"""
+    if dpkg_version(ENGINE_PKG) is None:
+        return [], "当前不是用 deb 包安装的（比如从源码装的），请到下载页手动更新"
+    distro = distro_tag()
+    name = f"wowtype_{release['version']}_{distro}_{deb_arch()}.deb"
+    if name not in release["assets"]:
+        return [], f"这一版没有 {distro or '你的发行版'} 的安装包，请到下载页看看"
+    files = [(name, release["assets"][name])]
+    installed_data = dpkg_version(DATA_PKG)
+    for asset, url in release["assets"].items():
+        match = re.fullmatch(rf"{DATA_PKG}_(.+)_all\.deb", asset)
+        if match and installed_data and parse_version(match.group(1)) > parse_version(installed_data):
+            files.append((asset, url))
+    return files, ""
+
+
+def download_updates(release, files, progress):
+    """下载并按 SHA256SUMS 校验，返回本地路径列表。progress(已下字节, 总字节)。"""
+    folder = os.path.join(UPDATE_DIR, release["tag"])
+    os.makedirs(folder, exist_ok=True)
+    sums = {}
+    if "SHA256SUMS" in release["assets"]:
+        with http_open(release["assets"]["SHA256SUMS"]) as response:
+            for line in response.read().decode("utf-8", "replace").splitlines():
+                digest, _, name = line.strip().partition(" ")
+                sums[name.strip().lstrip("*")] = digest
+    paths = []
+    for name, url in files:
+        if name not in sums:
+            raise RuntimeError(f"SHA256SUMS 里没有 {name}，不安装")
+        path = os.path.join(folder, name)
+        digest = hashlib.sha256()
+        with http_open(url, timeout=60) as response, open(path + ".part", "wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            while chunk := response.read(1 << 16):
+                out.write(chunk)
+                digest.update(chunk)
+                done += len(chunk)
+                progress(done, total)
+        if digest.hexdigest() != sums[name]:
+            os.unlink(path + ".part")
+            raise RuntimeError(f"{name} 校验和不对，可能没下完整，请重试")
+        os.replace(path + ".part", path)
+        paths.append(path)
+    return paths
+
+
+def read_update_state():
+    try:
+        with open(UPDATE_STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_update_state(state):
+    try:
+        write_atomic(UPDATE_STATE, json.dumps(state))
+    except OSError:
+        pass
+
+
+def background_check():
+    """fcitx5 切到 WowType 时在后台跑（wowtype-config --check-update）。
+
+    一天最多查一次；有新版本就发一条桌面通知（同一版本只提醒一次），点开进设置的「更新」页。
+    """
+    values, _ = read_config()
+    if values.get("CheckUpdate") != "True":
+        return 0
+    state = read_update_state()
+    if time.time() - state.get("checked", 0) < CHECK_INTERVAL:
+        return 0
+    try:
+        release = fetch_latest()
+    except Exception:  # 没网、被限流：下次再说
+        return 0
+    state["checked"] = time.time()
+    write_update_state(state)
+    if not is_newer(release) or state.get("notified") == release["tag"]:
+        return 0
+    state["notified"] = release["tag"]
+    write_update_state(state)
+    try:
+        chosen = subprocess.run(
+            ["notify-send", "--app-name=WowType", "--icon=wowtype",
+             "--action=open=查看更新", "--action=default=查看更新",
+             f"WowType {release['version']} 可以更新了",
+             f"当前是 {current_version()}。打开设置可以看更新内容，一键安装。"],
+            capture_output=True, text=True, timeout=24 * 3600).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if chosen in ("open", "default"):
+        os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), "--page", "update"])
+    return 0
 
 # ---------------------------------------------------------------- 界面
 
@@ -327,6 +518,8 @@ class SettingsWindow(Adw.ApplicationWindow):
                                         "audio-input-microphone-symbolic")
         self.stack.add_titled_with_icon(self.build_words(), "words", "自定义词",
                                         "accessories-dictionary-symbolic")
+        self.stack.add_titled_with_icon(self.build_update(), "update", "更新",
+                                        "software-update-available-symbolic")
         if page:
             self.stack.set_visible_child_name(page)
 
@@ -353,6 +546,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.set_size_request(420, 400)
 
         self.refresh_status()
+        self.release = None
+        self.update_files = []
+        self.on_check_update()
 
     # ---------------- 常规
 
@@ -619,6 +815,174 @@ class SettingsWindow(Adw.ApplicationWindow):
             row.add_suffix(button)
             self.word_box.append(row)
 
+    # ---------------- 更新
+
+    def build_update(self):
+        page = Adw.PreferencesPage()
+        group = Adw.PreferencesGroup(title="版本")
+        installed = dpkg_version(ENGINE_PKG)
+        self.version_row = Adw.ActionRow(
+            title=f"当前版本 {current_version()}",
+            subtitle="deb 包安装" if installed else "不是用 deb 包安装的，更新要手动装")
+        group.add(self.version_row)
+
+        self.latest_row = Adw.ActionRow(title="正在检查更新…")
+        self.check_button = Gtk.Button(label="检查更新", valign=Gtk.Align.CENTER)
+        self.check_button.connect("clicked", self.on_check_update)
+        self.latest_row.add_suffix(self.check_button)
+        group.add(self.latest_row)
+
+        self.install_row = Adw.ActionRow(visible=False)
+        self.install_button = Gtk.Button(label="下载并安装", valign=Gtk.Align.CENTER)
+        self.install_button.add_css_class("suggested-action")
+        self.install_button.connect("clicked", self.on_install_update)
+        self.page_button = Gtk.Button(label="打开下载页", valign=Gtk.Align.CENTER)
+        self.page_button.connect("clicked", lambda _b: Gtk.UriLauncher.new(
+            self.release["url"] if self.release else RELEASES_PAGE).launch(self, None, None))
+        self.install_row.add_suffix(self.page_button)
+        self.install_row.add_suffix(self.install_button)
+        group.add(self.install_row)
+
+        self.progress = Gtk.ProgressBar(visible=False, margin_top=6, margin_bottom=6)
+        group.add(self.progress)
+
+        self.restart_row = Adw.ActionRow(
+            title="已更新，重启输入法后生效",
+            subtitle="重启后，浏览器等正在打开的应用可能要重新打开才能打字", visible=False)
+        restart = Gtk.Button(label="重启输入法", valign=Gtk.Align.CENTER)
+        restart.add_css_class("suggested-action")
+        restart.connect("clicked", self.on_restart_fcitx)
+        self.restart_row.add_suffix(restart)
+        group.add(self.restart_row)
+        page.add(group)
+
+        self.notes_group = Adw.PreferencesGroup(title="更新内容", visible=False)
+        self.notes_label = Gtk.Label(wrap=True, xalign=0, selectable=True,
+                                     margin_top=12, margin_bottom=12,
+                                     margin_start=12, margin_end=12)
+        self.notes_label.add_css_class("card")
+        self.notes_group.add(self.notes_label)
+        page.add(self.notes_group)
+
+        auto = Adw.PreferencesGroup()
+        auto.add(self.make_switch("CheckUpdate", "自动检查更新",
+                                  "切到 WowType 时在后台检查，一天最多一次，有新版本发通知"))
+        page.add(auto)
+        return page
+
+    def on_check_update(self, *_args):
+        self.check_button.set_sensitive(False)
+        self.latest_row.set_title("正在检查更新…")
+        self.latest_row.set_subtitle("")
+
+        def work():
+            try:
+                release = fetch_latest()
+                files, reason = plan_update(release) if is_newer(release) else ([], "")
+                result = (release, files, reason, None)
+            except Exception as e:  # noqa: BLE001  网络错误各式各样
+                result = (None, [], "", str(e))
+            GLib.idle_add(self.show_check_result, *result)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_check_result(self, release, files, reason, error):
+        self.check_button.set_sensitive(True)
+        self.release = release
+        self.update_files = files
+        if error:
+            self.latest_row.set_title("检查更新失败")
+            self.latest_row.set_subtitle(GLib.markup_escape_text(f"连不上 GitHub：{error}"))
+            return GLib.SOURCE_REMOVE
+        state = read_update_state()
+        state["checked"] = time.time()
+        write_update_state(state)
+        newer = is_newer(release)
+        self.latest_row.set_title(
+            f"有新版本 {release['version']}" if newer else "已经是最新版本")
+        self.latest_row.set_subtitle(f"最新版本 {release['version']}")
+        self.install_row.set_visible(newer)
+        if newer:
+            self.install_row.set_title("更新到 " + release["version"])
+            self.install_row.set_subtitle(GLib.markup_escape_text(
+                reason or "要下载：" + "、".join(name for name, _ in files)))
+            self.install_button.set_visible(bool(files))
+            notes = release["notes"].strip()
+            self.notes_group.set_visible(bool(notes))
+            self.notes_label.set_text(notes[:4000])
+        else:
+            self.notes_group.set_visible(False)
+        return GLib.SOURCE_REMOVE
+
+    def on_install_update(self, _button):
+        if not self.release or not self.update_files:
+            return
+        release, files = self.release, list(self.update_files)
+        self.install_button.set_sensitive(False)
+        self.check_button.set_sensitive(False)
+        self.progress.set_visible(True)
+        self.progress.set_fraction(0)
+        self.progress.set_show_text(True)
+        self.progress.set_text("正在下载…")
+
+        def progress(done, total):
+            GLib.idle_add(lambda: (self.progress.set_fraction(done / total) if total
+                                   else self.progress.pulse()) and False)
+
+        def work():
+            try:
+                paths = download_updates(release, files, progress)
+            except Exception as e:  # noqa: BLE001
+                GLib.idle_add(self.install_failed, f"下载失败：{e}")
+                return
+            GLib.idle_add(self.run_installer, paths)
+        threading.Thread(target=work, daemon=True).start()
+
+    def run_installer(self, paths):
+        self.progress.set_text("等待授权，正在安装…")
+        self.progress.pulse()
+        try:
+            proc = Gio.Subprocess.new(
+                ["pkexec", "apt-get", "install", "-y", *paths],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
+        except GLib.Error as e:
+            self.install_failed(f"启动安装失败：{e.message}")
+            return GLib.SOURCE_REMOVE
+
+        def finished(proc, result):
+            try:
+                _ok, out, _err = proc.communicate_utf8_finish(result)
+            except GLib.Error as e:
+                self.install_failed(f"安装失败：{e.message}")
+                return
+            code = proc.get_exit_status()
+            if code == 0:
+                self.progress.set_visible(False)
+                self.install_row.set_visible(False)
+                self.restart_row.set_visible(True)
+                self.latest_row.set_title(f"已安装 {self.release['version']}")
+                self.toast("更新已安装")
+            elif code in (126, 127):  # pkexec：取消授权 / 没通过
+                self.install_failed("没有授权，已取消")
+            else:
+                tail = "\n".join((out or "").strip().splitlines()[-3:])
+                self.install_failed(f"安装失败：{tail or code}")
+        proc.communicate_utf8_async(None, None, finished)
+        return GLib.SOURCE_REMOVE
+
+    def install_failed(self, text):
+        self.progress.set_visible(False)
+        self.install_button.set_sensitive(True)
+        self.check_button.set_sensitive(True)
+        self.toast(text)
+        return GLib.SOURCE_REMOVE
+
+    def on_restart_fcitx(self, _button):
+        def done(ok):
+            self.toast("输入法已重启" if ok else "重启失败，可以注销后重新登录")
+            if ok:
+                self.restart_row.set_visible(False)
+        self.fcitx.restart(done)
+
     # ---------------- 保存
 
     def set_value(self, key, value):
@@ -693,7 +1057,7 @@ class SettingsApp(Adw.Application):
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.page = None
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
-                             "打开时显示的页面：general、voice、words", "页面")
+                             "打开时显示的页面：general、voice、words、update", "页面")
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict().end().unpack()
@@ -712,6 +1076,8 @@ class SettingsApp(Adw.Application):
 
 
 if __name__ == "__main__":
+    if "--check-update" in sys.argv:
+        sys.exit(background_check())
     if "--self-test" in sys.argv:
         assert normalize_pinyin("Ni Hǎo") == "ni hao"
         assert normalize_pinyin("nihao") == "ni hao"
@@ -720,6 +1086,9 @@ if __name__ == "__main__":
         assert normalize_pinyin("hua r") == "hua r"
         assert normalize_pinyin("github") is None
         assert len(SYLLABLES) == 432
+        assert parse_version("v0.2.10") > parse_version("0.2.9")
+        assert parse_version("0.2.1-1~ubuntu26.04") == (0, 2, 1)
+        assert parse_version("2026.10.31") < parse_version("2026.11.01")
         print("self-test ok")
         sys.exit(0)
     sys.exit(SettingsApp().run(sys.argv))

@@ -88,6 +88,8 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "esc") sym = FcitxKey_Escape;
             else if (name == "down") sym = FcitxKey_Down;
             else if (name == "right") sym = FcitxKey_Right;
+            else if (name == "left") sym = FcitxKey_Left;
+            else if (name == "up") sym = FcitxKey_Up;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
             send(ic, Key(sym));
             continue;
@@ -264,17 +266,51 @@ void runCases(Instance &instance) {
         check(ic->committed == second[0], "第二页按 1 选第二页第一个，实际 " + ic->committed);
     }
 
-    // 候选横排（和微信输入法一样）：下键翻页，右键移动光标
-    fresh(ic.get());
-    type(ic.get(), "shi");
-    {
+    // 候选横排（和微信输入法一样）：下键展开成 6 列的面板，右键移动光标
+    auto layout = [&]() {
         auto list = ic->inputPanel().candidateList();
         auto *common = list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
-        check(common && common->layoutHint() == CandidateLayoutHint::Horizontal, "候选横排");
-    }
+        return common ? common->layoutHint() : CandidateLayoutHint::NotSet;
+    };
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    check(layout() == CandidateLayoutHint::Horizontal, "候选横排");
     const auto firstPage = page(ic.get());
     type(ic.get(), "<down>");
-    check(page(ic.get()) != firstPage, "横排时下键翻页：" + join(page(ic.get())));
+    const auto grid = page(ic.get());
+    if (std::getenv("WOWTYPE_HARNESS_SHOW")) {
+        for (const auto &row : grid) {
+            std::fprintf(stderr, "GRID|%s|\n", row.c_str());
+        }
+    }
+    check(layout() == CandidateLayoutHint::Vertical && !grid.empty() && firstPage.size() >= 8 &&
+              grid[0].rfind("\uFF11\u3014" + firstPage[0] + "\u3015", 0) == 0 &&
+              grid[0].find(firstPage[5]) != std::string::npos &&
+              grid[0].find(firstPage[6]) == std::string::npos,
+          "下键展开：第一行 6 个、光标框住第一个：" + join(grid));
+    type(ic.get(), "<right><right><sp>");
+    check(firstPage.size() > 2 && ic->committed == firstPage[2],
+          "展开后右移两格空格选第三个，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi<down><down><sp>");
+    check(firstPage.size() > 6 && ic->committed == firstPage[6],
+          "展开后下移一行空格选第七个，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi<down><down>2");
+    check(firstPage.size() > 7 && ic->committed == firstPage[7],
+          "展开后数字选光标所在行，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi<down><down><up><up>");
+    // （前面选过词，排序会变，这里只看收起没有）
+    check(layout() == CandidateLayoutHint::Horizontal && page(ic.get()).size() == firstPage.size(),
+          "展开后在第一行按上键收起：" + join(page(ic.get())));
+    fresh(ic.get());
+    type(ic.get(), "shi<down><esc>");
+    check(layout() == CandidateLayoutHint::Horizontal && preedit(ic.get()) == "shi",
+          "展开后 Esc 只收起，不清空输入");
+    type(ic.get(), "<down>j");
+    check(layout() == CandidateLayoutHint::Horizontal && preedit(ic.get()) == "shi'j",
+          "展开后接着打字：收起并照常输入，实际 " + preedit(ic.get()));
 
     // 空格选光标所在的候选
     fresh(ic.get());

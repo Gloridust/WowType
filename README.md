@@ -194,7 +194,8 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | 空格 | 上屏第一个（或光标所在的）候选 |
 | `1`–`9` | 上屏对应的候选 |
 | `←` `→` | 在候选之间移动光标 |
-| `↑` `↓`、`-` `=`、`PgUp` `PgDn` | 翻页 |
+| `↓` | 展开候选面板（6 列，像微信输入法），在面板里用方向键挪、空格或 `1`–`6` 选；第一行按 `↑` 或 `Esc` 收起 |
+| `↑`、`-` `=`、`PgUp` `PgDn` | 翻页 |
 | 回车 | 把打的字母原样上屏 |
 | `Esc` | 清空正在打的内容 |
 | 退格 | 删一个字母；刚选过词时先撤销那次选词 |
@@ -251,6 +252,13 @@ WOWTYPE_FUZZY=1
 | `WOWTYPE_S2T` | 简繁对照表 | `/usr/share/wowtype/s2t.tsv` |
 | `WOWTYPE_USER_DICT` | 用户词库 | `~/.local/share/wowtype/user.tsv` |
 | `WOWTYPE_HISTORY` | 输入习惯 | `~/.local/share/wowtype/history.tsv` |
+
+### 更新
+
+用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
+有新版本就弹一条通知，点开进「WowType 设置」的「更新」页，能看更新内容，点「下载并安装」，
+按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
+不想自动检查，在「更新」页关掉「自动检查更新」。从源码装的只会提示新版本，要自己更新。
 
 ### 数据文件
 
