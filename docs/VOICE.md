@@ -9,8 +9,8 @@
         ┌── fcitx5 addon（输入法激活时）──┐
 热键 ───┤                                 ├──> 语音会话
         └── wowtype-voiced（常驻守护）────┘        │
-                                                    ├─ cpal 采集 48k 立体声
-                                                    ├─ 降混 + 重采样到 16k 单声道
+                                                    ├─ cpal 采集：设备支持就直接要 16k 单声道
+                                                    ├─ 否则降混 + 低通滤波 + 重采样到 16k
                                                     ├─ 20ms 分帧 + 能量 VAD
                                                     ├─ ASR 渠道（可多路并发）
                                                     └─ 上屏 / 候选面板
@@ -21,7 +21,7 @@
 | 模块 | 说明 |
 |---|---|
 | `hotkey.rs` | 按下即录音；松开<300ms 判点按继续录，≥300ms 判长按立即停；点按静音 1.5s 自动结束；再按一次提前结束 |
-| `audio.rs` | 线性重采样、多声道降混、320 样本定长分帧 |
+| `audio.rs` | 重采样（降采样前先过加窗 sinc 低通，防止高频折叠进语音频段）、多声道降混、320 样本定长分帧 |
 | `vad.rs` | 自适应噪声底（-60dB 起）+ hangover 15 帧 |
 | `typer.rs` | 边说边上屏：公共前缀比对，退格差异部分后补打 |
 | `asr.rs` | `AsrChannel` trait、多渠道并发、中间结果 |
@@ -85,7 +85,8 @@ wowtype-asr --download 音频.wav        # 或直接转写一个 WAV（16kHz 单
 
 ## 4. 与 fcitx5 的集成（已落地）
 
-插件在 WowType 是当前输入法时接住语音热键（默认右 Alt，`WOWTYPE_VOICE_KEY` 可改，`none` 关掉）。
+插件在 WowType 是当前输入法时接住语音热键（默认右 Alt）。热键和开关在设置界面的「语音」页改，
+存在 `~/.config/fcitx5/conf/wowtype.conf` 的 `VoiceKey`、`Voice`；调试时 `WOWTYPE_VOICE_KEY` 优先，`none` 关掉。
 Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入法。
 
 | 层 | 文件 | 做什么 |
@@ -127,7 +128,9 @@ use wowtype_voice::capture;
 let cap = capture::start(None, move |pcm: Vec<i16>| { /* 16kHz 单声道 */ })?;
 ```
 
-- 支持 f32 / i16 / u16 三种采样格式，内部统一降混 + 重采样到 16kHz
+- 优先直接以 16kHz 单声道打开设备（PipeWire / PulseAudio 自己重采样，质量更好）；
+  设备不支持时用默认格式，内部降混、低通滤波再重采样到 16kHz
+- 支持 f32 / i16 / u16 三种采样格式
 - 跨平台：Linux 走 ALSA/PulseAudio，macOS 走 CoreAudio（所以能在 macOS 上编译验证）
 - `capture::list_devices()` 枚举设备
 

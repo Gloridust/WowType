@@ -10,10 +10,12 @@ sudo apt update
 sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
   libasound2-dev libx11-dev libxkbcommon-dev \
   libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
-  fcitx5 fcitx5-frontend-gtk3 fcitx5-frontend-qt5
+  fcitx5 fcitx5-frontend-gtk3 fcitx5-frontend-qt5 \
+  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 ```
 
 只有语音需要 `libasound2-dev` 和 `libx11-dev`；只想用文字输入可以省掉。
+`python3-gi gir1.2-gtk-4.0 gir1.2-adw-1` 是设置界面 `wowtype-config` 运行时要的（libadwaita 1.4+），不影响编译。
 
 ## 1. 构建核心并验证
 
@@ -82,6 +84,8 @@ sudo cmake --install build
 安装后会看到：
 
 ```
+/usr/bin/wowtype-config
+/usr/share/applications/io.github.Gloridust.WowType.Config.desktop
 /usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so
 /usr/include/wowtype/wowtype_core.h
 /usr/share/fcitx5/addon/wowtype.conf
@@ -92,6 +96,9 @@ sudo cmake --install build
 
 缺词库时代码会退到 `demo_lexicon.tsv`（17 个词），能验证链路但没法日常用。
 
+不想装设置界面：cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`，就没有前两个文件。
+设置界面自己能跑一遍单元测试（不开窗口）：`python3 settings/wowtype-config --self-test`。
+
 ## 5. 启用
 
 ```bash
@@ -100,6 +107,7 @@ fcitx5-configtool               # 或在托盘里「配置」
 ```
 
 在「输入法」页把 **WowType** 加进列表，然后切过去试打 `nihao`。
+也可以运行 `wowtype-config`，「常规」页会检查 WowType 在不在列表里，不在就点「添加」。
 
 如果托盘里根本没有 fcitx5，先确认输入法框架是它：
 
@@ -116,6 +124,8 @@ im-config -n fcitx5             # 然后重新登录
 | 插件编过但输入法列表里没有 | 配置没装对 | 检查 `/usr/share/fcitx5/addon/wowtype.conf` 是否存在 |
 | 加载失败 | 看日志里 wowtype 那几行 | `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype` |
 | 打得出来但全是英文 | 词库没加载 | 设 `WOWTYPE_LEXICON` 指到词库，重启 fcitx5 |
+| `wowtype-config` 报 `Namespace Adw not available` | 缺 libadwaita 的 GI 绑定 | `sudo apt install gir1.2-adw-1` |
+| 设置里改了没效果 | 设了同名环境变量，它优先 | `env \| grep WOWTYPE`，去掉它 |
 | 候选为空 | 同上 | 跑第 3 步的自检 |
 
 看日志：
@@ -159,6 +169,9 @@ Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成�
 
 ## 环境变量
 
+平时的设置用 `wowtype-config`（存在 `~/.config/fcitx5/conf/wowtype.conf`，键名见 [README](../README.md#配置文件和环境变量)）。
+下面的环境变量主要用来调试和测试，设了就**优先于**配置文件。
+
 | 变量 | 作用 | 默认 |
 |---|---|---|
 | `WOWTYPE_LEXICON` | 词库路径 | `/usr/share/wowtype/lexicon.tsv` |
@@ -168,6 +181,10 @@ Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成�
 | `WOWTYPE_FUZZY=1` | 模糊音 | 关 |
 | `WOWTYPE_SHUANGPIN=1` | 双拼（自然码） | 关 |
 | `WOWTYPE_TRADITIONAL=1` | 繁体输出 | 关 |
+| `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
+| `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
+| `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉 | `Alt_R` |
+| `WOWTYPE_CUSTOM` | 自定义词文件 | `$XDG_DATA_HOME/wowtype/custom.tsv` |
 | `WOWTYPE_SINK` | 语音上屏后端 | `clipboard` |
 
 ## 已知限制

@@ -17,16 +17,20 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 引擎支持**半成品输入**：尾部还没成音节时会自动补全（`nih` → 你好，`zhongg` → 中国），
 不会出现"打到一半没有候选"。
 
-支持**模糊音**（默认关闭）：`--fuzzy` 或 `WOWTYPE_FUZZY=1` 开启后，
+支持**模糊音**（默认关闭）：`--fuzzy`（插件里在设置界面打开，或 `WOWTYPE_FUZZY=1`）开启后，
 `zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
 
 支持**自动学习**：同一个词选够 3 次（可配置）后自动收进用户词库，之后能直接打出来。
 词库已有的词也会被记录，相当于记住用户偏好。
 
+支持**自定义词**：用户在设置界面里加的词存在 `custom.tsv`（`拼音<TAB>词[<TAB>频次]`，拼音可以不分音节），
+插件经 `wowtype_engine_load_custom_words(engine, path)` 载入，每次载入整体替换上一次的，文件不存在就清空，
+不写回用户词库。自定义词全拼和简拼都排第一（加了「字节跳动」后 `zjtd` 第一个就是它）。
+
 支持**符号面板**：输入 `/` 后跟拼音或中文名前缀（`/juhao` → 。，`/kuo` → （））。
 ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）。
 
-支持**繁体输出**：`--traditional`（插件用 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
+支持**繁体输出**：`--traditional`（插件在设置界面打开，或 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
 `--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
 字符级转换，暂不处理「发/髮」这类词组歧义。
 
@@ -40,7 +44,7 @@ ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）。
     cat rime-ice/en_dicts/en.dict.yaml rime-ice/en_dicts/en_ext.dict.yaml \
         > ~/.local/share/wowtype/english.txt
 
-支持**双拼**（自然码，默认关闭）：`--shuangpin` 或 `WOWTYPE_SHUANGPIN=1`。
+支持**双拼**（自然码，默认关闭）：`--shuangpin`（插件在设置界面打开，或 `WOWTYPE_SHUANGPIN=1`）。
 `vsgo` → 中国，`nihk` → 你好；自然码里少量重叠码（如 `jp`）会同时展开成多种全拼再合并候选。
 
 语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
@@ -216,7 +220,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 「zhongdi 出重点」这类问题根本看不出来。
 
 漏按最难：少一个字母时可能正好是另一个合法拼音，很多时候没法判断。
-逐键延迟 p99 约 10–13 ms（全量词库，含纠错和句首词）。纠错可以关：`WOWTYPE_TYPO=0`。
+逐键延迟 p99 约 10–13 ms（全量词库，含纠错和句首词）。纠错可以在设置界面关掉（或 `WOWTYPE_TYPO=0`）。
 
 简拼的质量单测：`--jianpin` 生成只取首字母的用例，300 例 **top1 95.3%**。
 
@@ -261,7 +265,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 `FirstUserCandidateRankerProcessor`、`SingleUserWordCanbeSecond`、`history_hot_val`、
 `context_bigram_score`），只借思路，不用它的词库和模型。
 
-**候选横排**（`WOWTYPE_VERTICAL=1` 改回竖排）。横排时左右键移动、上下键翻页。
+**候选横排**（设置界面里可改竖排，或 `WOWTYPE_VERTICAL=1`）。横排时左右键移动、上下键翻页。
 
 **候选组成**：整句只留几个，后面是词，再后面是单字——
 
