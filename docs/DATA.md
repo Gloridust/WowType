@@ -1,7 +1,7 @@
-# 数据格式逆向笔记
+# 数据格式分析笔记
 
 记录 WeType `imeData.bundle` 里各二进制格式已确认的结构。所有结论都来自
-反汇编 + 实际文件字节核对。
+静态分析 + 实际文件字节核对。
 
 ## 1. 词典容器（通用头部）
 
@@ -38,7 +38,7 @@ struct item { void* fd_desc; const char* path; uint32_t id; };
 
 ## 3. 二元语言模型 `lmcnmac.bin`
 
-### 头部（`bi_gram::Reader::Impl::Impl` 反汇编）
+### 头部（`bi_gram::Reader::Impl::Impl` 指令级分析）
 
 ```
 u32[0]   flags       0x80000001  （最高位表示扩展头；低字节 = 版本 1）
@@ -131,7 +131,7 @@ cell_dict_ssrc_zh/1341|1342|1346/cell_dict.ssrc.zh
 文件自身的 dict_type（从报错里读）：`hf`=4、`sc`=4、`newhot`=4、`fi`=21、`ssrc`=22。
 槽位 3/5/6/7/9/10 不报错，语义待确认。
 
-## 5. Oracle 当前状态
+## 5. 参考引擎当前状态
 
 打通的部分：`dlopen` 引擎 → `wxime_initialize` → `wxime_config_dict`（28 个词典全装载）。
 
@@ -141,7 +141,7 @@ cell_dict_ssrc_zh/1341|1342|1346/cell_dict.ssrc.zh
 
 ## 6. 复现命令
 
-见 `tools/oracle/README.md`。
+见 `tools/ref-engine/README.md`。
 
 ## 8. 词典类型系统（已解开）
 
@@ -170,7 +170,7 @@ group: 1 = 拼音族, 2 = 语言模型, 4 = 参数, 8 = 五笔族
 
 ## 9. 枚举已加载词典（工具已可用）
 
-`tools/oracle/probe_dict_kinds.cpp`：
+`tools/ref-engine/probe_dict_kinds.cpp`：
 
 ```
 ResourceMgr::Instance() → operator*() → shared_ptr<Resources> → Resources+0 → DictManager*
@@ -300,7 +300,7 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 5. 设 `DYLD_FRAMEWORK_PATH` / `DYLD_LIBRARY_PATH` 指向真实 Frameworks
 6. `dlopen` 之后就能 dlsym 那 49 个 `wxime_*` 函数
 
-（具体命令见 `tools/oracle/README.md`，那里有可直接执行的版本。）
+（具体命令见 `tools/ref-engine/README.md`，那里有可直接执行的版本。）
 
 常见错误对照：
 
@@ -312,21 +312,21 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 | `wxime_config_dict` 报 “wxime not init” | 必须先 `wxime_initialize` |
 | `create_session` 段错误 | 见 14.4 第 3 条 |
 
-### 14.3 工具索引（`tools/oracle/`）
+### 14.3 工具索引（`tools/ref-engine/`）
 
 | 文件 | 作用 |
 |---|---|
-| `oracle3.c` | 最小可运行示例：初始化 + 建会话 + 输入 + 取候选 |
-| `oracle5_patch.c` | 运行时改内存（`mach_vm_protect` + `VM_PROT_COPY` + `sys_icache_invalidate`）绕开崩溃点 |
+| `probe_basic.c` | 最小可运行示例：初始化 + 建会话 + 输入 + 取候选 |
+| `probe_runtime_patch.c` | 运行时改内存（`mach_vm_protect` + `VM_PROT_COPY` + `sys_icache_invalidate`）绕开崩溃点 |
 | `probe_dict_kinds.cpp` | 枚举 45 个已加载词典的 kind 与类型名 |
 | `probe_cell_kind.cpp` / `probe_cell_types.c` | cell 词典槽位与 dict_type 的对应关系 |
 | `probe_cursor_walk.cpp` | 用 `Cursor::Move/Path/ToSyllable` 走 trie |
 | `probe_cursor_dfs.cpp` | 深度优先遍历 V3 词库，打印「音节序列 + 频次」 |
 
-`probe_cursor_dfs.cpp` 与 `oracle3.c` 都验证过能编译：
+`probe_cursor_dfs.cpp` 与 `probe_basic.c` 都验证过能编译：
 
 ```sh
-clang++ -std=c++17 -o /tmp/pcd tools/oracle/probe_cursor_dfs.cpp
+clang++ -std=c++17 -o /tmp/pcd tools/ref-engine/probe_cursor_dfs.cpp
 /tmp/pcd /tmp/WeTypeFake.app/Contents/MacOS/libwxime.dylib 45 40
 # 输出形如：\ta\t21578（音节序列 + 频次）
 ```
@@ -356,11 +356,11 @@ kind 29 用同一套 cursor 接口没有子节点（API 不同）；kind 0 直�
 
 ### 14.5 结论
 
-逆向到此为止：**能调用官方引擎（可做 teacher），但导不出它的词库和语言模型**。
+分析到此为止：**能调用官方引擎（可做 teacher），但导不出它的词库和语言模型**。
 可行路线是继续解 `LargeDictValueHuffmanCodec`。
 当前项目采用开源词库（rime-ice）+ 自建引擎，实测完整输入 top1 99.2%。
 
 ### 14.6 法律边界
 
 WeType 的二进制与模型是腾讯专有资产，**不随本仓库分发**。
-`tools/oracle/` 里的工具只用于在你自己的机器上分析你自己的那份安装，理解格式与对照行为，不再分发。
+`tools/ref-engine/` 里的工具只用于在你自己的机器上分析你自己的那份安装，理解格式与对照行为，不再分发。

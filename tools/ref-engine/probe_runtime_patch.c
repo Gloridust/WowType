@@ -71,7 +71,7 @@ int main(int argc,char**argv){
   *(void**)(c+0)=(void*)my_log;
   set_verbosity();
   printf("init=%d", init(c)); putchar(10);
-  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
+  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/wowtype-ref/userdata";
   printf("config_dict=%d", cfg(&dc)); putchar(10);
 
   /* 0x10173c7cc: ldr x0,[x19,#0x30]; ldr x8,[x0]; ldr x8,[x8,#0x98]; blr x8

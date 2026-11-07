@@ -46,7 +46,7 @@ int main(int argc,char**argv){
   *(const char**)(c+0x18)="/Library/Input Methods/WeType.app/Contents/Resources";
   *(void**)(c+0)=(void*)my_log;
   set_verbosity(H); int ri=init(c); printf("init -> %d", ri); putchar(10);
-  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
+  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/wowtype-ref/userdata";
   set_verbosity(H); int rc=cfg(&dc); printf("config_dict -> %d", rc); putchar(10);
   static uint8_t sc[512];
   unsigned long long sid=create(sc);

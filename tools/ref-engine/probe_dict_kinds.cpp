@@ -42,7 +42,7 @@ int main(int argc,char**argv){
   *(const char**)(c+0x18)="/Library/Input Methods/WeType.app/Contents/Resources";
   *(void**)(c+0)=(void*)my_log;
   init(c);
-  static dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
+  static dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/wowtype-ref/userdata";
   cfg(&dc);
   auto inst  = (void*(*)())loc(0x101c453b4UL);
   auto deref = (void*(*)(void*))loc(0x101c430c4UL);

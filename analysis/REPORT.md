@@ -1,4 +1,4 @@
-# WeType（微信输入法）macOS 版逆向分析报告
+# WeType（微信输入法）macOS 版引擎行为分析报告
 
 > 目标：判断「候选词排序」等输入法核心能否从 `WeTypeInstaller.app` 中解析出来，并评估移植到 Ubuntu 的可行路径。
 > 分析时间：2026-11-06 ｜ 版本：CFBundleShortVersionString 2.2.0 (Build 637)
@@ -119,7 +119,7 @@ wxime_get_most_likely_sequel  wxime_get_version  wxime_finalize
 | `2592000`(30天,s) | 历史记录过期时间 |
 | `0.833, 0.0504, 9.37, -1.94` | 模型相关常量 |
 
-配合 `HyperParams::SentenceSearchParams(bool)` 的调用点，可以逐个把字段和数值对上（需要继续读反汇编中的结构体偏移）。
+配合 `HyperParams::SentenceSearchParams(bool)` 的调用点，可以逐个把字段和数值对上（需要继续做指令级分析确认结构体偏移）。
 
 ---
 

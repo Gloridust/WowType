@@ -17,8 +17,8 @@
 | `voice/` | 语音核心：热键状态机、重采样、VAD、ASR 抽象、边说边上屏 |
 | `voice-daemon/` | 常驻进程：全局热键 + 采集 + 上屏（Linux） |
 | `fcitx5-addon/` | fcitx5 输入法插件（C++，调 Rust 的 C ABI） |
-| `tools/oracle/` | 让官方 WeType 引擎跑起来当数据源/裁判的工具 |
-| `analysis/` | 逆向分析报告与产物 |
+| `tools/ref-engine/` | 加载官方引擎做行为对照、核对格式的工具 |
+| `analysis/` | 引擎行为分析报告与产物 |
 | `docs/` | 设计文档 |
 
 ## 快速开始（Ubuntu）
@@ -69,7 +69,7 @@ sudo cmake --install fcitx5-addon/build
 
 ## 词库从哪来
 
-WeType 自己的词库还在逆向（见下）。在那之前可以直接用开源词库跑通：
+WeType 自己的词库格式还在解析（见下）。在那之前可以直接用开源词库跑通：
 
 ```bash
 # 雾凇拼音：https://github.com/iDvel/rime-ice
@@ -284,7 +284,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 | `bwcnmacv8.bin`（31MB，整数音节 ID + Huffman） | 待办 |
 | `lmcnmac.bin` 二元语言模型 | 待办 |
 | `hpmac_base.bin` 超参数 | 已读出浮点值 |
-| 候选排序 oracle（官方引擎直接吐分数） | 卡在 create_session 的一个空指针 |
+| 候选排序对照（官方引擎直接给出分数） | 卡在 create_session 的一个空指针 |
 
 详见 [analysis/REPORT.md](analysis/REPORT.md)、[docs/DATA.md](docs/DATA.md)、
-[tools/oracle/README.md](tools/oracle/README.md)、[docs/VOICE.md](docs/VOICE.md)。
+[tools/ref-engine/README.md](tools/ref-engine/README.md)、[docs/VOICE.md](docs/VOICE.md)。

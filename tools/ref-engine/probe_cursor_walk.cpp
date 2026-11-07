@@ -39,49 +39,19 @@ asm(
 );
 static void on_segv(int, siginfo_t*, void*){ const char m[]="CRASH\n"; write(2,m,sizeof m-1); _exit(7); }
 
-static std::string read_str(const void* s){
-  const unsigned char* b=(const unsigned char*)s;
-  unsigned long long cap=*(const unsigned long long*)(b+16);
-  unsigned long long sz=*(const unsigned long long*)(b+8);
-  unsigned long long dp=*(const unsigned long long*)(b);
-  // 长串：data@0 / size@8 / cap@16（LSB 标记）；做个合理性检查，避免把短串误判成长串
-  if((cap & 1ULL) && sz < 4096 && dp > 0x10000ULL && dp < 0x800000000000ULL){
-    return std::string((const char*)dp, (size_t)sz);
-  }
+static std::string read_str(void* s){
+  unsigned char* b=(unsigned char*)s;
   unsigned char last=b[23];
-  size_t n=last & 0x7f;
-  if(n>22) n=22;
-  return std::string((const char*)b,n);
+  if(last & 0x80){ size_t n=last & 0x7f; if(n>22)n=22; return std::string((char*)b,n); }
+  char* p=*(char**)(b+16); size_t n=*(size_t*)(b+8);
+  if(!p) return std::string();
+  return std::string(p,n);
 }
+
+typedef bool (*tryfn)(const void*, int);
 typedef bool (*movefn)(void*, int);
 typedef unsigned long long (*freqfn)(const void*);
 typedef bool (*leaffn)(const void*);
-static movefn mv; static freqfn fq; static leaffn lf;
-static long g_labels=0, g_leaves=0, max_nodes=200000, nodes=0, printed=0;
-
-static void walk(unsigned char* cur, int depth){
-  if(++nodes > max_nodes) return;
-  if(lf(cur)){
-    unsigned long long f=fq(cur);
-    if(f & (1ULL<<32)){
-      g_leaves++;
-      if(printed < 40){
-        std::string word=read_str(cur+0x2c);
-        std::string syl=read_str(cur+0x44);
-        printf("%s\\t%s\\t%u", word.c_str(), syl.c_str(), (unsigned)(f & 0xffffffffu));
-        putchar(10); printed++;
-      }
-    }
-  }
-  if(depth >= 6) return;
-  for(long i=0;i<g_labels;i++){
-    unsigned char ch[0x60];
-    memcpy(ch,cur,sizeof ch);
-    if(!mv(ch,i)) continue;
-    walk(ch, depth+1);
-    if(nodes>max_nodes) return;
-  }
-}
 
 int main(int argc,char**argv){
   struct sigaction sa; memset(&sa,0,sizeof sa); sa.sa_sigaction=on_segv; sa.sa_flags=SA_SIGINFO;
@@ -96,7 +66,7 @@ int main(int argc,char**argv){
   *(const char**)(c+0x18)="/Library/Input Methods/WeType.app/Contents/Resources";
   *(void**)(c+0)=(void*)my_log;
   init(c);
-  static dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
+  static dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/wowtype-ref/userdata";
   cfg(&dc);
 
   auto inst  = (void*(*)())loc(0x101c453b4UL);
@@ -106,20 +76,34 @@ int main(int argc,char**argv){
   void* res = *(void**)deref(inst());
   void* dmgr = *(void**)res;
   unsigned kind = (unsigned)strtoul(argv[2],0,0);
+  int max_label = (int)strtoul(argv[3],0,0);
   sp_raw d; d.p=0; d.ctl=0;
   dm_get(dmgr, (unsigned short)kind, &d);
   printf("dict %u -> %p", kind, d.p); putchar(10);
   if(!d.p) return 0;
 
-  g_labels = argc>3 ? atol(argv[3]) : 600;
-  printf("labels=%ld", g_labels); putchar(10);
-
-  unsigned char root[0x60]; memset(root,0,sizeof root);
+  unsigned char root[0x80]; memset(root,0,sizeof root);
   call2(d.p, root);
-  mv=(movefn)loc(0x101928708UL);
-  fq=(freqfn)loc(0x101928814UL);
-  lf=(leaffn)loc(0x101928830UL);
-  walk(root,0);
-  printf("leaves=%ld nodes=%ld", g_leaves, nodes); putchar(10);
+  void* syl=(void*)(root+0x44);
+  printf("root syllable='%s' leaf=%d", read_str(syl).c_str(), (int)((leaffn)loc(0x101928830UL))(root)); putchar(10);
+
+  movefn mv=(movefn)loc(0x101928708UL);
+  freqfn fq=(freqfn)loc(0x101928814UL);
+  int hits=0;
+  for(int i=0;i<max_label;i++){
+    unsigned char ch[0x80]; memcpy(ch,root,sizeof ch);
+    if(!mv(ch,i)) continue;
+    std::string s=read_str((void*)(ch+0x44));
+    unsigned long long f=fq(ch);
+    char* lbase=*(char**)((char*)loc(0x10367a768UL));
+    char* lp=0; unsigned long ln=0;
+    if(lbase){
+      lp=*(char**)(lbase + (long)i*16);
+      ln=*(unsigned long*)(lbase + (long)i*16 + 8);
+    }
+    printf("label %d -> path='%s' labelstr='%.*s' freq=%u leaf=%d", i, s.c_str(), (int)(ln>32?32:ln), lp?lp:"", (unsigned)(f & 0xffffffffu), (int)((leaffn)loc(0x101928830UL))(ch)); putchar(10);
+    if(++hits>=12) break;
+  }
+  printf("hits=%d", hits); putchar(10);
   return 0;
 }

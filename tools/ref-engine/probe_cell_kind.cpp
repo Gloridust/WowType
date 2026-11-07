@@ -49,7 +49,7 @@ int main(int argc,char**argv){
   unsigned n = sizeof(base_items)/sizeof(base_items[0]);
   memcpy(items, base_items, n*sizeof(item_t));
 
-  static dictcfg_t dc; dc.items=items; dc.count=n; dc.user_dir="/tmp/oracle/userdata";
+  static dictcfg_t dc; dc.items=items; dc.count=n; dc.user_dir="/tmp/wowtype-ref/userdata";
   int rc=cfg(&dc); printf("config=%d items=%u", rc, n); putchar(10);
   auto addcell = (int(*)(const char*,int,const void*))dlsym(H,"wxime_add_cell_dict");
   int ctype = (int)strtoul(argv[2],0,0);

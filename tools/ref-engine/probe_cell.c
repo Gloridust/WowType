@@ -20,7 +20,7 @@ int main(int argc,char**argv){
   *(const char**)(c+0x18)="/Library/Input Methods/WeType.app/Contents/Resources";
   *(void**)(c+0)=(void*)my_log;
   init(c);
-  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/oracle/userdata";
+  dictcfg_t dc; dc.items=items; dc.count=sizeof(items)/sizeof(items[0]); dc.user_dir="/tmp/wowtype-ref/userdata";
   cfg(&dc);
   int slot=atoi(argv[3]);
   int rc=addcell(argv[2], slot, 0);

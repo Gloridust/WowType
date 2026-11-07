@@ -1,7 +1,7 @@
-# WeType 引擎 Oracle（逆向用）
+# 官方引擎参考对照工具
 
-把 WeType 的主二进制改造成可 dlopen 的 bundle，直接调用它导出的 `wxime_*` C API，
-用来导出词库/候选/分数，也作为蒸馏时的 teacher。
+把官方引擎加载为可 dlopen 的模块，直接调用它导出的 `wxime_*` C API，
+用于行为对照：同一份输入，比较双方给出的候选与分数。
 
 ## 1. 制作可加载的 bundle
 
