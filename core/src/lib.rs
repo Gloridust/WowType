@@ -93,6 +93,9 @@ pub struct EngineConfig {
     pub typo_correction: bool,
     /// 句首词候选最多几个（0 表示不给）。长句打错时可以先选开头的词。
     pub prefix_candidates: usize,
+    /// 前面几页之后把剩下的词全补上（整个输入的同音词、句首词、单字），直到
+    /// `max_candidates`。关掉时只给最可能的那几页。
+    pub more_candidates: bool,
 }
 
 impl Default for EngineConfig {
@@ -110,6 +113,7 @@ impl Default for EngineConfig {
             auto_learn_threshold: 3,
             typo_correction: true,
             prefix_candidates: 16,
+            more_candidates: true,
         }
     }
 }
@@ -588,6 +592,9 @@ impl Engine {
             }
             compose_candidates(&mut result, prefix, self.config.max_candidates.max(1));
         }
+        if self.config.more_candidates && !self.config.shuangpin {
+            self.append_more_candidates(raw, display, &normalized, &mut result)?;
+        }
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {
@@ -670,6 +677,123 @@ impl Engine {
                 }],
             })
             .collect())
+    }
+
+    /// 翻页用的长尾：前面几页之后，把输入能对上的词全补上，直到 `max_candidates`。
+    ///
+    /// 照着微信输入法：先是整个输入的同音词（按词频），再是句首词（长的在前），
+    /// 最后是第一个音节的单字。前面已经有的不重复；排第一的结果没纠错时不补纠错出来的词。
+    fn append_more_candidates(
+        &self,
+        raw: &str,
+        display: &str,
+        normalized: &str,
+        result: &mut Vec<Candidate>,
+    ) -> Result<()> {
+        let max = self.config.max_candidates.max(1);
+        if result.len() >= max {
+            return Ok(());
+        }
+        let Ok(parsed) = parse(normalized) else {
+            return Ok(());
+        };
+        if parsed.is_empty() {
+            return Ok(());
+        }
+        let typo = self.config.typo_correction;
+        let full = SyllableGraph::build(
+            &parsed,
+            GraphOptions {
+                mode: GraphMode::Full,
+                allow_erhua: true,
+                typo,
+                completion: true,
+            },
+        );
+        let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
+            full
+        } else {
+            let completion_explains = full.has_path_without_typo();
+            abbrev_graph(&parsed, completion_explains).unwrap_or(full)
+        };
+        let fuzzy_view;
+        let lexicon: &dyn Lexicon = if self.config.fuzzy {
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            &fuzzy_view
+        } else {
+            self.lexicon.as_ref()
+        };
+        let words = crate::beam::all_first_words(&graph, lexicon, &self.config.beam, max);
+        if words.is_empty() {
+            return Ok(());
+        }
+        let total = graph.len();
+        let exact_top = result
+            .iter()
+            .find(|c| !is_raw_candidate(c))
+            .map(|c| c.features.typo_count == 0.0)
+            .unwrap_or(false);
+        let to_candidate = |word: BeamWord, cost: f64| Candidate {
+            text: word.text.clone(),
+            pinyin: word.pinyin.clone(),
+            score: -cost,
+            features: Feature {
+                typo_count: word.typos as f32,
+                typo: if word.typos > 0 { 1.0 } else { 0.0 },
+                ..Feature::default()
+            },
+            consumed: word.end,
+            words: vec![CandidateWord {
+                text: word.text,
+                pinyin: word.pinyin,
+                freq: word.freq,
+                known: true,
+            }],
+        };
+        let mut whole = Vec::new();
+        let mut heads = Vec::new();
+        for (word, cost) in words {
+            if exact_top && word.typos > 0 {
+                continue;
+            }
+            if word.end >= total {
+                whole.push(to_candidate(word, cost));
+            } else if word.completion == 0 {
+                heads.push(to_candidate(word, cost));
+            }
+        }
+        // 句首词只留在音节边界上的（不把一个音节拆开）
+        prefix_on_syllable_boundaries(result, normalized, &mut heads);
+        let leading = raw.len() - raw.trim_start().len();
+        let mut seen: HashMap<String, ()> = result.iter().map(|c| (c.text.clone(), ())).collect();
+        let converter = if self.config.traditional {
+            self.converter.read().ok()
+        } else {
+            None
+        };
+        for mut candidate in whole.into_iter().chain(heads) {
+            if result.len() >= max {
+                break;
+            }
+            if let Some(conv) = converter.as_ref().filter(|c| !c.is_empty()) {
+                candidate.text = conv.convert(&candidate.text);
+            }
+            if seen.insert(candidate.text.clone(), ()).is_some() {
+                continue;
+            }
+            candidate.consumed = if candidate.consumed >= total {
+                raw.len()
+            } else {
+                leading + letters_to_bytes(display, candidate.consumed)
+            };
+            result.push(candidate);
+        }
+        for i in 1..result.len() {
+            if result[i].score >= result[i - 1].score {
+                result[i].score = result[i - 1].score - 1e-3;
+            }
+        }
+        Ok(())
     }
 
     /// 全拼下输入能否不靠纠错、补全切成完整音节。
@@ -1486,8 +1610,17 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
         .filter(|p| seen.insert(p.text.clone(), ()).is_none())
         .collect();
 
+    // 排第一的没纠错时，纠错出来的整句/整词放到句首词后面：`bujianyi` 打的就是
+    // 不建议，「古剑一」（b 当 g）不该排在「不见」前面
+    let exact_first = kept.first().is_some_and(|c| c.features.typo <= 0.0);
+    let (kept, corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
+        kept.into_iter().partition(|c| c.features.typo <= 0.0)
+    } else {
+        (kept, Vec::new())
+    };
     let long_sentence = syllables >= 4 && kept.first().map(is_sentence).unwrap_or(false);
-    let mut merged: Vec<Candidate> = Vec::with_capacity(kept.len() + prefix.len());
+    let mut merged: Vec<Candidate> =
+        Vec::with_capacity(kept.len() + prefix.len() + corrected.len());
     let mut prefix = prefix.into_iter();
     let mut kept = kept.into_iter();
     if long_sentence {
@@ -1496,6 +1629,7 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
     }
     merged.extend(kept);
     merged.extend(prefix);
+    merged.extend(corrected);
     merged.truncate(max.saturating_sub(raw.len()).max(1));
     for (at, c) in raw {
         let at = at.min(merged.len());
@@ -1974,6 +2108,33 @@ mod tests {
             long.iter().map(|c| &c.text).collect::<Vec<_>>()
         );
         assert!(long.len() <= e.config.max_candidates.max(1));
+    }
+
+    #[test]
+    fn later_pages_list_every_homophone_and_head_word() {
+        let mut tsv = String::new();
+        for i in 0..40 {
+            tsv.push_str(&format!("shi\t字{i}\t{}\n", 1000 - i));
+        }
+        tsv.push_str("shi jie\t世界\t9000\nshi jie\t视界\t50\njie\t界\t500\n");
+        let mut e = engine(&tsv);
+        e.set_max_candidates(300);
+        let one: Vec<String> = e.input("shi").into_iter().map(|c| c.text).collect();
+        for i in 0..40 {
+            assert!(one.contains(&format!("字{i}")), "缺 字{i}: {one:?}");
+        }
+        let two = e.input("shijie");
+        assert_eq!(two[0].text, "世界");
+        let texts: Vec<&str> = two.iter().map(|c| c.text.as_str()).collect();
+        assert!(texts.contains(&"视界"), "{texts:?}");
+        // 翻到后面能选第一个音节的任意一个字，只用掉 shi
+        let head = two.iter().find(|c| c.text == "字39").expect("单字在后面");
+        assert_eq!(head.consumed, 3);
+
+        let mut off = engine(&tsv);
+        off.set_max_candidates(300);
+        off.config.more_candidates = false;
+        assert!(off.input("shi").len() < 40);
     }
 
     #[test]
