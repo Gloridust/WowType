@@ -96,14 +96,47 @@ fn finish_and_reset(session: &mut VoiceSession, opt: &Options) {
 }
 
 /// 有 --asr-cmd 就走外部识别器，否则用 Mock 验证链路。
-fn build_channel(opt: &Options) -> MultiChannel {
-    match opt.asr_cmd.as_deref() {
-        Some(cmd) if !cmd.trim().is_empty() => {
-            println!("识别渠道：外部命令 {cmd}");
-            MultiChannel::new(vec![Box::new(ProcessChannel::from_command_line(
-                "cmd", cmd,
-            ))])
+/// 识别渠道：`--asr` 显式指定，否则按是否有 `--asr-cmd` 判断。
+pub fn build_channel(opt: &Options) -> MultiChannel {
+    let mode = opt.asr.clone().unwrap_or_else(|| {
+        if opt.asr_cmd.as_deref().is_some_and(|c| !c.trim().is_empty()) {
+            "cmd".into()
+        } else {
+            "mock".into()
         }
+    });
+
+    match mode.as_str() {
+        "wtlocal" => {
+            let dir = opt
+                .asr_dir
+                .clone()
+                .unwrap_or_else(wowtype_voice::wtlocal::download::default_dir);
+            println!("识别渠道：微信离线（{}）", dir.display());
+            if let Err(e) = wowtype_voice::wtlocal::download::ensure(&dir) {
+                eprintln!("离线模型不可用：{e:#}");
+                std::process::exit(1);
+            }
+            match wowtype_voice::wtlocal::WtLocalChannel::new(dir) {
+                Ok(ch) => MultiChannel::new(vec![Box::new(ch)]),
+                Err(e) => {
+                    eprintln!("加载离线模型失败：{e:#}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        "cmd" => match opt.asr_cmd.as_deref() {
+            Some(cmd) if !cmd.trim().is_empty() => {
+                println!("识别渠道：外部命令 {cmd}");
+                MultiChannel::new(vec![Box::new(ProcessChannel::from_command_line(
+                    "cmd", cmd,
+                ))])
+            }
+            _ => {
+                eprintln!("--asr cmd 需要配合 --asr-cmd");
+                std::process::exit(1);
+            }
+        },
         _ => {
             println!("识别渠道：Mock（仅用于验证链路）");
             MultiChannel::new(vec![Box::new(MockChannel::new("mock"))])

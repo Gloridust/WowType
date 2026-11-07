@@ -52,6 +52,26 @@ Wayland 下"抢一个键"本质上不被允许（安全模型），所以要么�
 
 ## 3. 识别后端
 
+### 微信离线（wtlocal，纯 Rust）
+
+`voice/src/wtlocal/` 直接加载微信输入法的离线模型包并自己推理，**不需要官方程序**，
+全平台可用（无系统依赖）。首次使用时从腾讯 CDN 下载约 100MB 模型并校验 MD5。
+
+```bash
+wowtype-voiced --asr wtlocal          # 首次会下载模型
+wowtype-asr --download 音频.wav        # 或直接转写一个 WAV（16kHz 单声道）
+```
+
+实测（macOS TTS 合成语音，5 句全部正确）：
+
+| 原文 | 识别 |
+|---|---|
+| 今天天气不错 | 今天天气不错。 |
+| 明天下午三点开会 | 明天下午三点开会。 |
+| 把这个文件发送给张三 | 把这个文件发送给张三。 |
+
+1.7 秒音频推理约 0.16 秒（4 线程）。来源与适配说明见 `voice/src/wtlocal/NOTICE.md`。
+
 | 后端 | 许可 | 中文效果 | 说明 |
 |---|---|---|---|
 | **sherpa-onnx** + Zipformer/Paraformer 中文模型 | Apache-2.0 | 好 | 推荐默认，纯本地，ONNX Runtime |

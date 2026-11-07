@@ -14,6 +14,7 @@ pub mod sink;
 pub mod typer;
 pub mod vad;
 pub mod wav;
+pub mod wtlocal;
 
 pub use asr::{AsrChannel, MultiChannel, Transcript};
 pub use audio::{CaptureFormat, Framer, Resampler, FRAME_SAMPLES, TARGET_RATE};

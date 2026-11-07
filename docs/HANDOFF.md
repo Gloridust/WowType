@@ -9,7 +9,7 @@
 
 - 引擎：Rust，`core/`，提供 C ABI
 - 插件：C++，`fcitx5-addon/`，调 C ABI
-- 语音：Rust，`voice/` + `voice-daemon/`（X11 热键 + 麦克风 + 外部识别器）
+- 语音：Rust，`voice/` + `voice-daemon/`（X11 热键 + 麦克风 + 识别器）；内置微信离线识别（`voice/src/wtlocal/`），首次使用下载约 100MB 模型
 - 数据：开源词库（rime-ice），仓库自带简繁表
 
 ## 最短上手（5 条）

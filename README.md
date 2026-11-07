@@ -14,7 +14,7 @@
 | 路径 | 内容 |
 |---|---|
 | `core/` | 拼音引擎：音节切分、音节图、束搜索、打分、排序、C ABI |
-| `voice/` | 语音核心：热键状态机、重采样、VAD、ASR 抽象、边说边上屏 |
+| `voice/` | 语音核心：热键状态机、重采样、VAD、ASR 抽象、离线识别（wtlocal）、边说边上屏 |
 | `voice-daemon/` | 常驻进程：全局热键 + 采集 + 上屏（Linux） |
 | `fcitx5-addon/` | fcitx5 输入法插件（C++，调 Rust 的 C ABI） |
 | `tools/ref-engine/` | 加载官方引擎做行为对照、核对格式的工具 |
@@ -267,6 +267,12 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 
 交互预算（<10ms）有很大余量。模糊音索引是**惰性构建**的（模糊音默认关闭），
 55 万词库下省掉了约 45% 的加载时间；代价是第一次用模糊音时多一次建表。
+
+## 致谢
+
+离线语音识别（`voice/src/wtlocal/`）来自 [J3n5en/voicekey](https://github.com/J3n5en/voicekey)
+的 `crates/wtlocal`，经作者同意在本项目中使用并适配（去掉 rayon/memmap2/zip/tokio，
+改为标准库实现）。模型是腾讯的资源包，不随仓库分发，首次使用时从官方 CDN 下载。
 
 ## 已知限制
 

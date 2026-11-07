@@ -126,6 +126,19 @@ fcitx5-diagnose | head -50
 
 ## 7. 语音（可选）
 
+离线识别（微信离线模型，纯本地，不需要任何外部程序）：
+
+```bash
+sudo apt install -y curl unzip
+wowtype-voiced --asr wtlocal      # 首次会从 CDN 下载约 100MB 并校验 MD5
+```
+
+或者先单独验证引擎能否识别一段 16kHz 单声道 WAV：
+
+```bash
+cargo run --release -p wowtype-voice --bin wowtype-asr -- --download 测试.wav
+```
+
 ```bash
 cargo build --release -p wowtype-voiced
 # X11 下：默认 Alt+A 触发（可 --hotkey 改）

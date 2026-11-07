@@ -31,3 +31,7 @@ __pycache__/
 # 词库快照
 *.wcache
 *.wcache.tmp
+
+# 离线语音模型（从 CDN 下载，不入库）
+*.xnet
+*.part
