@@ -271,7 +271,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 ## 致谢
 
 离线语音识别（`voice/src/wtlocal/`）来自 [J3n5en/voicekey](https://github.com/J3n5en/voicekey)
-的 `crates/wtlocal`，经作者同意在本项目中使用并适配（去掉 rayon/memmap2/zip/tokio，
+的 `crates/wtlocal`，本项目中使用并适配（去掉 rayon/memmap2/zip/tokio，
 改为标准库实现）。模型是腾讯的资源包，不随仓库分发，首次使用时从官方 CDN 下载。
 
 ## 已知限制
