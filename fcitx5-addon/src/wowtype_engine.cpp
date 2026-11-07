@@ -675,4 +675,9 @@ public:
     }
 };
 
+// _V2 是 fcitx5 5.1.8 起才有的；Ubuntu 24.04 自带 5.1.7，只能用旧宏
+#ifdef FCITX_ADDON_FACTORY_V2
 FCITX_ADDON_FACTORY_V2(wowtype, WowtypeFactory)
+#else
+FCITX_ADDON_FACTORY(WowtypeFactory)
+#endif

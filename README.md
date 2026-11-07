@@ -1,384 +1,303 @@
+<div align="center">
+
 # Wowtype
 
-把微信输入法（WeType）的输入体验搬到 Linux：拼音 + 语音，跑在 fcitx5 上。
+**在 Linux 上打字，像微信输入法一样顺手。**
 
-> 状态：**文字输入可用，语音待实机验证。**
-> 142 项 Rust 测试 + C ABI 冒烟 + fcitx5 插件按键测试全绿；用真实词库（rime-ice 55 万条）测到完整输入 top1 100%（常用词）/ 99.0%（中低频词），
-> 按错相邻键 top1 85.7%、两键按反 93.0%、长句 72%（见[按错键与长句](#按错键与长句)）；
-> 各项改动对用户的实际影响见 [docs/UX-AUDIT.md](docs/UX-AUDIT.md)。
-> 语音的可测部分（VAD/WAV/识别器调用/上屏）也都有测试，但 X11 热键和采集
-> 没在 Linux 上实机跑过。
->
-> **接手先看 [docs/HANDOFF.md](docs/HANDOFF.md)**（从哪开始、哪里可能炸）；安装步骤见 [docs/INSTALL.md](docs/INSTALL.md)；目标完成度见 [docs/STATUS.md](docs/STATUS.md)。
+一个 fcitx5 拼音输入法：长句一次打完、打一半就有词、按错键也能认出来，越用越懂你。
 
-## 目录
+[![CI](https://github.com/Gloridust/Wowtype/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloridust/Wowtype/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Gloridust/Wowtype?include_prereleases&label=release)](https://github.com/Gloridust/Wowtype/releases)
+![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
+![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
-| 路径 | 内容 |
+[安装](#安装) · [使用](#使用) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
+
+<!-- 截图：docs/images/candidates.png（横排候选条），补上后删掉这行注释
+<img src="docs/images/candidates.png" width="640" alt="Wowtype 横排候选条">
+-->
+
+</div>
+
+## 特性
+
+- **整句输入**：`wojintianwanshangyaojiaban` 直接出「我今天晚上要加班」；后面跟着句子的前半截，可以先上屏一段，剩下的拼音接着改。
+- **半成品也有词**：`zhongg` 就有「中国」，不用打全。打全了的拼音正好是个词时，它一定排第一。
+- **按错键能认出来**：按成相邻键、两个键按反、多按或漏按一个键（`zhognguo` → 中国）。本来就打对的输入不受影响。
+- **越用越懂你**：记住你选过的词和常连着用的词（选过一次「我们再讨论」，下次就不会出「我们在讨论」），30 天不用会慢慢淡掉。
+- **简拼、中英混打**：`bjdx` → 北京大学；`github` → GitHub。
+- **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
+- **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
+- **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑。
+
+## 示例
+
+下面是用默认词库（雾凇拼音）实际打出来的候选，可以用 `wowtype-show` 自己试：
+
+| 输入 | 候选（前几个） | 说明 |
+|---|---|---|
+| `wojintianwanshangyaojiaban` | **我今天晚上要加班** · 我今天晚上要 · 我今天晚上要甲板 · … | 整句；第 2 个是句子前半截，选了只上屏这一段 |
+| `hengxianghouxuanci` | **横向候选词** · 横向 · 横向后选词 · 横 · 哼 · 衡 | 整句只留几个，然后是词，再是单字 |
+| `zhongg` | **中国** · 中共 · 忠告 · 中高 · 重工 | 没打完也有词 |
+| `zhognguo` | **中国** · 种过 · 重过 | 两个键按反了 |
+| `bjdx` | **北京大学** · 北京电信 · 半径大小 | 简拼 |
+| `sz` | **设置** · 甚至 · 随着 · 深圳 · 是指 | 简拼 |
+| `github` | **GitHub** | 英文词按词表里的写法给出 |
+
+<!-- 截图（补上后删掉这行注释）：
+| 长句先上屏前半截 | 按错键 |
 |---|---|
-| `core/` | 拼音引擎：音节切分、音节图、束搜索、打分、排序、C ABI |
-| `voice/` | 语音核心：热键状态机、重采样、VAD、ASR 抽象、离线识别（wtlocal）、边说边上屏 |
-| `voice-daemon/` | 常驻进程：全局热键 + 采集 + 上屏（Linux） |
-| `fcitx5-addon/` | fcitx5 输入法插件（C++，调 Rust 的 C ABI） |
-| `tools/ref-engine/` | 加载官方引擎做行为对照、核对格式的工具 |
-| `analysis/` | 引擎行为分析报告与产物 |
-| `docs/` | 设计文档 |
+| <img src="docs/images/sentence-head.png" width="380"> | <img src="docs/images/typo.png" width="380"> |
+-->
 
-## 快速开始（Ubuntu）
+## 安装
 
-完整步骤（含词库准备、故障排查、语音依赖）见 **[docs/INSTALL.md](docs/INSTALL.md)**。
-最短路径：
+### 系统要求
+
+- Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**。其他发行版（Arch、Fedora……）请[从源码构建](#方式二从源码构建)
+- Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
+
+### 第 1 步：确认你在用 fcitx5
+
+Ubuntu 默认用的是 IBus。先装好 fcitx5 并设为默认输入法框架（已经在用 fcitx5 的跳过这步）：
 
 ```bash
-# 1. 系统依赖
-sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
-  libasound2-dev libx11-dev libxkbcommon-dev \
-  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev
+sudo apt install fcitx5 fcitx5-config-qt \
+  fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5
+im-config -n fcitx5
+```
 
-# 2. 测试核心算法
-cargo test -p wowtype-core -p wowtype-voice
+然后**注销并重新登录**。登录后右上角托盘里应该有一个键盘图标。
 
-# 2.5 验证 C ABI（fcitx5 插件依赖的就是这套）
-./scripts/abi-smoke.sh
+> GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
+> [Input Method Panel](https://extensions.gnome.org/extension/261/kimpanel/)，
+> 活动概览的搜索框等地方才能显示候选框。
 
-# 2.6 数据自检：词库/语言模型/简繁表/用户词是否就位
-cargo run -p wowtype-core --bin wowtype-check -- --lexicon lexicon.tsv --s2t core/data/s2t.tsv
+### 第 2 步：安装 Wowtype
 
-# 3. 跑一下拼音 demo
-cargo run -p wowtype-core --bin wowtype-demo -- xian
+#### 方式一：安装包（推荐）
 
-# 4. 构建 fcitx5 插件
+到 [Releases](https://github.com/Gloridust/Wowtype/releases) 页面下载两个文件：
+
+| 文件 | 内容 |
+|---|---|
+| `wowtype_<版本>_<发行版>_amd64.deb` | 输入法本体，选和你系统对应的那个（`ubuntu24.04`、`ubuntu26.04`、`debian13`） |
+| `wowtype-data-rime-ice_<日期>_all.deb` | 词库（89 万词 + 英文词表），所有发行版通用 |
+
+不知道自己是哪个发行版：
+
+```bash
+. /etc/os-release && echo "$ID$VERSION_ID"     # 例如 ubuntu24.04
+```
+
+在下载目录里安装：
+
+```bash
+sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
+```
+
+也可以一条命令下载最新版（需要 `curl`）：
+
+```bash
+. /etc/os-release
+curl -s https://api.github.com/repos/Gloridust/Wowtype/releases/latest \
+  | grep -oE "https://[^\"]+(_${ID}${VERSION_ID}_amd64|_all)\.deb" \
+  | xargs -n1 curl -LO
+sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
+```
+
+#### 方式二：从源码构建
+
+适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
+（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、Rust 1.70+、Python 3、git）。
+
+```bash
+# 1. 依赖
+sudo apt install build-essential pkg-config cmake extra-cmake-modules \
+  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev git python3 curl
+curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
+
+# 2. 代码
+git clone https://github.com/Gloridust/Wowtype.git
+cd Wowtype
+
+# 3. 编译并安装插件（Rust 核心静态链接进插件，不用另装 .so）
 cargo build --release -p wowtype-core
-cmake -S fcitx5-addon -B fcitx5-addon/build -DCMAKE_BUILD_TYPE=Release
-cmake --build fcitx5-addon/build
-sudo cmake --install fcitx5-addon/build
+cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build build -j"$(nproc)"
+sudo cmake --install build
+
+# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice）
+scripts/make-data.sh "" dist/data
+mkdir -p ~/.local/share/wowtype
+cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
 ```
 
-## 架构
+> Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
+> 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成你系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
 
-```
-按键 ──> fcitx5 addon ──C ABI──> wowtype-core (Rust)
-                                    ├─ 音节切分 / 音节图（全拼、简拼、隔音符、儿化）
-                                    ├─ 束搜索（beam，可自适应）
-                                    ├─ 打分：词典频次 + 二元 LM + 覆盖率
-                                    ├─ 排序：LTR 特征 + 权重（可替换）
-                                    └─ 候选输出
+不想用安装包的词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期>.tar.gz`，解压到 `~/.local/share/wowtype/`。
 
-麦克风 ─> wowtype-voiced ──> wowtype-voice (Rust)
-                              ├─ 16k/20ms 分帧 + VAD
-                              ├─ 多渠道 ASR（本地/云端）
-                              └─ 边说边上屏 / 定稿上屏
-```
+### 第 3 步：把 Wowtype 加进输入法列表
 
-## 词库从哪来
+1. 重启 fcitx5：`fcitx5 -r -d`（或者注销再登录）
+2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
+3. 在右边「可用输入法」里**取消勾选「仅显示当前语言」**，搜索 `Wowtype`，点 ← 加到左边
+4. 关掉配置窗口，按 `Ctrl+Space` 切换到 Wowtype，打 `nihao` 试试
 
-WeType 自己的词库格式还在解析（见下）。在那之前可以直接用开源词库跑通：
+<!-- 截图（补上后删掉这行注释）：<img src="docs/images/configtool.png" width="560" alt="在 Fcitx 5 配置里添加 Wowtype"> -->
+
+> **重要：重启 fcitx5 以后，Chrome、VS Code、Slack、微信等 Chromium / Electron 程序要彻底退出再打开**，
+> 否则在它们里面打不了中文。终端、GTK、Qt 程序会自动重新连上。
+
+### 检查是否装好
 
 ```bash
-# 雾凇拼音：https://github.com/iDvel/rime-ice
-# 会自动顺着 import_tables 递归合并被引用的词库（rime-ice 的条目都在被引用文件里）
-python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
-cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
+wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv    # 源码安装的用 ~/.local/share/wowtype/lexicon.tsv
+wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
+# nihao: 1.你好词 2.拟好词 ...
 ```
 
-引擎支持**半成品输入**：尾部还没成音节时会自动补全（`nih` → 你好，`zhongg` → 中国），
-不会出现"打到一半没有候选"。
+`wowtype-show` 和插件用的是同一个引擎、同样的配置，打出来的候选应该和输入法里一样。
 
-支持**模糊音**（默认关闭）：`--fuzzy` 或 `WOWTYPE_FUZZY=1` 开启后，
-`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
+## 使用
 
-支持**自动学习**：同一个词选够 3 次（可配置）后自动收进用户词库，之后能直接打出来。
-词库已有的词也会被记录，相当于记住用户偏好。
-
-支持**符号面板**：输入 `/` 后跟拼音或中文名前缀（`/juhao` → 。，`/kuo` → （））。
-ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）。
-
-支持**繁体输出**：`--traditional`（插件用 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
-`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
-字符级转换，暂不处理「发/髮」这类词组歧义。
-
-英文/未登录串会把原始输入本身作为候选（保留大小写）：`hello` → `hello`，
-纯拼音输入被完整覆盖时不会插入原始串。加载英文词表（`--english`，插件放
-`~/.local/share/wowtype/english.txt`）后，认识的英文词会按词表里的写法给出
-（`github` → GitHub），并排在纠错出来的中文前面；本身就是合法拼音的（`she`、`fan`）排第 6，
-前 5 个留给中文。
-词表直接用 rime-ice 的英文词典：
-
-    cat rime-ice/en_dicts/en.dict.yaml rime-ice/en_dicts/en_ext.dict.yaml \
-        > ~/.local/share/wowtype/english.txt
-
-支持**双拼**（自然码，默认关闭）：`--shuangpin` 或 `WOWTYPE_SHUANGPIN=1`。
-`vsgo` → 中国，`nihk` → 你好；自然码里少量重叠码（如 `jp`）会同时展开成多种全拼再合并候选。
-
-语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
-WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](docs/DATA.md)。
-
-## 真实数据验证
-
-用 rime-ice 全量词库（8105 字表 + base 词库，**552,087 条**）跑了两组评测：
-
-| 评测 | 用例 | 结果 |
-|---|---|---|
-| 最高频同音词（rank=1） | 400 | **top1 100%** |
-| 第 2 / 3 / 5 / 10 高频同音词 | 300 / 300 / 224 / 64 | **top10 均 100%** |
-| 长输入（≤20 字母、≤7 字词） | 200 | **top1 100%** |
-
-解读：
-
-- rank=1 全中，说明频次打分的排序方向是对的
-- 更深排名的 top10 全中，说明**束搜索和候选收集没有漏词**（不是靠调权重掩盖了召回不足）
-- 束宽从 5 到 40 结果完全一致，说明这些输入上束宽不是瓶颈（默认仍取 20，留给长句）
-
-需要说明的局限：这些用例的「期望答案」是按词频取的，所以只能验证**排序与召回的正确性**，
-不能验证「人更想要哪个词」。后者需要人工标注的用例，评测工具已支持（见下）。
-
-## 调排序
-
-排序权重不能靠感觉调。仓库带一个离线评测工具：
-
-```bash
-# 用例格式：输入<TAB>期望（多个可接受答案用 | 分隔）
-cargo run --release -p wowtype-core --bin wowtype-eval -- \
-    --lexicon rime.tsv --eval cases.tsv \
-    --weights coverage_score=1.5,prob=0,history_count=0.3
-```
-
-常用参数：
-
-| 参数 | 作用 |
+| 按键 | 作用 |
 |---|---|
-| `--k n` | 报告 top-n 召回（默认 3） |
-| `--max n` | 候选数量上限 |
-| `--fuzzy` / `--shuangpin` | 用对应模式评测 |
-| `--lm` / `--arpa` | 指定语言模型 |
+| 空格 | 上屏第一个（或光标所在的）候选 |
+| `1`–`9` | 上屏对应的候选 |
+| `←` `→` | 在候选之间移动光标 |
+| `↑` `↓`、`-` `=`、`PgUp` `PgDn` | 翻页 |
+| 回车 | 把打的字母原样上屏 |
+| `Esc` | 清空正在打的内容 |
+| 退格 | 删一个字母；刚选过词时先撤销那次选词 |
+| `'` | 分隔音节，比如 `xi'an` → 西安 |
+| `/` + 拼音 | 符号：`/juhao` → 。，`/kuo` → （） |
+| 左 `Shift` | 临时切英文（fcitx5 的设置），打了一半的字母原样上屏 |
 
-用例可以从词库自动生成，也可以自己标注：
+**长句可以分段上屏**：打完一整句，候选里除了整句，还有它的前半截（比如「我今天晚上要」）。
+选了前半截就只上屏这一段，剩下的拼音留着继续选。
 
-```bash
-python3 tools/make_eval.py rime.tsv --count 300                 # 每拼音取最高频词
-python3 tools/make_eval.py rime.tsv --rank 2                    # 取第 2 高频（测候选广度）
-python3 tools/make_eval.py rime.tsv --truncate 1                # 截掉末尾 1 字母（测补全）
-python3 tools/make_eval.py rime.tsv --jianpin                   # 换成简拼
+中文标点自动转全角（`,` → ，`?` → ？）。
+
+### 设置
+
+目前没有图形设置界面，用环境变量设置。写进 `~/.config/environment.d/wowtype.conf`，**注销重新登录**后生效：
+
+```ini
+# ~/.config/environment.d/wowtype.conf
+WOWTYPE_FUZZY=1
 ```
 
-### 语言模型与上下文
+想先试一下效果，可以临时带着变量重启 fcitx5：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。
 
-`--lm` 吃「prev<TAB>cur<TAB>count」的 bigram TSV，`--arpa` 吃标准 ARPA。
-上下文取光标前文本的**最后一个词或最后一个字**去查二元组（中文通常没有空格，
-只取「最后一个词」会把整段当成一个词，永远查不到）。
-
-实测上下文消歧：
-
-```bash
-wowtype-demo --lexicon lex.tsv --lm lm.tsv xian              # 1. 先
-wowtype-demo --lexicon lex.tsv --lm lm.tsv --context 我 xian  # 1. 西安
-```
-
-`tools/make_bigram.py` 能从词库反推字二元（`事->情` 这类词内搭配），但它**不能替代真实语料**：
-在没有语料的情况下实测，rank1 从 100% 掉到 99%，rank2 的 top10 从 100% 掉到 98.7%——
-用它换来的是上下文能力，用频率忠实度做代价。真实语料训练的 LM 才有正收益。
-
-另外，词表里没有的词（例如字级模型评多字词）一律当「无信息」处理，
-否则会被按近零概率惩罚，把正确的长词压下去。
-
-### 默认权重的取舍
-
-排序总分是 `path.score + rank_score`。因此 `rank_score` 里**不能**再放已经计入
-`path.score` 的特征，否则就是重复计权：
-
-| 特征 | 权重 | 原因 |
+| 变量 | 作用 | 默认 |
 |---|---|---|
-| `prob` | 0 | 是 `path.score` 的单调变换 |
-| `lm_score_with_previous_txt` | 0 | 已计入 `path.score` |
-| `context_bigram_score` | 2.0 | 上下文带来的新信息 |
+| `WOWTYPE_FUZZY=1` | 模糊音：平翘舌（z/zh、c/ch、s/sh）和前后鼻音（an/ang 等） | 关 |
+| `WOWTYPE_SHUANGPIN=1` | 自然码双拼（`vsgo` → 中国） | 关 |
+| `WOWTYPE_TRADITIONAL=1` | 繁体输出（字符级转换） | 关 |
+| `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
+| `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
+| `WOWTYPE_LEXICON` | 词库路径 | 见下 |
+| `WOWTYPE_ENGLISH` | 英文词表路径 | 见下 |
+| `WOWTYPE_LM` | 二元语言模型（`前词<TAB>后词<TAB>次数`） | 无 |
+| `WOWTYPE_S2T` | 简繁对照表 | `/usr/share/wowtype/s2t.tsv` |
+| `WOWTYPE_USER_DICT` | 用户词库 | `~/.local/share/wowtype/user.tsv` |
+| `WOWTYPE_HISTORY` | 输入习惯 | `~/.local/share/wowtype/history.tsv` |
 
-这样上下文才有机会真正影响结果。例子（词库里「先」远高于「西安」）：
+### 数据文件
 
-```bash
-wowtype-demo --lexicon lex.tsv --lm lm.tsv xian            # 1. 先
-wowtype-demo --lexicon lex.tsv --lm lm.tsv --context 我 xian  # 1. 西安
-```
+词库和英文词表按这个顺序找，用第一个找到的：环境变量 → `~/.local/share/wowtype/` → `/usr/share/wowtype/`。
+都找不到时用只有十几个词的演示词库（能打 `nihao`，但没法日常用）。
 
-改完后在真实词库上回归验证：rank1 top1 100%、rank2/3 的 top10 100%、长输入 top1 100%，均无下降。
-
-### 训练权重
-
-有一批「输入 → 我实际想要的词」的标注后，可以直接拟合权重（softmax 交叉熵 + L2）：
-
-```bash
-cargo run --release -p wowtype-core --bin wowtype-train -- \
-    --lexicon rime.tsv --cases cases.tsv --epochs 300 --out weights.txt
-```
-
-输出可以直接喂给 `wowtype-eval --weights`。
-
-实测结论要说清楚：
-- **特征能区分的场景**（例如「先」vs「西安」，分词特征 `kind` 不同）训练有效，0% → 100%
-- **同音词之间**（特征几乎完全相同）训练无效，0% → 0%——这类需要上下文/LM 特征，
-  词库自带的信息不足以区分
-
-输出形如 `用例 200  top1 176 (88.0%)  top3 195 (97.5%)`，并列出没进前三的用例。
-
-还有两个辅助工具：
-
-- `wowtype-probe`：逐键输入探针，从第 2 个字母开始逐位截断，看目标词在每一步是否还在候选里。
-  它靠「出现过又消失」这个信号抓到了补全的 bug（见下）。
-- `wowtype-bench`：真实词库下的载入耗时与逐键延迟。
-配合 `--fuzzy` / `--shuangpin` / `--arpa` 可以对比不同配置。仓库里的
-`core/data/eval_sample.tsv` 只是演示用的 13 条。
-
-## 半成品输入
-
-即使输入能完整解析（`zhonggu` 就是 zhong+gu），引擎也会把延伸候选（中国）一并给出——
-否则用户打到一半时几乎选不对词。延伸候选按「多打的字母数」扣分（每字母 1.2 nats）。
-
-**但打全了的拼音正好是一个实在的词时，它一定排第一。** 补全的分数里带着词频，高频词补出来
-可能比用户打全了的低频词还高：以前 `zhongdi` 出「重点」（zhong dian）而不是「种地」，
-`ka` 出「看」，`beiji` 出「北京」。用户按空格上屏的是第一个——打到一半时补全排第二只是
-多按一个键，打全了却被换成别的词就是打错字。所以现在：
-
-- 精确全拼、整个输入是一个词（或最后一个词至少两个字）、词频不低于 1000 → 排第一，
-  补全和纠错候选排到它后面（通常是第二）；
-- 整个输入是一个词时，单字拼凑的（`shidan` 拆成「是 | 但」）也排到它后面；
-- 最后是个单字的精确结果（`zhonggu` 拆成「中 | 骨」）不算，补全照常可以排第一；
-- 整词盖住全部输入的（`congshanruli` 从善如流）不会被拼凑结果（从善 | 入理）压下去。
-
-为什么「截断 1 个字母」的 top1 掉了是对的：这组用例把 `zhonggu` 的期望答案定为「中国」，
-可 `zhonggu` 本身就是「中古」。94 例里截断后的字母恰好是另一个词，这些现在一律给精确词，
-补全排第二（top3 从 91.5% 升到 93.6%）；截断后不是词的 206 例 top1 99.5%。详见
-[docs/UX-AUDIT.md](docs/UX-AUDIT.md)。
-
-## 按错键与长句
-
-音节图里除了正常音节，还加了四种「纠错边」：按成相邻键（`zhonggup`）、两个键按反（`zhognguo`）、
-多按一个键（`nihaoo`）、漏按一个键（`zhongguo` 打成 `zhonguo`）；跨音节的按反（`nihoa`）也算。
-每条纠错边扣固定分，路径上纠错次数作为排序特征 `typo_count`。只有在没有零纠错路径能把输入
-解析完、或纠错后的词明显更常见时，纠错结果才会排到前面——所以本来就对的输入不受影响。
-
-长句改成**逐位置束搜索**：每个位置只留分数最高的若干条路径，一整句不用枚举全部切分；
-同时会给出「句首词」候选（`nihaozhongguo` 里的「你好」），选了它就只上屏这一段、剩下的拼音继续打。
-句首词只在音节边界上切（单音节 `dan` 不会出「大」），4 个音节以上的输入里第二位放整句开头
-最长的那段（我今天晚上要加班 → 我今天晚上），短输入里最多 3 个、放在最后，总数不超过候选上限。
-
-实测（rime-ice 55 万词库 + 英文词表，`wowtype-eval`，各组几百例）：
-
-| 场景 | 改前 top1 / top3 | 改后 top1 / top3 |
-|---|---|---|
-| 完整输入，常用词（前 5000） | 100 / 100% | 100 / 100% |
-| 完整输入，中低频词（3 万–30 万名） | 95.5 / 99.8% | **99.0 / 100%** |
-| 按成相邻键 | 0 / 0% | 85.7 / 90.1% |
-| 两键按反 | 0 / 0% | 93.0 / 96.5% |
-| 多按一个键 | 0 / 0% | 95.9 / 97.7% |
-| 漏按一个键 | 14.0 / 16.9% | 33.2 / 44.0% |
-| 长句（整句） | 16 / 20% | 72 / 80% |
-| 长句 + 一处按反 | 0 / 0% | 60 / 68% |
-| 日常句子（80 句） | 5.0 / 6.2% | 85.0 / 90.0% |
-| 截断 1 个字母，截完不是词 | 100 / 100% | 99.5 / 100% |
-| 截断 1 个字母，截完正好是另一个词 | 75.5 / 91.5% | 12.8 / 93.6%（有意为之，见上一节） |
-| 截断 1 个字母，中低频词 | 89.8 / 97.5% | 89.0 / 97.0% |
-| 简拼 | 94.3 / 94.3% | 94.3 / 94.3% |
-
-「改前」是 main 分支。每组几百例，用 `wowtype-eval` 跑，中低频那组用
-`tools/make_eval.py --skip 30000 --top 300000` 生成——只测前 5000 个常用词时
-「zhongdi 出重点」这类问题根本看不出来。
-
-漏按最难：少一个字母时可能正好是另一个合法拼音，很多时候没法判断。
-逐键延迟 p99 约 10–13 ms（全量词库，含纠错和句首词）。纠错可以关：`WOWTYPE_TYPO=0`。
-
-简拼的质量单测：`--jianpin` 生成只取首字母的用例，300 例 **top1 95.3%**。
-
-逐键输入用 `wowtype-probe` 检查：从第 2 个字母开始逐位截断，统计目标词是否还在候选里。
-它抓过一个真 bug——补全把未完成的尾巴当成了合法前缀（`shesh` 被当成能解析的 head），
-导致 `设施` 从来没被补出来。修好后「出现过又消失」的用例为 **0**。
-
-简拼的「半成品」（`jz` 想打 `jzm` 江泽民）**不做前缀补全**：`jz` 本身可能就是要打
-「记者/戒指」，按词频给精确结果符合主流输入法行为；实测加前缀补全后，10 个候选位
-会被同分数的短词占满，长词仍进不了前 10，收益为零而复杂度上升。
-
-## 候选怎么排、怎么学（照微信输入法 3.0）
-
-对照的是 WeType macOS 3.0.0 引擎里的符号（`RemoveDupSentenceProcessor`、`GenerateWordsAndRunes`、
-`FirstUserCandidateRankerProcessor`、`SingleUserWordCanbeSecond`、`history_hot_val`、
-`context_bigram_score`），只借思路，不用它的词库和模型。
-
-**候选横排**（`WOWTYPE_VERTICAL=1` 改回竖排）。横排时左右键移动、上下键翻页。
-
-**候选组成**：整句只留几个，后面是词，再后面是单字——
-
-- 整句（几个词拼的）最多 1 个（2 个音节以内）、2 个（3 个音节）、3 个（4 个以上）；
-  只差最后一个字的整句（横向候选词 / 横向候选此）只留一个。
-- 整个输入正好是一个词的同音词（是的、似的、使得）不算整句，照常排。
-- 再往后是句首候选：整句去掉最后一个词（横向候选词 -> 横向…；我今天晚上要加班 -> 我今天晚上要），
-  然后是从输入开头起的词，长的在前，最后最多 6 个单字。
-
-**学用户的习惯**（存在 `~/.local/share/wowtype/history.tsv`，和用户词库放一起，重启不丢）：
-
-- 热度：每选一次加 1，30 天减半。排序用 ln(1+热度)。
-  以前的历史特征按「距今秒数」扣分，一小时前选过的词反而排在没选过的后面，已经去掉。
-- 同一串输入上次选过的候选：词和整句放第一，单字只放到第二（偶尔选一次生僻字不该一直顶掉常用字）。
-- 词搭配：上屏时记下「上一个词 -> 这个词」，包括一段一段选出来的整句（我们 -> 再 -> 讨论），
-  以及上一次上屏的最后一个词 -> 这次的第一个词。束搜索给学过的搭配加分（用过一次约 +1.7）。
-
-`wowtype-eval --learn` 先把每个用例按插件里的选法「打一遍、上屏正确答案」再测，
-`--learn-from <文件>` 用另一组用例学，看学了一组会不会把别的组带坏。40 句日常句子：
-
-| | 不学 | 学一遍以后 |
-|---|---|---|
-| 日常句子 | 90.0% | 95.0% |
-| 中低频完整输入 | 99.0% | 100% |
-| 截断 1 个字母 | 89.0 / 97.5% | 92.8 / 98.8% |
-| 学了句子以后的常用词 / 中低频词 | 100 / 99.0% | 不变 |
-
-还差的是真正的语言模型：没用过的搭配（祝你/祝您、在/再）只能靠词频，要用语料训练词级 bigram 才能解决。
-
-`wowtype-show --lexicon lexicon.tsv --english english.txt 拼音...` 按插件的配置打印候选，
-每个候选标出是整句、词、句首候选还是原始串。
-
-## 性能
-
-合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
-
-| 输入 | 耗时 |
+| 文件 | 内容 |
 |---|---|
-| 载入 10 万条词库 | ~140 ms（一次性） |
-| 载入 rime-ice 全量 55 万条（首次，建快照） | ~1.4 s |
-| 同上（之后，读快照） | **~0.35 s** |
-| 完整输入（55 万词库） | 0.5~1.0 ms |
-| 半成品输入（触发补全，55 万词库） | ~6 ms |
-| `a` | 0.003 ms |
-| `zhong` | 0.14 ms |
-| `zhongguo` | 0.03 ms |
-| `zhongg`（半成品，触发 32 路补全） | 0.19 ms |
+| `lexicon.tsv` | 词库，一行一个：`拼音（空格分隔）<TAB>词<TAB>词频` |
+| `english.txt` | 英文词表 |
+| `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
+| `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
+| `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
 
-词库加载会自动生成二进制快照（`lexicon.tsv.wcache`）：按「源文件大小 + mtime + 格式版本」
-校验，词库更新后自动重建。词库在只读目录（如 `/usr/share`）时快照落到
-`$XDG_CACHE_HOME/wowtype/`（默认 `~/.cache/wowtype/`）。
+想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动。
 
-交互预算（<10ms）有很大余量。模糊音索引是**惰性构建**的（模糊音默认关闭），
-55 万词库下省掉了约 45% 的加载时间；代价是第一次用模糊音时多一次建表。
+想用自己的词库：任何 Rime 格式的词库（`.dict.yaml`）都能用 `python3 tools/rime2tsv.py xxx.dict.yaml > lexicon.tsv` 转过来。
+
+## 常见问题
+
+| 现象 | 处理 |
+|---|---|
+| 输入法列表里找不到 Wowtype | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`fcitx5 -r -d` 重启 |
+| 某个程序里打不了中文，别的程序可以 | 重启 fcitx5 以后 Chrome / Electron 程序要彻底退出再打开 |
+| 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。装 `wowtype-data-rime-ice`，或把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
+| 第一次切到 Wowtype 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
+| 想看日志 | 终端里运行 `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype`，日志里有载入了哪个词库、用了多久 |
+| 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
+
+问题没解决，欢迎[提 issue](https://github.com/Gloridust/Wowtype/issues)，附上发行版、桌面环境（GNOME / KDE……，X11 还是 Wayland）和上面的日志。
+
+## 卸载
+
+```bash
+# 安装包装的
+sudo apt remove wowtype wowtype-data-rime-ice
+
+# 源码装的（在仓库目录里）
+sudo xargs rm -v < build/install_manifest.txt
+
+# 学到的数据和缓存（可选）
+rm -rf ~/.local/share/wowtype ~/.cache/wowtype
+```
+
+卸载后到 Fcitx 5 配置里把 Wowtype 从输入法列表里删掉，再 `fcitx5 -r -d`。
+
+## 工作原理
+
+```
+按键 ─> fcitx5 插件（C++）─C ABI─> 拼音引擎（Rust）
+                                    ├─ 切音节：全拼 / 简拼 / 半成品 / 按错键
+                                    ├─ 音节图上做束搜索，词频 + 语言模型 + 用户习惯打分
+                                    └─ 组织候选：几个整句、句子前半截、词、单字
+```
+
+引擎用 Rust 写，编成静态库链进 fcitx5 插件。设计思路参考了微信输入法（WeType）3.0 的公开行为和引擎里的符号名，
+但没有用它的任何代码、词库或模型；词库来自开源的雾凇拼音。实现细节、评测数字和调参方法见 [docs/ENGINE.md](docs/ENGINE.md)。
+
+## 参与开发
+
+```bash
+cargo test --workspace                     # Rust 测试（语音部分需要 libasound2-dev libx11-dev libxkbcommon-dev）
+./scripts/abi-smoke.sh                     # C 接口冒烟测试
+scripts/addon-test.sh ~/.local/share/wowtype/lexicon.tsv ~/.local/share/wowtype/english.txt
+                                           # 插件按键测试：起一个私有的 fcitx5，不影响你正在用的输入法
+```
+
+改了排序，用 `wowtype-eval` 在几百个用例上对比改前改后（用法见 [docs/ENGINE.md](docs/ENGINE.md#调排序)）。
+推送 `v*` 标签会自动编译各发行版的安装包并发布到 Releases。
+
+| 目录 | 内容 |
+|---|---|
+| `core/` | 拼音引擎和 C 接口 |
+| `fcitx5-addon/` | fcitx5 插件 |
+| `voice/`、`voice-daemon/` | 语音输入（还没在真机上验证，没进安装包） |
+| `tools/` | 词库转换、评测用例生成 |
+| `docs/` | [引擎细节](docs/ENGINE.md)、[体验审查](docs/UX-AUDIT.md)、[接手指南](docs/HANDOFF.md)、[语音](docs/VOICE.md)、[数据格式](docs/DATA.md) |
+
+## 现在还不行的
+
+- 没有图形设置界面，设置靠环境变量
+- 只有 x86_64 的安装包；Arch、Fedora 等要从源码构建
+- 没有用语料训练的语言模型，「祝你 / 祝您」「在 / 再」这类同音词，没用过时只能靠词频排
+- 语音输入还没做完
 
 ## 致谢
 
-离线语音识别（`voice/src/wtlocal/`）来自 [J3n5en/voicekey](https://github.com/J3n5en/voicekey)
-的 `crates/wtlocal`，本项目中使用并适配（去掉 rayon/memmap2/zip/tokio，
-改为标准库实现）。模型是腾讯的资源包，不随仓库分发，首次使用时从官方 CDN 下载。
+- [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，作为单独的词库包分发）
+- [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
+- [fcitx5](https://github.com/fcitx/fcitx5)：输入法框架
+- [voicekey](https://github.com/J3n5en/voicekey)：离线语音识别部分的代码
+- 微信输入法：体验和设计上的参照
 
-## 已知限制
+## 许可证
 
-- `core/data/demo_lexicon.tsv` 只有十几条演示词，真实词库尚未导出（见下）。
-- `voice-daemon` 的 X11 热键与 cpal 采集是骨架，未在真机跑过。
-- fcitx5 插件未在这台 macOS 上编译验证。
-
-## 数据管线（下一步）
-
-官方 WeType 的词库和排序参数是二进制格式，正在解：
-
-| 目标 | 状态 |
-|---|---|
-| `bwcnmac.bin`（30MB，含明文拼音）词条布局 | 进行中 |
-| `bwcnmacv8.bin`（31MB，整数音节 ID + Huffman） | 待办 |
-| `lmcnmac.bin` 二元语言模型 | 待办 |
-| `hpmac_base.bin` 超参数 | 已读出浮点值 |
-| 候选排序对照（官方引擎直接给出分数） | 卡在 create_session 的一个空指针 |
-
-详见 [analysis/REPORT.md](analysis/REPORT.md)、[docs/DATA.md](docs/DATA.md)、
-[tools/ref-engine/README.md](tools/ref-engine/README.md)、[docs/VOICE.md](docs/VOICE.md)。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。词库包的数据遵循 rime-ice 的 GPL-3.0。
