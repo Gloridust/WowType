@@ -94,6 +94,10 @@ private:
     /// 开始说话时的输入框；结果只往这里上屏。
     fcitx::TrackableObjectReference<fcitx::InputContext> voiceIc_;
     std::unique_ptr<fcitx::EventSourceTime> voiceTimer_;
+    /// 最近几次轮询的音量（0–100），画成滚动的波形。
+    std::vector<int> voiceLevels_;
+    /// 轮询次数，「识别中」的省略号动画用。
+    unsigned voiceFrame_ = 0;
 };
 
 #endif /* WOWTYPE_FCITX5_ENGINE_H */

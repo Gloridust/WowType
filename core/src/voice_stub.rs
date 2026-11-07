@@ -30,6 +30,10 @@ pub unsafe extern "C" fn wowtype_voice_text(_voice: *const WowtypeVoice) -> *con
     EMPTY.as_ptr() as *const c_char
 }
 #[no_mangle]
+pub unsafe extern "C" fn wowtype_voice_level(_voice: *const WowtypeVoice) -> c_int {
+    0
+}
+#[no_mangle]
 pub unsafe extern "C" fn wowtype_voice_model_state(_voice: *const WowtypeVoice) -> c_int {
     0
 }

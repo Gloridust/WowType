@@ -1,5 +1,6 @@
 #include "wowtype_engine.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -116,16 +117,21 @@ fcitx::KeySym voiceKeyFromEnv(std::string &name) {
     return key.sym();
 }
 
-/// 给用户看的热键名。
-std::string voiceKeyLabel(const std::string &name) {
-    if (name == "Alt_R") return "右 Alt";
-    if (name == "Control_R") return "右 Ctrl";
-    if (name == "Shift_R") return "右 Shift";
-    if (name == "Super_R") return "右 Super";
-    return name;
-}
-
 constexpr uint64_t kVoicePollUsec = 50 * 1000;
+constexpr std::size_t kVoiceBars = 6;
+
+/// 音量（0–100）画成一排竖条，不足 kVoiceBars 个时左边补最低的条。
+std::string voiceWave(const std::vector<int> &levels) {
+    static const char *const kBlocks[] = {"▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
+    std::string out;
+    for (std::size_t i = levels.size(); i < kVoiceBars; ++i) {
+        out += kBlocks[0];
+    }
+    for (const int level : levels) {
+        out += kBlocks[std::clamp(level, 0, 100) * 7 / 100];
+    }
+    return out;
+}
 constexpr uint64_t kVoiceErrorUsec = 1500 * 1000;
 
 /// 用户输入习惯（词的热度、词搭配）和用户词库放在同一个目录：history.tsv。
@@ -793,28 +799,25 @@ bool WowtypeEngine::pollVoice() {
     }
     const int phase = wowtype_voice_poll(voice_);
     const std::string text = wowtype_voice_text(voice_);
-    const std::string keyLabel = voiceKeyLabel(voiceKeyName_);
     switch (phase) {
     case WOWTYPE_VOICE_LISTENING: {
-        std::string status;
-        switch (wowtype_voice_model_state(voice_)) {
-        case WOWTYPE_VOICE_MODEL_DOWNLOADING:
-            status = "🎙 正在听（第一次用，正在下载语音模型，约 100MB）";
-            break;
-        case WOWTYPE_VOICE_MODEL_LOADING:
-            status = "🎙 正在听（正在加载语音模型）";
-            break;
-        default:
-            status = wowtype_voice_is_tap(voice_)
-                         ? "🎙 正在听… 说完停一下，或再按" + keyLabel
-                         : "🎙 正在听… 松开" + keyLabel + "结束";
+        // 不写字，只画麦克风 + 跟着音量滚动的波形；第一次下载模型要很久，才写一句
+        voiceLevels_.push_back(wowtype_voice_level(voice_));
+        if (voiceLevels_.size() > kVoiceBars) {
+            voiceLevels_.erase(voiceLevels_.begin());
         }
-        showVoice(ic, status, text);
+        std::string status = "🎙 " + voiceWave(voiceLevels_);
+        if (wowtype_voice_model_state(voice_) == WOWTYPE_VOICE_MODEL_DOWNLOADING) {
+            status += " 下载语音模型…";
+        }
+        showVoice(ic, status + " ", text);
         return true;
     }
-    case WOWTYPE_VOICE_RECOGNIZING:
-        showVoice(ic, "🎙 识别中…", text);
+    case WOWTYPE_VOICE_RECOGNIZING: {
+        static const char *const kDots[] = {"·    ", "··   ", "···  ", "···· ", "·····"};
+        showVoice(ic, std::string("🎙 ") + kDots[(voiceFrame_++ / 3) % 5] + " ", text);
         return true;
+    }
     case WOWTYPE_VOICE_RESULT:
         clearVoice();
         commitPlain(ic, text);
@@ -850,6 +853,8 @@ void WowtypeEngine::showVoice(fcitx::InputContext *ic, const std::string &status
 
 void WowtypeEngine::clearVoice() {
     voiceShowing_ = false;
+    voiceLevels_.clear();
+    voiceFrame_ = 0;
     voiceErrorUntil_ = 0;
     if (auto *ic = voiceIc_.get()) {
         ic->inputPanel().reset();

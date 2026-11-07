@@ -93,7 +93,7 @@ Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入
 | C 接口 | `core/src/voice_ffi.rs`、`core/include/wowtype_core.h` | `wowtype_voice_new/key_down/key_up/poll/text/cancel`；都不阻塞 |
 | 工作线程 | 同上 | 每次说话一个线程：cpal 开默认输入设备 → 分帧 + VAD → 喂 wtlocal 出中间结果 → 结束时整段定稿 |
 | 模型线程 | 同上 | 第一次按热键时下载（腾讯 CDN，约 100MB，校验 MD5）并载入，只做一次；还没好时音频先攒着 |
-| 插件 | `fcitx5-addon/src/wowtype_engine.cpp` | 热键按下/松开都吃掉（免得应用把单按 Alt 当成打开菜单）；50ms 定时轮询；编辑区显示中间结果，上方提示「正在听」；结果用 `commitString` 上屏 |
+| 插件 | `fcitx5-addon/src/wowtype_engine.cpp` | 热键按下/松开都吃掉（免得应用把单按 Alt 当成打开菜单）；50ms 定时轮询；编辑区显示中间结果，前面是麦克风图标和跟着音量动的波形（不写说明文字，免得和识别出的字混在一起）；结果用 `commitString` 上屏 |
 
 规则：
 

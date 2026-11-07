@@ -157,6 +157,8 @@ void wowtype_voice_cancel(WowtypeVoice *voice);
 int wowtype_voice_poll(WowtypeVoice *voice);
 /* 上一次 poll 对应的文本；下一次 poll 或释放前有效。 */
 const char *wowtype_voice_text(const WowtypeVoice *voice);
+/* 正在听时最近的音量，0–100（画波形用）。 */
+int wowtype_voice_level(const WowtypeVoice *voice);
 /* 返回 WOWTYPE_VOICE_MODEL_*。 */
 int wowtype_voice_model_state(const WowtypeVoice *voice);
 /* 松开热键后还在听（点按模式）时返回 1。 */

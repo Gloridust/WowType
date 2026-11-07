@@ -147,6 +147,18 @@ struct Shared {
     text: String,
     /// 最近一次检测到说话的时间（点按模式靠它判断说完了）。
     voice_at: Option<Instant>,
+    /// 最近一块音频的音量，0–100（给插件画波形）。
+    level: u8,
+}
+
+/// 一块 PCM 的音量：-60 dB（安静房间）到 -10 dB（大声说话）映射到 0–100。
+fn level_of(pcm: &[i16]) -> u8 {
+    if pcm.is_empty() {
+        return 0;
+    }
+    let energy = pcm.iter().map(|&v| (v as f64 / 32768.0).powi(2)).sum::<f64>() / pcm.len() as f64;
+    let db = 10.0 * energy.max(1e-10).log10();
+    (((db + 60.0) / 50.0).clamp(0.0, 1.0) * 100.0).round() as u8
 }
 
 enum Msg {
@@ -181,6 +193,7 @@ impl WowtypeVoice {
                 phase: VOICE_IDLE,
                 text: String::new(),
                 voice_at: None,
+                level: 0,
             })),
             trigger: VoiceTrigger::new(TriggerConfig::default()),
             session: 0,
@@ -211,6 +224,7 @@ impl WowtypeVoice {
             shared.phase = VOICE_LISTENING;
             shared.text.clear();
             shared.voice_at = Some(Instant::now());
+            shared.level = 0;
         }
         let (tx, rx) = mpsc::channel();
         let worker = Worker {
@@ -370,6 +384,8 @@ impl Worker {
             }
             match msg {
                 Ok(Msg::Pcm(pcm)) => {
+                    let level = level_of(&pcm);
+                    self.update(|s| s.level = level);
                     let mut voiced = false;
                     for frame in framer.push(&pcm) {
                         voiced |= vad.push(&frame);
@@ -515,6 +531,15 @@ pub unsafe extern "C" fn wowtype_voice_text(voice: *const WowtypeVoice) -> *cons
     }
 }
 
+/// 正在听时最近的音量，0–100。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_voice_level(voice: *const WowtypeVoice) -> c_int {
+    match unsafe { voice.as_ref() } {
+        Some(voice) => c_int::from(voice.shared.lock().unwrap().level),
+        None => 0,
+    }
+}
+
 /// 模型状态，MODEL_*。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_voice_model_state(voice: *const WowtypeVoice) -> c_int {
@@ -546,5 +571,13 @@ mod tests {
         voice.cancel();
         assert_eq!(voice.poll(), VOICE_IDLE);
         assert!(!voice.trigger.is_recording());
+    }
+
+    #[test]
+    fn level_maps_silence_and_speech() {
+        assert_eq!(level_of(&[0; 320]), 0);
+        assert!(level_of(&[8000, -8000].repeat(160)) > 70);
+        let quiet = level_of(&[60, -60].repeat(160));
+        assert!(quiet > 0 && quiet < 40, "{quiet}");
     }
 }

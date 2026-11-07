@@ -349,8 +349,8 @@ void runVoiceCase(Instance &instance, std::function<void()> done) {
     instance.setCurrentInputMethod(c->ic.get(), "wowtype", true);
     KeyEvent press(c->ic.get(), Key(FcitxKey_Alt_R), false);
     check(c->ic->keyEvent(press), "语音：按下右 Alt 被输入法接住");
-    check(c->ic->inputPanel().auxUp().toString().find("正在听") != std::string::npos,
-          "语音：提示正在听，实际 " + c->ic->inputPanel().auxUp().toString());
+    check(c->ic->inputPanel().auxUp().toString().find("🎙") != std::string::npos,
+          "语音：显示麦克风图标，实际 " + c->ic->inputPanel().auxUp().toString());
     c->timer = instance.eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
         [c, done](EventSourceTime *source, uint64_t) {
