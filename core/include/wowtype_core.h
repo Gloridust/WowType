@@ -28,6 +28,16 @@ void wowtype_engine_free(WowtypeEngineHandle *engine);
 /* 设置 beam size；成功返回 0，失败返回 -1。 */
 int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_size);
 
+/* 每次输入最多返回多少个整句候选（句首词候选另算）。返回 0 成功。 */
+int wowtype_engine_set_max_candidates(WowtypeEngineHandle *engine, unsigned int max_candidates);
+
+/* 开关按错键纠错（相邻键、两键按反、多按/漏按），默认开。返回 0 成功。 */
+int wowtype_engine_set_typo_correction(WowtypeEngineHandle *engine, int on);
+
+/* 载入英文词表（每行一个词，或 rime 的 en.dict.yaml）。
+ * 载入后输入已知英文词（hello、github）时英文排在前面。返回累计词条数，失败返回 -1。 */
+int wowtype_engine_load_english(WowtypeEngineHandle *engine, const char *path);
+
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
 
@@ -56,7 +66,6 @@ int wowtype_engine_record_selection_ex(WowtypeEngineHandle *engine,
 /* 设置光标前文本，参与上下文 bigram 特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_set_context(WowtypeEngineHandle *engine, const char *text);
 
-/* 输入拼音串；失败返回 NULL。 */
 /* 用户词库 */
 int wowtype_engine_add_user_word(WowtypeEngineHandle *engine, const char *pinyin,
                                  const char *word);
@@ -64,6 +73,12 @@ int wowtype_engine_remove_user_word(WowtypeEngineHandle *engine, const char *wor
 int wowtype_engine_save_user_dict(WowtypeEngineHandle *engine, const char *path);
 int wowtype_engine_load_user_dict(WowtypeEngineHandle *engine, const char *path);
 
+/* 用户输入习惯：选过的词的热度（30 天半衰期）和词搭配（上一个词 -> 这个词），
+ * 参与排序，存成 TSV。save 返回 0 成功；load 返回条数，-1 表示出错。 */
+int wowtype_engine_save_history(WowtypeEngineHandle *engine, const char *path);
+int wowtype_engine_load_history(WowtypeEngineHandle *engine, const char *path);
+
+/* 输入拼音串；失败返回 NULL。 */
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 
 /**
@@ -83,6 +98,14 @@ const char *wowtype_candidates_text(const WowtypeCandidates *candidates, size_t 
 
 /* 候选分数；索引越界返回 0。 */
 double wowtype_candidates_score(const WowtypeCandidates *candidates, size_t index);
+
+/* 候选拼音（空格分隔音节，纠错后的写法），可传给 record_selection_ex；
+ * 预测/符号结果为空串，越界返回 NULL。 */
+const char *wowtype_candidates_pinyin(const WowtypeCandidates *candidates, size_t index);
+
+/* 候选用掉了输入的多少字节。等于输入长度是整句候选；小于时是句首词候选，
+ * 上屏后应把 input + consumed 之后的部分留在编辑区继续输入。越界返回 0。 */
+size_t wowtype_candidates_consumed(const WowtypeCandidates *candidates, size_t index);
 
 /* 释放候选集合。 */
 void wowtype_candidates_free(WowtypeCandidates *candidates);

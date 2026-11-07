@@ -6,6 +6,9 @@
 
 用法：
     python3 tools/make_eval.py lexicon.tsv --count 500 > cases.tsv
+
+默认只取最常用的 5000 个词。常用词几乎不会出错，「打全了的低频词被高频补全抢走」
+（zhongdi 出「重点」不出「种地」）这类问题要用 --skip 换到中低频词才测得出来。
 """
 
 import argparse
@@ -21,6 +24,13 @@ def main():
     ap.add_argument("--max-len", type=int, default=12, help="拼音总长度上限")
     ap.add_argument("--max-word", type=int, default=4, help="词的字数上限")
     ap.add_argument("--top", type=int, default=5000, help="只从频次前 N 的词里取")
+    ap.add_argument(
+        "--skip",
+        type=int,
+        default=0,
+        help="跳过频次前 N 的词（只测中低频词：--skip 30000 --top 300000）。"
+        "同音词排第几仍按全部词算",
+    )
     ap.add_argument(
         "--jianpin",
         action="store_true",
@@ -60,7 +70,7 @@ def main():
     rows.sort(key=lambda r: -r[0])
     rows = rows[: args.top]
 
-    for freq, pinyin, word in rows:
+    for index, (freq, pinyin, word) in enumerate(rows):
         syllables = pinyin.split()
         joined = "".join(s[0] for s in syllables) if args.jianpin else pinyin.replace(" ", "")
         if args.truncate > 0:
@@ -73,13 +83,13 @@ def main():
             continue
         bucket = per_pinyin[joined]
         if len(bucket) < args.rank:
-            bucket.append((freq, word))
+            bucket.append((freq, word, index))
 
     # 第 rank 高频的词（同音词里第 2/3 个）
     items = [
         (joined, (bucket[args.rank - 1][1], bucket[args.rank - 1][0]))
         for joined, bucket in per_pinyin.items()
-        if len(bucket) >= args.rank
+        if len(bucket) >= args.rank and bucket[args.rank - 1][2] >= args.skip
     ]
     # 均匀抽样，避免全是超高频词
     step = max(1, len(items) // args.count)

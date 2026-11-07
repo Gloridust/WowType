@@ -101,7 +101,7 @@ wowtype-check --lexicon /tmp/rime/lexicon.tsv --s2t core/data/s2t.tsv
 
 以上都在 macOS 上完成。**以下没有任何验证**：
 
-- fcitx5 插件编译（代码已写，API 已逐项核对，但从未过编译器）
+- fcitx5 插件编译（代码已写，API 已逐项核对，但从未过编译器）——**2026-11-07 已在 Ubuntu 26.04 上编译并通过按键测试**
 - Linux 的 X11 全局热键、cpal 麦克风采集
 - 语音端到端（录音 → 识别 → 上屏）
 - 真实使用手感（需要人工标注判断「哪个词更合适」）

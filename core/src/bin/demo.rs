@@ -25,6 +25,7 @@ fn usage(program: &str) {
     println!("  --beam <n>        beam size，默认 20");
     println!("  --fuzzy           开启模糊音（z/zh、an/ang 等）");
     println!("  --shuangpin       使用双拼（自然码）");
+    println!("  --english <file>  英文词表（每行一个词，或 rime 的 en.dict.yaml）");
     println!("  --traditional     候选输出繁体");
     println!("  --s2t <file>      简繁映射表（简体<TAB>繁体）");
     println!("  --context <text>  光标前已有文本（上下文排序）");
@@ -49,6 +50,7 @@ fn main() {
     let mut shuangpin = false;
     let mut traditional = false;
     let mut s2t_path: Option<String> = None;
+    let mut english_path: Option<String> = None;
     let mut context_text: Option<String> = None;
     let mut max_candidates = 10usize;
     let mut queries: Vec<String> = Vec::new();
@@ -106,6 +108,13 @@ fn main() {
                 i += 1;
                 max_candidates = parse_usize(args.get(i), "--max");
             }
+            "--english" => {
+                i += 1;
+                match args.get(i) {
+                    Some(value) => english_path = Some(value.clone()),
+                    None => fail("--english 需要一个文件路径"),
+                }
+            }
             other if other.starts_with('-') => fail(&format!("未知选项: {other}")),
             other => queries.push(other.to_string()),
         }
@@ -144,6 +153,12 @@ fn main() {
     if let Some(path) = &s2t_path {
         match engine.load_conversion(path) {
             Ok(n) => eprintln!("简繁表：{n} 条"),
+            Err(error) => fail(&format!("{error:#}")),
+        }
+    }
+    if let Some(path) = &english_path {
+        match engine.load_english(path) {
+            Ok(n) => eprintln!("英文词表：{n} 条"),
             Err(error) => fail(&format!("{error:#}")),
         }
     }

@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 
 [lib]
 name = "wowtype_core"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [[bin]]
 name = "wowtype-demo"
@@ -29,6 +29,10 @@ path = "src/bin/check.rs"
 [[bin]]
 name = "wowtype-train"
 path = "src/bin/train.rs"
+
+[[bin]]
+name = "wowtype-show"
+path = "src/bin/show.rs"
 
 [[bin]]
 name = "wowtype-probe"

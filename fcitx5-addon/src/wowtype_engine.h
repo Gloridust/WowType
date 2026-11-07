@@ -2,6 +2,7 @@
 #define WOWTYPE_FCITX5_ENGINE_H
 
 #include <cstddef>
+#include <future>
 #include <string>
 #include <vector>
 
@@ -35,21 +36,34 @@ public:
                fcitx::InputContextEvent &event) override;
 
     void updateInputPanel(fcitx::InputContext *ic, WowtypeState *state);
+    /// 选中第 index 个候选（全局下标）：整句候选直接上屏，
+    /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
                          std::size_t index);
 
 private:
+    /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
+    bool coreReady();
     void refreshCandidates(WowtypeState *state);
-    /// 统一的上屏入口：提交文本、记录选词、更新上下文。
-    void commitText(fcitx::InputContext *ic, WowtypeState *state,
-                    const std::string &text);
+    /// 上屏：已选的词 + tail 一起提交，记录选词、更新上下文，清空状态。
+    void commitAll(fcitx::InputContext *ic, WowtypeState *state,
+                   const std::string &tail, const std::string &tailPinyin);
+    /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
+    void commitPlain(fcitx::InputContext *ic, const std::string &text);
+    /// 选中光标所在的候选；没有候选时上屏原始输入。
+    void commitCurrent(fcitx::InputContext *ic, WowtypeState *state);
+    void rememberContext(const std::string &text);
+    void maybeSaveUserDict(bool force);
     std::string userDictPath() const;
 
     fcitx::Instance *instance_;
     WowtypeEngineHandle *core_;
+    std::future<WowtypeEngineHandle *> loading_;
     fcitx::FactoryFor<WowtypeState> factory_;
-    /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字符）。
+    /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字节，按字符边界截）。
     std::string recent_;
+    /// 距离上次保存用户词库的上屏次数。
+    int unsavedCommits_ = 0;
 };
 
 #endif /* WOWTYPE_FCITX5_ENGINE_H */

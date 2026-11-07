@@ -2,7 +2,7 @@
 
 这是把 WeType（微信输入法）拼音排序思路移植到 Linux 的外壳层：
 
-    fcitx5  ->  libwowtype.so (C++ addon)  ->  C ABI  ->  libwowtype_core.so (Rust)
+    fcitx5  ->  libwowtype.so (C++ addon，静态链接 Rust 核心 libwowtype_core.a，经 C ABI 调用)
 
 Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负责 fcitx5 的
 输入上下文、预编辑、候选面板和按键处理。
@@ -15,6 +15,7 @@ Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负�
       conf/wowtype-addon.conf.in    # addon 动态库注册
       src/wowtype_engine.h
       src/wowtype_engine.cpp        # InputMethodEngineV2 实现 + AddonFactory
+      test/key_harness.cpp          # 按键行为测试（私有 fcitx5 实例）
     core/
       include/wowtype_core.h        # C ABI
       src/ffi.rs                    # C ABI 的 Rust 实现
@@ -53,32 +54,18 @@ Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负�
 ## 安装
 
     sudo cmake --install build
-    sudo ldconfig
 
 CMake 会安装：
 
     /usr/lib/<multiarch>/fcitx5/libwowtype.so
-    /usr/lib/<multiarch>/libwowtype_core.so
     /usr/share/fcitx5/addon/wowtype.conf
     /usr/share/fcitx5/inputmethod/wowtype.conf
     /usr/share/wowtype/demo_lexicon.tsv
+    /usr/share/wowtype/s2t.tsv
 
-multiarch 通常是 x86_64-linux-gnu。libwowtype.so 的 RPATH 是 $ORIGIN/..，
-因此会从上一级目录寻找 libwowtype_core.so。
-
-如果 CMake 没有把文件放到 fcitx5 期望的位置，可以手动安装：
-
-    sudo install -Dm755 target/release/libwowtype_core.so \
-        /usr/lib/x86_64-linux-gnu/libwowtype_core.so
-    sudo install -Dm755 fcitx5-addon/build/libwowtype.so \
-        /usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so
-    sudo install -Dm644 fcitx5-addon/build/wowtype.conf \
-        /usr/share/fcitx5/inputmethod/wowtype.conf
-    sudo install -Dm644 fcitx5-addon/build/wowtype-addon.conf \
-        /usr/share/fcitx5/addon/wowtype.conf
-    sudo install -Dm644 core/data/demo_lexicon.tsv \
-        /usr/share/wowtype/demo_lexicon.tsv
-    sudo ldconfig
+Rust 核心默认**静态链接**进 libwowtype.so，不需要再装 libwowtype_core.so，
+Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲突。
+要动态链接用 `-DWOWTYPE_CORE_STATIC=OFF`（此时会一起装 libwowtype_core.so，RPATH 为 `$ORIGIN/..`）。
 
 ## 启用
 
@@ -95,15 +82,27 @@ multiarch 通常是 x86_64-linux-gnu。libwowtype.so 的 RPATH 是 $ORIGIN/..，
 
 ## 数据
 
-插件默认读取：
+每个文件按这个顺序找，用第一个存在的：环境变量 > `~/.local/share/wowtype/`（`$XDG_DATA_HOME`）> `/usr/share/wowtype/`。
 
-    /usr/share/wowtype/lexicon.tsv
+| 文件 | 环境变量 | 说明 |
+|---|---|---|
+| `lexicon.tsv` | `WOWTYPE_LEXICON` | 词库；都没有时退回 `demo_lexicon.tsv`（只有几十个词） |
+| `bigram.tsv` | `WOWTYPE_LM` | bigram（可选） |
+| `english.txt` | `WOWTYPE_ENGLISH` | 英文词表（可选）；有了它 hello/github 会排第一 |
+| `s2t.tsv` | `WOWTYPE_S2T` | 简繁表，`WOWTYPE_TRADITIONAL=1` 时用 |
 
-如果不存在，会退回到 /usr/share/wowtype/demo_lexicon.tsv。也可以用环境变量：
+不用 root 也能装真实词库和英文词表：
 
-    export WOWTYPE_LEXICON=/path/to/lexicon.tsv
-    export WOWTYPE_LM=/path/to/bigram.tsv
+    mkdir -p ~/.local/share/wowtype
+    python3 tools/rime2tsv.py rime_ice.dict.yaml > ~/.local/share/wowtype/lexicon.tsv
+    cat rime-ice/en_dicts/en.dict.yaml rime-ice/en_dicts/en_ext.dict.yaml \
+        > ~/.local/share/wowtype/english.txt
     fcitx5 -r
+
+英文词表直接接受 rime 的 `en.dict.yaml`（「上屏<TAB>编码」），也可以每行一个词。
+
+词库在后台线程载入（全量 89 万条约 0.6 秒，有快照缓存时），不会卡住 fcitx5 启动；
+载入完成前打字只显示拼音，空格上屏原始字母。
 
 词典格式（TSV，UTF-8）：
 
@@ -114,7 +113,6 @@ multiarch 通常是 x86_64-linux-gnu。libwowtype.so 的 RPATH 是 $ORIGIN/..，
 
 - 多音节拼音用空格或隔音符分隔；不要写成无分隔连写（fangan 有歧义）。
 - 儿化用独立的 r 标记。
-- 目前 demo 词典只是极小样本，需要换成真实导出的词库或开源词库。
 
 bigram 格式（可选）：
 
@@ -125,40 +123,58 @@ bigram 格式（可选）：
 
 ## 当前边界
 
-- C++ 侧只处理字母、隔音符、空格、数字选词、退格、Esc、回车；翻页、
-  标点、符号、云候选、用户词持久化都还没做。
+- 已在 Ubuntu 26.04 + fcitx5 5.1.19 上编译，按键行为用 `scripts/addon-test.sh` 测过；
+  还没装进日常使用的 fcitx5 里实际打字。
+- fcitx5 5.1 的头文件要求 C++20。
 - 排序是骨架版：词典频次 + bigram + 覆盖率 + 线性特征；LTR（LightGBM）、
   NNLM 重排、MixRank 只有 trait/钩子，没有真实模型。
-- 真实 WeType 词库是 LOUDS trie + 音节 ID 编码，需要单独写解析器并实现
-  Lexicon；MemoryLexicon 的 TSV 加载只用于打通流程。
-- 本目录的 C++ 没有在 macOS 开发机上编译（缺少 fcitx5 头文件）。代码按
-  fcitx5 5.1.x 的 InputMethodEngineV2 / AddonFactory API 编写；在 Ubuntu
-  上如果 fcitx5 版本不同，可能需要按头文件微调。
+- 云候选没做。
 
 ## 环境变量
 
 | 变量 | 作用 |
 |---|---|
-| `WOWTYPE_LEXICON` | 词库 TSV 路径，默认 `/usr/share/wowtype/lexicon.tsv` |
+| `WOWTYPE_LEXICON` | 词库 TSV 路径（查找顺序见上） |
 | `WOWTYPE_LM` | bigram TSV 路径（可选） |
+| `WOWTYPE_ENGLISH` | 英文词表路径（可选） |
 | `WOWTYPE_USER_DICT` | 用户词库路径，默认 `$XDG_DATA_HOME/wowtype/user.tsv` |
+| `WOWTYPE_TYPO` | `0` 关闭按错键纠错（默认开；双拼下不生效） |
+| `WOWTYPE_FUZZY` | `1` 开启模糊音 |
+| `WOWTYPE_SHUANGPIN` | `1` 使用双拼（自然码） |
+| `WOWTYPE_TRADITIONAL` / `WOWTYPE_S2T` | 繁体输出 / 简繁表路径 |
 
 ## 交互行为
 
-- 字母 / 隔音符 `'` 进入拼音缓冲，实时出候选
-- `空格` 上屏第一个候选；无候选时上屏原始拼音
-- `回车` 直接上屏原始拼音
-- `1`–`9` 选择对应候选
-- `退格` 删一个字母，`Esc` 清空
-- `↑↓` / `PgUp` `PgDn` / `-` `=` 翻页（交给 fcitx 的候选列表处理）
-- 缓冲为空时，ASCII 标点自动转成中文标点（映射表在 Rust 侧，`wowtype_fullwidth_punct`）
-- 输入 `/` 进入符号面板，后面跟拼音前缀（`/juhao` → 。）；退格可回到普通输入
+- 字母 / 隔音符 `'` 进入拼音缓冲，实时出候选；大写字母原样保留（`Hello` 上屏 `Hello`）
+- 按错相邻键、两个键按反、多按或漏按一个键都会纠正（`zhognguo` → 中国）
+- 长句可以**先选开头的词**：候选里有「句首词」（如 `nihaozhongguo` 的「你好」），
+  选了它不上屏，编辑区变成「你好zhongguo」，接着选剩下的；整句选完一起上屏。
+  剩余拼音删光后再按 `退格` 撤销上一次选词
+- `空格` 上屏光标所在的候选；无候选时上屏原始拼音
+- `回车` 上屏已选的词 + 原始拼音
+- `1`–`9` 选**当前页**对应的候选
+- `↑↓` 移动光标，`PgUp` `PgDn` / `-` `=` 翻页
+- 打字途中按标点：先上屏当前候选，再出中文标点（`nihao,` → 你好，）
+- 缓冲为空时，ASCII 标点自动转成中文标点；数字直接交给应用
+- 输入 `/` 进入符号面板，后面跟拼音前缀（`/juhao` → 。）
+- 中英文切换用 fcitx5 自己的「临时切换输入法」热键（默认左 Shift）；
+  打到一半切走时，已选的词 + 原始字母上屏，不会丢。失去焦点时清空编辑区，不往别的窗口上屏
+- 编辑区里 `←→` `Tab` `Delete` 吃掉不处理，免得应用里的光标乱跑
 
 ## 选词学习
 
-每次上屏都会调用 `wowtype_engine_record_selection`，历史计数参与排序；
-同时把最近 24 字节的已上屏文本通过 `wowtype_engine_set_context` 传给引擎，
-用于上下文 bigram 特征。用户词库在插件析构时落盘。
+每次上屏都会调用 `wowtype_engine_record_selection_ex`，带上**纠错后的拼音**
+（`wowtype_candidates_pinyin`），选够 3 次自动进用户词库；分几次选出来的整句也记一次。
+最近 24 字节的已上屏文本（按 UTF-8 字符边界截）作为上下文传给引擎；
+句首词选好后，它也会作为剩余部分的上文。用户词库每 20 次上屏、失去焦点、退出时落盘。
+
+## 测试
+
+    scripts/addon-test.sh [lexicon.tsv] [english.txt]
+
+起一个私有、无界面、无 D-Bus 的 fcitx5 实例（配置目录都在临时目录），只加载 wowtype
+和 fcitx5 自带的 testim，用假输入上下文按键并检查上屏结果，不影响正在用的输入法。
+用真实词库 + 英文词表时 21 项全过；只用 demo 词典时有 3 项因为缺词失败。
 
 ## 已核对的 fcitx5 API（对照 master 头文件）
 
@@ -166,7 +182,7 @@ bigram 格式（可选）：
 |---|---|---|
 | `InputMethodEngineV2` 的 `keyEvent/activate/deactivate/reset` | `fcitx/inputmethodengine.h` | ✅ 签名一致；V2 只额外加了 `subModeIconImpl/subModeLabelImpl` |
 | `CandidateWord::select(InputContext*) const` | `fcitx/candidatelist.h` | ✅ |
-| `CandidateList::size()/hasPrev()/prev()/hasNext()/next()/prevCandidate()/nextCandidate()` | 同上 | ✅ 均存在 |
+| `CandidateList::size()/candidate(i)/cursorIndex()`；翻页在 `toPageable()`，移光标在 `toCursorMovable()` | 同上 | ✅ 5.1.19 上编译通过 |
 | **`CandidateList::keyEvent`** | 同上 | ❌ **不存在**，原来调用它的代码必然编译失败，已改为手动映射按键 |
 | `CandidateList::append<T>(args...)` | 同上 | ✅ 模板转发 |
 | `CommonCandidateList::setPageSize/setLayoutHint` | 同上 | ✅ |
@@ -179,13 +195,15 @@ bigram 格式（可选）：
 
 ### 翻页的正确写法
 
-fcitx5 不会替你处理候选翻页，引擎必须自己把按键映射过去：
+fcitx5 不会替你处理候选翻页，引擎必须自己把按键映射过去。翻页和移动光标不在
+`CandidateList` 上，要先转成对应的接口；`candidateList()` 返回的是 `shared_ptr`：
 
 ```cpp
-if (sym == FcitxKey_Up) list->prevCandidate();
-else if (sym == FcitxKey_Down) list->nextCandidate();
-else if (sym == FcitxKey_Page_Up && list->hasPrev()) list->prev();
-else if (sym == FcitxKey_Page_Down && list->hasNext()) list->next();
+if (auto list = ic->inputPanel().candidateList()) {
+    if (auto *movable = list->toCursorMovable(); movable && sym == FcitxKey_Down)
+        movable->nextCandidate();
+    if (auto *pageable = list->toPageable(); pageable && pageable->hasNext())
+        pageable->next();
+    list->candidate(i).select(ic);   // i 是当前页内的下标
+}
 ```
-
-`-` / `=` 也映射到翻页（传统输入法习惯）。

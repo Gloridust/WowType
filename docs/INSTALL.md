@@ -1,6 +1,7 @@
-# 在 Ubuntu 上从零到能用
+# 从源码构建：每一步怎么验证
 
-以 Ubuntu 22.04 / 24.04 为例。每一步都有验证命令，出问题能立刻定位到哪一层。
+普通用户用 [README](../README.md#安装) 里的安装包就行。这里是从源码一步步构建、每步都能验证的版本，
+方便出问题时定位到哪一层。需要 fcitx5 5.1 或更新（Ubuntu 24.04 / Debian 13 起）。
 
 ## 0. 依赖
 
@@ -20,7 +21,7 @@ sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
 git clone https://github.com/Gloridust/Wowtype.git
 cd Wowtype
 cargo build --release -p wowtype-core
-cargo test                                  # 131 项（core 96 + voice 35）
+cargo test --workspace                      # 142 项
 ./scripts/abi-smoke.sh                      # C ABI 22 项，插件依赖的就是它
 ```
 
@@ -45,7 +46,7 @@ sudo cp /tmp/lexicon.tsv /usr/share/wowtype/lexicon.tsv
 ### 语言模型（可选）
 
 有 ARPA 或 bigram TSV 就设置 `WOWTYPE_LM`。**没有真实语料就别用**
-`tools/make_bigram.py` 生成的那种，实测会掉点（见 README）。
+`tools/make_bigram.py` 生成的那种，实测会掉点（见 [ENGINE.md](ENGINE.md)）。
 
 ## 3. 自检
 
@@ -73,7 +74,7 @@ cargo run --release -p wowtype-core --bin wowtype-demo -- \
 ## 4. 构建并安装 fcitx5 插件
 
 ```bash
-cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build -j$(nproc)
 sudo cmake --install build
 ```
@@ -82,7 +83,7 @@ sudo cmake --install build
 
 ```
 /usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so
-/usr/lib/x86_64-linux-gnu/libwowtype_core.so
+/usr/include/wowtype/wowtype_core.h
 /usr/share/fcitx5/addon/wowtype.conf
 /usr/share/fcitx5/inputmethod/wowtype.conf
 /usr/share/wowtype/demo_lexicon.tsv
@@ -111,9 +112,9 @@ im-config -n fcitx5             # 然后重新登录
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | `find_package(Fcitx5Core)` 失败 | 缺 `libfcitx5core-dev` | 按第 0 节装依赖 |
-| CMake 报找不到 `libwowtype_core.so` | 没先 `cargo build --release -p wowtype-core` | 先构建，或用 `-DWOWTYPE_CORE_LIB=` 指定 |
+| CMake 报找不到 `libwowtype_core.a` | 没先 `cargo build --release -p wowtype-core` | 先构建，或用 `-DWOWTYPE_CORE_LIB=` 指定 |
 | 插件编过但输入法列表里没有 | 配置没装对 | 检查 `/usr/share/fcitx5/addon/wowtype.conf` 是否存在 |
-| 加载失败 | 找不到 `libwowtype_core.so` | `ldd /usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so | grep wowtype` |
+| 加载失败 | 看日志里 wowtype 那几行 | `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype` |
 | 打得出来但全是英文 | 词库没加载 | 设 `WOWTYPE_LEXICON` 指到词库，重启 fcitx5 |
 | 候选为空 | 同上 | 跑第 3 步的自检 |
 

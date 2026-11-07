@@ -1,0 +1,155 @@
+name: CI
+
+# 每次推送 / PR：跑测试，在三个发行版上编插件、跑按键测试、打 .deb（结果在 Actions 页的 Artifacts 里）。
+# 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：再把这些包发到 GitHub Release。
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core:
+    name: Rust 核心测试
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libx11-dev libxkbcommon-dev
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+      - name: C ABI 冒烟测试
+        run: ./scripts/abi-smoke.sh
+
+  data:
+    name: 词库（rime-ice）
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/make-data.sh "" dist/data
+      - run: scripts/package-deb.sh data dist/data dist/pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data
+          path: dist/data
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-data
+          path: dist/pkg
+
+  addon:
+    name: 插件 · ${{ matrix.distro }}
+    needs: data
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: ubuntu24.04, image: "ubuntu:24.04" }
+          - { distro: ubuntu26.04, image: "ubuntu:26.04" }
+          - { distro: debian13, image: "debian:trixie" }
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: 系统依赖
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake extra-cmake-modules \
+            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
+            fcitx5 fcitx5-modules \
+            ca-certificates curl git dpkg-dev file python3
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.distro }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: 按键测试（私有 fcitx5 实例 + 真实词库）
+        run: scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - name: 版本号
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            base=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)
+            version="${base}~git$(date -u +%Y%m%d).$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: 打包
+        run: scripts/package-deb.sh engine "$VERSION" dist/pkg
+      - name: 装上试一下
+        run: |
+          apt-get install -y ./dist/pkg/wowtype_*.deb
+          ls /usr/lib/*/fcitx5/libwowtype.so
+          wowtype-check --lexicon dist/data/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
+          wowtype-show --lexicon dist/data/lexicon.tsv nihao | tee /tmp/show.txt
+          grep -q '1\.你好' /tmp/show.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.distro }}
+          path: dist/pkg
+
+  release:
+    name: 发布
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [core, data, addon]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pkg-*
+          path: dist
+          merge-multiple: true
+      - name: 校验和
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: 发布到 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          data=$(cd dist && ls wowtype-data-rime-ice_*_all.deb)
+          cat > notes.md <<EOF
+          ## 安装（Ubuntu / Debian）
+
+          按发行版下载对应的 \`wowtype_<版本>_<发行版>_amd64.deb\`（ubuntu24.04 / ubuntu26.04 / debian13），再加上词库包 \`$data\`：
+
+          \`\`\`bash
+          sudo apt install ./wowtype_*_amd64.deb ./$data
+          fcitx5 -r -d
+          \`\`\`
+
+          然后在 fcitx5 配置里添加「Wowtype」。完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
+
+          词库包的数据来自 [rime-ice](https://github.com/iDvel/rime-ice)，许可证 GPL-3.0。
+
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "Wowtype $GITHUB_REF_NAME" \
+            --notes-file notes.md --generate-notes

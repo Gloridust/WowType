@@ -9,7 +9,7 @@
 //! - 儿化用独立的 r 标记，例如：hua r
 //! - 以 # 开头的行和空行会被忽略。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -62,6 +62,19 @@ fn source_stamp(path: &Path) -> Option<(u64, u64)> {
     Some((meta.len(), mtime))
 }
 
+const KEY_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// 音节键序列的滚动哈希（FNV-1a）。
+fn key_hash_step(hash: u64, key: SyllableKey) -> u64 {
+    let raw = u64::from(key.id) | (u64::from(key.erhua) << 16);
+    let mut h = hash;
+    for byte in raw.to_le_bytes().iter().take(3) {
+        h ^= u64::from(*byte);
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
+}
+
 /// 词典条目。
 #[derive(Clone, Debug, PartialEq)]
 pub struct LexEntry {
@@ -100,6 +113,13 @@ pub trait Lexicon: Send + Sync {
         Vec::new()
     }
 
+    /// 是否存在比 query 更长、且以 query 开头的词。
+    ///
+    /// 束搜索靠它剪掉不可能成词的音节串；不确定时返回 true（只影响速度，不影响结果）。
+    fn has_longer(&self, _query: &[SyllableQuery]) -> bool {
+        true
+    }
+
     fn total_freq(&self) -> f64;
 
     fn len(&self) -> usize;
@@ -126,7 +146,10 @@ pub struct MemoryLexicon {
     /// 默认不构建——模糊音默认关闭，而 55 万词库下建这张表要占掉不少加载时间。
     /// 第一次模糊查询时再建。
     fuzzy_index: OnceLock<HashMap<Vec<SyllableId>, Vec<usize>>>,
-    by_length: HashMap<usize, Vec<usize>>,
+    /// 全拼词条所有「真前缀」的哈希，供 has_longer 剪枝（哈希碰撞只会少剪，不会错剪）。
+    full_prefixes: HashSet<u64>,
+    /// 同上，按声母：简拼和「全拼混简拼」（kyi、yongzwen）的查询用它剪枝。
+    initial_prefixes: HashSet<u64>,
     total_freq: f64,
     /// 加载时被跳过的行数（未知音节等）。
     skipped: usize,
@@ -173,7 +196,16 @@ impl MemoryLexicon {
             .entry(initials.clone())
             .or_default()
             .push(idx);
-        self.by_length.entry(keys.len()).or_default().push(idx);
+        let mut hash = KEY_HASH_SEED;
+        for key in keys.iter().take(keys.len().saturating_sub(1)) {
+            hash = key_hash_step(hash, *key);
+            self.full_prefixes.insert(hash);
+        }
+        let mut hash = KEY_HASH_SEED;
+        for &letter in initials.iter().take(initials.len().saturating_sub(1)) {
+            hash = initial_hash_step(hash, letter);
+            self.initial_prefixes.insert(hash);
+        }
         self.total_freq += freq;
     }
 
@@ -377,9 +409,12 @@ impl Lexicon for MemoryLexicon {
                 .unwrap_or_default();
         }
 
-        // 混合全拼/简拼：骨架阶段先做线性扫描；真实词典应建前缀 trie。
-        self.by_length
-            .get(&query.len())
+        // 全拼混简拼（k yi -> 可以）：先按声母查，再逐个比对全拼的那几个音节
+        let Some(initials) = query_initials(query) else {
+            return Vec::new();
+        };
+        self.jianpin_index
+            .get(&initials)
             .map(|idxs| {
                 idxs.iter()
                     .filter(|&&i| entry_matches(&self.entries[i], query))
@@ -387,6 +422,26 @@ impl Lexicon for MemoryLexicon {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        if query.iter().any(|q| q.is_jianpin()) {
+            // 简拼、混合查询按声母剪（只看声母会少剪一些，不会错剪）
+            let Some(initials) = query_initials(query) else {
+                return true;
+            };
+            let hash = initials
+                .iter()
+                .fold(KEY_HASH_SEED, |h, &letter| initial_hash_step(h, letter));
+            return self.initial_prefixes.contains(&hash);
+        }
+        let mut hash = KEY_HASH_SEED;
+        for q in query {
+            if let SyllableQuery::Full { id, erhua } = q {
+                hash = key_hash_step(hash, SyllableKey::new(*id, *erhua));
+            }
+        }
+        self.full_prefixes.contains(&hash)
     }
 
     fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
@@ -581,6 +636,15 @@ impl Lexicon for UserLexicon {
         result
     }
 
+    fn has_longer(&self, query: &[SyllableQuery]) -> bool {
+        self.base.has_longer(query)
+            || self
+                .snapshot
+                .read()
+                .map(|s| s.has_longer(query))
+                .unwrap_or(true)
+    }
+
     fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
         let mut result = self.base.lookup_fuzzy(query);
         if let Ok(snapshot) = self.snapshot.read() {
@@ -596,6 +660,21 @@ impl Lexicon for UserLexicon {
     fn len(&self) -> usize {
         self.base.len() + self.snapshot.read().map(|s| s.len()).unwrap_or(0)
     }
+}
+
+/// 查询每个音节的声母（全拼音节取首字母，和词条的 initials 一样）。
+fn query_initials(query: &[SyllableQuery]) -> Option<Vec<u8>> {
+    query
+        .iter()
+        .map(|q| match q {
+            SyllableQuery::Full { id, .. } => Syllable::from_id(*id).map(|s| s.initial_letter()),
+            SyllableQuery::Jianpin { letter } => Some(*letter),
+        })
+        .collect()
+}
+
+fn initial_hash_step(hash: u64, letter: u8) -> u64 {
+    (hash ^ u64::from(letter)).wrapping_mul(0x1000_0000_01b3)
 }
 
 fn entry_matches(entry: &LexEntry, query: &[SyllableQuery]) -> bool {
@@ -684,6 +763,25 @@ mod tests {
         let found = lex.lookup(&[xi.query(false), an.query(false)]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].word, "西安");
+    }
+
+    #[test]
+    fn mixed_lookup_and_prune() {
+        let mut lex = MemoryLexicon::new();
+        lex.insert("zhong wen", "中文", 100.0).unwrap();
+        lex.insert("zheng wen", "正文", 50.0).unwrap();
+        lex.insert("zhong guo ren", "中国人", 80.0).unwrap();
+        let wen = Syllable::from_text("wen").unwrap().query(false);
+        let guo = Syllable::from_text("guo").unwrap().query(false);
+        let z = SyllableQuery::Jianpin { letter: b'z' };
+        let words: Vec<String> = lex.lookup(&[z, wen]).into_iter().map(|e| e.word).collect();
+        assert_eq!(words.len(), 2, "{words:?}");
+        assert!(words.contains(&"中文".to_string()));
+        // 剪枝按声母：z guo 后面还有中国人，z wen 后面没有更长的词
+        assert!(lex.has_longer(&[z, guo]));
+        assert!(!lex.has_longer(&[z, wen]));
+        assert!(lex.has_longer(&[z]));
+        assert!(!lex.has_longer(&[SyllableQuery::Jianpin { letter: b'q' }]));
     }
 
     #[test]

@@ -2,7 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(wowtype-fcitx5 VERSION 0.1.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+# fcitx5 5.1 的头文件用到了 std::span、std::source_location
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -13,13 +14,21 @@ find_package(Fcitx5Config REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
 
 # Rust 核心产物。先执行：cargo build --release -p wowtype-core（产物在 workspace 根 target/）
-set(WOWTYPE_CORE_LIB
-    "${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libwowtype_core.so"
-    CACHE FILEPATH "Path to libwowtype_core.so")
+#
+# 默认静态链接 libwowtype_core.a：插件自成一体，不用再装 libwowtype_core.so，
+# 也不会因为 .so 没有 SONAME 而把构建目录的绝对路径写进插件。
+option(WOWTYPE_CORE_STATIC "Link the Rust core statically" ON)
+if(WOWTYPE_CORE_STATIC)
+    set(_wowtype_core_default "${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libwowtype_core.a")
+else()
+    set(_wowtype_core_default "${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libwowtype_core.so")
+endif()
+set(WOWTYPE_CORE_LIB "${_wowtype_core_default}"
+    CACHE FILEPATH "Path to libwowtype_core.a (or .so with -DWOWTYPE_CORE_STATIC=OFF)")
 if(NOT EXISTS "${WOWTYPE_CORE_LIB}")
     message(FATAL_ERROR
         "找不到 ${WOWTYPE_CORE_LIB}。请先在仓库根目录执行 cargo build --release -p wowtype-core，"
-        "或用 -DWOWTYPE_CORE_LIB=/path/to/libwowtype_core.so 指定。")
+        "或用 -DWOWTYPE_CORE_LIB=/path/to/libwowtype_core.a 指定。")
 endif()
 
 if(NOT DEFINED FCITX_INSTALL_PKGDATADIR)
@@ -40,19 +49,29 @@ target_link_libraries(wowtype PRIVATE
     "${WOWTYPE_CORE_LIB}"
 )
 
-set_target_properties(wowtype PROPERTIES
-    INSTALL_RPATH "$ORIGIN/.."
-    BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../target/release"
-)
+if(WOWTYPE_CORE_STATIC)
+    # Rust 标准库要的系统库（cargo rustc -- --print native-static-libs）；
+    # 静态库里的符号不导出，免得和别的插件冲突
+    find_package(Threads REQUIRED)
+    target_link_libraries(wowtype PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+    target_link_options(wowtype PRIVATE "LINKER:--exclude-libs,ALL")
+else()
+    set_target_properties(wowtype PROPERTIES
+        INSTALL_RPATH "$ORIGIN/.."
+        BUILD_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../target/release"
+    )
+endif()
 
 install(TARGETS wowtype
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5"
 )
 
-# Rust cdylib 与头文件
-install(FILES "${WOWTYPE_CORE_LIB}"
-    DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-)
+# 动态链接时才需要把 Rust cdylib 一起装上
+if(NOT WOWTYPE_CORE_STATIC)
+    install(FILES "${WOWTYPE_CORE_LIB}"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    )
+endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../core/include/wowtype_core.h"
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/wowtype"
 )
@@ -80,3 +99,10 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wowtype-addon.conf"
     DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon"
     RENAME wowtype.conf
 )
+
+# 按键行为测试（scripts/addon-test.sh 会打开它）：私有、无界面的 fcitx5 实例里加载插件按键
+option(WOWTYPE_BUILD_TESTS "Build the key-handling harness" OFF)
+if(WOWTYPE_BUILD_TESTS)
+    add_executable(wowtype-key-harness test/key_harness.cpp)
+    target_link_libraries(wowtype-key-harness PRIVATE Fcitx5::Core Fcitx5::Utils)
+endif()

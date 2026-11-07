@@ -31,6 +31,15 @@ fn main() {
     let mut weights = FeatureWeights::default();
     let mut fuzzy = false;
     let mut shuangpin = false;
+    let mut typo_cost: Option<f64> = None;
+    let mut abbrev_cost: Option<f64> = None;
+    let mut tail_abbrev_cost: Option<f64> = None;
+    let mut completion_cost: Option<f64> = None;
+    let mut no_typo = false;
+    let mut english_path: Option<String> = None;
+    let mut show_top1 = false;
+    let mut learn = false;
+    let mut learn_from = String::new();
 
     let mut i = 1;
     while i < args.len() {
@@ -76,6 +85,34 @@ fn main() {
                     fail(&e);
                 }
             }
+            "--abbrev-cost" => {
+                i += 1;
+                abbrev_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--tail-abbrev-cost" => {
+                i += 1;
+                tail_abbrev_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--typo-cost" => {
+                i += 1;
+                typo_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--completion-cost" => {
+                i += 1;
+                completion_cost = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--no-typo" => no_typo = true,
+            "--english" => {
+                i += 1;
+                english_path = args.get(i).cloned();
+            }
+            "--show-top1" => show_top1 = true,
+            "--learn" => learn = true,
+            "--learn-from" => {
+                i += 1;
+                learn_from = args.get(i).cloned().unwrap_or_default();
+                learn = true;
+            }
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
@@ -83,6 +120,7 @@ fn main() {
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
                 println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
+                println!("            [--typo-cost x] [--completion-cost x] [--abbrev-cost x] [--tail-abbrev-cost x] [--no-typo] [--english <file>] [--show-top1]");
                 return;
             }
             other => fail(&format!("未知参数: {other}")),
@@ -123,17 +161,92 @@ fn main() {
     if let Some(size) = beam {
         config.beam.beam_size = size.max(1);
     }
+    if let Some(cost) = abbrev_cost {
+        config.beam.abbrev_cost = cost;
+    }
+    if let Some(cost) = tail_abbrev_cost {
+        config.beam.tail_abbrev_cost = cost;
+    }
+    if let Some(cost) = typo_cost {
+        config.beam.typo_cost = cost;
+    }
+    if let Some(cost) = completion_cost {
+        config.beam.completion_cost = cost;
+    }
+    if no_typo {
+        config.typo_correction = false;
+    }
     let engine = Engine::new(lex, lm).with_config(config).with_ranker(ranker);
+    if let Some(path) = &english_path {
+        if let Err(e) = engine.load_english(path) {
+            fail(&format!("{e:#}"));
+        }
+    }
 
     let data = match std::fs::read_to_string(&eval_path) {
         Ok(v) => v,
         Err(e) => fail(&format!("读取用例失败: {e}")),
     };
 
+    // --learn：先把每个用例「打一遍、上屏正确答案」，再测。看用户用过一次以后能不能记住。
+    if learn {
+        let replay = if learn_from.is_empty() {
+            data.clone()
+        } else {
+            std::fs::read_to_string(&learn_from)
+                .unwrap_or_else(|e| fail(&format!("读不了 {learn_from}: {e}")))
+        };
+        for line in replay.lines() {
+            let mut cols = line.trim_end().split('\t');
+            let (Some(input), Some(expected)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            if input.starts_with('#') {
+                continue;
+            }
+            let expected = expected.split('|').next().unwrap_or("").trim();
+            // 照插件里真实的选法：整句对就选整句；不对就选最长的、对得上的句首候选，
+            // 剩下的拼音接着打；最后把拼出来的整句也记一次
+            engine.set_context("");
+            let mut rest = input.to_string();
+            let mut done = String::new();
+            for _ in 0..16 {
+                let candidates = engine.input(&rest);
+                let want = &expected[done.len().min(expected.len())..];
+                if let Some(c) = candidates
+                    .iter()
+                    .find(|c| c.text == want && c.consumed >= rest.len())
+                {
+                    engine.record_selection(&c.text);
+                    done.push_str(&c.text);
+                    break;
+                }
+                let head = candidates
+                    .iter()
+                    .filter(|c| c.consumed < rest.len() && want.starts_with(c.text.as_str()))
+                    .max_by_key(|c| c.text.len());
+                let Some(head) = head else {
+                    break;
+                };
+                engine.record_selection(&head.text);
+                done.push_str(&head.text);
+                rest = rest[head.consumed..].to_string();
+                engine.set_context(&done);
+            }
+            if done == expected && done != input {
+                engine.set_context("");
+                engine.record_selection(expected);
+            }
+        }
+        engine.set_context("");
+    }
+
     let mut total = 0usize;
     let mut top1 = 0usize;
     let mut top3 = 0usize;
     let mut misses: Vec<String> = Vec::new();
+    // top1 没中时，排在第一的是什么东西抢走了位置
+    let mut causes: std::collections::BTreeMap<&'static str, usize> = Default::default();
 
     for line in data.lines() {
         let line = line.trim_end();
@@ -151,6 +264,18 @@ fn main() {
         let hit1 = texts.first().map(|t| accepted.contains(t)).unwrap_or(false);
         if hit1 {
             top1 += 1;
+        } else if let Some(first) = candidates.first() {
+            if show_top1 {
+                println!(
+                    "  top1 未中 [{}] {input:<14} 期望 {expected:<6} 实际 {}",
+                    miss_cause(input, first),
+                    texts.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+            causes
+                .entry(miss_cause(input, first))
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
         }
         let hit3 = texts.iter().take(top_k).any(|t| accepted.contains(t));
         if hit3 {
@@ -174,10 +299,29 @@ fn main() {
         pct(top1),
         pct(top3)
     );
+    if !causes.is_empty() {
+        let parts: Vec<String> = causes.iter().map(|(k, v)| format!("{k} {v}")).collect();
+        println!("top1 被谁占了：{}", parts.join("  "));
+    }
     if !misses.is_empty() {
         println!("未进前 {top_k}：");
         for line in misses {
             println!("{line}");
         }
+    }
+}
+
+/// 排第一的候选是怎么来的（只在 top1 没中时统计）。
+fn miss_cause(input: &str, first: &wowtype_core::Candidate) -> &'static str {
+    if first.consumed < input.len() {
+        "句首词"
+    } else if first.words.len() == 1 && first.words[0].pinyin.is_empty() {
+        "原始串/英文"
+    } else if first.features.typo_count > 0.0 {
+        "纠错"
+    } else if first.features.prefix_completion > 0.0 {
+        "补全"
+    } else {
+        "同音排序"
     }
 }

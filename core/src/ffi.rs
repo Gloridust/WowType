@@ -44,6 +44,23 @@ pub struct WowtypeEngineHandle {
 pub struct WowtypeCandidates {
     texts: Vec<CString>,
     scores: Vec<f64>,
+    /// 候选对应的拼音（空格分隔音节）；预测、符号结果为空串。
+    pinyins: Vec<CString>,
+    /// 候选用掉了输入的多少字节；整句候选等于输入长度。
+    consumed: Vec<usize>,
+}
+
+impl WowtypeCandidates {
+    /// 只有文本和分数的结果（预测、符号）。
+    fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
+        let n = texts.len();
+        Self {
+            texts,
+            scores,
+            pinyins: vec![CString::default(); n],
+            consumed: vec![0; n],
+        }
+    }
 }
 
 /// 创建引擎。
@@ -134,12 +151,21 @@ pub unsafe extern "C" fn wowtype_engine_input(
         Ok(Ok(candidates)) => {
             let mut texts = Vec::with_capacity(candidates.len());
             let mut scores = Vec::with_capacity(candidates.len());
+            let mut pinyins = Vec::with_capacity(candidates.len());
+            let mut consumed = Vec::with_capacity(candidates.len());
             for candidate in candidates {
                 let text = candidate.text.replace('\0', " ");
                 texts.push(CString::new(text).unwrap_or_default());
                 scores.push(candidate.score);
+                pinyins.push(CString::new(candidate.pinyin.replace('\0', " ")).unwrap_or_default());
+                consumed.push(candidate.consumed.min(input.len()));
             }
-            Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+            Box::into_raw(Box::new(WowtypeCandidates {
+                texts,
+                scores,
+                pinyins,
+                consumed,
+            }))
         }
         Ok(Err(error)) => {
             set_last_error(format!("{error:#}"));
@@ -183,7 +209,7 @@ pub unsafe extern "C" fn wowtype_engine_predict_next(
                 Err(_) => continue,
             }
         }
-        Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+        Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
     }));
     match outcome {
         Ok(candidates) => candidates,
@@ -325,6 +351,105 @@ pub unsafe extern "C" fn wowtype_engine_load_user_dict(
     }
 }
 
+/// 保存用户输入习惯（选过的词的热度、词搭配）到 TSV。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_save_history(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.save_history(path) {
+        Ok(()) => 0,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
+/// 读回用户输入习惯，返回条数，-1 表示出错（文件不存在也是 -1）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_history(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_history(path) {
+        Ok(n) => n as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
+/// 每次输入最多返回多少个整句候选（句首词候选另算）。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_max_candidates(
+    engine: *mut WowtypeEngineHandle,
+    max_candidates: u32,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }
+        .engine
+        .set_max_candidates(max_candidates as usize);
+    0
+}
+
+/// 开关按错键纠错（相邻键、两键按反、多按/漏按）。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_typo_correction(
+    engine: *mut WowtypeEngineHandle,
+    on: c_int,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_typo_correction(on != 0);
+    0
+}
+
+/// 载入英文词表（每行一个词，或 rime 的 en.dict.yaml），返回累计词条数；失败返回 -1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_english(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_english(path) {
+        Ok(n) => n.min(c_int::MAX as usize) as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 开关模糊音（z/zh、an/ang 等）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
@@ -431,7 +556,7 @@ pub unsafe extern "C" fn wowtype_symbol_search(
             Err(_) => continue,
         }
     }
-    Box::into_raw(Box::new(WowtypeCandidates { texts, scores }))
+    Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
 }
 
 /// 记录选词并可携带拼音：选够次数后自动加入用户词库。pinyin 可为 NULL。
@@ -487,6 +612,30 @@ pub unsafe extern "C" fn wowtype_candidates_score(
         .unwrap_or(0.0)
 }
 
+/// 候选的拼音（空格分隔，按纠错后的音节）；没有拼音或越界返回空串/NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_pinyin(
+    candidates: *const WowtypeCandidates,
+    index: usize,
+) -> *const c_char {
+    unsafe { candidates.as_ref() }
+        .and_then(|c| c.pinyins.get(index))
+        .map(|text| text.as_ptr())
+        .unwrap_or(ptr::null())
+}
+
+/// 候选用掉了输入的多少字节。小于输入长度时是句首词候选：
+/// 上屏这个词后，剩下的输入（从这个偏移开始）继续留在编辑区。越界返回 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_consumed(
+    candidates: *const WowtypeCandidates,
+    index: usize,
+) -> usize {
+    unsafe { candidates.as_ref() }
+        .and_then(|c| c.consumed.get(index).copied())
+        .unwrap_or(0)
+}
+
 /// 释放候选集合。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_candidates_free(candidates: *mut WowtypeCandidates) {
@@ -528,6 +677,12 @@ mod tests {
         assert!(!first.is_null());
         let first = unsafe { CStr::from_ptr(first) }.to_str().unwrap();
         assert!(!first.is_empty());
+
+        let len = unsafe { wowtype_candidates_consumed(candidates, 0) };
+        assert_eq!(len, 4, "整句候选用掉全部输入");
+        let pinyin = unsafe { wowtype_candidates_pinyin(candidates, 0) };
+        assert!(!pinyin.is_null());
+        assert!(unsafe { wowtype_candidates_pinyin(candidates, 99) }.is_null());
 
         unsafe {
             wowtype_candidates_free(candidates);

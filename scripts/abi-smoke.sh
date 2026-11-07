@@ -23,6 +23,7 @@ case "$(uname -s)" in
   *)      LIB=libwowtype_core.so;    RUNENV="LD_LIBRARY_PATH=$LIBDIR" ;;
 esac
 
-cc -O2 -I"$INCLUDE" -L"$LIBDIR" -lwowtype_core -o /tmp/wowtype_abi_smoke tools/abi_smoke.c
+# 库要放在源文件后面：Ubuntu 默认 --as-needed，放前面会被丢掉
+cc -O2 -I"$INCLUDE" -o /tmp/wowtype_abi_smoke tools/abi_smoke.c -L"$LIBDIR" -lwowtype_core
 S2T="$PWD/core/data/s2t.tsv"
 env $RUNENV /tmp/wowtype_abi_smoke "$LEXICON" "$BIGRAM" "$S2T"
