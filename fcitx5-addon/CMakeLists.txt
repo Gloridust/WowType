@@ -42,6 +42,9 @@ add_library(wowtype MODULE
 target_include_directories(wowtype PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"
 )
+# 设置界面装在哪：插件在后台用它检查更新（wowtype-config --check-update）
+target_compile_definitions(wowtype PRIVATE
+    WOWTYPE_CONFIG_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/wowtype-config")
 target_link_libraries(wowtype PRIVATE
     Fcitx5::Core
     Fcitx5::Config

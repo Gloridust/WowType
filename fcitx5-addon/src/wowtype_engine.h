@@ -23,6 +23,7 @@ namespace fcitx {
 class Instance;
 class InputContext;
 class InputContextEvent;
+class InputPanel;
 class InputMethodEntry;
 class KeyEvent;
 } // namespace fcitx
@@ -61,6 +62,7 @@ FCITX_CONFIGURATION(
         this, "VoiceKey", "语音输入键（按住说话，或点一下开始）", fcitx::Key(FcitxKey_Alt_R),
         fcitx::KeyConstrain({fcitx::KeyConstrainFlag::AllowModifierOnly,
                              fcitx::KeyConstrainFlag::AllowModifierLess})};
+    fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（一天最多一次）", true};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
 class WowtypeEngine final : public fcitx::InputMethodEngineV2 {
@@ -87,6 +89,8 @@ public:
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
                          std::size_t index);
+    /// 展开的候选面板里点了第 row 行：光标在这行就选光标处的词，否则选这行第一个。
+    void selectGridRow(fcitx::InputContext *ic, WowtypeState *state, std::size_t row);
 
 private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
@@ -98,6 +102,9 @@ private:
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
     void refreshCandidates(WowtypeState *state);
+    /// 展开的候选面板（下键展开）：处理了这个键返回 true。
+    bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
+    void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state) const;
     /// 上屏：已选的词 + tail 一起提交，记录选词、更新上下文，清空状态。
     void commitAll(fcitx::InputContext *ic, WowtypeState *state,
@@ -120,6 +127,7 @@ private:
                    const std::string &partial);
     void clearVoice();
     void cancelVoice();
+    void maybeCheckUpdate();
     bool voiceActive() const { return voiceShowing_; }
 
     fcitx::Instance *instance_;
@@ -146,6 +154,8 @@ private:
     fcitx::Key voiceKey_;
     /// 热键按下还没松开（松开那一下也要吃掉，免得应用把单按 Alt 当成打开菜单）。
     bool voiceKeyDown_ = false;
+    /// 这次 fcitx5 运行里查过更新没有（只在第一次切到 WowType 时查）。
+    bool updateChecked_ = false;
     /// 正在显示语音提示（录音、识别中、出错提示）。
     bool voiceShowing_ = false;
     /// 出错提示显示到这个时刻（单调时钟，微秒）。
