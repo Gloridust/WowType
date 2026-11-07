@@ -123,6 +123,10 @@ jobs:
           grep -q '1\.你好' /tmp/show.txt
           # 设置界面：能 import GTK 4 / libadwaita，拼音整理逻辑正确
           wowtype-config --self-test
+          # 图标装到 hicolor，输入法和设置界面都指向它
+          test -f /usr/share/icons/hicolor/scalable/apps/wowtype.svg
+          test -f /usr/share/icons/hicolor/22x22/apps/wowtype.png
+          grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}

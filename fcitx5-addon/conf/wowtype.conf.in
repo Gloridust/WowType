@@ -1,7 +1,7 @@
 [InputMethod]
 Name=WowType
 Name[zh_CN]=WowType 拼音
-Icon=input-keyboard
+Icon=wowtype
 LangCode=zh_CN
 Addon=wowtype
 Configurable=True

@@ -107,6 +107,12 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wowtype-addon.conf"
     RENAME wowtype.conf
 )
 
+# 图标：输入法列表、托盘和设置界面都用 wowtype
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../icons/hicolor"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/icons"
+    FILES_MATCHING PATTERN "*.png" PATTERN "*.svg"
+)
+
 # 设置界面（GTK 4 + libadwaita，Python）：fcitx5 配置工具里的「自定义词和更多设置」也打开它
 option(WOWTYPE_INSTALL_SETTINGS "Install the wowtype-config settings app" ON)
 if(WOWTYPE_INSTALL_SETTINGS)
