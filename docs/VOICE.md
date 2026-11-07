@@ -83,16 +83,30 @@ wowtype-asr --download 音频.wav        # 或直接转写一个 WAV（16kHz 单
 再分发有风险，而且 VoiceKey 已经用 Rust 重写了它的 int8 推理（`crates/wtlocal`
 约 40 层 Transformer + FBank）。我们把它列为可选实验项，不作为默认。
 
-## 4. 与 fcitx5 的集成
+## 4. 与 fcitx5 的集成（已落地）
 
-在 addon 里把语音做成一种输入状态：
+插件在 WowType 是当前输入法时接住语音热键（默认右 Alt，`WOWTYPE_VOICE_KEY` 可改，`none` 关掉）。
+Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入法。
 
-1. 收到热键 → 进入语音模式，预编辑显示「正在听…」
-2. 中间结果 → 更新预编辑（或走 `Typer` 边说边上屏）
-3. 结束 → 多路结果进入候选列表，数字键/回车选定后 `commit`
-4. 取消 → 退格清掉已上屏内容（`Typer` 记录过，可精确回滚）
+| 层 | 文件 | 做什么 |
+|---|---|---|
+| C 接口 | `core/src/voice_ffi.rs`、`core/include/wowtype_core.h` | `wowtype_voice_new/key_down/key_up/poll/text/cancel`；都不阻塞 |
+| 工作线程 | 同上 | 每次说话一个线程：cpal 开默认输入设备 → 分帧 + VAD → 喂 wtlocal 出中间结果 → 结束时整段定稿 |
+| 模型线程 | 同上 | 第一次按热键时下载（腾讯 CDN，约 100MB，校验 MD5）并载入，只做一次；还没好时音频先攒着 |
+| 插件 | `fcitx5-addon/src/wowtype_engine.cpp` | 热键按下/松开都吃掉（免得应用把单按 Alt 当成打开菜单）；50ms 定时轮询；编辑区显示中间结果，前面是麦克风图标和跟着音量动的波形（不写说明文字，免得和识别出的字混在一起）；结果用 `commitString` 上屏 |
 
-这样语音与拼音共用候选面板、翻页、用户词记录，不需要两套 UI。
+规则：
+
+- 正在打拼音时热键交给应用，不抢；
+- 按住 ≥300ms 松开即结束；更短算点按，静音 1.5 秒或再按一次结束；单次最长 120 秒；
+- 说话时按 `Esc` 丢掉；按别的键也丢掉，那个键照常处理；切走输入框（失去焦点、切输入法）丢掉；
+- 结果只往开始说话的那个输入框上屏。
+
+核心可以 `--no-default-features` 编译掉语音（不依赖 ALSA），这时 `wowtype_voice_new` 返回 NULL，
+插件用 `-DWOWTYPE_VOICE=OFF` 配置即可。
+
+测试：`WOWTYPE_VOICE_WAV=x.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-test.sh ...` 用 WAV 代替麦克风，
+在私有 fcitx5 实例里走一遍「按住右 Alt → 松开 → 上屏」。
 
 ## 5. 下一步
 
@@ -171,10 +185,7 @@ wowtype-voiced --asr-cmd 'sherpa-onnx-offline --tokens=tokens.txt --paraformer=m
 | 边说边上屏 | ✅ 已测 | 中间结果修正时正确退格重打 |
 | 热键状态机 | ✅ 已测 | 长按/点按/静音超时/二次点按/自动重复，9 个用例 |
 | 上屏后端 | ✅ 已测（逻辑） | 剪贴板写入用真实子进程验证；实际按键注入未测 |
-| cpal 采集 | ⚠️ 仅 macOS 验过 | Linux 需要 ALSA/PulseAudio |
+| cpal 采集 | ✅ Linux 验过 | ALSA 默认设备（走 PipeWire），约 30ms 打开 |
 | X11 全局热键 | ❌ 未验证 | `#[cfg(target_os = "linux")]`，这台机器上不会被编译 |
-| 端到端录音→识别→上屏 | ❌ 未验证 | 需要真机和麦克风 |
-
-最后一行的意思是：链路每一段都单独测过，但**没有一次真正的「按住说话」跑通过**。
-上 Linux 后建议先跑 `cargo test -p wowtype-voice`（31 + 4 项），再用
-`wowtype-voiced --asr-cmd '...'` 实机试一次。
+| fcitx5 插件：热键→识别→上屏 | ✅ 已测 | 私有 fcitx5 实例 + WAV 代替麦克风，按下到上屏 1.6 秒（含载入模型） |
+| 真人对着麦克风说 | ⏳ 待用户试 | 麦克风采集和识别都单独验过 |

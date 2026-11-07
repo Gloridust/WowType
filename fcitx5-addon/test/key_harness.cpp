@@ -20,6 +20,8 @@
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
+#include <cstdlib>
+#include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
@@ -48,6 +50,8 @@ public:
 };
 
 int failures = 0;
+/// main 里建的事件分发器（fcitx5 5.1.7 的 Instance 还没有 eventDispatcher()）。
+EventDispatcher *dispatcher = nullptr;
 
 void check(bool ok, const std::string &what) {
     std::printf("%s %s\n", ok ? "ok  " : "FAIL", what.c_str());
@@ -227,12 +231,12 @@ void runCases(Instance &instance) {
     if (prefix >= 0) {
         type(ic.get(), std::string(1, static_cast<char>('1' + prefix)));
         check(ic->committed.empty(), "选句首词不上屏，实际 " + ic->committed);
-        check(preedit(ic.get()) == "你好zhongguo", "编辑区 = 已选 + 剩余拼音，实际 " + preedit(ic.get()));
+        check(preedit(ic.get()) == "你好zhong'guo", "编辑区 = 已选 + 剩余拼音（分好音节），实际 " + preedit(ic.get()));
         // 删掉剩余拼音，再退格撤销选词
         type(ic.get(), "<bs><bs><bs><bs><bs><bs><bs><bs>");
         check(preedit(ic.get()) == "你好", "删完剩余拼音，实际 " + preedit(ic.get()));
         type(ic.get(), "<bs>");
-        check(preedit(ic.get()) == "nihao", "再退格撤销选词，实际 " + preedit(ic.get()));
+        check(preedit(ic.get()) == "ni'hao", "再退格撤销选词，实际 " + preedit(ic.get()));
         type(ic.get(), "zhongguo");
         cands = page(ic.get());
         for (std::size_t i = 0; i < cands.size(); ++i) {
@@ -310,7 +314,82 @@ void runCases(Instance &instance) {
     type(ic.get(), "renmin<sp>");
     check(ic->committed.size() > 30 * 6, "连续上屏 31 次没出错");
 
+    // 编辑区给拼音分音节，回车仍上屏原始字母
+    fresh(ic.get());
+    type(ic.get(), "hengxiang");
+    check(preedit(ic.get()) == "heng'xiang", "编辑区分音节，实际 " + preedit(ic.get()));
+    type(ic.get(), "<cr>");
+    check(ic->committed == "hengxiang", "回车上屏原始字母（不带隔音符），实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "zhongg");
+    check(preedit(ic.get()) == "zhong'g", "打了一半也分，实际 " + preedit(ic.get()));
+
+    // 打拼音时按语音热键（右 Alt）：不抢，编辑区不动
+    fresh(ic.get());
+    type(ic.get(), "ni");
+    const bool tookAlt = send(ic.get(), Key(FcitxKey_Alt_R));
+    check(!tookAlt && preedit(ic.get()) == "ni", "打拼音时右 Alt 交给应用、编辑区不动");
+
     ic.reset();
+}
+
+/// 语音：按住右 Alt 说话（WOWTYPE_VOICE_WAV 代替麦克风），松开后等识别结果上屏。
+/// 要真模型，所以只在 addon-test.sh 带了 WOWTYPE_VOICE_WAV 时跑。异步：靠事件循环里的定时器推进。
+struct VoiceCase {
+    Instance &instance;
+    std::unique_ptr<HarnessInputContext> ic;
+    std::unique_ptr<EventSourceTime> timer;
+    std::string expect;
+    int ticks = 0;
+    bool released = false;
+};
+
+void runVoiceCase(Instance &instance, std::function<void()> done) {
+    const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
+    if (!wav || !*wav) {
+        std::printf("skip 语音（没给 WOWTYPE_VOICE_WAV）\n");
+        done();
+        return;
+    }
+    auto *c = new VoiceCase{instance, std::make_unique<HarnessInputContext>(instance.inputContextManager()), {}, {}};
+    if (const char *expect = std::getenv("WOWTYPE_VOICE_EXPECT")) {
+        c->expect = expect;
+    }
+    c->ic->focusIn();
+    instance.setCurrentInputMethod(c->ic.get(), "wowtype", true);
+    KeyEvent press(c->ic.get(), Key(FcitxKey_Alt_R), false);
+    check(c->ic->keyEvent(press), "语音：按下右 Alt 被输入法接住");
+    check(c->ic->inputPanel().auxUp().toString().find("🎙") != std::string::npos,
+          "语音：显示麦克风图标，实际 " + c->ic->inputPanel().auxUp().toString());
+    c->timer = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
+        [c, done](EventSourceTime *source, uint64_t) {
+            ++c->ticks;
+            // 按住 1 秒后松开（长按：松开即结束）
+            if (!c->released && c->ticks >= 10) {
+                c->released = true;
+                KeyEvent release(c->ic.get(), Key(FcitxKey_Alt_R, KeyState::Alt), true);
+                check(c->ic->keyEvent(release), "语音：松开右 Alt 也被接住");
+            }
+            const bool finished = !c->ic->committed.empty() || c->ticks > 600;
+            if (!finished) {
+                source->setNextInterval(100000);
+                source->setOneShot();
+                return true;
+            }
+            std::printf("语音上屏：%s（%.1f 秒）\n", c->ic->committed.c_str(), c->ticks / 10.0);
+            check(!c->ic->committed.empty(), "语音：识别结果上屏");
+            if (!c->expect.empty()) {
+                check(c->ic->committed.find(c->expect) != std::string::npos,
+                      "语音：结果里有「" + c->expect + "」");
+            }
+            check(c->ic->inputPanel().auxUp().empty(), "语音：上屏后提示消失");
+            c->ic.reset();
+            done();
+            // 定时器自己的回调里不能删定时器，交给下一轮事件循环
+            dispatcher->schedule([c]() { delete c; });
+            return true;
+        });
 }
 
 } // namespace
@@ -324,12 +403,15 @@ int main(int argc, char **argv) {
     char *args[] = {arg0, arg1, arg2};
     Instance instance(3, args);
     instance.addonManager().registerDefaultLoader(nullptr);
-    EventDispatcher dispatcher;
-    dispatcher.attach(&instance.eventLoop());
-    dispatcher.schedule([&instance]() {
+    EventDispatcher mainDispatcher;
+    mainDispatcher.attach(&instance.eventLoop());
+    dispatcher = &mainDispatcher;
+    mainDispatcher.schedule([&instance]() {
         runCases(instance);
-        std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
-        instance.exit();
+        runVoiceCase(instance, [&instance]() {
+            std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
+            instance.exit();
+        });
     });
     instance.exec();
     return failures ? 1 : 0;

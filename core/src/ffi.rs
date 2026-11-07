@@ -644,6 +644,30 @@ pub unsafe extern "C" fn wowtype_candidates_free(candidates: *mut WowtypeCandida
     }
 }
 
+thread_local! {
+    static SEGMENTED: RefCell<CString> = RefCell::new(CString::default());
+}
+
+/// 按候选拼音（空格分隔）给输入分词：hengxiang + "heng xiang" -> heng'xiang。
+/// 切不了（英文、双拼、差得太多）返回 NULL；返回的串在同一线程下一次调用前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_segment_input(
+    input: *const c_char,
+    pinyin: *const c_char,
+) -> *const c_char {
+    let (Some(input), Some(pinyin)) = (unsafe { cstr_to_str(input) }, unsafe { cstr_to_str(pinyin) })
+    else {
+        return ptr::null();
+    };
+    match crate::preedit::segment_input(input, pinyin).and_then(|s| CString::new(s).ok()) {
+        Some(text) => SEGMENTED.with(|slot| {
+            *slot.borrow_mut() = text;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
+}
+
 /// 最近一次错误。返回的指针在下一次调用本 API 前有效。
 #[no_mangle]
 pub extern "C" fn wowtype_last_error() -> *const c_char {

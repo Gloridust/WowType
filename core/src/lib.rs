@@ -1,4 +1,4 @@
-//! Wowtype 拼音引擎骨架。
+//! WowType 拼音引擎骨架。
 //!
 //! 流水线：
 //! 输入预处理 -> 音节图 -> 束搜索（词典 + 二元 LM） -> 特征/线性打分 -> 候选。
@@ -11,11 +11,16 @@ pub mod graph;
 pub mod learn;
 pub mod lexicon;
 pub mod lm;
+pub mod preedit;
 pub mod rank;
 pub mod shuangpin;
 pub mod syllable;
 pub mod symbols;
 pub mod train;
+#[cfg(feature = "voice")]
+pub mod voice_ffi;
+#[cfg(not(feature = "voice"))]
+pub mod voice_stub;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;

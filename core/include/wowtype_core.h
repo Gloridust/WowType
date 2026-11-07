@@ -1,5 +1,5 @@
 /*
- * Wowtype Rust 核心的 C ABI。
+ * WowType Rust 核心的 C ABI。
  *
  * 生命周期：
  * - wowtype_engine_new 成功返回句柄，必须用 wowtype_engine_free 释放；
@@ -110,11 +110,64 @@ size_t wowtype_candidates_consumed(const WowtypeCandidates *candidates, size_t i
 /* 释放候选集合。 */
 void wowtype_candidates_free(WowtypeCandidates *candidates);
 
+/* 编辑区显示用：按候选拼音（空格分隔，wowtype_candidates_pinyin）给输入分词，
+ * hengxiang + "heng xiang" -> heng'xiang。保留用户打的字母（大小写、按错的键）。
+ * 切不了（英文、双拼、差得太多）返回 NULL；返回的串在同一线程下一次调用前有效。 */
+const char *wowtype_segment_input(const char *input, const char *pinyin);
+
 /* 最近一次错误信息，可能为空串。 */
 const char *wowtype_last_error(void);
 
 /* 版本号，例如 0.1.0。 */
 const char *wowtype_version(void);
+
+/*
+ * 语音输入（核心带 voice 特性编译时才有，默认带）。
+ *
+ * 识别用微信输入法的离线模型：不随软件分发，第一次按热键时从腾讯 CDN 下载（约 100MB）
+ * 到 model_dir，之后常驻内存。所有函数都不阻塞：开麦克风、下载、解码都在后台线程。
+ *
+ * 用法：热键按下/松开调 key_down/key_up；录音期间每几十毫秒调一次 poll，
+ * 按返回的状态显示提示或上屏 wowtype_voice_text。
+ * 按住超过 300ms 松开即结束；更短算点按，继续听到静音 1.5 秒或再按一次热键。
+ * 设了环境变量 WOWTYPE_VOICE_WAV 时不开麦克风，改读这个 WAV 文件（测试用）。
+ */
+typedef struct WowtypeVoice WowtypeVoice;
+
+enum {
+    WOWTYPE_VOICE_IDLE = 0,
+    WOWTYPE_VOICE_LISTENING = 1,   /* 正在听；文本是中间结果（可能为空） */
+    WOWTYPE_VOICE_RECOGNIZING = 2, /* 录完了，正在出最终结果 */
+    WOWTYPE_VOICE_RESULT = 3,      /* 最终结果，文本即要上屏的字；只返回一次 */
+    WOWTYPE_VOICE_ERROR = 4,       /* 出错或没听清，文本是原因；只返回一次 */
+};
+
+enum {
+    WOWTYPE_VOICE_MODEL_NONE = 0,
+    WOWTYPE_VOICE_MODEL_DOWNLOADING = 1,
+    WOWTYPE_VOICE_MODEL_LOADING = 2,
+    WOWTYPE_VOICE_MODEL_READY = 3,
+    WOWTYPE_VOICE_MODEL_FAILED = 4,
+};
+
+/* model_dir 为 NULL/空串时用 ~/.local/share/wowtype/wtlocal。
+ * 核心不带 voice 特性编译时返回 NULL（其余函数接受 NULL，什么也不做）。 */
+WowtypeVoice *wowtype_voice_new(const char *model_dir);
+void wowtype_voice_free(WowtypeVoice *voice);
+void wowtype_voice_key_down(WowtypeVoice *voice);
+void wowtype_voice_key_up(WowtypeVoice *voice);
+/* 丢掉这次说的话（Esc、切走输入框）。 */
+void wowtype_voice_cancel(WowtypeVoice *voice);
+/* 返回 WOWTYPE_VOICE_*。 */
+int wowtype_voice_poll(WowtypeVoice *voice);
+/* 上一次 poll 对应的文本；下一次 poll 或释放前有效。 */
+const char *wowtype_voice_text(const WowtypeVoice *voice);
+/* 正在听时最近的音量，0–100（画波形用）。 */
+int wowtype_voice_level(const WowtypeVoice *voice);
+/* 返回 WOWTYPE_VOICE_MODEL_*。 */
+int wowtype_voice_model_state(const WowtypeVoice *voice);
+/* 松开热键后还在听（点按模式）时返回 1。 */
+int wowtype_voice_is_tap(const WowtypeVoice *voice);
 
 #ifdef __cplusplus
 }

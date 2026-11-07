@@ -40,3 +40,9 @@ path = "src/bin/probe.rs"
 
 [dependencies]
 anyhow = "1.0"
+# 语音输入（麦克风 + 微信离线识别模型）。Linux 需要 libasound2-dev
+wowtype-voice = { path = "../voice", features = ["capture"], optional = true }
+
+[features]
+default = ["voice"]
+voice = ["dep:wowtype-voice"]

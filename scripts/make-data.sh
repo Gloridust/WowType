@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 从雾凇拼音（rime-ice）生成 Wowtype 用的词库和英文词表。
+# 从雾凇拼音（rime-ice）生成 WowType 用的词库和英文词表。
 #
 #   scripts/make-data.sh [rime-ice 目录] [输出目录]
 #
@@ -29,7 +29,7 @@ DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)
 cat > "$OUT/SOURCE.txt" <<EOF
 数据来源：雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），许可证 GPL-3.0，见 LICENSE。
 版本：$COMMIT（$DATE）
-lexicon.tsv 由 Wowtype 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables；
+lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables；
 english.txt 是 en_dicts/en.dict.yaml 与 en_dicts/en_ext.dict.yaml 原样拼接。
 EOF
 echo "$DATE" > "$OUT/VERSION"
