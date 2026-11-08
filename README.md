@@ -110,7 +110,7 @@ im-config -n fcitx5
 | 文件 | 内容 |
 |---|---|
 | `wowtype_<版本>_<发行版>_amd64.deb` | 输入法本体，选和你系统对应的那个（`ubuntu24.04`、`ubuntu26.04`、`debian13`） |
-| `wowtype-data-rime-ice_<日期>_all.deb` | 词库（89 万词 + 英文词表），所有发行版通用 |
+| `wowtype-data-rime-ice_<日期.修订>_all.deb` | 词库（89 万词 + 英文词表），所有发行版通用 |
 
 不知道自己是哪个发行版：
 
@@ -171,7 +171,7 @@ cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
 > Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
 > 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成你系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
 
-不想用安装包的词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期>.tar.gz`，解压到 `~/.local/share/wowtype/`。
+不想用安装包的词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
 
 ### 第 3 步：把 WowType 加进输入法列表
 

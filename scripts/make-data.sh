@@ -36,10 +36,13 @@ lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及�
 再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv；
 english.txt 是 en_dicts/en.dict.yaml 与 en_dicts/en_ext.dict.yaml 原样拼接。
 EOF
-echo "$DATE" > "$OUT/VERSION"
+# 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
+# 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
+REV=1
+echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)
-echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice $DATE）"
+echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice $DATE，修订 $REV）"
 if (( LINES < 100000 )); then
   echo "词库条数太少，rime-ice 的目录结构可能变了" >&2
   exit 1
