@@ -118,6 +118,17 @@ int main(int argc, char **argv) {
     check(wowtype_engine_save_user_dict(e, "/tmp/wowtype_abi_user.tsv") == 0, "save_user_dict");
     check(wowtype_engine_remove_user_word(e, "我特") == 1, "remove_user_word");
     check(wowtype_engine_load_user_dict(e, "/tmp/wowtype_abi_user.tsv") >= 1, "load_user_dict");
+    {
+        FILE *custom = fopen("/tmp/wowtype_abi_custom.tsv", "w");
+        check(custom != NULL, "open custom.tsv");
+        fputs("ni hao\t妮好\nnot pinyin zz\t坏\n", custom);
+        fclose(custom);
+        check(wowtype_engine_load_custom_words(e, "/tmp/wowtype_abi_custom.tsv") == 1,
+              "load_custom_words");
+        check(wowtype_engine_load_custom_words(e, "/tmp/wowtype_abi_no_such.tsv") == 0,
+              "load_custom_words missing file clears");
+        remove("/tmp/wowtype_abi_custom.tsv");
+    }
 
     /* 自动学习：同一个词选 3 次后应当能直接打出来 */
     for (int i = 0; i < 3; i++) {

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(wowtype-fcitx5 VERSION 0.1.0 LANGUAGES CXX)
+project(wowtype-fcitx5 VERSION 0.2.1 LANGUAGES CXX)
 
 # fcitx5 5.1 的头文件用到了 std::span、std::source_location
 set(CMAKE_CXX_STANDARD 20)
@@ -42,6 +42,9 @@ add_library(wowtype MODULE
 target_include_directories(wowtype PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"
 )
+# 设置界面装在哪：插件在后台用它检查更新（wowtype-config --check-update）
+target_compile_definitions(wowtype PRIVATE
+    WOWTYPE_CONFIG_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/wowtype-config")
 target_link_libraries(wowtype PRIVATE
     Fcitx5::Core
     Fcitx5::Config
@@ -106,6 +109,25 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wowtype-addon.conf"
     DESTINATION "${FCITX_INSTALL_PKGDATADIR}/addon"
     RENAME wowtype.conf
 )
+
+# 图标：输入法列表、托盘和设置界面都用 wowtype
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../icons/hicolor"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/icons"
+    FILES_MATCHING PATTERN "*.png" PATTERN "*.svg"
+)
+
+# 设置界面（GTK 4 + libadwaita，Python）：fcitx5 配置工具里的「自定义词和更多设置」也打开它
+option(WOWTYPE_INSTALL_SETTINGS "Install the wowtype-config settings app" ON)
+if(WOWTYPE_INSTALL_SETTINGS)
+    set(WOWTYPE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the settings app")
+    set(VERSION "${WOWTYPE_VERSION}")
+    configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../settings/wowtype-config"
+        "${CMAKE_CURRENT_BINARY_DIR}/wowtype-config" @ONLY)
+    install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/wowtype-config"
+        DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../settings/io.github.Gloridust.WowType.Config.desktop"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/applications")
+endif()
 
 # 按键行为测试（scripts/addon-test.sh 会打开它）：私有、无界面的 fcitx5 实例里加载插件按键
 option(WOWTYPE_BUILD_TESTS "Build the key-handling harness" OFF)

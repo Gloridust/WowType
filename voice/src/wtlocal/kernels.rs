@@ -69,8 +69,12 @@ fn dot(x: &[i8], xr: usize, w: &[i8], wr: usize, k: usize) -> [[i32; 4]; 2] {
         return unsafe { neon::dot2x4(xp, wp, k) };
     }
     #[cfg(target_arch = "x86_64")]
-    if k % 32 == 0 && avx2() {
-        return unsafe { avx::dot2x4(xp, wp, k) };
+    if k % 32 == 0 {
+        match x86_level() {
+            X86::Vnni => return unsafe { avx::dot2x4_vnni(xp, wp, k) },
+            X86::Avx2 => return unsafe { avx::dot2x4(xp, wp, k) },
+            X86::None => {}
+        }
     }
     let mut r = [[0i32; 4]; 2];
     for a in 0..xr {
@@ -98,9 +102,29 @@ fn dot1(a: &[i8], b: &[i8]) -> i32 {
 }
 
 #[cfg(target_arch = "x86_64")]
-fn avx2() -> bool {
-    static F: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *F.get_or_init(|| std::is_x86_feature_detected!("avx2"))
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum X86 {
+    None,
+    Avx2,
+    /// AVX-VNNI（Intel 12 代、AMD Zen 5 起）：一条 vpdpbusd 顶 maddubs + madd 两条
+    Vnni,
+}
+
+#[cfg(target_arch = "x86_64")]
+fn x86_level() -> X86 {
+    static F: std::sync::OnceLock<X86> = std::sync::OnceLock::new();
+    *F.get_or_init(|| {
+        if std::env::var_os("WOWTYPE_NO_VNNI").is_none()
+            && std::is_x86_feature_detected!("avx2")
+            && std::is_x86_feature_detected!("avxvnni")
+        {
+            X86::Vnni
+        } else if std::is_x86_feature_detected!("avx2") {
+            X86::Avx2
+        } else {
+            X86::None
+        }
+    })
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -188,6 +212,30 @@ mod avx {
         }
         r
     }
+
+    /// 同 [`dot2x4`]，乘加用 AVX-VNNI 的 vpdpbusd（u8×i8 直接累加到 i32）
+    #[target_feature(enable = "avx2,avxvnni")]
+    pub unsafe fn dot2x4_vnni(x: [*const i8; 2], w: [*const i8; 4], k: usize) -> [[i32; 4]; 2] {
+        let mut a = [_mm256_setzero_si256(); 8];
+        let mut i = 0;
+        while i < k {
+            let x0 = _mm256_loadu_si256(x[0].add(i) as *const __m256i);
+            let x1 = _mm256_loadu_si256(x[1].add(i) as *const __m256i);
+            let (u0, u1) = (_mm256_sign_epi8(x0, x0), _mm256_sign_epi8(x1, x1));
+            for b in 0..4 {
+                let wv = _mm256_loadu_si256(w[b].add(i) as *const __m256i);
+                a[b] = _mm256_dpbusd_avx_epi32(a[b], u0, _mm256_sign_epi8(wv, x0));
+                a[4 + b] = _mm256_dpbusd_avx_epi32(a[4 + b], u1, _mm256_sign_epi8(wv, x1));
+            }
+            i += 32;
+        }
+        let mut r = [[0; 4]; 2];
+        for b in 0..4 {
+            r[0][b] = hsum(a[b]);
+            r[1][b] = hsum(a[4 + b]);
+        }
+        r
+    }
 }
 
 /// f32 点积（8 路累加，便于自动向量化）
@@ -231,6 +279,38 @@ mod tests {
                     "{i},{j}"
                 );
             }
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+mod simd_tests {
+    use super::*;
+
+    #[test]
+    fn simd_kernels_match_scalar() {
+        let k = 512;
+        let mut seed = 7u32;
+        // 量化权重和激活都在 [-127, 127]（对称量化，不会出现 -128）
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            (((seed >> 16) % 255) as i32 - 127) as i8
+        };
+        let x: Vec<i8> = (0..2 * k).map(|_| rnd()).collect();
+        let w: Vec<i8> = (0..4 * k).map(|_| rnd()).collect();
+        let xp = [x.as_ptr(), x[k..].as_ptr()];
+        let wp: [*const i8; 4] = std::array::from_fn(|b| w[b * k..].as_ptr());
+        let mut want = [[0i32; 4]; 2];
+        for a in 0..2 {
+            for b in 0..4 {
+                want[a][b] = dot1(&x[a * k..(a + 1) * k], &w[b * k..(b + 1) * k]);
+            }
+        }
+        if std::is_x86_feature_detected!("avx2") {
+            assert_eq!(unsafe { avx::dot2x4(xp, wp, k) }, want);
+        }
+        if std::is_x86_feature_detected!("avxvnni") {
+            assert_eq!(unsafe { avx::dot2x4_vnni(xp, wp, k) }, want);
         }
     }
 }

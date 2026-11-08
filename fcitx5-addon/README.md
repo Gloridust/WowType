@@ -134,7 +134,7 @@ bigram 格式（可选）：
 ## 配置
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
-`Shuangpin`、`Traditional`、`Voice`、`VoiceKey`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`Shuangpin`、`Traditional`、`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -156,6 +156,7 @@ bigram 格式（可选）：
 | `WOWTYPE_VERTICAL` | `1` 候选竖排 |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉语音 |
 | `WOWTYPE_CUSTOM` | 自定义词文件路径 |
+| `WOWTYPE_NO_UPDATE_CHECK` | 设了就不在后台检查更新 |
 
 ## 交互行为
 

@@ -204,7 +204,8 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | 空格 | 上屏第一个（或光标所在的）候选 |
 | `1`–`9` | 上屏对应的候选 |
 | `←` `→` | 在候选之间移动光标 |
-| `↑` `↓`、`-` `=`、`PgUp` `PgDn` | 翻页 |
+| `↓` | 展开候选面板（6 列，像微信输入法），在面板里用方向键挪、空格或 `1`–`6` 选；第一行按 `↑` 或 `Esc` 收起 |
+| `↑`、`-` `=`、`PgUp` `PgDn` | 翻页 |
 | 回车 | 把打的字母原样上屏 |
 | `Esc` | 清空正在打的内容 |
 | 退格 | 删一个字母；刚选过词时先撤销那次选词 |
@@ -261,10 +262,11 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加 |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
+| 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
 
 右上角菜单里还有：用文本编辑器打开自定义词文件、恢复默认设置（不影响自定义词）、关于。
 
-- `wowtype-config --page voice`（或 `general`、`words`）直接打开某一页。
+- `wowtype-config --page voice`（或 `general`、`words`、`update`）直接打开某一页。
 - **Fcitx 5 配置**里选中 WowType 点「配置」，也能改上面这些设置，里面的「自定义词和更多设置」会打开 WowType 设置。
 
 #### 自定义词
@@ -301,13 +303,14 @@ Shuangpin=False
 Traditional=False
 Voice=True
 VoiceKey=Alt_R
+CheckUpdate=True
 ```
 
 | 键 | 取值 |
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`CheckUpdate` | `True` / `False` |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
 
 文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
@@ -323,8 +326,16 @@ VoiceKey=Alt_R
 | `WOWTYPE_S2T` | 简繁对照表，默认 `/usr/share/wowtype/s2t.tsv` |
 | `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
 | `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal` |
+| `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新 |
 
 临时试一下：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。长期用写进 `~/.config/environment.d/wowtype.conf`，注销重新登录后生效。
+
+### 更新
+
+用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
+有新版本就弹一条通知，点开进「WowType 设置」的「更新」页，能看更新内容，点「下载并安装」，
+按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
+不想自动检查，在「更新」页关掉「自动检查更新」（就是配置文件里的 `CheckUpdate=False`）。从源码装的只会提示新版本，要自己更新。
 
 ### 数据文件
 

@@ -22,7 +22,11 @@ pub fn segment_input(raw: &str, pinyin: &str) -> Option<String> {
         .split_whitespace()
         .map(|s| s.to_ascii_lowercase().into_bytes())
         .collect();
-    if syllables.len() < 2 || syllables.iter().any(|s| !s.iter().all(u8::is_ascii_lowercase)) {
+    if syllables.len() < 2
+        || syllables
+            .iter()
+            .any(|s| !s.iter().all(u8::is_ascii_lowercase))
+    {
         return None;
     }
 
@@ -63,7 +67,10 @@ pub fn segment_input(raw: &str, pinyin: &str) -> Option<String> {
                 }
                 let seg = &letters[a..i];
                 let cost = if last {
-                    (1..=syl.len()).map(|p| osa(seg, &syl[..p])).min().unwrap_or(INF)
+                    (1..=syl.len())
+                        .map(|p| osa(seg, &syl[..p]))
+                        .min()
+                        .unwrap_or(INF)
                 } else {
                     osa(seg, syl)
                 };
@@ -130,7 +137,9 @@ fn osa(a: &[u8], b: &[u8]) -> usize {
     for i in 1..=n {
         for j in 1..=m {
             let sub = usize::from(a[i - 1] != b[j - 1]);
-            let mut v = (d[i - 1][j] + 1).min(d[i][j - 1] + 1).min(d[i - 1][j - 1] + sub);
+            let mut v = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + sub);
             if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
                 v = v.min(d[i - 2][j - 2] + 1);
             }
@@ -150,7 +159,10 @@ mod tests {
 
     #[test]
     fn full_pinyin() {
-        assert_eq!(seg("hengxiang", "heng xiang").as_deref(), Some("heng'xiang"));
+        assert_eq!(
+            seg("hengxiang", "heng xiang").as_deref(),
+            Some("heng'xiang")
+        );
         assert_eq!(
             seg("wojintianwanshang", "wo jin tian wan shang").as_deref(),
             Some("wo'jin'tian'wan'shang")

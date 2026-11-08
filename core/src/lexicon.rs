@@ -21,7 +21,14 @@ use crate::syllable::{Syllable, SyllableId, SyllableQuery};
 
 /// 词库快照的魔数与格式版本。格式一变就改版本号，旧快照自动失效。
 const CACHE_MAGIC: &[u8; 4] = b"WLC1";
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
+
+/// 占位频次的词估频时给的成词加成（自然对数，约 ×20）。见 `estimate_placeholder_freqs`。
+const PLACEHOLDER_BONUS: f64 = 3.0;
+/// 同一个频次至少有这么多多音节词才当占位值（小词库、用户词库不处理）。
+const PLACEHOLDER_MIN_WORDS: usize = 1000;
+/// 切分时每一部分最多几个音节。
+const PLACEHOLDER_MAX_PART: usize = 6;
 
 fn cache_path(path: &Path) -> std::path::PathBuf {
     let mut os = path.as_os_str().to_owned();
@@ -243,6 +250,8 @@ impl MemoryLexicon {
         buf.extend_from_slice(&src_len.to_le_bytes());
         buf.extend_from_slice(&src_mtime.to_le_bytes());
         buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        // 词频是估过的（见 estimate_placeholder_freqs），总频次单独存，别从估值里加
+        buf.extend_from_slice(&self.total_freq.to_le_bytes());
         for entry in &self.entries {
             let word = entry.word.as_bytes();
             buf.extend_from_slice(&(word.len() as u16).to_le_bytes());
@@ -279,8 +288,9 @@ impl MemoryLexicon {
         {
             return None;
         }
-        let count = u32::from_le_bytes(data[24..28].try_into().ok()?) as usize;
-        let mut cursor = 28usize;
+        let count = u32::from_le_bytes(data.get(24..28)?.try_into().ok()?) as usize;
+        let total = f64::from_le_bytes(data.get(28..36)?.try_into().ok()?);
+        let mut cursor = 36usize;
         let mut lex = MemoryLexicon::new();
         for _ in 0..count {
             let word_len =
@@ -306,6 +316,7 @@ impl MemoryLexicon {
             cursor += n_initials;
             lex.add_entry(keys, initials, word, freq);
         }
+        lex.total_freq = total;
         Some(lex)
     }
 
@@ -337,6 +348,93 @@ impl MemoryLexicon {
         Ok(lex)
     }
 
+    /// 给「占位频次」的词估一个频次。
+    ///
+    /// rime-ice 的 ext / tencent 两个词表（加起来五十多万词，占整个词库一半以上）
+    /// 所有词的频次都是同一个占位值 100。按字面当频次用，这些词就比任何常用字
+    /// 拼出来的句子都冷门得多：`bujianyi` 里「不建议」排在「不见一」「部件」后面，
+    /// 第一页根本看不到。
+    ///
+    /// 做法：找出多音节词里占比很高的那个频次（占位值），把这些词按自己的拼音
+    /// 和字切成词库里已有的词，频次取「各部分概率相乘」再乘一个成词加成
+    /// [`PLACEHOLDER_BONUS`]——词库收了它，说明这几个字常挨着用，相当于没有
+    /// 二元模型时给它补上搭配分。不会低于原值，也不会高过最冷门的那一部分。
+    fn estimate_placeholder_freqs(&mut self, min_words: usize) {
+        let mut hist: HashMap<u64, usize> = HashMap::new();
+        let mut multi = 0usize;
+        for entry in &self.entries {
+            if entry.keys.len() >= 2 {
+                multi += 1;
+                *hist.entry(entry.freq.to_bits()).or_default() += 1;
+            }
+        }
+        let Some((&bits, &count)) = hist.iter().max_by_key(|(_, &c)| c) else {
+            return;
+        };
+        if count < min_words || count * 4 < multi {
+            return;
+        }
+        let placeholder = f64::from_bits(bits);
+        let bonus = std::env::var("WOWTYPE_PLACEHOLDER_BONUS")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(PLACEHOLDER_BONUS);
+        let total = self.total_freq.max(1.0);
+        let mut updates = Vec::new();
+        for (idx, entry) in self.entries.iter().enumerate() {
+            if entry.freq != placeholder || entry.keys.len() < 2 {
+                continue;
+            }
+            let chars: Vec<char> = entry.word.chars().collect();
+            let n = chars.len();
+            if n != entry.keys.len() {
+                continue; // 儿化、混了字母数字的词，字和音节对不齐
+            }
+            // best[j]：前 j 个字切成已有词的最小代价；rarest[j]：这种切法里最冷门部分的频次
+            let mut best = vec![f64::INFINITY; n + 1];
+            let mut rarest = vec![f64::INFINITY; n + 1];
+            best[0] = 0.0;
+            for i in 0..n {
+                if !best[i].is_finite() {
+                    continue;
+                }
+                for j in (i + 1)..=n.min(i + PLACEHOLDER_MAX_PART) {
+                    if j - i == n {
+                        continue; // 不能用自己
+                    }
+                    let Some(ids) = self.full_index.get(&entry.keys[i..j]) else {
+                        continue;
+                    };
+                    let part: String = chars[i..j].iter().collect();
+                    let freq = ids
+                        .iter()
+                        .map(|&k| &self.entries[k])
+                        .filter(|e| e.word == part)
+                        .map(|e| e.freq)
+                        .fold(0.0f64, f64::max);
+                    if freq <= 0.0 {
+                        continue;
+                    }
+                    let cost = best[i] - (freq / total).ln();
+                    if cost < best[j] {
+                        best[j] = cost;
+                        rarest[j] = rarest[i].min(freq);
+                    }
+                }
+            }
+            if !best[n].is_finite() {
+                continue;
+            }
+            let estimate = (total * (bonus - best[n]).exp()).min(rarest[n]);
+            if estimate > entry.freq {
+                updates.push((idx, estimate));
+            }
+        }
+        for (idx, freq) in updates {
+            self.entries[idx].freq = freq;
+        }
+    }
+
     fn build_fuzzy_index(&self) -> HashMap<Vec<SyllableId>, Vec<usize>> {
         let mut map: HashMap<Vec<SyllableId>, Vec<usize>> = HashMap::new();
         for (idx, entry) in self.entries.iter().enumerate() {
@@ -362,7 +460,9 @@ impl MemoryLexicon {
         let path = path.as_ref();
         let data = fs::read_to_string(path)
             .with_context(|| format!("读取词典失败: {}", path.display()))?;
-        Self::from_tsv_str(&data)
+        let mut lex = Self::from_tsv_str(&data)?;
+        lex.estimate_placeholder_freqs(PLACEHOLDER_MIN_WORDS);
+        Ok(lex)
     }
 }
 
@@ -519,14 +619,20 @@ impl Lexicon for FuzzyLexicon<'_> {
 pub struct UserLexicon {
     base: Arc<dyn Lexicon>,
     words: RwLock<Vec<(String, String, f64)>>,
+    /// 自定义词（设置里添加的，存在 custom.tsv）：只读，整份替换，不写回用户词库。
+    custom: RwLock<Vec<(String, String, f64)>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
+
+/// 自定义词默认频次：和最常用的词差不多，所以排在同音词前面。
+pub const CUSTOM_WORD_FREQ: f64 = 5_000_000.0;
 
 impl UserLexicon {
     pub fn new(base: Arc<dyn Lexicon>) -> Self {
         Self {
             base,
             words: RwLock::new(Vec::new()),
+            custom: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -613,8 +719,71 @@ impl UserLexicon {
         Ok(added)
     }
 
+    /// 用一份自定义词整体替换现有的。格式 `拼音<TAB>词[<TAB>频次]`，
+    /// 拼音不合法的行跳过。返回收下的条数。
+    pub fn set_custom_tsv(&self, data: &str) -> usize {
+        let mut custom = Vec::new();
+        for line in data.lines() {
+            let line = line.trim_end_matches('\r');
+            if line.trim().is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let mut cols = line.split('\t');
+            let (Some(pinyin), Some(word)) = (cols.next(), cols.next()) else {
+                continue;
+            };
+            let (pinyin, word) = (pinyin.trim().to_ascii_lowercase(), word.trim());
+            // 手写的 custom.tsv 可能不分音节（nihao）：自己切开
+            let Some(pinyin) = (if parse_pinyin_keys(&pinyin).is_ok() {
+                Some(pinyin)
+            } else {
+                split_syllables(&pinyin)
+            }) else {
+                continue;
+            };
+            if word.is_empty() {
+                continue;
+            }
+            let freq = cols
+                .next()
+                .and_then(|f| f.trim().parse::<f64>().ok())
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .unwrap_or(CUSTOM_WORD_FREQ);
+            custom.push((pinyin, word.to_string(), freq));
+        }
+        let count = custom.len();
+        if let Ok(mut slot) = self.custom.write() {
+            *slot = custom;
+        }
+        self.rebuild();
+        count
+    }
+
+    /// 从文件读自定义词（整体替换）；文件不存在就清空。
+    pub fn load_custom<P: AsRef<Path>>(&self, path: P) -> Result<usize> {
+        let path = path.as_ref();
+        match fs::read_to_string(path) {
+            Ok(data) => Ok(self.set_custom_tsv(&data)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(self.set_custom_tsv("")),
+            Err(e) => Err(e).with_context(|| format!("读取自定义词失败: {}", path.display())),
+        }
+    }
+
+    /// 是不是设置里添加的自定义词。
+    pub fn is_custom(&self, word: &str) -> bool {
+        self.custom
+            .read()
+            .map(|c| c.iter().any(|(_, w, _)| w == word))
+            .unwrap_or(false)
+    }
+
+    pub fn custom_words(&self) -> Vec<(String, String, f64)> {
+        self.custom.read().map(|w| w.clone()).unwrap_or_default()
+    }
+
     fn rebuild(&self) {
-        let words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        let mut words = self.words.read().map(|w| w.clone()).unwrap_or_default();
+        words.extend(self.custom_words());
         let mut tsv = String::new();
         for (pinyin, word, freq) in &words {
             tsv.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq));
@@ -699,6 +868,40 @@ fn entry_matches(entry: &LexEntry, query: &[SyllableQuery]) -> bool {
 /// - 儿化：hua r
 ///
 /// 多音节不允许写成无分隔的连写，因为无法唯一切分（如 fangan）。
+/// 把连着写的拼音切成音节（`nihao` -> `ni hao`）：音节数最少，一样多时前面的音节取长的
+/// （`fangan` -> `fang an`，想要 fan gan 就自己加空格或隔音符）。切不开返回 None。
+pub fn split_syllables(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_lowercase()) {
+        return None;
+    }
+    let n = text.len();
+    // best[i]：text[i..] 最少切成几个音节，以及第一个音节的长度
+    let mut best: Vec<Option<(usize, usize)>> = vec![None; n + 1];
+    best[n] = Some((0, 0));
+    for i in (0..n).rev() {
+        for len in (1..=crate::syllable::MAX_SYLLABLE_LEN.min(n - i)).rev() {
+            if !crate::syllable::is_valid(&text[i..i + len]) {
+                continue;
+            }
+            if let Some((count, _)) = best[i + len] {
+                if best[i].map_or(true, |(c, _)| count + 1 < c) {
+                    best[i] = Some((count + 1, len));
+                }
+            }
+        }
+    }
+    best[0]?;
+    let mut parts = Vec::new();
+    let mut i = 0;
+    while i < n {
+        let (_, len) = best[i]?;
+        parts.push(&text[i..i + len]);
+        i += len;
+    }
+    Some(parts.join(" "))
+}
+
 pub fn parse_pinyin_keys(pinyin: &str) -> Result<Vec<SyllableKey>> {
     let pinyin = pinyin.trim();
     if pinyin.is_empty() {
@@ -847,6 +1050,19 @@ mod tests {
     }
 
     #[test]
+    fn split_syllables_prefers_fewest_and_longest_first() {
+        assert_eq!(split_syllables("nihao").as_deref(), Some("ni hao"));
+        assert_eq!(split_syllables("fangan").as_deref(), Some("fang an"));
+        assert_eq!(split_syllables("xian").as_deref(), Some("xian"));
+        assert_eq!(
+            split_syllables("zhongguoren").as_deref(),
+            Some("zhong guo ren")
+        );
+        assert_eq!(split_syllables("github"), None);
+        assert_eq!(split_syllables("Ni"), None);
+    }
+
+    #[test]
     fn cache_roundtrip_matches_tsv() {
         let path = temp_lexicon("rt", "ni hao\t你好\t100\nzhong guo\t中国\t50\n");
         let first = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
@@ -882,5 +1098,26 @@ mod tests {
         let lex = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert_eq!(lex.len(), 1, "快照损坏时应回退到 TSV");
         cleanup(&path);
+    }
+    #[test]
+    fn placeholder_weight_words_get_estimated_from_their_parts() {
+        let mut lex = MemoryLexicon::from_tsv_str(
+            "bu\t不\t3000000\njian yi\t建议\t500000\nbu jian\t不见\t250000\nyi\t一\t35000000\n\
+             bu jian yi\t不建议\t100\nbu jian ying\t不坚硬\t100\nhao\t好\t9000\n\
+             zhe ge\t这个\t100\n",
+        )
+        .unwrap();
+        let total = lex.total_freq;
+        lex.estimate_placeholder_freqs(2);
+        let freq = |w: &str| lex.entries.iter().find(|e| e.word == w).unwrap().freq;
+        // 不建议 = 不 × 建议 × 加成，高过「不见 + 一」这句
+        let cost = |f: f64| -(f / total).ln();
+        assert!(cost(freq("不建议")) < cost(freq("不见")) + cost(freq("一")));
+        // 不会高过最冷门的那部分
+        assert!(freq("不建议") <= 500000.0);
+        // 切不开的词保持原样；总频次不变
+        assert_eq!(freq("不坚硬"), 100.0);
+        assert_eq!(freq("这个"), 100.0);
+        assert_eq!(lex.total_freq, total);
     }
 }

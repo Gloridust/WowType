@@ -333,6 +333,46 @@ pub fn first_words(
     words
 }
 
+/// 从输入开头起的全部词典词（翻页时补在后面）：包括正好用完整个输入的同音词。
+///
+/// 和 [`first_words`] 不同，这里每个结束位置最多留 `per_span` 个，不再按长度限量。
+/// 排序：用掉的字母多的在前，同样长的按代价从低到高。
+pub fn all_first_words(
+    graph: &SyllableGraph,
+    lexicon: &dyn Lexicon,
+    config: &BeamConfig,
+    per_span: usize,
+) -> Vec<(BeamWord, f64)> {
+    if graph.len() == 0 || per_span == 0 {
+        return Vec::new();
+    }
+    let mut words: Vec<(BeamWord, f64)> = collect_spans(
+        graph,
+        lexicon,
+        0,
+        config.max_word_syllables.max(1),
+        per_span,
+        config,
+    )
+    .into_iter()
+    .filter(|s| s.word.known)
+    .map(|s| {
+        let cost = s.lexical
+            + config.typo_cost * s.word.typos as f64
+            + config.completion_cost * s.word.completion as f64
+            + abbrev_penalty(graph, &s.word, config);
+        (s.word, cost)
+    })
+    .collect();
+    words.sort_by(|a, b| {
+        b.0.end
+            .cmp(&a.0.end)
+            .then_with(|| a.1.total_cmp(&b.1))
+            .then_with(|| a.0.text.cmp(&b.0.text))
+    });
+    words
+}
+
 /// 从 pos 出发的所有候选词：词典命中（按结束位置分组，各取代价最低的若干个）
 /// 加上每条精确边的未登录兜底。
 fn collect_spans(

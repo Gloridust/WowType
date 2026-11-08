@@ -265,7 +265,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 `FirstUserCandidateRankerProcessor`、`SingleUserWordCanbeSecond`、`history_hot_val`、
 `context_bigram_score`），只借思路，不用它的词库和模型。
 
-**候选横排**（设置界面里可改竖排，或 `WOWTYPE_VERTICAL=1`）。横排时左右键移动、上下键翻页。
+**候选横排**（设置界面里可改竖排，或 `WOWTYPE_VERTICAL=1`）。横排时左右键移动、上键翻页，下键展开成 6 列的候选面板（照微信输入法；fcitx5 的候选框只能画一行或一列，所以面板是竖排列表、每项一行 6 个词，用全角字符对齐，光标处的词用〔〕框起来）。
 
 **候选组成**：整句只留几个，后面是词，再后面是单字——
 

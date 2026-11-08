@@ -58,7 +58,26 @@ where
 {
     let host = cpal::default_host();
     let dev = pick_device(&host, device)?;
-    let supported = dev.default_input_config().context("读取录音配置失败")?;
+    // 设备能直接给 16kHz 就要 16kHz（PipeWire/PulseAudio 自己重采样，质量比我们好），
+    // 声道越少越好；不行再用设备默认格式，自己滤波重采样
+    let wanted = cpal::SampleRate(TARGET_RATE);
+    let preferred = dev.supported_input_configs().ok().and_then(|configs| {
+        configs
+            .filter(|c| {
+                c.min_sample_rate() <= wanted
+                    && wanted <= c.max_sample_rate()
+                    && matches!(
+                        c.sample_format(),
+                        cpal::SampleFormat::F32 | cpal::SampleFormat::I16
+                    )
+            })
+            .min_by_key(|c| (c.channels(), c.sample_format() != cpal::SampleFormat::F32))
+            .map(|c| c.with_sample_rate(wanted))
+    });
+    let supported = match preferred {
+        Some(config) => config,
+        None => dev.default_input_config().context("读取录音配置失败")?,
+    };
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
     let channels = config.channels;

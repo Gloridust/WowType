@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=WowType Settings
+Name[zh_CN]=WowType 设置
+Comment=Candidate layout, fuzzy pinyin, voice key and custom words
+Comment[zh_CN]=候选排列、模糊音、语音键和自定义词
+Exec=wowtype-config
+Icon=wowtype
+Terminal=false
+Categories=Settings;GTK;
+Keywords=input;pinyin;fcitx;wowtype;输入法;拼音;
+StartupNotify=true
