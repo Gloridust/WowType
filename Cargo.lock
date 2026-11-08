@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "wowtype-voice",
@@ -1028,7 +1028,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-voice"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "cpal",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-voiced"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "wowtype-voice",
