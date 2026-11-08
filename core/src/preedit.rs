@@ -180,6 +180,8 @@ mod tests {
         assert_eq!(seg("yongzwen", "yong z wen").as_deref(), Some("yong'z'wen"));
         assert_eq!(seg("zhognguo", "zhong guo").as_deref(), Some("zhogn'guo"));
         assert_eq!(seg("nihoa", "ni hao").as_deref(), Some("ni'hoa"));
+        assert_eq!(seg("zhchi", "zh chi").as_deref(), Some("zh'chi"));
+        assert_eq!(seg("zhch", "zh ch").as_deref(), Some("zh'ch"));
     }
 
     #[test]
