@@ -494,7 +494,7 @@ impl Lexicon for MemoryLexicon {
                 .unwrap_or_default();
         }
 
-        if all_jianpin {
+        if all_jianpin && !query.iter().any(needs_initial_check) {
             let key: Vec<u8> = query
                 .iter()
                 .map(|q| match q {
@@ -509,7 +509,7 @@ impl Lexicon for MemoryLexicon {
                 .unwrap_or_default();
         }
 
-        // 全拼混简拼（k yi -> 可以）：先按声母查，再逐个比对全拼的那几个音节
+        // 全拼混简拼（k yi -> 可以）、zh/ch/sh 简拼：先按首字母查，再逐个比对
         let Some(initials) = query_initials(query) else {
             return Vec::new();
         };
@@ -837,9 +837,17 @@ fn query_initials(query: &[SyllableQuery]) -> Option<Vec<u8>> {
         .iter()
         .map(|q| match q {
             SyllableQuery::Full { id, .. } => Syllable::from_id(*id).map(|s| s.initial_letter()),
-            SyllableQuery::Jianpin { letter } => Some(*letter),
+            SyllableQuery::Jianpin { letter } => {
+                Some(crate::syllable::jianpin_first_letter(*letter))
+            }
         })
         .collect()
+}
+
+/// 简拼查询要不要逐条核对声母（zh/ch/sh 的简拼只按首字母查不够）。
+fn needs_initial_check(query: &SyllableQuery) -> bool {
+    matches!(query, SyllableQuery::Jianpin { letter }
+        if crate::syllable::jianpin_required_initial(*letter).is_some())
 }
 
 fn initial_hash_step(hash: u64, letter: u8) -> u64 {
@@ -856,7 +864,14 @@ fn entry_matches(entry: &LexEntry, query: &[SyllableQuery]) -> bool {
         .enumerate()
         .all(|(i, (q, key))| match q {
             SyllableQuery::Full { id, erhua } => key.id == *id && key.erhua == *erhua,
-            SyllableQuery::Jianpin { letter } => entry.initials.get(i) == Some(letter),
+            SyllableQuery::Jianpin { letter } => {
+                match crate::syllable::jianpin_required_initial(*letter) {
+                    Some(initial) => {
+                        Syllable::from_id(key.id).is_some_and(|s| s.initial == initial)
+                    }
+                    None => entry.initials.get(i) == Some(letter),
+                }
+            }
         })
 }
 
@@ -996,6 +1011,30 @@ mod tests {
         ]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].word, "中国");
+    }
+
+    #[test]
+    fn digraph_jianpin_lookup() {
+        let mut lex = MemoryLexicon::new();
+        lex.insert("zhi chi", "支持", 100.0).unwrap();
+        lex.insert("zi chi", "自持", 10.0).unwrap();
+        lex.insert("zhi ci", "至此", 50.0).unwrap();
+        let words = |q: &[SyllableQuery]| {
+            let mut w: Vec<String> = lex.lookup(q).into_iter().map(|e| e.word).collect();
+            w.sort();
+            w
+        };
+        let zh = SyllableQuery::Jianpin { letter: b'Z' };
+        let ch = SyllableQuery::Jianpin { letter: b'C' };
+        let z = SyllableQuery::Jianpin { letter: b'z' };
+        let c = SyllableQuery::Jianpin { letter: b'c' };
+        let chi = Syllable::from_text("chi").unwrap().query(false);
+        assert_eq!(words(&[zh, ch]), vec!["支持"]);
+        assert_eq!(words(&[zh, c]), vec!["支持", "至此"]);
+        assert_eq!(words(&[z, c]), vec!["支持", "自持", "至此"]);
+        assert_eq!(words(&[zh, chi]), vec!["支持"]);
+        assert_eq!(words(&[z, chi]), vec!["支持", "自持"]);
+        assert!(lex.has_longer(&[zh]));
     }
 
     #[test]

@@ -297,11 +297,63 @@ class Fcitx:
                       lambda info: done(None if info is None else (group, *info.unpack())))
         self.call("CurrentInputMethodGroup", None, "(s)", got_group)
 
+    def get_config(self, uri, done):
+        """done({键: 值字符串} 或 None)。"""
+        self.call("GetConfig", GLib.Variant("(s)", (uri,)), "(va(sa(sssva{sv})))",
+                  lambda value: done(None if value is None else value.unpack()[0]))
+
+    def set_config(self, uri, values, done=None):
+        """只改给出的几项（fcitx5 按部分配置合并），立即生效。"""
+        raw = GLib.Variant("a{sv}", {k: GLib.Variant("s", v) for k, v in values.items()})
+        self.call("SetConfig", GLib.Variant("(sv)", (uri, raw)),
+                  done=lambda value: done and done(value is not None))
+
     def add_to_group(self, group, layout, items, done):
         items = list(items) + [("wowtype", "")]
         self.call("SetInputMethodGroupInfo", GLib.Variant("(ssa(ss))", (group, layout, items)),
                   done=lambda value: done(value is not None))
 
+
+
+# ---------------------------------------------------------------- 主题
+
+CLASSICUI_URI = "fcitx://config/addon/classicui"
+THEME_LIGHT = "wowtype"
+THEME_DARK = "wowtype-dark"
+GNOME_THEME_EXT = "wowtype-theme@gloridust.github.io"
+KIMPANEL_EXT = "kimpanel@kde.org"
+
+
+def gnome_shell_settings():
+    """GNOME Shell 的 gsettings（不是 GNOME 返回 None）。"""
+    if "GNOME" not in os.environ.get("XDG_CURRENT_DESKTOP", "").upper():
+        return None
+    source = Gio.SettingsSchemaSource.get_default()
+    if source is None or source.lookup("org.gnome.shell", True) is None:
+        return None
+    return Gio.Settings.new("org.gnome.shell")
+
+
+def gnome_extension_loaded(uuid):
+    """GNOME Shell 这次登录有没有扫到这个扩展（新装的扩展要重新登录才扫得到）。"""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        value = bus.call_sync("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions",
+                              "org.gnome.Shell.Extensions", "GetExtensionInfo",
+                              GLib.Variant("(s)", (uuid,)), GLib.VariantType("(a{sv})"),
+                              Gio.DBusCallFlags.NO_AUTO_START, 2000, None)
+        return bool(value.unpack()[0])
+    except GLib.Error:
+        return False
+
+
+def set_gnome_extension(settings, uuid, enabled):
+    """在 enabled-extensions 里加上/去掉；GNOME Shell 盯着这个键，扫到了的扩展马上生效。"""
+    on = [u for u in settings.get_strv("enabled-extensions") if u != uuid]
+    off = [u for u in settings.get_strv("disabled-extensions") if u != uuid]
+    (on if enabled else off).append(uuid)
+    settings.set_strv("enabled-extensions", on)
+    settings.set_strv("disabled-extensions", off)
 
 
 # ---------------------------------------------------------------- 更新
@@ -546,6 +598,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.set_size_request(420, 400)
 
         self.refresh_status()
+        self.refresh_theme()
         self.release = None
         self.update_files = []
         self.on_check_update()
@@ -584,6 +637,15 @@ class SettingsWindow(Adw.ApplicationWindow):
         cands.add(self.page_row)
         page.add(cands)
 
+        look = Adw.PreferencesGroup(title="外观")
+        self.theme_row = Adw.SwitchRow(
+            title="WowType 绿色主题",
+            subtitle="圆角候选框，选中的词是 WowType 绿，深色模式自动换深色版")
+        self.theme_row.set_sensitive(False)  # 读到 fcitx5 的当前主题再打开
+        self.theme_handler = self.theme_row.connect("notify::active", self.on_theme_toggled)
+        look.add(self.theme_row)
+        page.add(look)
+
         pinyin = Adw.PreferencesGroup(title="拼音")
         self.switches = {}
         for key, title, subtitle in (
@@ -597,13 +659,52 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         tips = Adw.PreferencesGroup(title="小技巧")
         for title, subtitle in (
-            ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以"),
+            ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持"),
             ("长句分段选", "第一个候选不对时，先选开头的词，剩下的接着选"),
             ("符号", "打 / 加名字找符号，比如 /gou → ✓、/youjiantou → →"),
         ):
             tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
         page.add(tips)
         return page
+
+    def refresh_theme(self):
+        def done(config):
+            if config is None:
+                self.theme_row.set_subtitle("没检测到 fcitx5，启动 fcitx5 后再来设置")
+                return
+            active = config.get("Theme") == THEME_LIGHT
+            shell = gnome_shell_settings()
+            if shell is not None:
+                active = active or GNOME_THEME_EXT in shell.get_strv("enabled-extensions")
+            self.theme_row.handler_block(self.theme_handler)
+            self.theme_row.set_active(active)
+            self.theme_row.handler_unblock(self.theme_handler)
+            self.theme_row.set_sensitive(True)
+        self.fcitx.get_config(CLASSICUI_URI, done)
+
+    def on_theme_toggled(self, row, _param):
+        on = row.get_active()
+        # fcitx5 经典界面（KDE、X11 等）：浅色/深色各一套，跟随系统深浅色
+        if on:
+            values = {"Theme": THEME_LIGHT, "DarkTheme": THEME_DARK, "UseDarkTheme": "True"}
+        else:
+            values = {"Theme": "default", "DarkTheme": "default-dark"}
+        self.fcitx.set_config(CLASSICUI_URI, values)
+
+        # GNOME 上候选框是 Input Method Panel（kimpanel）扩展画的，换色靠另一个小扩展
+        shell = gnome_shell_settings()
+        if shell is None:
+            self.toast("已换成 WowType 主题" if on else "已换回 fcitx5 默认主题")
+            return
+        set_gnome_extension(shell, GNOME_THEME_EXT, on)
+        if not on:
+            self.toast("已换回默认配色")
+        elif KIMPANEL_EXT not in shell.get_strv("enabled-extensions"):
+            self.toast("GNOME 上要先装并启用 Input Method Panel 扩展，候选框才会用这个主题")
+        elif not gnome_extension_loaded(GNOME_THEME_EXT):
+            self.toast("注销并重新登录一次后生效（GNOME 新装的扩展要重新登录才加载）")
+        else:
+            self.toast("已换成 WowType 主题")
 
     def make_switch(self, key, title, subtitle):
         row = Adw.SwitchRow(title=title, subtitle=subtitle)

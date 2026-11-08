@@ -1466,7 +1466,7 @@ fn is_mixed_jianpin(c: &Candidate) -> bool {
     c.features.full_jianpin > 0.0
         && c.pinyin
             .split_whitespace()
-            .any(|s| s.len() > 1 || !crate::syllable::is_jianpin_letter(s.as_bytes()[0]))
+            .any(|s| !crate::syllable::is_abbrev_syllable(s))
 }
 
 /// 最后一个音节之前就有只打了声母的音节。
@@ -1475,7 +1475,7 @@ fn abbrev_before_last(c: &Candidate) -> bool {
     syllables.len() >= 2
         && syllables[..syllables.len() - 1]
             .iter()
-            .any(|s| s.len() == 1 && crate::syllable::is_jianpin_letter(s.as_bytes()[0]))
+            .any(|s| crate::syllable::is_abbrev_syllable(s))
 }
 
 /// 原始串 / 英文候选（append_raw_candidate 插进来的）。

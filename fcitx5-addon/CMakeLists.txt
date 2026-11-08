@@ -116,6 +116,15 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../icons/hicolor"
     FILES_MATCHING PATTERN "*.png" PATTERN "*.svg"
 )
 
+# 绿色主题：fcitx5 经典界面主题（KDE、X11 等用它画候选框）和 GNOME 的 kimpanel 配色扩展
+option(WOWTYPE_INSTALL_THEMES "Install the WowType fcitx5 themes and GNOME Shell extension" ON)
+if(WOWTYPE_INSTALL_THEMES)
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../themes/fcitx5/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/fcitx5/themes")
+    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../themes/gnome-shell/"
+        DESTINATION "${CMAKE_INSTALL_DATADIR}/gnome-shell/extensions")
+endif()
+
 # 设置界面（GTK 4 + libadwaita，Python）：fcitx5 配置工具里的「自定义词和更多设置」也打开它
 option(WOWTYPE_INSTALL_SETTINGS "Install the wowtype-config settings app" ON)
 if(WOWTYPE_INSTALL_SETTINGS)

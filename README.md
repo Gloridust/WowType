@@ -25,7 +25,7 @@
 - **半成品也有词**：`zhongg` 就有「中国」，不用打全。打全了的拼音正好是个词时，它一定排第一。
 - **按错键能认出来**：按成相邻键、两个键按反、多按或漏按一个键（`zhognguo` → 中国）。本来就打对的输入不受影响。
 - **越用越懂你**：记住你选过的词和常连着用的词（选过一次「我们再讨论」，下次就不会出「我们在讨论」），30 天不用会慢慢淡掉。
-- **简拼、省略韵母、中英混打**：`bjdx` → 北京大学；有的音节只打声母也行，`kyi` → 可以、`yongzwen` → 用中文；`github` → GitHub。
+- **简拼、省略韵母、中英混打**：`bjdx` → 北京大学；有的音节只打声母也行，`kyi` → 可以、`yongzwen` → 用中文；zh/ch/sh 可以当一个声母，`zhch`、`zhchi` → 支持；`github` → GitHub。
 - **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
@@ -259,7 +259,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 | 页面 | 能改什么 |
 |---|---|
-| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加 |
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加 |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
 | 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
@@ -268,6 +268,27 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 - `wowtype-config --page voice`（或 `general`、`words`、`update`）直接打开某一页。
 - **Fcitx 5 配置**里选中 WowType 点「配置」，也能改上面这些设置，里面的「自定义词和更多设置」会打开 WowType 设置。
+
+#### 主题
+
+候选框可以换成 WowType 的绿色主题：圆角候选框，选中的词是图标里的那种绿，系统换深色模式时跟着换深色版。
+在「WowType 设置 → 常规 → 外观」里打开「WowType 绿色主题」就行，关掉换回默认。
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/images/theme-light.png" alt="WowType 浅色主题：白底圆角候选框，第一个候选是绿底白字"><br><sub>浅色</sub></td>
+<td align="center" width="50%"><img src="docs/images/theme-dark.png" alt="WowType 深色主题：下键展开的候选面板，当前行是绿底"><br><sub>深色（按下键展开）</sub></td>
+</tr>
+</table>
+
+候选框由谁来画，决定了主题怎么生效：
+
+- **KDE、X11 等**：fcitx5 自己画（经典界面），用的是主题 `wowtype` / `wowtype-dark`，打开开关马上生效。
+  也可以在 Fcitx 5 配置 → 附加组件 → 经典用户界面里手动选。
+- **GNOME（Wayland）**：候选框是 Input Method Panel 扩展画的，fcitx5 的主题管不到。WowType 另带一个只有样式表的小扩展
+  `wowtype-theme@gloridust.github.io` 给它换色，打开开关会顺带启用它。**第一次启用要注销重新登录一次**（GNOME 只在登录时加载新装的扩展）。
+
+主题文件在 `themes/`：`themes/fcitx5/` 是经典界面主题，图片由 `themes/src/*.svg` 经 `themes/render.sh` 生成；`themes/gnome-shell/` 是 GNOME 扩展。
 
 #### 自定义词
 

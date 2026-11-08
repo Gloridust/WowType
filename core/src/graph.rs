@@ -4,7 +4,8 @@
 //! 会禁止跨过该位置的边；儿化边会消耗掉尾部的 r，并把音节标记为儿化。
 
 use crate::syllable::{
-    is_jianpin_letter, parse, ParsedInput, Syllable, SyllableQuery, MAX_SYLLABLE_LEN,
+    is_jianpin_letter, jianpin_digraph, parse, ParsedInput, Syllable, SyllableQuery,
+    MAX_SYLLABLE_LEN,
 };
 
 /// 建图模式。
@@ -486,6 +487,23 @@ fn build_full_edges(input: &ParsedInput, allow_erhua: bool, edges: &mut [Vec<Edg
 
 fn build_jianpin_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
     for (pos, &letter) in input.letters.iter().enumerate() {
+        // zh/ch/sh 也可以只打声母：zhch -> 支持（z h 拆开的那条路照样保留）
+        if let Some(&next) = input.letters.get(pos + 1) {
+            if let Some(digraph) = jianpin_digraph(letter, next) {
+                if !input.forced_between(pos, pos + 2) {
+                    add_edge(
+                        edges,
+                        Edge {
+                            start: pos,
+                            end: pos + 2,
+                            kind: EdgeKind::Jianpin { letter: digraph },
+                            typo: false,
+                            completion: 0,
+                        },
+                    );
+                }
+            }
+        }
         if is_jianpin_letter(letter) {
             add_edge(
                 edges,
@@ -553,6 +571,30 @@ mod tests {
         assert_eq!(segs[0].len(), 2);
         assert_eq!(segs[0][0].query(), SyllableQuery::Jianpin { letter: b'z' });
         assert_eq!(segs[0][1].query(), SyllableQuery::Jianpin { letter: b'g' });
+    }
+
+    #[test]
+    fn jianpin_digraph_initials() {
+        // zh 既可以是一个声母，也可以是 z、h 两个
+        let g = graph("zhch", GraphMode::Jianpin);
+        let segs = g.segmentations(16);
+        let zh_ch = vec![
+            SyllableQuery::Jianpin { letter: b'Z' },
+            SyllableQuery::Jianpin { letter: b'C' },
+        ];
+        assert!(segs
+            .iter()
+            .any(|p| p.iter().map(|e| e.query()).collect::<Vec<_>>() == zh_ch));
+        assert!(segs.iter().any(|p| p.len() == 4));
+        // 隔音符隔开就不算 zh
+        let g = graph("z'h", GraphMode::Jianpin);
+        assert!(g.segmentations(8).iter().all(|p| p.len() == 2));
+        // 混着全拼：zh + chi
+        let g = graph("zhchi", GraphMode::Mixed);
+        assert!(g
+            .segmentations(32)
+            .iter()
+            .any(|p| p.len() == 2 && p[0].query() == SyllableQuery::Jianpin { letter: b'Z' }));
     }
 
     #[test]

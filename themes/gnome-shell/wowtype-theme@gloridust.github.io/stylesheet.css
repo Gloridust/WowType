@@ -1,0 +1,33 @@
+/*
+ * WowType 主题：给 Input Method Panel（kimpanel@kde.org）画的候选框换颜色。
+ * 只用 kimpanel 自己的样式类，不影响 GNOME Shell 的其它菜单。
+ * 主色取自 WowType 图标：#0EAF76。
+ * Yaru 给 .popup-menu-item:hover 写了 !important，这里的背景色也得带上才盖得住。
+ */
+
+.kimpanel-popup-boxpointer .popup-menu-content.kimpanel-popup-content {
+  border-radius: 14px;
+  padding: 6px 8px;
+}
+
+.kimpanel-popup-content .kimpanel-label {
+  padding: 0.3em 0.55em;
+}
+
+.kimpanel-popup-content .kimpanel-candidate-item {
+  border-radius: 9px;
+  padding: 0.3em 0.6em;
+  margin: 0 1px;
+}
+
+.kimpanel-popup-content .kimpanel-candidate-item:hover {
+  background-color: rgba(14, 175, 118, 0.16) !important;
+}
+
+/* 选中的候选 */
+.kimpanel-popup-content .kimpanel-candidate-item:active,
+.kimpanel-popup-content .kimpanel-candidate-item:active:hover,
+.kimpanel-popup-content .kimpanel-candidate-item:active:focus {
+  background-color: #0eaf76 !important;
+  color: #ffffff;
+}

@@ -211,12 +211,64 @@ impl SyllableQuery {
                     text.to_string()
                 }
             }
-            Self::Jianpin { letter } => (letter as char).to_string(),
+            Self::Jianpin { letter } => jianpin_text(letter).to_string(),
         }
     }
 
     pub fn is_jianpin(self) -> bool {
         matches!(self, Self::Jianpin { .. })
+    }
+}
+
+/// 两字母声母 zh/ch/sh 的简拼在查询里的写法：用大写字母和单字母的 z/c/s 区分开。
+///
+/// 只打 `z` 时 z 和 zh 开头的音节都算（`zg` -> 中国），打了 `zh` 就只算 zh 开头的
+/// （`zhch` -> 支持，`zhchi` -> 支持）。
+pub const JIANPIN_ZH: u8 = b'Z';
+pub const JIANPIN_CH: u8 = b'C';
+pub const JIANPIN_SH: u8 = b'S';
+
+/// 两个字母（zh/ch/sh）对应的简拼写法；不是这三个返回 None。
+pub fn jianpin_digraph(first: u8, second: u8) -> Option<u8> {
+    match (first, second) {
+        (b'z', b'h') => Some(JIANPIN_ZH),
+        (b'c', b'h') => Some(JIANPIN_CH),
+        (b's', b'h') => Some(JIANPIN_SH),
+        _ => None,
+    }
+}
+
+/// 简拼写法对应的拼音文本（`Z` -> `zh`，`g` -> `g`）。
+pub fn jianpin_text(letter: u8) -> &'static str {
+    const SINGLE: [&str; 26] = [
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+        "s", "t", "u", "v", "w", "x", "y", "z",
+    ];
+    match letter {
+        JIANPIN_ZH => "zh",
+        JIANPIN_CH => "ch",
+        JIANPIN_SH => "sh",
+        b'a'..=b'z' => SINGLE[(letter - b'a') as usize],
+        _ => "?",
+    }
+}
+
+/// 简拼写法对应的首字母（词条按首字母建索引）：`Z` -> `z`。
+pub fn jianpin_first_letter(letter: u8) -> u8 {
+    letter.to_ascii_lowercase()
+}
+
+/// 简拼写法是否只认某个两字母声母；是的话返回那个声母。
+pub fn jianpin_required_initial(letter: u8) -> Option<&'static str> {
+    matches!(letter, JIANPIN_ZH | JIANPIN_CH | JIANPIN_SH).then(|| jianpin_text(letter))
+}
+
+/// 候选拼音里的一个音节是不是只打了声母（`z`、`zh`，不算 `zhi`）。
+pub fn is_abbrev_syllable(text: &str) -> bool {
+    match text.as_bytes() {
+        [letter] => is_jianpin_letter(*letter),
+        [a, b] => jianpin_digraph(*a, *b).is_some(),
+        _ => false,
     }
 }
 

@@ -1,0 +1,8 @@
+{
+  "uuid": "wowtype-theme@gloridust.github.io",
+  "name": "WowType Theme",
+  "description": "把 Input Method Panel（kimpanel）画的 fcitx5 候选框换成 WowType 的绿色主题。需要同时启用 Input Method Panel 扩展。",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/Gloridust/WowType",
+  "version": 1
+}
