@@ -89,7 +89,8 @@ Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲�
 | `lexicon.tsv` | `WOWTYPE_LEXICON` | 词库；都没有时退回 `demo_lexicon.tsv`（只有几十个词） |
 | `bigram.tsv` | `WOWTYPE_LM` | bigram（可选） |
 | `english.txt` | `WOWTYPE_ENGLISH` | 英文词表（可选）；有了它 hello/github 会排第一 |
-| `s2t.tsv` | `WOWTYPE_S2T` | 简繁表，`WOWTYPE_TRADITIONAL=1` 时用 |
+| `s2t.tsv` | `WOWTYPE_S2T` | 简繁表，开了繁体输出时用 |
+| `custom.tsv` | `WOWTYPE_CUSTOM` | 自定义词（`拼音<TAB>词[<TAB>频次]`），设置界面维护；只在用户目录找 |
 
 不用 root 也能装真实词库和英文词表：
 
@@ -130,7 +131,17 @@ bigram 格式（可选）：
   NNLM 重排、MixRank 只有 trait/钩子，没有真实模型。
 - 云候选没做。
 
+## 配置
+
+插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
+`Shuangpin`、`Traditional`、`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
+设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
+重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
+
 ## 环境变量
+
+设了就优先于配置文件，主要给测试用（`scripts/addon-test.sh` 靠它们切换选项）。
 
 | 变量 | 作用 |
 |---|---|
@@ -142,6 +153,10 @@ bigram 格式（可选）：
 | `WOWTYPE_FUZZY` | `1` 开启模糊音 |
 | `WOWTYPE_SHUANGPIN` | `1` 使用双拼（自然码） |
 | `WOWTYPE_TRADITIONAL` / `WOWTYPE_S2T` | 繁体输出 / 简繁表路径 |
+| `WOWTYPE_VERTICAL` | `1` 候选竖排 |
+| `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉语音 |
+| `WOWTYPE_CUSTOM` | 自定义词文件路径 |
+| `WOWTYPE_NO_UPDATE_CHECK` | 设了就不在后台检查更新 |
 
 ## 交互行为
 

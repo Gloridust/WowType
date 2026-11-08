@@ -11,7 +11,7 @@
 ![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
-[安装](#安装) · [使用](#使用) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
+[安装](#安装) · [使用](#使用) · [设置](#设置) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
 
 <img src="docs/images/candidates.png" width="640" alt="打 hengxianghouxuanci 时的横排候选条：横向候选词、横向、横向后选词……">
 
@@ -29,6 +29,7 @@
 - **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
+- **图形设置界面**：候选排列、模糊音、语音键都在「WowType 设置」里点一下就改，马上生效；还能加自定义词（人名、公司名、常用的长句），加进去的词排第一，简拼也能打。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次）。
 
 <table>
@@ -123,6 +124,9 @@ im-config -n fcitx5
 sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
 ```
 
+`apt` 会顺带装上设置界面要用的 GTK 4 和 libadwaita（`python3-gi`、`gir1.2-gtk-4.0`、`gir1.2-adw-1`）。
+加了 `--no-install-recommends` 的话不会装，打字不受影响，只是打不开设置界面。
+
 也可以一条命令下载最新版（需要 `curl`）：
 
 ```bash
@@ -136,19 +140,21 @@ sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
 #### 方式二：从源码构建
 
 适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
-（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git）。
+（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git；
+设置界面另外要 PyGObject、GTK 4 和 libadwaita 1.4+）。
 
 ```bash
 # 1. 依赖
 sudo apt install build-essential pkg-config cmake extra-cmake-modules \
   libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev git python3 curl
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1    # 设置界面用，不装也能打字
 curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
 
 # 2. 代码
 git clone https://github.com/Gloridust/WowType.git
 cd WowType
 
-# 3. 编译并安装插件（Rust 核心静态链接进插件，不用另装 .so）
+# 3. 编译并安装插件和设置界面（Rust 核心静态链接进插件，不用另装 .so）
 cargo build --release -p wowtype-core
 cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
 cmake --build build -j"$(nproc)"
@@ -160,6 +166,8 @@ mkdir -p ~/.local/share/wowtype
 cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
 ```
 
+> 不想装设置界面，cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`。
+>
 > Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
 > 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成你系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
 
@@ -171,6 +179,8 @@ cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
 2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
 3. 在右边「可用输入法」里**取消勾选「仅显示当前语言」**，搜索 `WowType`，点 ← 加到左边
 4. 关掉配置窗口，按 `Ctrl+Space` 切换到 WowType，打 `nihao` 试试
+
+也可以从应用菜单打开 **WowType 设置**：「常规」页第一行会显示 WowType 有没有在输入法列表里，没有的话点「添加」就行。
 
 <!-- 截图（补上后删掉这行注释）：<img src="docs/images/configtool.png" width="560" alt="在 Fcitx 5 配置里添加 WowType"> -->
 
@@ -224,41 +234,108 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 **第一次按右 `Alt` 时**会从腾讯的服务器下载（约 100MB，存到 `~/.local/share/wowtype/wtlocal/`），
 下载完之后再说话才能识别。载入后常驻内存，约 150MB。
 
-用别的键：`WOWTYPE_VOICE_KEY=Control_R`（fcitx5 的键名）；不想要语音：`WOWTYPE_VOICE_KEY=none`。
+换语音键（右 Ctrl、菜单键、F8–F10）或者关掉语音，在 [WowType 设置](#设置)的「语音」页里改。
+
+<img src="docs/images/settings-voice.png" width="420" alt="WowType 设置的语音页：语音输入开关、语音键选右 Alt、识别模型已下载">
 
 ### 设置
 
-目前没有图形设置界面，用环境变量设置。写进 `~/.config/environment.d/wowtype.conf`，**注销重新登录**后生效：
+从应用菜单打开 **WowType 设置**（或者运行 `wowtype-config`）。改完立刻生效，不用重启 fcitx5。
 
-```ini
-# ~/.config/environment.d/wowtype.conf
-WOWTYPE_FUZZY=1
+<table>
+<tr>
+<td align="center" width="50%">
+<img src="docs/images/settings-general.png" alt="WowType 设置的常规页：输入法状态、候选排列方向、每页个数、模糊音、按错键纠正、双拼、繁体字"><br>
+<b>常规</b><br>
+<sub>候选横排还是竖排、每页几个，模糊音、纠错、双拼、繁体</sub>
+</td>
+<td align="center" width="50%">
+<img src="docs/images/settings-words.png" alt="WowType 设置的自定义词页：输入词后拼音自动填好，下面是已经加过的词"><br>
+<b>自定义词</b><br>
+<sub>填上词，拼音自动查好</sub>
+</td>
+</tr>
+</table>
+
+| 页面 | 能改什么 |
+|---|---|
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加 |
+| 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
+| 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
+| 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
+
+右上角菜单里还有：用文本编辑器打开自定义词文件、恢复默认设置（不影响自定义词）、关于。
+
+- `wowtype-config --page voice`（或 `general`、`words`、`update`）直接打开某一页。
+- **Fcitx 5 配置**里选中 WowType 点「配置」，也能改上面这些设置，里面的「自定义词和更多设置」会打开 WowType 设置。
+
+#### 自定义词
+
+加进去的词总是排在候选第一个，简拼也能打：加了「字节跳动」（`zi jie tiao dong`），打 `zijietiaodong` 或者 `zjtd` 都能出来。
+
+自定义词存在 `~/.local/share/wowtype/custom.tsv`，一行一个，也可以手动编辑：
+
+```
+# 拼音<TAB>词[<TAB>频次]
+zi jie tiao dong	字节跳动
+zhangwei	张伟
 ```
 
-想先试一下效果，可以临时带着变量重启 fcitx5：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。
+拼音可以用空格隔开音节，也可以连着写（`zhangwei`）。在设置界面里加的词马上能用；手动改了文件，要让 fcitx5 重新读一下：
 
-| 变量 | 作用 | 默认 |
-|---|---|---|
-| `WOWTYPE_FUZZY=1` | 模糊音：平翘舌（z/zh、c/ch、s/sh）和前后鼻音（an/ang 等） | 关 |
-| `WOWTYPE_SHUANGPIN=1` | 自然码双拼（`vsgo` → 中国） | 关 |
-| `WOWTYPE_TRADITIONAL=1` | 繁体输出（字符级转换） | 关 |
-| `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
-| `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
-| `WOWTYPE_VOICE_KEY` | 语音热键（fcitx5 键名，如 `Control_R`、`F8`）；`none` 关掉语音 | `Alt_R`（右 Alt） |
-| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录 | `~/.local/share/wowtype/wtlocal` |
-| `WOWTYPE_LEXICON` | 词库路径 | 见下 |
-| `WOWTYPE_ENGLISH` | 英文词表路径 | 见下 |
-| `WOWTYPE_LM` | 二元语言模型（`前词<TAB>后词<TAB>次数`） | 无 |
-| `WOWTYPE_S2T` | 简繁对照表 | `/usr/share/wowtype/s2t.tsv` |
-| `WOWTYPE_USER_DICT` | 用户词库 | `~/.local/share/wowtype/user.tsv` |
-| `WOWTYPE_HISTORY` | 输入习惯 | `~/.local/share/wowtype/history.tsv` |
+```bash
+dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
+  org.fcitx.Fcitx.Controller1.ReloadAddonConfig string:wowtype
+```
+
+手动改 `wowtype.conf` 也一样。（重启 fcitx5 也行，但 Chrome 这类程序要跟着重开，见[第 3 步](#第-3-步把-wowtype-加进输入法列表)。）
+
+#### 配置文件和环境变量
+
+设置存在 `~/.config/fcitx5/conf/wowtype.conf`，设置界面和 Fcitx 5 配置改的都是这个文件：
+
+```ini
+CandidateLayout=Horizontal
+PageSize=9
+Fuzzy=False
+TypoCorrection=True
+Shuangpin=False
+Traditional=False
+Voice=True
+VoiceKey=Alt_R
+CheckUpdate=True
+```
+
+| 键 | 取值 |
+|---|---|
+| `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
+| `PageSize` | 每页候选个数，3–9 |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`CheckUpdate` | `True` / `False` |
+| `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
+
+文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
+
+下面这些环境变量主要是**调试和测试用**，设了的话**优先于**配置文件（在设置界面里改了也不起作用），平时用不着：
+
+| 变量 | 作用 |
+|---|---|
+| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1` | 对应上面的开关 |
+| `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |
+| `WOWTYPE_LEXICON`、`WOWTYPE_ENGLISH` | 词库、英文词表路径（默认的查找顺序见下） |
+| `WOWTYPE_LM` | 二元语言模型（`前词<TAB>后词<TAB>次数`），默认无 |
+| `WOWTYPE_S2T` | 简繁对照表，默认 `/usr/share/wowtype/s2t.tsv` |
+| `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
+| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal` |
+| `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新 |
+
+临时试一下：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。长期用写进 `~/.config/environment.d/wowtype.conf`，注销重新登录后生效。
 
 ### 更新
 
 用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
 有新版本就弹一条通知，点开进「WowType 设置」的「更新」页，能看更新内容，点「下载并安装」，
 按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
-不想自动检查，在「更新」页关掉「自动检查更新」。从源码装的只会提示新版本，要自己更新。
+不想自动检查，在「更新」页关掉「自动检查更新」（就是配置文件里的 `CheckUpdate=False`）。从源码装的只会提示新版本，要自己更新。
 
 ### 数据文件
 
@@ -269,12 +346,13 @@ WOWTYPE_FUZZY=1
 |---|---|
 | `lexicon.tsv` | 词库，一行一个：`拼音（空格分隔）<TAB>词<TAB>词频` |
 | `english.txt` | 英文词表 |
+| `custom.tsv` | [自定义词](#自定义词)：在设置里加的词 |
 | `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
 | `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
 | `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
 
-想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动。
+想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动（自定义词不受影响）。
 
 想用自己的词库：任何 Rime 格式的词库（`.dict.yaml`）都能用 `python3 tools/rime2tsv.py xxx.dict.yaml > lexicon.tsv` 转过来。
 
@@ -287,7 +365,9 @@ WOWTYPE_FUZZY=1
 | 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。装 `wowtype-data-rime-ice`，或把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
 | 按右 Alt 提示「开不了麦克风」 | 在系统设置的「声音」里确认有输入设备；`arecord -l` 应该能列出麦克风 |
-| 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，用 `WOWTYPE_VOICE_KEY` 换个键 |
+| 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，到设置的「语音」页换个键 |
+| 应用菜单里没有「WowType 设置」，或者打不开 | 缺 GTK 4 / libadwaita：`sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`。在终端里运行 `wowtype-config` 能看到报错 |
+| 设置里改了，打字时没变化 | 看看是不是设了 `WOWTYPE_*` 环境变量（`env \| grep WOWTYPE`），它们优先于设置；fcitx5 没在运行时，设置会在它下次启动时生效 |
 | 想看日志 | 终端里运行 `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype`，日志里有载入了哪个词库、用了多久 |
 | 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
 
@@ -302,8 +382,8 @@ sudo apt remove wowtype wowtype-data-rime-ice
 # 源码装的（在仓库目录里）
 sudo xargs rm -v < build/install_manifest.txt
 
-# 学到的数据和缓存（可选）
-rm -rf ~/.local/share/wowtype ~/.cache/wowtype
+# 学到的数据、自定义词、设置和缓存（可选）
+rm -rf ~/.local/share/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
 ```
 
 卸载后到 Fcitx 5 配置里把 WowType 从输入法列表里删掉，再 `fcitx5 -r -d`。
@@ -339,6 +419,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 |---|---|
 | `core/` | 拼音引擎和 C 接口 |
 | `fcitx5-addon/` | fcitx5 插件 |
+| `settings/` | 设置界面 `wowtype-config`（Python、GTK 4、libadwaita） |
 | `voice/` | 语音输入：热键状态机、麦克风采集、微信离线模型推理（插件通过 `core/src/voice_ffi.rs` 调用） |
 | `voice-daemon/` | 不依赖输入法的语音守护进程（X11，实验性，没进安装包） |
 | `tools/` | 词库转换、评测用例生成 |
@@ -346,7 +427,6 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 现在还不行的
 
-- 没有图形设置界面，设置靠环境变量
 - 只有 x86_64 的安装包；Arch、Fedora 等要从源码构建
 - 没有用语料训练的语言模型，「祝你 / 祝您」「在 / 再」这类同音词，没用过时只能靠词频排
 - 语音输入只有一个识别结果，不能在候选里改；不能选麦克风（用系统默认的输入设备）
