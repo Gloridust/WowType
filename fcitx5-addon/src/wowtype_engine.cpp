@@ -155,6 +155,17 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
             FCITX_INFO() << "WowType: 载入英文词 " << loaded << " 个";
         }
     }
+    // 微信输入法的字级神经语言模型（不随 WowType 分发，本机有才用）
+    if (const std::string nnlm = findDataFile("WOWTYPE_NNLM", "wetype/nlrgpt2_nnlm.bin");
+        !nnlm.empty()) {
+        const int loaded = wowtype_engine_load_nnlm(core, nnlm.c_str());
+        if (loaded > 0) {
+            FCITX_INFO() << "WowType: 载入神经语言模型（" << loaded << " 字）";
+        } else {
+            FCITX_WARN() << "WowType: 神经语言模型载入失败 " << nnlm << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        }
+    }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {

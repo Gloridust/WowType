@@ -38,6 +38,8 @@ fn main() {
     let mut no_typo = false;
     let mut english_path: Option<String> = None;
     let mut show_top1 = false;
+    let mut nnlm_path: Option<String> = None;
+    let mut nnlm_rerank: Option<usize> = None;
     let mut learn = false;
     let mut learn_from = String::new();
 
@@ -107,6 +109,14 @@ fn main() {
                 english_path = args.get(i).cloned();
             }
             "--show-top1" => show_top1 = true,
+            "--nnlm" => {
+                i += 1;
+                nnlm_path = args.get(i).cloned();
+            }
+            "--nnlm-rerank" => {
+                i += 1;
+                nnlm_rerank = args.get(i).and_then(|v| v.parse().ok());
+            }
             "--learn" => learn = true,
             "--learn-from" => {
                 i += 1;
@@ -176,7 +186,15 @@ fn main() {
     if no_typo {
         config.typo_correction = false;
     }
+    if let Some(n) = nnlm_rerank {
+        config.nnlm_rerank = n;
+    }
     let engine = Engine::new(lex, lm).with_config(config).with_ranker(ranker);
+    if let Some(path) = &nnlm_path {
+        if let Err(e) = engine.load_nnlm(path) {
+            fail(&format!("{e:#}"));
+        }
+    }
     if let Some(path) = &english_path {
         if let Err(e) = engine.load_english(path) {
             fail(&format!("{e:#}"));

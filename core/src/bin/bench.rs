@@ -4,7 +4,7 @@
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
-//!   加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
+//!   加 --nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,6 +19,7 @@ fn main() {
     let mut typing_path: Option<String> = None;
     let mut no_prefix = false;
     let mut max_candidates: Option<usize> = None;
+    let mut nnlm_path: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -32,6 +33,10 @@ fn main() {
                 typing_path = args.get(i).cloned();
             }
             "--no-prefix" => no_prefix = true,
+            "--nnlm" => {
+                i += 1;
+                nnlm_path = args.get(i).cloned();
+            }
             "--max" => {
                 i += 1;
                 max_candidates = args.get(i).and_then(|v| v.parse().ok());
@@ -94,6 +99,11 @@ fn main() {
         config.prefix_candidates = 0;
     }
     let engine = Engine::new(lex, lm).with_config(config);
+    if let Some(path) = &nnlm_path {
+        let started = Instant::now();
+        engine.load_nnlm(path).expect("载入神经语言模型");
+        println!("神经语言模型载入 {:?}", started.elapsed());
+    }
 
     if let Some(path) = typing_path {
         typing_latency(&engine, &path);

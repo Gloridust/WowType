@@ -105,6 +105,20 @@ key = absl::StrCat(上下文文本, 候选文本)   // 直接拼，无分隔符
 结论：Rust 侧不要指望复刻这份 LM，直接换开源/自建 bigram，
 `LanguageModel` trait 已经预留了替换点。
 
+### 3.1 字级神经语言模型 `nlrgpt2_nnlm.bin`（已跑通，`core/src/nnlm.rs`）
+
+微信输入法 3.0.0（macOS）的 `imeData.bundle/nlrgpt2_nnlm.bin`，MD5 `edca685aba600497de298dd68a5d5e4d`，16,211,368 字节。
+
+- 布局：1 字节 `0x01` + u32 长度 + TFLite 模型（15,883,720 字节）+ 一个和 §3 同格式的哈希表（字表）+ 末尾一段 JSON
+  （`start_cache`：`<s>` 在位置 0 的 KV；`log_softmax`：`<s>` 之后的分布，可用来自检）。
+- 字表哈希表：`flags=0x80000001`、桶数 5594。桶号 = CityHash32(字) % 5594，桶内哈希 = CityHash64WithSeed(字, 0x1DBBA5) 的低 32 位（CityHash **v1.1**）。
+  值是 `04 01 <u16 码位> <u8 编号>` 或 `14 01 <u16 码位> <u16 编号>`，值里自带字，所以遍历所有桶就能拿到完整字表，不用算哈希。
+  特殊编号：`<pad>`=0、`<unk>`=1、`<s>`=2、`</s>`=3；其余按字频排（，=4、的=5、。=6）。
+- 模型：GPT-2，3 层、d=256、4 头×64、FFN 1024、最长 512 位置，词表 5594，输出头和 wte 共享，pre-LN（eps 1e-5），GELU 用 tanh 近似。
+  权重全是 float32（没有量化），全连接权重按 [out, in] 存。输入 `input_ids`、`past`（KV 缓存）、`z_flag`（只控制另一个输出的 64 维符号哈希，打分用不到）。
+- 验证：Rust 实现和 LiteRT 的输出差 < 2e-5。`我今天很开心` = −15.28，`我今天很开薪` = −35.95。一步约 4M 次乘加，单核约 1ms。
+- `decgnr.bin`（12 层、768 维、词表 10496 的 WordPiece 模型）更大，逐键跑太重，没接。
+
 ## 4. Cell 词典（`cell_dict.*.zh`）
 
 运行中的 WeType 从

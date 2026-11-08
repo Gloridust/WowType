@@ -11,6 +11,7 @@ pub mod graph;
 pub mod learn;
 pub mod lexicon;
 pub mod lm;
+pub mod nnlm;
 pub mod preedit;
 pub mod rank;
 pub mod shuangpin;
@@ -96,6 +97,8 @@ pub struct EngineConfig {
     /// 前面几页之后把剩下的词全补上（整个输入的同音词、句首词、单字），直到
     /// `max_candidates`。关掉时只给最可能的那几页。
     pub more_candidates: bool,
+    /// 有神经语言模型时，按束搜索分数取前几条整句用它重排（0 表示不用）。
+    pub nnlm_rerank: usize,
 }
 
 impl Default for EngineConfig {
@@ -114,6 +117,7 @@ impl Default for EngineConfig {
             typo_correction: true,
             prefix_candidates: 16,
             more_candidates: true,
+            nnlm_rerank: 8,
         }
     }
 }
@@ -157,6 +161,8 @@ pub struct Engine {
     converter: RwLock<Arc<Converter>>,
     /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
     english: RwLock<Arc<HashMap<String, String>>>,
+    /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
+    nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
 }
 
 impl Engine {
@@ -175,7 +181,27 @@ impl Engine {
             last_words: RwLock::new(HashMap::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
+            nnlm: RwLock::new(None),
         }
+    }
+
+    /// 加载微信输入法的字级神经语言模型（`nlrgpt2_nnlm.bin`），返回字表大小。
+    /// 模型不随 WowType 分发，见 `docs/DATA.md`。
+    pub fn load_nnlm<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let model = nnlm::Nnlm::load(path)?;
+        let size = model.vocab_size();
+        self.set_nnlm(Some(Arc::new(model)));
+        Ok(size)
+    }
+
+    pub fn set_nnlm(&self, model: Option<Arc<nnlm::Nnlm>>) {
+        if let Ok(mut slot) = self.nnlm.write() {
+            *slot = model;
+        }
+    }
+
+    pub fn has_nnlm(&self) -> bool {
+        self.nnlm.read().map(|m| m.is_some()).unwrap_or(false)
     }
 
     /// 设置光标前的文本（上一次上屏的内容）。
@@ -1061,9 +1087,11 @@ impl Engine {
             .map(|p| p.score)
             .fold(f64::NEG_INFINITY, f64::max);
 
+        let nnlm = self.nnlm_scores(&paths);
         let candidates: Vec<Candidate> = paths
             .into_iter()
-            .map(|path| self.make_candidate(path, best_score, at_ms))
+            .zip(nnlm)
+            .map(|(path, nnlm)| self.make_candidate(path, best_score, at_ms, nnlm))
             .collect();
 
         let mut deduped = dedupe_by_text(candidates);
@@ -1076,8 +1104,42 @@ impl Engine {
         Ok(deduped)
     }
 
-    fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64) -> Candidate {
-        let feature = self.make_feature(&path, best_score, at_ms);
+    /// 每条路径的神经语言模型特征：log P(整句 | 光标前的文本) 减去这批里最好的那条，≤ 0。
+    ///
+    /// 只算束搜索分数最高的 `nnlm_rerank` 条（模型一步约 1 ms，同一前缀会缓存）；
+    /// 其余的给比算过的最差那条还低一点的值。没有模型时全是 0。
+    fn nnlm_scores(&self, paths: &[BeamPath]) -> Vec<f32> {
+        let mut out = vec![0.0f32; paths.len()];
+        let limit = self.config.nnlm_rerank;
+        if limit == 0 || paths.len() < 2 {
+            return out;
+        }
+        let Some(model) = self.nnlm.read().ok().and_then(|m| m.clone()) else {
+            return out;
+        };
+        let mut order: Vec<usize> = (0..paths.len()).collect();
+        order.sort_by(|&a, &b| paths[b].score.total_cmp(&paths[a].score));
+        let context = model.context_tokens(&self.context());
+        let scored: Vec<(usize, f64)> = order
+            .iter()
+            .take(limit)
+            .map(|&i| (i, model.score(&context, &paths[i].text)))
+            .collect();
+        let best = scored.iter().map(|s| s.1).fold(f64::NEG_INFINITY, f64::max);
+        let worst = scored.iter().map(|s| s.1).fold(f64::INFINITY, f64::min);
+        for &(i, s) in &scored {
+            out[i] = (s - best).max(-NNLM_FLOOR) as f32;
+        }
+        let rest = ((worst - best) - 2.0).max(-NNLM_FLOOR) as f32;
+        for &i in order.iter().skip(limit) {
+            out[i] = rest;
+        }
+        out
+    }
+
+    fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64, nnlm: f32) -> Candidate {
+        let mut feature = self.make_feature(&path, best_score, at_ms);
+        feature.head_word_nnlm = nnlm;
         let rank_score = self.ranker.score(&feature) as f64;
         let score = path.score + rank_score;
         Candidate {
@@ -1206,7 +1268,7 @@ impl Engine {
             typo_count: path.typos as f32,
             prefix_completion: (path.completion as f32).min(3.0),
             typo: if path.typos > 0 { 1.0 } else { 0.0 },
-            // 用户词、NNLM、补全等特征还没有数据源，保持 0。
+            // 用户词等特征还没有数据源，保持 0；NNLM 在 make_candidate 里填。
             ..Feature::default()
         }
     }
@@ -1235,6 +1297,8 @@ fn letters_to_bytes(raw: &str, letters: usize) -> usize {
 /// （长句）第二名往后的整句只是小改动，价值不如句首词，所以句首词紧跟第一名。
 /// 词频低于这个数的词不受「精确优先」保护（rime-ice 里约排在 20 万名以后，多是生僻或凑出来的条目）。
 const EXACT_PROTECT_MIN_FREQ: f64 = 1000.0;
+/// 神经语言模型特征最低到多少（自然对数），免得一条特别离谱的把分数拉得太开。
+const NNLM_FLOOR: f64 = 20.0;
 
 /// 拼音打全了、而且正好是一个实在的词时，这个词必须排第一。
 ///
