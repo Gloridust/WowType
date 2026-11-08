@@ -22,6 +22,7 @@ pub mod train;
 pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
+pub mod wordlm;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;

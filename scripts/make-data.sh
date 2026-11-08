@@ -20,7 +20,10 @@ if [[ -z "$RIME" ]]; then
   git clone --depth 1 https://github.com/iDvel/rime-ice.git "$RIME"
 fi
 
-python3 tools/rime2tsv.py "$RIME/rime_ice.dict.yaml" > "$OUT/lexicon.tsv"
+python3 tools/rime2tsv.py "$RIME/rime_ice.dict.yaml" > "$OUT/lexicon.rime.tsv"
+# 合进 WowType 自己整理的热词（AI、工作、网络用语），见 data/hotwords.tsv
+python3 tools/add_hotwords.py "$OUT/lexicon.rime.tsv" data/hotwords.tsv > "$OUT/lexicon.tsv"
+rm "$OUT/lexicon.rime.tsv"
 cat "$RIME/en_dicts/en.dict.yaml" "$RIME/en_dicts/en_ext.dict.yaml" > "$OUT/english.txt"
 cp "$RIME/LICENSE" "$OUT/LICENSE"
 
@@ -29,7 +32,8 @@ DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)
 cat > "$OUT/SOURCE.txt" <<EOF
 数据来源：雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），许可证 GPL-3.0，见 LICENSE。
 版本：$COMMIT（$DATE）
-lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables；
+lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables，
+再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv；
 english.txt 是 en_dicts/en.dict.yaml 与 en_dicts/en_ext.dict.yaml 原样拼接。
 EOF
 echo "$DATE" > "$OUT/VERSION"

@@ -137,7 +137,11 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
         lexicon = std::string(kSystemDataDir) + "/demo_lexicon.tsv";
         FCITX_WARN() << "WowType: 没找到 lexicon.tsv，用 demo 词典（只有几十个词）";
     }
-    const std::string lm = findDataFile("WOWTYPE_LM", "bigram.tsv");
+    // 词级语言模型：wowtype-lmbuild 生成的 words.lm；没有就找旧的 bigram.tsv
+    std::string lm = findDataFile("WOWTYPE_LM", "words.lm");
+    if (lm.empty()) {
+        lm = findDataFile("WOWTYPE_LM", "bigram.tsv");
+    }
     const auto started = std::chrono::steady_clock::now();
     WowtypeEngineHandle *core =
         wowtype_engine_new(lexicon.c_str(), lm.empty() ? nullptr : lm.c_str());
@@ -185,7 +189,8 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - started)
                         .count();
-    FCITX_INFO() << "WowType: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms";
+    FCITX_INFO() << "WowType: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms"
+                 << (lm.empty() ? "（没有语言模型）" : "，语言模型 " + lm);
     return core;
 }
 
