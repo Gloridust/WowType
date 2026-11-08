@@ -138,7 +138,7 @@ impl Default for FeatureWeights {
             user_word_rollback_score: 0.8,
             // 这一项已经计入 path.score，再叠加就是重复计权
             lm_score_with_previous_txt: 0.0,
-            head_word_nnlm: 0.5,
+            head_word_nnlm: 2.0,
             hot_val_conf: 0.3,
             with_context: 0.1,
             user_tail_conf: 0.3,
