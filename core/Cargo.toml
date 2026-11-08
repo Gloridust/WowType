@@ -35,6 +35,10 @@ name = "wowtype-show"
 path = "src/bin/show.rs"
 
 [[bin]]
+name = "wowtype-lmbuild"
+path = "src/bin/lmbuild.rs"
+
+[[bin]]
 name = "wowtype-probe"
 path = "src/bin/probe.rs"
 

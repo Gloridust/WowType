@@ -40,6 +40,7 @@ fn main() {
     let mut show_top1 = false;
     let mut nnlm_path: Option<String> = None;
     let mut nnlm_rerank: Option<usize> = None;
+    let mut lm_weight: Option<f64> = None;
     let mut learn = false;
     let mut learn_from = String::new();
 
@@ -113,6 +114,10 @@ fn main() {
                 i += 1;
                 nnlm_path = args.get(i).cloned();
             }
+            "--lm-weight" => {
+                i += 1;
+                lm_weight = args.get(i).and_then(|v| v.parse().ok());
+            }
             "--nnlm-rerank" => {
                 i += 1;
                 nnlm_rerank = args.get(i).and_then(|v| v.parse().ok());
@@ -152,8 +157,8 @@ fn main() {
             Err(e) => fail(&format!("{e:#}")),
         }
     } else if let Some(path) = &lm_path {
-        match BigramLm::from_bigram_tsv_path(path) {
-            Ok(v) => Arc::new(v),
+        match wowtype_core::lm::load_lm(path) {
+            Ok(v) => v,
             Err(e) => fail(&format!("{e:#}")),
         }
     } else {
@@ -185,6 +190,9 @@ fn main() {
     }
     if no_typo {
         config.typo_correction = false;
+    }
+    if let Some(w) = lm_weight {
+        config.beam.lm_weight = w;
     }
     if let Some(n) = nnlm_rerank {
         config.nnlm_rerank = n;

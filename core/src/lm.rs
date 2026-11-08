@@ -359,6 +359,22 @@ impl LanguageModel for ArpaLm {
     }
 }
 
+/// 按文件内容载入语言模型：`wowtype-lmbuild` 生成的二进制（开头是 `WTLM`）用
+/// [`crate::wordlm::WordLm`]，否则当 `前词<TAB>后词<TAB>次数` 的 TSV。
+pub fn load_lm<P: AsRef<Path>>(path: P) -> Result<std::sync::Arc<dyn LanguageModel>> {
+    let path = path.as_ref();
+    let mut head = [0u8; 4];
+    let is_binary = fs::File::open(path)
+        .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut head))
+        .map(|_| &head == crate::wordlm::MAGIC)
+        .unwrap_or(false);
+    if is_binary {
+        Ok(std::sync::Arc::new(crate::wordlm::WordLm::load(path)?))
+    } else {
+        Ok(std::sync::Arc::new(BigramLm::from_bigram_tsv_path(path)?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
