@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -126,6 +127,18 @@ std::string voiceWave(const std::vector<int> &levels) {
     return out;
 }
 constexpr uint64_t kVoiceErrorUsec = 1500 * 1000;
+
+// 语音浮条：WowType 的 GNOME 扩展注册这个名字，插件把语音状态发给它画。
+// 信号 State(u 状态, s 文字, i 音量 0–100, i x, i y, i w, i h, b 相对窗口, d 缩放)，
+// x/y/w/h 是光标矩形，和 kimpanel 的 SetSpotRect / SetRelativeSpotRectV2 同一个意思。
+constexpr const char *kOverlayService = "io.github.gloridust.WowType.VoiceOverlay";
+constexpr const char *kOverlayPath = "/io/github/gloridust/WowType";
+constexpr const char *kOverlayInterface = "io.github.gloridust.WowType.Voice1";
+constexpr uint32_t kOverlayHide = 0;
+constexpr uint32_t kOverlayListening = 1;
+constexpr uint32_t kOverlayRecognizing = 2;
+constexpr uint32_t kOverlayDone = 3;
+constexpr uint32_t kOverlayError = 4;
 
 /// 用户输入习惯（词的热度、词搭配）和用户词库放在同一个目录：history.tsv。
 std::string historyPathFor(const std::string &userDict) {
@@ -376,6 +389,61 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     loading_ = std::async(std::launch::async, loadCore, userDictPath());
     fcitx::readAsIni(config_, kConfigFile);
     applyConfig();
+    setupVoiceOverlay();
+}
+
+void WowtypeEngine::setupVoiceOverlay() {
+    // WOWTYPE_VOICE_OVERLAY=0：不用 GNOME 扩展的浮条，一直用候选框里的文字提示
+    if (!envFlag("WOWTYPE_VOICE_OVERLAY", true)) {
+        return;
+    }
+    try {
+        auto bus = std::make_unique<fcitx::dbus::Bus>(fcitx::dbus::BusType::Session);
+        if (!bus->isOpen()) {
+            return;
+        }
+        bus->attachEventLoop(&instance_->eventLoop());
+        overlayBus_ = std::move(bus);
+        overlayWatcher_ = std::make_unique<fcitx::dbus::ServiceWatcher>(*overlayBus_);
+        overlayWatch_ = overlayWatcher_->watchService(
+            kOverlayService,
+            [this](const std::string &, const std::string &, const std::string &owner) {
+                if (owner != overlayOwner_) {
+                    overlayOwner_ = owner;
+                    WLOG_I() << "WowType: 语音浮条" << (owner.empty() ? "不在了" : "就绪");
+                }
+            });
+    } catch (const std::exception &e) {
+        // 没有会话总线（比如测试里）：用文字提示
+        WLOG_I() << "WowType: 连不上会话总线，语音用文字提示：" << e.what();
+        overlayWatch_.reset();
+        overlayWatcher_.reset();
+        overlayBus_.reset();
+    }
+}
+
+void WowtypeEngine::sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state,
+                                     const std::string &label, int level) {
+    if (!overlayBus_ || overlayOwner_.empty()) {
+        return;
+    }
+    int32_t x = 0, y = 0, w = 0, h = 0;
+    bool relative = false;
+    double scale = 1.0;
+    if (ic) {
+        const fcitx::Rect &rect = ic->cursorRect();
+        x = rect.left();
+        y = rect.top();
+        w = rect.width();
+        h = rect.height();
+        relative = ic->capabilityFlags().test(fcitx::CapabilityFlag::RelativeRect);
+        scale = ic->scaleFactor();
+    }
+    auto msg = overlayBus_->createSignal(kOverlayPath, kOverlayInterface, "State");
+    msg.setDestination(overlayOwner_);
+    msg << state << label << static_cast<int32_t>(std::clamp(level, 0, 100)) << x << y << w << h
+        << relative << scale;
+    msg.send();
 }
 
 void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
@@ -1424,30 +1492,50 @@ bool WowtypeEngine::pollVoice() {
     const std::string text = wowtype_voice_text(voice_);
     switch (phase) {
     case WOWTYPE_VOICE_LISTENING: {
+        const int level = wowtype_voice_level(voice_);
+        const bool downloading =
+            wowtype_voice_model_state(voice_) == WOWTYPE_VOICE_MODEL_DOWNLOADING;
+        if (voiceOverlay()) {
+            // 浮条由 GNOME 扩展画，这里只留编辑区里识别到一半的字
+            showVoice(ic, {}, text);
+            sendVoiceOverlay(ic, kOverlayListening, downloading ? "下载语音模型…" : "正在听…",
+                             level);
+            return true;
+        }
         // 不写字，只画麦克风 + 跟着音量滚动的波形；第一次下载模型要很久，才写一句
-        voiceLevels_.push_back(wowtype_voice_level(voice_));
+        voiceLevels_.push_back(level);
         if (voiceLevels_.size() > kVoiceBars) {
             voiceLevels_.erase(voiceLevels_.begin());
         }
         std::string status = "🎙 " + voiceWave(voiceLevels_);
-        if (wowtype_voice_model_state(voice_) == WOWTYPE_VOICE_MODEL_DOWNLOADING) {
+        if (downloading) {
             status += " 下载语音模型…";
         }
         showVoice(ic, status + " ", text);
         return true;
     }
     case WOWTYPE_VOICE_RECOGNIZING: {
+        if (voiceOverlay()) {
+            showVoice(ic, {}, text);
+            sendVoiceOverlay(ic, kOverlayRecognizing, "识别中…", 0);
+            return true;
+        }
         static const char *const kDots[] = {"·    ", "··   ", "···  ", "···· ", "·····"};
         showVoice(ic, std::string("🎙 ") + kDots[(voiceFrame_++ / 3) % 5] + " ", text);
         return true;
     }
     case WOWTYPE_VOICE_RESULT:
-        clearVoice();
+        clearVoice(true);
         commitPlain(ic, text);
         return false;
     case WOWTYPE_VOICE_ERROR:
         WLOG_I() << "WowType: 语音 " << text;
-        showVoice(ic, "🎙 " + text, {});
+        if (voiceOverlay()) {
+            showVoice(ic, {}, {});
+            sendVoiceOverlay(ic, kOverlayError, text, 0);
+        } else {
+            showVoice(ic, "🎙 " + text, {});
+        }
         voiceErrorUntil_ = fcitx::now(CLOCK_MONOTONIC) + kVoiceErrorUsec;
         return true;
     default:
@@ -1469,12 +1557,18 @@ void WowtypeEngine::showVoice(fcitx::InputContext *ic, const std::string &status
         preedit.setCursor(static_cast<int>(preedit.textLength()));
         panel.setPreedit(preedit);
     }
-    panel.setAuxUp(fcitx::Text(status));
+    if (!status.empty()) {
+        panel.setAuxUp(fcitx::Text(status));
+    }
     ic->updatePreedit();
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
-void WowtypeEngine::clearVoice() {
+void WowtypeEngine::clearVoice(bool done) {
+    if (voiceShowing_ && voiceOverlay()) {
+        sendVoiceOverlay(voiceIc_.get(), done ? kOverlayDone : kOverlayHide,
+                         done ? "识别完成" : "", 0);
+    }
     voiceShowing_ = false;
     voiceLevels_.clear();
     voiceFrame_ = 0;

@@ -31,3 +31,40 @@
   background-color: #0eaf76 !important;
   color: #ffffff;
 }
+
+/* 语音输入浮条（voice.js），配色和尺寸照宣传片 */
+.wowtype-voice-pill {
+  background-color: #ffffff;
+  border: 1.5px solid #dce3df;
+  border-radius: 14px;
+  box-shadow: 0 4px 18px 0 rgba(29, 35, 33, 0.16);
+  padding: 3px 16px 3px 4px;
+}
+
+.wowtype-voice-mic {
+  width: 46px;
+  height: 46px;
+}
+
+.wowtype-voice-label {
+  color: #1d2321;
+  font-size: 15px;
+  font-weight: 500;
+  margin-left: 4px;
+}
+
+.wowtype-voice-label.wowtype-voice-error {
+  color: #e5484d;
+}
+
+.wowtype-voice-tag {
+  color: #7a8580;
+  font-size: 12.5px;
+  margin-left: 8px;
+}
+
+.wowtype-voice-wave {
+  width: 130px;
+  height: 34px;
+  margin-left: 18px;
+}

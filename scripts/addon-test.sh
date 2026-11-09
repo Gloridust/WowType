@@ -3,6 +3,7 @@
 #
 #   scripts/addon-test.sh [lexicon.tsv] [english.txt]
 #   WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-test.sh ...  # 加跑语音
+#   WOWTYPE_HARNESS_DBUS=$DBUS_SESSION_BUS_ADDRESS ...   # 让插件连上会话总线（测语音浮条的信号）
 #
 # 起的是一个私有、无界面、无 D-Bus 的 fcitx5 实例（配置目录都在临时目录里），
 # 不会影响正在用的输入法。不给词库时用仓库里的 demo 词典，部分用例会因为缺词失败。
@@ -61,5 +62,6 @@ env -i PATH="$PATH" HOME="$ROOT" \
   WOWTYPE_LEXICON="$LEXICON" WOWTYPE_ENGLISH="$ENGLISH" WOWTYPE_LM="${WOWTYPE_LM:-}" WOWTYPE_LOG="${WOWTYPE_LOG:-0}" \
   WOWTYPE_USER_DICT="$ROOT/user.tsv" \
   WOWTYPE_VOICE_WAV="$VOICE_WAV" WOWTYPE_VOICE_MODEL_DIR="$VOICE_MODEL_DIR" \
+  DBUS_SESSION_BUS_ADDRESS="${WOWTYPE_HARNESS_DBUS:-}" \
   WOWTYPE_NO_UPDATE_CHECK=1 WOWTYPE_HARNESS_SHOW="${WOWTYPE_HARNESS_SHOW:-}" WOWTYPE_VOICE_EXPECT="${WOWTYPE_VOICE_EXPECT:-}" \
   "$BUILD/wowtype-key-harness"
