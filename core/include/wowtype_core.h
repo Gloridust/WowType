@@ -60,6 +60,15 @@ const char *wowtype_fullwidth_punct(int ascii_codepoint);
 /* 符号检索（拼音/中文名前缀），结果用 wowtype_candidates_* 读取并释放。 */
 WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
 
+/* 打字时的 emoji 推荐。text 是首选候选的文字；结果的 text 是显示文字，
+ * 上屏用 wowtype_candidates_commit（整个词对上时只有 emoji，句尾对上时是整句 + emoji）。 */
+WowtypeCandidates *wowtype_emoji_recommend(const char *text, size_t limit);
+
+/* 表情面板搜索。query 为空给全部 emoji；否则按拼音（经引擎转成中文词）、英文、
+ * 符号名一起找。engine 可为 NULL。 */
+WowtypeCandidates *wowtype_engine_emoji_search(const WowtypeEngineHandle *engine,
+                                               const char *query, size_t limit);
+
 /* 记录一次选词，参与历史排序特征。返回 0 成功，-1 失败。 */
 int wowtype_engine_record_selection(WowtypeEngineHandle *engine, const char *word);
 
@@ -113,6 +122,9 @@ const char *wowtype_candidates_pinyin(const WowtypeCandidates *candidates, size_
 /* 候选用掉了输入的多少字节。等于输入长度是整句候选；小于时是句首词候选，
  * 上屏后应把 input + consumed 之后的部分留在编辑区继续输入。越界返回 0。 */
 size_t wowtype_candidates_consumed(const WowtypeCandidates *candidates, size_t index);
+
+/* 选中后上屏的文字（emoji 推荐可能和显示的不同），其他候选等于 text。越界返回 NULL。 */
+const char *wowtype_candidates_commit(const WowtypeCandidates *candidates, size_t index);
 
 /* 释放候选集合。 */
 void wowtype_candidates_free(WowtypeCandidates *candidates);

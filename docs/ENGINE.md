@@ -27,8 +27,14 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 插件经 `wowtype_engine_load_custom_words(engine, path)` 载入，每次载入整体替换上一次的，文件不存在就清空，
 不写回用户词库。自定义词全拼和简拼都排第一（加了「字节跳动」后 `zjtd` 第一个就是它）。
 
-支持**符号面板**：输入 `/` 后跟拼音或中文名前缀（`/juhao` → 。，`/kuo` → （））。
-ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）。
+支持 **emoji 和符号**（`core/src/emoji.rs`、`core/src/symbols.rs`）：
+- 打字时推荐：`wowtype_emoji_recommend(首选候选)`，整个词或句尾两个字以上的词对上 emoji 就给一个，
+  插件插在第三个候选。词表是 `core/src/emoji/zh-extra.tsv`（手工整理的聊天常用词）加上
+  `core/src/emoji/cldr.tsv` 里够具体的关键词（一个关键词对应不超过 3 个 emoji；「脸」「手」这种不算）。
+- 表情面板：`wowtype_engine_emoji_search(engine, query)`。拼音先经引擎转成前几个中文候选，再按 CLDR 中文关键词找；
+  同时按英文关键词前缀、符号名（`juhao` → 。）找。`cldr.tsv` 由 `scripts/make-emoji.py` 从 Unicode CLDR 生成，
+  只收 emoji 15.0 及以前的（新的系统字体可能还画不出来）。
+ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）；`/` 等没收录的原样交给应用。
 
 支持**繁体输出**：`--traditional`（插件在设置界面打开，或 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
 `--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
