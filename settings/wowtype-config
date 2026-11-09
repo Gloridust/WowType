@@ -21,9 +21,15 @@ import urllib.request
 
 import gi
 
+# 界面文字全是简体中文。系统语言是英文时 Pango 给汉字挑字形会挑到繁体（台湾）那一套，
+# 「、」「。」画在格子正中间；告诉它优先简体中文。
+if "zh" not in os.environ.get("PANGO_LANGUAGE", ""):
+    os.environ["PANGO_LANGUAGE"] = ":".join(
+        x for x in ("zh-cn", os.environ.get("PANGO_LANGUAGE", "")) if x)
+
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gio, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
 APP_ID = "io.github.Gloridust.WowType.Config"
 VERSION = "@VERSION@"
@@ -44,6 +50,9 @@ STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
 LOG_FILE = os.environ.get("WOWTYPE_LOG") or os.path.join(STATE_DIR, "wowtype.log")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
 ISSUES_URL = "https://github.com/Gloridust/WowType/issues/new"
+# 界面上的中文标点要用简体中文字体画，见 SettingsApp.update_font_css；装了哪个用哪个
+CJK_SC_FONTS = ["Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN",
+                "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Droid Sans Fallback"]
 LEXICON_CANDIDATES = [
     os.environ.get("WOWTYPE_LEXICON", ""),
     os.path.join(DATA_DIR, "lexicon.tsv"),
@@ -692,6 +701,65 @@ def http_open(url, timeout=30):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
+_MD_INLINE = re.compile(r"\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?://[^)\s]+)\)|(https?://[^\s<>()]+)")
+
+
+def _md_inline(text):
+    """一行 Markdown 里的粗体、代码、链接 → Pango 标记，其余文字转义。"""
+    out, pos = [], 0
+    for m in _MD_INLINE.finditer(text):
+        out.append(GLib.markup_escape_text(text[pos:m.start()]))
+        bold, code, label, href, bare = m.groups()
+        if bold is not None:
+            out.append(f"<b>{_md_inline(bold)}</b>")
+        elif code is not None:
+            out.append(f"<tt>{GLib.markup_escape_text(code)}</tt>")
+        elif label is not None:
+            out.append(f'<a href="{GLib.markup_escape_text(href)}">{GLib.markup_escape_text(label)}</a>')
+        else:
+            url = GLib.markup_escape_text(bare)
+            out.append(f'<a href="{url}">{url}</a>')
+        pos = m.end()
+    out.append(GLib.markup_escape_text(text[pos:]))
+    return "".join(out)
+
+
+def markdown_to_pango(md):
+    """GitHub Release 说明（Markdown）→ Gtk.Label 能显示的 Pango 标记。
+
+    只认 Release 说明里会用到的：标题、列表（含缩进的子项）、代码块、粗体、行内代码、链接。
+    """
+    lines, in_code = [], False
+    for raw in md.replace("\r\n", "\n").split("\n"):
+        line = raw.rstrip()
+        if line.lstrip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            lines.append("    <tt>" + GLib.markup_escape_text(line) + "</tt>")
+            continue
+        heading = re.match(r"(#{1,6})\s+(.*)", line)
+        item = re.match(r"(\s*)[-*+]\s+(.*)", line)
+        if heading:
+            size = "large" if len(heading.group(1)) <= 2 else "medium"
+            if lines and lines[-1] != "":
+                lines.append("")
+            lines.append(f'<span size="{size}" weight="bold">{_md_inline(heading.group(2))}</span>')
+        elif item:
+            depth = len(item.group(1).expandtabs(2)) // 2
+            bullet = "•" if depth == 0 else "◦"
+            lines.append("    " * depth + f"{bullet} {_md_inline(item.group(2))}")
+        elif not line.strip():
+            if lines and lines[-1] != "":
+                lines.append("")
+        else:
+            lines.append(_md_inline(line.strip()))
+    while lines and lines[-1] == "":
+        lines.pop()
+    # 整段标成简体中文：跟在英文后面的「。」也用简体字形
+    return '<span lang="zh-cn">' + "\n".join(lines) + "</span>"
+
+
 def fetch_latest():
     """GitHub 上最新的正式版：{tag, version, notes, url, assets: {文件名: 下载地址}}。"""
     with http_open(RELEASE_API, timeout=20) as response:
@@ -1266,11 +1334,14 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(group)
 
         self.notes_group = Adw.PreferencesGroup(title="更新内容", visible=False)
-        self.notes_label = Gtk.Label(wrap=True, xalign=0, selectable=True,
-                                     margin_top=12, margin_bottom=12,
-                                     margin_start=12, margin_end=12)
-        self.notes_label.add_css_class("card")
-        self.notes_group.add(self.notes_label)
+        self.notes_label = Gtk.Label(wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                                     xalign=0, selectable=True,
+                                     margin_top=14, margin_bottom=14,
+                                     margin_start=16, margin_end=16)
+        notes_card = Gtk.Box()
+        notes_card.add_css_class("card")
+        notes_card.append(self.notes_label)
+        self.notes_group.add(notes_card)
         page.add(self.notes_group)
 
         auto = Adw.PreferencesGroup()
@@ -1317,7 +1388,10 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.install_button.set_visible(bool(files))
             notes = release["notes"].strip()
             self.notes_group.set_visible(bool(notes))
-            self.notes_label.set_text(notes[:4000])
+            try:
+                self.notes_label.set_markup(markdown_to_pango(notes[:6000]))
+            except GLib.Error:  # 标记拼坏了就退回纯文字
+                self.notes_label.set_text(notes[:6000])
         else:
             self.notes_group.set_visible(False)
         return GLib.SOURCE_REMOVE
@@ -1475,6 +1549,24 @@ class SettingsApp(Adw.Application):
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
                              "打开时显示的页面：general、voice、words、update", "页面")
 
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        # 跟在英文后面的「、」「。」，Pango 会去找第一个有这个字的字体，常常找到蒙古文字体，
+        # 标点画在格子正中间。在系统界面字体后面接上简体中文字体，让它先找到这些。
+        self.font_css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), self.font_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        settings = Gtk.Settings.get_default()
+        settings.connect("notify::gtk-font-name", lambda *_: self.update_font_css())
+        self.update_font_css()
+
+    def update_font_css(self):
+        name = Gtk.Settings.get_default().props.gtk_font_name or "Sans 11"
+        family = Pango.FontDescription.from_string(name).get_family() or "Sans"
+        families = [family] + [f for f in CJK_SC_FONTS if f != family]
+        quoted = ", ".join('"' + f.replace('"', "") + '"' for f in families)
+        self.font_css.load_from_string(f"window {{ font-family: {quoted}; }}")
+
     def do_command_line(self, command_line):
         options = command_line.get_options_dict().end().unpack()
         self.page = options.get("page")
@@ -1515,6 +1607,14 @@ if __name__ == "__main__":
         assert parse_version("v0.2.10") > parse_version("0.2.9")
         assert parse_version("0.2.1-1~ubuntu26.04") == (0, 2, 1)
         assert parse_version("2026.10.31") < parse_version("2026.11.01")
+        notes = markdown_to_pango("## 标题\n\n- **粗** `a<b>` [链接](https://x.y/?a=1&b=2)\n  - 子项\n"
+                                  "```bash\nsudo apt <x>\n```\nhttps://x.y/z")
+        assert notes.startswith('<span lang="zh-cn">') and notes.endswith("</span>")
+        assert '<span size="large" weight="bold">标题</span>' in notes
+        assert "• <b>粗</b> <tt>a&lt;b&gt;</tt>" in notes
+        assert '<a href="https://x.y/?a=1&amp;b=2">链接</a>' in notes
+        assert "    ◦ 子项" in notes and "<tt>sudo apt &lt;x&gt;</tt>" in notes
+        assert "```" not in notes and '<a href="https://x.y/z">' in notes
         print("self-test ok")
         sys.exit(0)
     sys.exit(SettingsApp().run(sys.argv))
