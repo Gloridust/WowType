@@ -184,6 +184,7 @@ Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成�
 | `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
 | `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉 | `Alt_R` |
+| `WOWTYPE_VOICE_OVERLAY=0` | GNOME 上不用语音浮条，用候选框里的文字提示 | 用浮条 |
 | `WOWTYPE_CUSTOM` | 自定义词文件 | `$XDG_DATA_HOME/wowtype/custom.tsv` |
 | `WOWTYPE_NO_UPDATE_CHECK` | 设了就不自动检查更新 | 不设 |
 | `WOWTYPE_SINK` | 语音上屏后端 | `clipboard` |

@@ -1,6 +1,6 @@
 [package]
 name = "wowtype-voice"
-version = "0.3.5"
+version = "0.3.6"
 edition = "2021"
 description = "语音输入：热键状态机、音频帧、VAD、ASR 抽象、上屏"
 

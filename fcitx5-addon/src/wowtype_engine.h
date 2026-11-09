@@ -12,6 +12,8 @@
 #include <fcitx-config/option.h>
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
+#include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
@@ -144,8 +146,14 @@ private:
     bool pollVoice();
     void showVoice(fcitx::InputContext *ic, const std::string &status,
                    const std::string &partial);
-    void clearVoice();
+    /// done：识别完了（语音浮条显示「识别完成」再淡出），否则直接收起。
+    void clearVoice(bool done = false);
     void cancelVoice();
+    /// GNOME 下由 WowType 扩展画语音浮条：插件经 D-Bus 把状态发给它。
+    void setupVoiceOverlay();
+    bool voiceOverlay() const { return !overlayOwner_.empty(); }
+    void sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state, const std::string &label,
+                          int level);
     void maybeCheckUpdate();
     bool voiceActive() const { return voiceShowing_; }
 
@@ -192,6 +200,13 @@ private:
     std::vector<int> voiceLevels_;
     /// 轮询次数，「识别中」的省略号动画用。
     unsigned voiceFrame_ = 0;
+
+    // 语音浮条（GNOME 扩展画）：单独一条会话总线连接，盯着扩展注册的名字
+    std::unique_ptr<fcitx::dbus::Bus> overlayBus_;
+    std::unique_ptr<fcitx::dbus::ServiceWatcher> overlayWatcher_;
+    std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> overlayWatch_;
+    /// 扩展在总线上的唯一名；空表示扩展没在跑，用候选框里的文字提示。
+    std::string overlayOwner_;
 };
 
 #endif /* WOWTYPE_FCITX5_ENGINE_H */

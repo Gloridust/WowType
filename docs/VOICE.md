@@ -96,6 +96,29 @@ Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入
 | 模型线程 | 同上 | 第一次按热键时下载（腾讯 CDN，约 100MB，校验 MD5）并载入，只做一次；还没好时音频先攒着 |
 | 插件 | `fcitx5-addon/src/wowtype_engine.cpp` | 热键按下/松开都吃掉（免得应用把单按 Alt 当成打开菜单）；50ms 定时轮询；编辑区显示中间结果，前面是麦克风图标和跟着音量动的波形（不写说明文字，免得和识别出的字混在一起）；结果用 `commitString` 上屏 |
 
+### 语音浮条（GNOME）
+
+fcitx5 的候选框只能显示文字，画不出宣传片里那条带动画的语音条，所以在 GNOME 上由 WowType 的 GNOME 扩展
+（`themes/gnome-shell/wowtype-theme@gloridust.github.io/voice.js`，和绿色主题是同一个扩展）来画：
+
+- 扩展启用后在会话总线上注册 `io.github.gloridust.WowType.VoiceOverlay`；插件用自己的一条会话总线连接盯着这个名字
+  （`fcitx::dbus::ServiceWatcher`），名字在就不往候选框写 🎙 和波形，改为每次轮询（50ms）给它发一个信号：
+  `/io/github/gloridust/WowType`，接口 `io.github.gloridust.WowType.Voice1`，
+  `State(u 状态, s 文字, i 音量 0–100, i x, i y, i w, i h, b 相对窗口, d 缩放)`。
+  状态：0 收起、1 正在听、2 识别中、3 识别完成、4 出错；x/y/w/h 是光标矩形，和 kimpanel 的
+  `SetSpotRect` / `SetRelativeSpotRectV2` 同一个意思，扩展换算到屏幕坐标的方法也照抄 Input Method Panel。
+- 浮条：白色圆角卡片，左边绿色话筒 + 跟着音量变大的浅绿光晕，中间「正在听… 离线」，右边 24 根竖条
+  （高度 = 真实音量 × 一道从左往右走的起伏，照宣传片的公式）；弹出时上浮 + 从 0.94 放大，收起时 0.25 秒淡出下沉。
+  浮条左边对着开始说话时的光标，字多了光标往右走才跟着挪。
+- 光标：按下语音键后 0.2 秒内，光标右边长出 5 根绿色竖条（中间最高，两边 0.8、0.55）跟着音量跳，松开 0.2 秒收回。
+  光标本身是应用画的，WowType 改不了，所以这 5 根竖条是画在窗口上面的。
+- 编辑区里识别到一半的字仍由应用画（下划线），宣传片里「旧字上飘、新字落下」的改字动画做不到。
+- 扩展没在跑（其他桌面、关了绿色主题、没重新登录）或 `WOWTYPE_VOICE_OVERLAY=0`：回到候选框里的文字提示。
+- 插件 1.5 秒没发信号（fcitx5 退出了），扩展自己收起浮条。
+
+调试：`WOWTYPE_HARNESS_DBUS=$DBUS_SESSION_BUS_ADDRESS` 让 `scripts/addon-test.sh` 里的插件连上会话总线，
+在 `dbus-run-session` 里起一个占住 `io.github.gloridust.WowType.VoiceOverlay` 的小程序就能收到这些信号。
+
 规则：
 
 - 正在打拼音时热键交给应用，不抢；
