@@ -110,7 +110,7 @@ im-config -n fcitx5
 | 文件 | 内容 |
 |---|---|
 | `wowtype_<版本>_<发行版>_amd64.deb` | 输入法本体，选和你系统对应的那个（`ubuntu24.04`、`ubuntu26.04`、`debian13`） |
-| `wowtype-data-rime-ice_<日期.修订>_all.deb` | 词库（89 万词 + 英文词表），所有发行版通用 |
+| `wowtype-data-rime-ice_<日期.修订>_all.deb` | 词库（89 万词 + 英文词表 + 词级语言模型），所有发行版通用 |
 
 不知道自己是哪个发行版：
 
@@ -368,7 +368,7 @@ CheckUpdate=True
 |---|---|
 | `lexicon.tsv` | 词库，一行一个：`拼音（空格分隔）<TAB>词<TAB>词频` |
 | `english.txt` | 英文词表 |
-| `words.lm` | 可选：词级语言模型（哪些词常连着用），有它长句更准，见下 |
+| `words.lm` | 词级语言模型（哪些词常连着用），有它长句更准；词库包里自带，见下 |
 | `custom.tsv` | [自定义词](#自定义词)：在设置里加的词 |
 | `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
@@ -376,9 +376,11 @@ CheckUpdate=True
 | `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 
-**词级语言模型（可选）**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
-用 `wowtype-lmbuild` 从语料训练，例如用清华的对话语料 [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（MIT）
-加中文维基百科（CC BY-SA 4.0）：
+**词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
+词库包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
+是用清华的对话语料 [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（MIT）加中文维基百科（CC BY-SA 4.0）训练的，
+单独下载见 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)。
+载入约 0.06 秒，多占约 90 MB 内存，对按键速度几乎没有影响。想用自己的语料重新训练：
 
 ```bash
 cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \

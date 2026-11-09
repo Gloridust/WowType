@@ -291,13 +291,18 @@ void runCases(Instance &instance) {
     type(ic.get(), "<right><right><sp>");
     check(firstPage.size() > 2 && ic->committed == firstPage[2],
           "展开后右移两格空格选第三个，实际 " + ic->committed);
+    // 选过词后排序会变（学习、上文），每次按之前重新取当前这一页
     fresh(ic.get());
-    type(ic.get(), "shi<down><down><sp>");
-    check(firstPage.size() > 6 && ic->committed == firstPage[6],
+    type(ic.get(), "shi");
+    auto now = page(ic.get());
+    type(ic.get(), "<down><down><sp>");
+    check(now.size() > 6 && ic->committed == now[6],
           "展开后下移一行空格选第七个，实际 " + ic->committed);
     fresh(ic.get());
-    type(ic.get(), "shi<down><down>2");
-    check(firstPage.size() > 7 && ic->committed == firstPage[7],
+    type(ic.get(), "shi");
+    now = page(ic.get());
+    type(ic.get(), "<down><down>2");
+    check(now.size() > 7 && ic->committed == now[7],
           "展开后数字选光标所在行，实际 " + ic->committed);
     fresh(ic.get());
     type(ic.get(), "shi<down><down><up><up>");
