@@ -421,6 +421,117 @@ def fcitx_call_sync(method, params=None, reply=None):
         return None
 
 
+PROFILE_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "profile")
+
+
+def fcitx_knows_wowtype():
+    """fcitx5 在跑并且认得 WowType 返回 True，在跑但不认得（装完还没重启）False，没在跑 None。"""
+    value = fcitx_call_sync("AvailableInputMethods", None, "(a(ssssssb))")
+    if value is None:
+        return None
+    return any(item[0] == "wowtype" for item in value.unpack()[0])
+
+
+def system_keyboard_layout():
+    """fcitx5 键盘布局的名字（us、de-nodeadkeys……），从 localectl 读，读不到用 us。"""
+    layout = variant = ""
+    try:
+        out = subprocess.run(["localectl", "status"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    for line in out.splitlines():
+        key, _, value = line.strip().partition(":")
+        value = value.strip().split(",")[0].strip()
+        if key == "X11 Layout":
+            layout = value
+        elif key == "X11 Variant":
+            variant = value
+    layout = layout or "us"
+    return f"{layout}-{variant}" if variant else layout
+
+
+def profile_add_wowtype(path=PROFILE_FILE):
+    """fcitx5 没在跑时直接改它的配置文件 profile，把 WowType 加进第一个分组。
+
+    没有 profile（fcitx5 还没运行过）就新建一个：系统键盘布局 + WowType。
+    fcitx5 退出时会把内存里的分组写回 profile，所以只能在它没在跑时改。返回说明文字。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+    except FileNotFoundError:
+        layout = system_keyboard_layout()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"[Groups/0]\nName=Default\nDefault Layout={layout}\nDefaultIM=wowtype\n\n"
+                    f"[Groups/0/Items/0]\nName=keyboard-{layout}\nLayout=\n\n"
+                    "[Groups/0/Items/1]\nName=wowtype\nLayout=\n\n"
+                    "[GroupOrder]\n0=Default\n")
+        return f"新建了 fcitx5 输入法列表：键盘 {layout} + WowType"
+    sections, current = {}, None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+            sections.setdefault(current, {})
+        elif current and "=" in line and not line.startswith("#"):
+            key, _, value = line.partition("=")
+            sections[current][key.strip()] = value.strip()
+    first = sections.get("GroupOrder", {}).get("0")
+    index = next((name.split("/")[1] for name, keys in sections.items()
+                  if re.fullmatch(r"Groups/\d+", name) and keys.get("Name") == first), None)
+    if index is None:
+        raise RuntimeError(f"看不懂 {path}，请在 fcitx5 配置里手动添加 WowType")
+    items = [keys.get("Name") for name, keys in sections.items()
+             if re.fullmatch(rf"Groups/{index}/Items/\d+", name)]
+    if "wowtype" in items:
+        return f"WowType 已经在输入法列表「{first}」里"
+    with open(path + ".bak-wowtype", "w", encoding="utf-8") as f:
+        f.write(text)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text.rstrip("\n") + f"\n\n[Groups/{index}/Items/{len(items)}]\nName=wowtype\nLayout=\n")
+    return f"已把 WowType 加进输入法列表「{first}」（原来的存成 profile.bak-wowtype）"
+
+
+def add_to_group_cli(restart):
+    """安装脚本用（wowtype-config --add-to-group [--restart]）：把 WowType 加进当前输入法分组。
+
+    fcitx5 在跑：认得 WowType 就经 D-Bus 加；不认得（刚装完）时带 --restart 先让它重启，
+    否则返回 3。fcitx5 没在跑：直接改 profile。成功（含本来就在）返回 0。
+    """
+    known = fcitx_knows_wowtype()
+    if known is None:
+        print(profile_add_wowtype())
+        return 0
+    if not known:
+        if not restart:
+            print("fcitx5 还没载入 WowType，要先重启 fcitx5")
+            return 3
+        fcitx_call_sync("Restart")
+        for _ in range(60):  # 最多等 15 秒
+            time.sleep(0.25)
+            known = fcitx_knows_wowtype()
+            if known:
+                break
+        if not known:
+            print("重启 fcitx5 以后还是找不到 WowType，请注销重新登录后在 fcitx5 配置里添加")
+            return 1
+        print("已重启 fcitx5")
+    group = fcitx_call_sync("CurrentInputMethodGroup", None, "(s)").unpack()[0]
+    info = fcitx_call_sync("InputMethodGroupInfo", GLib.Variant("(s)", (group,)), "(sa(ss))")
+    layout, items = info.unpack()
+    if any(name == "wowtype" for name, _ in items):
+        print(f"WowType 已经在输入法列表「{group}」里")
+        return 0
+    items = list(items) + [("wowtype", "")]
+    if fcitx_call_sync("SetInputMethodGroupInfo",
+                       GLib.Variant("(ssa(ss))", (group, layout, items))) is None:
+        print("添加失败，请在 fcitx5 配置里手动添加 WowType")
+        return 1
+    print(f"已把 WowType 加进输入法列表「{group}」")
+    return 0
+
+
 def classicui_theme_values(on):
     # fcitx5 经典界面（KDE、X11 等）：浅色/深色各一套，跟随系统深浅色
     if on:
@@ -545,8 +656,14 @@ def collect_diagnostics():
     add("")
     add("## 版本")
     add(f"设置界面：{current_version()}")
-    for pkg in (ENGINE_PKG, DATA_PKG):
-        add(f"{pkg}：{dpkg_version(pkg) or '没用 deb 装'}")
+    add(f"{ENGINE_PKG}：{dpkg_version(ENGINE_PKG) or '没用 deb 装'}")
+    if dpkg_version(DATA_PKG):  # 0.3.3 及以前词库是单独的包
+        add(f"{DATA_PKG}：{dpkg_version(DATA_PKG)}")
+    try:
+        with open(DATA_VERSION_FILE, encoding="utf-8") as f:
+            add(f"安装包里的词库：{f.read().strip()}")
+    except OSError:
+        pass
     add(f"fcitx5：{_run(['fcitx5', '--version'])}")
     os_name = ""
     try:
@@ -645,7 +762,9 @@ CACHE_DIR = os.path.join(_xdg("XDG_CACHE_HOME", "~/.cache"), "wowtype")
 UPDATE_DIR = os.path.join(CACHE_DIR, "updates")
 UPDATE_STATE = os.path.join(CACHE_DIR, "update-check.json")
 ENGINE_PKG = "wowtype"
+# 0.3.3 及以前词库是单独的包，0.3.4 起打进了安装包（新包会把旧词库包替换掉）
 DATA_PKG = "wowtype-data-rime-ice"
+DATA_VERSION_FILE = "/usr/share/doc/wowtype/DATA-VERSION"
 # 自动检查最多这么久一次
 CHECK_INTERVAL = 20 * 3600
 
@@ -785,13 +904,7 @@ def plan_update(release):
     name = f"wowtype_{release['version']}_{distro}_{deb_arch()}.deb"
     if name not in release["assets"]:
         return [], f"这一版没有 {distro or '你的发行版'} 的安装包，请到下载页看看"
-    files = [(name, release["assets"][name])]
-    installed_data = dpkg_version(DATA_PKG)
-    for asset, url in release["assets"].items():
-        match = re.fullmatch(rf"{DATA_PKG}_(.+)_all\.deb", asset)
-        if match and installed_data and parse_version(match.group(1)) > parse_version(installed_data):
-            files.append((asset, url))
-    return files, ""
+    return [(name, release["assets"][name])], ""
 
 
 def download_updates(release, files, progress):
@@ -1588,6 +1701,8 @@ if __name__ == "__main__":
         sys.exit(startup_tasks())
     if "--check-update" in sys.argv:  # 旧版插件叫的是这个
         sys.exit(startup_tasks())
+    if "--add-to-group" in sys.argv:
+        sys.exit(add_to_group_cli("--restart" in sys.argv))
     if "--export-log" in sys.argv:
         rest = sys.argv[sys.argv.index("--export-log") + 1:]
         target = rest[0] if rest else os.path.join(os.getcwd(), default_log_name())
@@ -1615,6 +1730,20 @@ if __name__ == "__main__":
         assert '<a href="https://x.y/?a=1&amp;b=2">链接</a>' in notes
         assert "    ◦ 子项" in notes and "<tt>sudo apt &lt;x&gt;</tt>" in notes
         assert "```" not in notes and '<a href="https://x.y/z">' in notes
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = os.path.join(tmp, "profile")
+            assert "新建" in profile_add_wowtype(profile)
+            assert "已经在" in profile_add_wowtype(profile)
+            with open(profile, "w", encoding="utf-8") as f:
+                f.write("[Groups/0]\n# Group Name\nName=Default\nDefault Layout=us\nDefaultIM=rime\n\n"
+                        "[Groups/0/Items/0]\nName=keyboard-us\nLayout=\n\n"
+                        "[Groups/0/Items/1]\nName=rime\nLayout=\n\n[GroupOrder]\n0=Default\n")
+            assert "已把" in profile_add_wowtype(profile)
+            with open(profile, encoding="utf-8") as f:
+                assert f.read().endswith("[Groups/0/Items/2]\nName=wowtype\nLayout=\n")
+            assert "已经在" in profile_add_wowtype(profile)
+            assert os.path.exists(profile + ".bak-wowtype")
         print("self-test ok")
         sys.exit(0)
     sys.exit(SettingsApp().run(sys.argv))

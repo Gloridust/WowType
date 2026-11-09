@@ -85,7 +85,34 @@
 - 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**。其他发行版（Arch、Fedora……）请[从源码构建](#方式二从源码构建)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
-### 第 1 步：确认你在用 fcitx5
+### 一行命令安装（推荐）
+
+Ubuntu 24.04 / 26.04、Debian 13 上，在终端里运行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
+```
+
+它会：
+
+1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
+2. 用 `sudo apt-get install` 装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita
+3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
+4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
+
+装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
+以后再跑一遍同样的命令就是升级（设置界面里也会提醒有新版本）。
+
+> 想先看看脚本做了什么：[install.sh](install.sh)。
+> 不想让它改输入法框架或重启 fcitx5，可以加环境变量，例如 `curl -fsSL … | WOWTYPE_NO_IM_CONFIG=1 WOWTYPE_NO_RESTART=1 bash`。
+>
+> GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
+> [Input Method Panel](https://extensions.gnome.org/extension/261/kimpanel/)，
+> 活动概览的搜索框等地方才能显示候选框。
+
+### 手动安装
+
+#### 第 1 步：确认你在用 fcitx5
 
 Ubuntu 默认用的是 IBus。先装好 fcitx5 并设为默认输入法框架（已经在用 fcitx5 的跳过这步）：
 
@@ -97,21 +124,12 @@ im-config -n fcitx5
 
 然后**注销并重新登录**。登录后右上角托盘里应该有一个键盘图标。
 
-> GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
-> [Input Method Panel](https://extensions.gnome.org/extension/261/kimpanel/)，
-> 活动概览的搜索框等地方才能显示候选框。
+#### 第 2 步：安装 WowType
 
-### 第 2 步：安装 WowType
+##### 方式一：安装包
 
-#### 方式一：安装包（推荐）
-
-到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载两个文件：
-
-| 文件 | 内容 |
-|---|---|
-| `wowtype_<版本>_<发行版>_amd64.deb` | 输入法本体，选和你系统对应的那个（`ubuntu24.04`、`ubuntu26.04`、`debian13`） |
-| `wowtype-data-rime-ice_<日期.修订>_all.deb` | 词库（89 万词 + 英文词表 + 词级语言模型），所有发行版通用 |
-
+到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
+`wowtype_<版本>_<发行版>_amd64.deb`（`ubuntu24.04`、`ubuntu26.04`、`debian13`），词库已经包含在里面。
 不知道自己是哪个发行版：
 
 ```bash
@@ -121,23 +139,15 @@ im-config -n fcitx5
 在下载目录里安装：
 
 ```bash
-sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
+sudo apt install ./wowtype_*_amd64.deb
 ```
 
 `apt` 会顺带装上设置界面要用的 GTK 4 和 libadwaita（`python3-gi`、`gir1.2-gtk-4.0`、`gir1.2-adw-1`）。
 加了 `--no-install-recommends` 的话不会装，打字不受影响，只是打不开设置界面。
 
-也可以一条命令下载最新版（需要 `curl`）：
+> 0.3.3 及以前的版本，词库是单独的 `wowtype-data-rime-ice` 包。装新版时 apt 会自动把它删掉（文件由新包接管），不用管它。
 
-```bash
-. /etc/os-release
-curl -s https://api.github.com/repos/Gloridust/WowType/releases/latest \
-  | grep -oE "https://[^\"]+(_${ID}${VERSION_ID}_amd64|_all)\.deb" \
-  | xargs -n1 curl -LO
-sudo apt install ./wowtype_*_amd64.deb ./wowtype-data-rime-ice_*_all.deb
-```
-
-#### 方式二：从源码构建
+##### 方式二：从源码构建
 
 适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
 （需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git；
@@ -160,10 +170,10 @@ cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX
 cmake --build build -j"$(nproc)"
 sudo cmake --install build
 
-# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice）
+# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice 和语言模型）
 scripts/make-data.sh "" dist/data
 mkdir -p ~/.local/share/wowtype
-cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
+cp dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm ~/.local/share/wowtype/
 ```
 
 > 不想装设置界面，cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`。
@@ -171,9 +181,9 @@ cp dist/data/lexicon.tsv dist/data/english.txt ~/.local/share/wowtype/
 > Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
 > 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成你系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
 
-不想用安装包的词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
+不想自己生成词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
 
-### 第 3 步：把 WowType 加进输入法列表
+#### 第 3 步：把 WowType 加进输入法列表
 
 1. 重启 fcitx5：`fcitx5 -r -d`（或者注销再登录）
 2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
@@ -359,6 +369,7 @@ CheckUpdate=True
 用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
 有新版本就弹一条通知，点开进「WowType 设置」的「更新」页，能看更新内容，点「下载并安装」，
 按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
+也可以重新运行[一行安装命令](#一行命令安装推荐)。
 不想自动检查，在「更新」页关掉「自动检查更新」（就是配置文件里的 `CheckUpdate=False`）。从源码装的只会提示新版本，要自己更新。
 
 ### 数据文件
@@ -370,7 +381,7 @@ CheckUpdate=True
 |---|---|
 | `lexicon.tsv` | 词库，一行一个：`拼音（空格分隔）<TAB>词<TAB>词频` |
 | `english.txt` | 英文词表 |
-| `words.lm` | 词级语言模型（哪些词常连着用），有它长句更准；词库包里自带，见下 |
+| `words.lm` | 词级语言模型（哪些词常连着用），有它长句更准；安装包里自带，见下 |
 | `custom.tsv` | [自定义词](#自定义词)：在设置里加的词 |
 | `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
@@ -379,7 +390,7 @@ CheckUpdate=True
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
-词库包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
+安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
 是用清华的对话语料 [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（MIT）加中文维基百科（CC BY-SA 4.0）训练的，
 单独下载见 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)。
 载入约 0.06 秒，多占约 90 MB 内存，对按键速度几乎没有影响。想用自己的语料重新训练：
@@ -407,7 +418,7 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 |---|---|
 | 输入法列表里找不到 WowType | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`fcitx5 -r -d` 重启 |
 | 某个程序里打不了中文，别的程序可以 | 重启 fcitx5 以后 Chrome / Electron 程序要彻底退出再打开 |
-| 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。装 `wowtype-data-rime-ice`，或把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
+| 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。用安装包装的话重装一遍（安装包自带词库）；从源码装的把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
 | 按右 Alt 提示「开不了麦克风」 | 在系统设置的「声音」里确认有输入设备；`arecord -l` 应该能列出麦克风 |
 | 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，到设置的「语音」页换个键 |
@@ -432,7 +443,7 @@ WowType 自己的日志在 `~/.local/state/wowtype/wowtype.log`（满 512 KB 换
 
 ```bash
 # 安装包装的
-sudo apt remove wowtype wowtype-data-rime-ice
+sudo apt remove wowtype
 
 # 源码装的（在仓库目录里）
 sudo xargs rm -v < build/install_manifest.txt
@@ -488,7 +499,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 致谢
 
-- [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，作为单独的词库包分发）
+- [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，随安装包一起分发，许可证见 `/usr/share/doc/wowtype/copyright`）
 - [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
 - [fcitx5](https://github.com/fcitx/fcitx5)：输入法框架
 - [voicekey](https://github.com/J3n5en/voicekey)：离线语音识别部分的代码
@@ -496,4 +507,4 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 许可证
 
-代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。词库包的数据遵循 rime-ice 的 GPL-3.0。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0。
