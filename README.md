@@ -13,9 +13,7 @@
 
 [安装](#安装) · [使用](#使用) · [设置](#设置) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
 
-<a href="docs/media/wowtype-intro.mp4"><img src="docs/images/video-cover.png" width="640" alt="WowType 介绍视频的封面：这一定是最好用的 Linux 输入法"></a>
-
-<sub>▶ 点开看 38 秒介绍视频</sub>
+https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
 </div>
 
