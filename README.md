@@ -259,20 +259,21 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 | 页面 | 能改什么 |
 |---|---|
-| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加 |
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
 | 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
 
-右上角菜单里还有：用文本编辑器打开自定义词文件、恢复默认设置（不影响自定义词）、关于。
+右上角菜单里还有：用文本编辑器打开自定义词文件、导出日志、恢复默认设置（不影响自定义词）、关于。
 
 - `wowtype-config --page voice`（或 `general`、`words`、`update`）直接打开某一页。
 - **Fcitx 5 配置**里选中 WowType 点「配置」，也能改上面这些设置，里面的「自定义词和更多设置」会打开 WowType 设置。
 
 #### 主题
 
-候选框可以换成 WowType 的绿色主题：圆角候选框，选中的词是图标里的那种绿，系统换深色模式时跟着换深色版。
-在「WowType 设置 → 常规 → 外观」里打开「WowType 绿色主题」就行，关掉换回默认。
+WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标里的那种绿，系统换深色模式时跟着换深色版。
+第一次切到 WowType 时自动打开（只这一次；你在用别的 fcitx5 主题时不动）。
+不喜欢的话在「WowType 设置 → 常规 → 外观」里关掉「WowType 绿色主题」，换回默认。
 
 <table>
 <tr>
@@ -348,7 +349,8 @@ CheckUpdate=True
 | `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
 | `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal` |
 | `WOWTYPE_NNLM` | 神经语言模型路径，默认 `~/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin` |
-| `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新 |
+| `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新，也不自动打开默认主题 |
+| `WOWTYPE_LOG` | 日志文件路径，默认 `~/.local/state/wowtype/wowtype.log`；`0` 不写 |
 
 临时试一下：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。长期用写进 `~/.config/environment.d/wowtype.conf`，注销重新登录后生效。
 
@@ -411,10 +413,20 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 | 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，到设置的「语音」页换个键 |
 | 应用菜单里没有「WowType 设置」，或者打不开 | 缺 GTK 4 / libadwaita：`sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`。在终端里运行 `wowtype-config` 能看到报错 |
 | 设置里改了，打字时没变化 | 看看是不是设了 `WOWTYPE_*` 环境变量（`env \| grep WOWTYPE`），它们优先于设置；fcitx5 没在运行时，设置会在它下次启动时生效 |
-| 想看日志 | 终端里运行 `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype`，日志里有载入了哪个词库、用了多久 |
+| 想看日志 | `~/.local/state/wowtype/wowtype.log`，或者[导出日志](#出问题时导出日志) |
 | 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
 
-问题没解决，欢迎[提 issue](https://github.com/Gloridust/WowType/issues)，附上发行版、桌面环境（GNOME / KDE……，X11 还是 Wayland）和上面的日志。
+### 出问题时导出日志
+
+「WowType 设置 → 常规 → 问题反馈 → 导出日志」，或者右上角菜单里的「导出日志…」，会存一个 `wowtype-log-时间.txt`，
+里面有版本、系统和桌面环境、fcitx5 的输入法列表和主题、WowType 的设置、数据文件在不在、WowType 和 fcitx5 最近的日志。
+**不含你打过的字**，自定义词、自动学到的词和输入习惯只写条数；家目录写成 `~`。导出后可以先打开看一眼再发。
+
+没有图形界面时：`wowtype-config --export-log`（存到当前目录）或 `wowtype-config --export-log -`（打到终端）。
+
+WowType 自己的日志在 `~/.local/state/wowtype/wowtype.log`（满 512 KB 换一个，旧的留一份 `.1`）。
+
+问题没解决，欢迎[提 issue](https://github.com/Gloridust/WowType/issues)，把导出的日志拖进去。
 
 ## 卸载
 
@@ -426,7 +438,7 @@ sudo apt remove wowtype wowtype-data-rime-ice
 sudo xargs rm -v < build/install_manifest.txt
 
 # 学到的数据、自定义词、设置和缓存（可选）
-rm -rf ~/.local/share/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
+rm -rf ~/.local/share/wowtype ~/.local/state/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
 ```
 
 卸载后到 Fcitx 5 配置里把 WowType 从输入法列表里删掉，再 `fcitx5 -r -d`。

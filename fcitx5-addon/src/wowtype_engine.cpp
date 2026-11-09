@@ -1,4 +1,5 @@
 #include "wowtype_engine.h"
+#include "wowtype_log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -135,7 +136,7 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     std::string lexicon = findDataFile("WOWTYPE_LEXICON", "lexicon.tsv");
     if (lexicon.empty()) {
         lexicon = std::string(kSystemDataDir) + "/demo_lexicon.tsv";
-        FCITX_WARN() << "WowType: 没找到 lexicon.tsv，用 demo 词典（只有几十个词）";
+        WLOG_W() << "WowType: 没找到 lexicon.tsv，用 demo 词典（只有几十个词）";
     }
     // 词级语言模型：wowtype-lmbuild 生成的 words.lm；没有就找旧的 bigram.tsv
     std::string lm = findDataFile("WOWTYPE_LM", "words.lm");
@@ -147,13 +148,13 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
         wowtype_engine_new(lexicon.c_str(), lm.empty() ? nullptr : lm.c_str());
     if (!core && !lm.empty()) {
         // 语言模型坏了（版本不对、文件不完整）不该让输入法整个用不了：不带它再试一次
-        FCITX_WARN() << "WowType: 语言模型载入失败，不用它，文件=" << lm << "，错误="
+        WLOG_W() << "WowType: 语言模型载入失败，不用它，文件=" << lm << "，错误="
                      << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         lm.clear();
         core = wowtype_engine_new(lexicon.c_str(), nullptr);
     }
     if (!core) {
-        FCITX_ERROR() << "WowType: 初始化 Rust 核心失败，词典=" << lexicon
+        WLOG_E() << "WowType: 初始化 Rust 核心失败，词典=" << lexicon
                       << "，错误="
                       << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         return nullptr;
@@ -163,7 +164,7 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     if (!english.empty()) {
         const int loaded = wowtype_engine_load_english(core, english.c_str());
         if (loaded > 0) {
-            FCITX_INFO() << "WowType: 载入英文词 " << loaded << " 个";
+            WLOG_I() << "WowType: 载入英文词 " << loaded << " 个";
         }
     }
     // 微信输入法的字级神经语言模型（不随 WowType 分发，本机有才用）
@@ -171,32 +172,32 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
         !nnlm.empty()) {
         const int loaded = wowtype_engine_load_nnlm(core, nnlm.c_str());
         if (loaded > 0) {
-            FCITX_INFO() << "WowType: 载入神经语言模型（" << loaded << " 字）";
+            WLOG_I() << "WowType: 载入神经语言模型（" << loaded << " 字）";
         } else {
-            FCITX_WARN() << "WowType: 神经语言模型载入失败 " << nnlm << "："
+            WLOG_W() << "WowType: 神经语言模型载入失败 " << nnlm << "："
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
-            FCITX_INFO() << "WowType: 载入用户词 " << loaded << " 条";
+            WLOG_I() << "WowType: 载入用户词 " << loaded << " 条";
         }
     }
     if (const std::string history = historyPathFor(userDict);
         !history.empty() && std::filesystem::exists(history)) {
         const int loaded = wowtype_engine_load_history(core, history.c_str());
         if (loaded >= 0) {
-            FCITX_INFO() << "WowType: 载入输入习惯 " << loaded << " 条";
+            WLOG_I() << "WowType: 载入输入习惯 " << loaded << " 条";
         } else {
-            FCITX_WARN() << "WowType: 输入习惯载入失败 " << history << "："
+            WLOG_W() << "WowType: 输入习惯载入失败 " << history << "："
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - started)
                         .count();
-    FCITX_INFO() << "WowType: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms"
+    WLOG_I() << "WowType: 词典 " << lexicon << " 载入完成，用时 " << ms << " ms"
                  << (lm.empty() ? "（没有语言模型）" : "，语言模型 " + lm);
     return core;
 }
@@ -327,6 +328,8 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
       core_(nullptr),
       factory_([](fcitx::InputContext &) { return new WowtypeState(); }) {
     instance_->inputContextManager().registerProperty("wowtype", &factory_);
+    WLOG_I() << "WowType " << WOWTYPE_ADDON_VERSION << " 启动（fcitx5 " << fcitx::Instance::version()
+             << "）";
     // 全量词库载入要几百毫秒，放后台，别卡住 fcitx 启动
     loading_ = std::async(std::launch::async, loadCore, userDictPath());
     fcitx::readAsIni(config_, kConfigFile);
@@ -363,7 +366,7 @@ void WowtypeEngine::applyConfig() {
         const std::string name = env;
         key = name == "none" || name == "0" ? fcitx::Key() : fcitx::Key(name);
         if (key.sym() == FcitxKey_None && name != "none" && name != "0") {
-            FCITX_WARN() << "WowType: 不认识语音热键 " << name << "，改用 Alt_R";
+            WLOG_W() << "WowType: 不认识语音热键 " << name << "，改用 Alt_R";
             key = fcitx::Key(FcitxKey_Alt_R);
         }
     }
@@ -379,6 +382,10 @@ void WowtypeEngine::applyConfig() {
         const char *dir = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
         voice_ = wowtype_voice_new(dir);
     }
+    WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
+             << " 模糊音=" << fuzzy_ << " 纠错=" << typo_ << " 双拼=" << shuangpin_
+             << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
+             << " 检查更新=" << *config_.checkUpdate;
     if (core_) {
         applyCoreSettings();
     }
@@ -397,9 +404,9 @@ void WowtypeEngine::applyCoreSettings() {
             s2t.empty() ? -1 : wowtype_engine_load_conversion(core_, s2t.c_str());
         if (loaded > 0) {
             conversionLoaded_ = true;
-            FCITX_INFO() << "WowType: 载入简繁表 " << loaded << " 条";
+            WLOG_I() << "WowType: 载入简繁表 " << loaded << " 条";
         } else {
-            FCITX_WARN() << "WowType: 简繁表载入失败 " << s2t;
+            WLOG_W() << "WowType: 简繁表载入失败 " << s2t;
         }
     }
     wowtype_engine_set_traditional(core_, traditional_ && conversionLoaded_ ? 1 : 0);
@@ -407,10 +414,10 @@ void WowtypeEngine::applyCoreSettings() {
     if (const std::string custom = customWordsPath(); !custom.empty()) {
         const int loaded = wowtype_engine_load_custom_words(core_, custom.c_str());
         if (loaded < 0) {
-            FCITX_WARN() << "WowType: 自定义词载入失败 " << custom << "："
+            WLOG_W() << "WowType: 自定义词载入失败 " << custom << "："
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         } else if (loaded > 0) {
-            FCITX_INFO() << "WowType: 载入自定义词 " << loaded << " 条";
+            WLOG_I() << "WowType: 载入自定义词 " << loaded << " 条";
         }
     }
 }
@@ -494,7 +501,7 @@ void WowtypeEngine::maybeSaveUserDict(bool force) {
     const bool historySaved =
         !history.empty() && wowtype_engine_save_history(core_, history.c_str()) == 0;
     if (!historySaved) {
-        FCITX_WARN() << "WowType: 输入习惯保存失败 " << history << "："
+        WLOG_W() << "WowType: 输入习惯保存失败 " << history << "："
                      << (wowtype_last_error() ? wowtype_last_error() : "unknown");
     }
     if (dictSaved && historySaved) {
@@ -1005,17 +1012,18 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     maybeCheckUpdate();
 }
 
-/// 后台检查更新：交给设置界面（wowtype-config --check-update），它自己限一天一次、
-/// 有新版本时发桌面通知。插件这边只是每次 fcitx5 运行里第一次切到 WowType 时叫它一下。
+/// 后台的小事交给设置界面（wowtype-config --startup）：第一次用时打开 WowType 主题、
+/// 检查更新（它自己看「自动检查更新」开关，限一天一次，有新版本时发桌面通知）。
+/// 插件这边只是每次 fcitx5 运行里第一次切到 WowType 时叫它一下。
 void WowtypeEngine::maybeCheckUpdate() {
 #ifdef WOWTYPE_CONFIG_TOOL
-    if (updateChecked_ || !*config_.checkUpdate || std::getenv("WOWTYPE_NO_UPDATE_CHECK")) {
+    if (updateChecked_ || std::getenv("WOWTYPE_NO_UPDATE_CHECK")) {
         return;
     }
     updateChecked_ = true;
     std::error_code ec;
     if (std::filesystem::exists(WOWTYPE_CONFIG_TOOL, ec)) {
-        fcitx::startProcess({WOWTYPE_CONFIG_TOOL, "--check-update"});
+        fcitx::startProcess({WOWTYPE_CONFIG_TOOL, "--startup"});
     }
 #endif
 }
@@ -1154,7 +1162,7 @@ bool WowtypeEngine::pollVoice() {
         commitPlain(ic, text);
         return false;
     case WOWTYPE_VOICE_ERROR:
-        FCITX_INFO() << "WowType: 语音 " << text;
+        WLOG_I() << "WowType: 语音 " << text;
         showVoice(ic, "🎙 " + text, {});
         voiceErrorUntil_ = fcitx::now(CLOCK_MONOTONIC) + kVoiceErrorUsec;
         return true;

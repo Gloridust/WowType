@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(wowtype-fcitx5 VERSION 0.3.1 LANGUAGES CXX)
+project(wowtype-fcitx5 VERSION 0.3.2 LANGUAGES CXX)
 
 # fcitx5 5.1 的头文件用到了 std::span、std::source_location
 set(CMAKE_CXX_STANDARD 20)
@@ -42,9 +42,11 @@ add_library(wowtype MODULE
 target_include_directories(wowtype PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"
 )
-# 设置界面装在哪：插件在后台用它检查更新（wowtype-config --check-update）
+# 设置界面装在哪：插件在后台用它打开默认主题、检查更新（wowtype-config --startup）
+set(WOWTYPE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the settings app and the log")
 target_compile_definitions(wowtype PRIVATE
-    WOWTYPE_CONFIG_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/wowtype-config")
+    WOWTYPE_CONFIG_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/wowtype-config"
+    WOWTYPE_ADDON_VERSION="${WOWTYPE_VERSION}")
 target_link_libraries(wowtype PRIVATE
     Fcitx5::Core
     Fcitx5::Config
@@ -128,7 +130,6 @@ endif()
 # 设置界面（GTK 4 + libadwaita，Python）：fcitx5 配置工具里的「自定义词和更多设置」也打开它
 option(WOWTYPE_INSTALL_SETTINGS "Install the wowtype-config settings app" ON)
 if(WOWTYPE_INSTALL_SETTINGS)
-    set(WOWTYPE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the settings app")
     set(VERSION "${WOWTYPE_VERSION}")
     configure_file("${CMAKE_CURRENT_SOURCE_DIR}/../settings/wowtype-config"
         "${CMAKE_CURRENT_BINARY_DIR}/wowtype-config" @ONLY)

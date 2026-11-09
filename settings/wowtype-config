@@ -39,6 +39,11 @@ CONFIG_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "conf
 DATA_DIR = os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "wowtype")
 CUSTOM_FILE = os.environ.get("WOWTYPE_CUSTOM") or os.path.join(DATA_DIR, "custom.tsv")
 VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
+STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
+# 插件和设置界面共用的日志（插件那边见 fcitx5-addon/src/wowtype_log.h），不记打的字
+LOG_FILE = os.environ.get("WOWTYPE_LOG") or os.path.join(STATE_DIR, "wowtype.log")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+ISSUES_URL = "https://github.com/Gloridust/WowType/issues/new"
 LEXICON_CANDIDATES = [
     os.environ.get("WOWTYPE_LEXICON", ""),
     os.path.join(DATA_DIR, "lexicon.tsv"),
@@ -126,6 +131,37 @@ def write_atomic(path, text):
 def write_config(values, extra):
     lines = [f"{key}={values[key]}" for key in DEFAULTS]
     write_atomic(CONFIG_FILE, "\n".join(lines + extra) + "\n")
+
+
+def log(message):
+    """往共用日志里记一行（和插件同一个文件，标成 settings）。写不了就算了。"""
+    if LOG_FILE == "0":
+        return
+    try:
+        os.makedirs(os.path.dirname(LOG_FILE), exist_ok=True)
+        now = time.time()
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now))
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"{stamp}.{int(now * 1000) % 1000:03d} I settings {message}\n")
+    except OSError:
+        pass
+
+
+def read_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def update_state(**changes):
+    state = read_state()
+    state.update(changes)
+    try:
+        write_atomic(STATE_FILE, json.dumps(state, ensure_ascii=False))
+    except OSError:
+        pass
 
 
 def read_custom_words():
@@ -334,17 +370,26 @@ def gnome_shell_settings():
     return Gio.Settings.new("org.gnome.shell")
 
 
-def gnome_extension_loaded(uuid):
-    """GNOME Shell 这次登录有没有扫到这个扩展（新装的扩展要重新登录才扫得到）。"""
+def gnome_extension_info(uuid):
+    """GNOME Shell 里这个扩展的信息；这次登录没扫到（新装的扩展要重新登录）时是空字典。
+
+    注意接口在 org.gnome.Shell 上；org.gnome.Shell.Extensions 那个名字是「扩展」应用，
+    不自动启动时根本不存在。
+    """
     try:
         bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        value = bus.call_sync("org.gnome.Shell.Extensions", "/org/gnome/Shell/Extensions",
+        value = bus.call_sync("org.gnome.Shell", "/org/gnome/Shell",
                               "org.gnome.Shell.Extensions", "GetExtensionInfo",
                               GLib.Variant("(s)", (uuid,)), GLib.VariantType("(a{sv})"),
                               Gio.DBusCallFlags.NO_AUTO_START, 2000, None)
-        return bool(value.unpack()[0])
+        return value.unpack()[0]
     except GLib.Error:
-        return False
+        return {}
+
+
+def gnome_extension_loaded(uuid):
+    """GNOME Shell 这次登录有没有扫到这个扩展。"""
+    return bool(gnome_extension_info(uuid))
 
 
 def set_gnome_extension(settings, uuid, enabled):
@@ -354,6 +399,232 @@ def set_gnome_extension(settings, uuid, enabled):
     (on if enabled else off).append(uuid)
     settings.set_strv("enabled-extensions", on)
     settings.set_strv("disabled-extensions", off)
+
+
+def fcitx_call_sync(method, params=None, reply=None):
+    """同步调 fcitx5（命令行和后台任务用）；fcitx5 没在跑时返回 None。"""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        return bus.call_sync(Fcitx.NAME, Fcitx.PATH, Fcitx.IFACE, method, params,
+                             GLib.VariantType(reply) if reply else None,
+                             Gio.DBusCallFlags.NO_AUTO_START, 3000, None)
+    except GLib.Error:
+        return None
+
+
+def classicui_theme_values(on):
+    # fcitx5 经典界面（KDE、X11 等）：浅色/深色各一套，跟随系统深浅色
+    if on:
+        return {"Theme": THEME_LIGHT, "DarkTheme": THEME_DARK, "UseDarkTheme": "True"}
+    return {"Theme": "default", "DarkTheme": "default-dark"}
+
+
+def apply_gnome_theme(on):
+    """GNOME 上候选框是 Input Method Panel（kimpanel）扩展画的，换色靠另一个小扩展。
+
+    返回给用户看的一句话；不是 GNOME 时返回 None。
+    """
+    shell = gnome_shell_settings()
+    if shell is None:
+        return None
+    set_gnome_extension(shell, GNOME_THEME_EXT, on)
+    if not on:
+        return "已换回默认配色"
+    if KIMPANEL_EXT not in shell.get_strv("enabled-extensions"):
+        return "GNOME 上要先装并启用 Input Method Panel 扩展，候选框才会用这个主题"
+    if not gnome_extension_loaded(GNOME_THEME_EXT):
+        return "注销并重新登录一次后生效（GNOME 新装的扩展要重新登录才加载）"
+    return "已换成 WowType 主题"
+
+
+def init_default_theme():
+    """第一次用 WowType 时把绿色主题打开（只做一次，之后听用户的）。
+
+    不覆盖用户自己选的别的 fcitx5 主题；GNOME 上用户关过这个扩展的也不动。
+    fcitx5 还没起来时什么都不做，下次再试。
+    """
+    if read_state().get("theme_default_done"):
+        return
+    value = fcitx_call_sync("GetConfig", GLib.Variant("(s)", (CLASSICUI_URI,)),
+                            "(va(sa(sssva{sv})))")
+    if value is None:
+        return
+    shell = gnome_shell_settings()
+    if shell is not None and GNOME_THEME_EXT in shell.get_strv("disabled-extensions"):
+        update_state(theme_default_done=True)
+        log("默认主题：用户在 GNOME 里关过 WowType 主题，不动")
+        return
+    current = value.unpack()[0].get("Theme", "default")
+    if current in ("default", "", THEME_LIGHT):
+        raw = GLib.Variant("a{sv}", {k: GLib.Variant("s", v)
+                                     for k, v in classicui_theme_values(True).items()})
+        fcitx_call_sync("SetConfig", GLib.Variant("(sv)", (CLASSICUI_URI, raw)))
+        log(f"默认主题：fcitx5 经典界面 {current or 'default'} -> {THEME_LIGHT}")
+    else:
+        log(f"默认主题：用户在用别的主题 {current}，不动")
+    if shell is not None:
+        log(f"默认主题：GNOME 扩展 {apply_gnome_theme(True)}")
+    update_state(theme_default_done=True)
+
+
+def startup_tasks():
+    """插件每次 fcitx5 运行里第一次切到 WowType 时在后台叫（wowtype-config --startup）。"""
+    try:
+        init_default_theme()
+    except Exception as e:  # 主题弄不好也别耽误检查更新
+        log(f"默认主题失败：{e!r}")
+    return background_check()
+
+
+# ---------------------------------------------------------------- 诊断信息
+
+
+def _home(text):
+    home = os.path.expanduser("~")
+    return text.replace(home, "~") if home and home != "/" else text
+
+
+def _run(cmd, timeout=10):
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return (out.stdout + out.stderr).strip()
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"（{cmd[0]} 运行失败：{e}）"
+
+
+def _tail(path, lines):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read().splitlines()[-lines:]
+    except OSError:
+        return []
+
+
+def _file_line(path):
+    if not path:
+        return None
+    try:
+        st = os.stat(path)
+    except OSError:
+        return f"  {path}：没有"
+    if os.path.isdir(path):
+        size = dir_size(path)
+    else:
+        size = st.st_size
+    stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+    return f"  {path}：{size / 1e6:.1f} MB，{stamp}"
+
+
+def _count_lines(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return sum(1 for line in f if line.strip() and not line.startswith("#"))
+    except OSError:
+        return None
+
+
+def collect_diagnostics():
+    """导出给开发者看的诊断信息（纯文本）。
+
+    不含打过的字、自定义词和输入习惯的内容（只有条数），家目录写成 ~。
+    """
+    out = []
+    add = out.append
+    add("# WowType 诊断信息")
+    add(f"导出时间：{time.strftime('%Y-%m-%d %H:%M:%S %z')}")
+    add("不含你打过的字、自定义词和输入习惯的内容（只有条数和大小）。")
+    add("")
+    add("## 版本")
+    add(f"设置界面：{current_version()}")
+    for pkg in (ENGINE_PKG, DATA_PKG):
+        add(f"{pkg}：{dpkg_version(pkg) or '没用 deb 装'}")
+    add(f"fcitx5：{_run(['fcitx5', '--version'])}")
+    os_name = ""
+    try:
+        with open("/etc/os-release", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    os_name = line.split("=", 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    add(f"系统：{os_name}，内核 {os.uname().release}，{os.uname().machine}")
+    for key in ("XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "LANG", "GTK_IM_MODULE",
+                "QT_IM_MODULE", "XMODIFIERS"):
+        add(f"{key}={os.environ.get(key, '')}")
+    add("")
+
+    add("## fcitx5")
+    group = fcitx_call_sync("CurrentInputMethodGroup", None, "(s)")
+    if group is None:
+        add("fcitx5 没在运行（或连不上 D-Bus）")
+    else:
+        name = group.unpack()[0]
+        info = fcitx_call_sync("InputMethodGroupInfo", GLib.Variant("(s)", (name,)), "(sa(ss))")
+        items = [im for im, _layout in info.unpack()[1]] if info else []
+        add(f"输入法组 {name}：{', '.join(items)}")
+        current = fcitx_call_sync("CurrentInputMethod", None, "(s)")
+        if current is not None:
+            add(f"当前输入法：{current.unpack()[0]}")
+        theme = fcitx_call_sync("GetConfig", GLib.Variant("(s)", (CLASSICUI_URI,)),
+                                "(va(sa(sssva{sv})))")
+        if theme is not None:
+            cfg = theme.unpack()[0]
+            add(f"经典界面主题：{cfg.get('Theme')} / {cfg.get('DarkTheme')}，"
+                f"跟随深色 {cfg.get('UseDarkTheme')}")
+    shell = gnome_shell_settings()
+    if shell is not None:
+        enabled = shell.get_strv("enabled-extensions")
+        states = {1: "在运行", 2: "已停用", 3: "出错", 4: "版本不兼容"}
+        for uuid in (KIMPANEL_EXT, GNOME_THEME_EXT):
+            info = gnome_extension_info(uuid)
+            state = states.get(int(info.get("state", 0)), f"状态 {info.get('state')}") \
+                if info else "这次登录没加载"
+            error = f"，错误：{info['error']}" if info.get("error") else ""
+            add(f"GNOME 扩展 {uuid}：{'已启用' if uuid in enabled else '没启用'}，{state}{error}")
+    add("")
+
+    add("## WowType 设置（wowtype.conf）")
+    values, _extra = read_config()
+    add(", ".join(f"{k}={v}" for k, v in values.items()))
+    add("")
+
+    add("## 数据文件")
+    for path in [*LEXICON_CANDIDATES,
+                 os.path.join(DATA_DIR, "english.txt"), "/usr/share/wowtype/english.txt",
+                 os.environ.get("WOWTYPE_LM", ""),
+                 os.path.join(DATA_DIR, "words.lm"), "/usr/share/wowtype/words.lm",
+                 os.path.join(DATA_DIR, "lexicon.tsv.wcache"),
+                 os.path.join(DATA_DIR, "wetype", "nlrgpt2_nnlm.bin"),
+                 VOICE_MODEL_DIR]:
+        line = _file_line(path)
+        if line:
+            add(line)
+    for label, path in (("自定义词", CUSTOM_FILE),
+                        ("自动学到的词", os.path.join(DATA_DIR, "user.tsv")),
+                        ("输入习惯", os.path.join(DATA_DIR, "history.tsv"))):
+        count = _count_lines(path)
+        add(f"  {label}：{'没有' if count is None else f'{count} 条'}")
+    add("")
+
+    add("## WowType 日志（最近 400 行）")
+    lines = _tail(LOG_FILE + ".1", 400) + _tail(LOG_FILE, 400)
+    out.extend(lines[-400:] or ["（还没有日志：要用新版的 WowType 打过一次字才会有）"])
+    add("")
+
+    add("## fcitx5 日志（这次开机，最近 300 行）")
+    add(_run(["journalctl", "--user", "-b", "--no-pager", "-o", "short-iso", "-n", "300",
+              "_COMM=fcitx5"], timeout=20) or "（没有）")
+    return _home("\n".join(out)) + "\n"
+
+
+def default_log_name():
+    return time.strftime("wowtype-log-%Y%m%d-%H%M%S.txt")
+
+
+def export_diagnostics(path):
+    write_atomic(path, collect_diagnostics())
+    log(f"导出诊断信息到 {_home(path)}")
+    return path
 
 
 # ---------------------------------------------------------------- 更新
@@ -580,12 +851,13 @@ class SettingsWindow(Adw.ApplicationWindow):
         header.set_title_widget(switcher)
         menu = Gio.Menu()
         menu.append("用文本编辑器打开自定义词", "win.open-custom")
+        menu.append("导出日志…", "win.export-log")
         menu.append("恢复默认设置", "win.reset")
         menu.append("关于 WowType", "win.about")
         header.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu,
                                        tooltip_text="菜单"))
         for name, handler in (("open-custom", self.on_open_custom), ("reset", self.on_reset),
-                              ("about", self.on_about)):
+                              ("about", self.on_about), ("export-log", self.on_export_log)):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", handler)
             self.add_action(action)
@@ -665,7 +937,57 @@ class SettingsWindow(Adw.ApplicationWindow):
         ):
             tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
         page.add(tips)
+
+        feedback = Adw.PreferencesGroup(title="问题反馈")
+        export_row = Adw.ActionRow(
+            title="导出日志",
+            subtitle="出问题时导出来，附在 GitHub issue 里；不含你打过的字和自定义词")
+        export_button = Gtk.Button(label="导出…", valign=Gtk.Align.CENTER)
+        export_button.connect("clicked", self.on_export_log)
+        export_row.add_suffix(export_button)
+        export_row.set_activatable_widget(export_button)
+        feedback.add(export_row)
+        issue_row = Adw.ActionRow(title="提交问题", subtitle="在 GitHub 上新建 issue")
+        issue_row.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
+        issue_row.set_activatable(True)
+        issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
+        feedback.add(issue_row)
+        page.add(feedback)
         return page
+
+    def open_url(self, url):
+        Gtk.UriLauncher.new(url).launch(self, None, None, None)
+
+    def on_export_log(self, *_args):
+        dialog = Gtk.FileDialog(title="导出日志", initial_name=default_log_name())
+        downloads = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
+        if downloads and os.path.isdir(downloads):
+            dialog.set_initial_folder(Gio.File.new_for_path(downloads))
+
+        def chosen(dialog, result):
+            try:
+                file = dialog.save_finish(result)
+            except GLib.Error:
+                return  # 取消
+            path = file.get_path()
+
+            def work():
+                try:
+                    export_diagnostics(path)
+                    GLib.idle_add(self.exported, path, None)
+                except Exception as e:
+                    GLib.idle_add(self.exported, path, str(e))
+            threading.Thread(target=work, daemon=True).start()
+        dialog.save(self, None, chosen)
+
+    def exported(self, path, error):
+        if error:
+            self.toast(f"导出失败：{error}")
+            return GLib.SOURCE_REMOVE
+        toast = Adw.Toast(title=f"已保存到 {_home(path)}", button_label="提交问题", timeout=8)
+        toast.connect("button-clicked", lambda _t: self.open_url(ISSUES_URL))
+        self.toasts.add_toast(toast)
+        return GLib.SOURCE_REMOVE
 
     def refresh_theme(self):
         def done(config):
@@ -684,27 +1006,13 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def on_theme_toggled(self, row, _param):
         on = row.get_active()
-        # fcitx5 经典界面（KDE、X11 等）：浅色/深色各一套，跟随系统深浅色
-        if on:
-            values = {"Theme": THEME_LIGHT, "DarkTheme": THEME_DARK, "UseDarkTheme": "True"}
-        else:
-            values = {"Theme": "default", "DarkTheme": "default-dark"}
-        self.fcitx.set_config(CLASSICUI_URI, values)
-
-        # GNOME 上候选框是 Input Method Panel（kimpanel）扩展画的，换色靠另一个小扩展
-        shell = gnome_shell_settings()
-        if shell is None:
-            self.toast("已换成 WowType 主题" if on else "已换回 fcitx5 默认主题")
-            return
-        set_gnome_extension(shell, GNOME_THEME_EXT, on)
-        if not on:
-            self.toast("已换回默认配色")
-        elif KIMPANEL_EXT not in shell.get_strv("enabled-extensions"):
-            self.toast("GNOME 上要先装并启用 Input Method Panel 扩展，候选框才会用这个主题")
-        elif not gnome_extension_loaded(GNOME_THEME_EXT):
-            self.toast("注销并重新登录一次后生效（GNOME 新装的扩展要重新登录才加载）")
-        else:
-            self.toast("已换成 WowType 主题")
+        self.fcitx.set_config(CLASSICUI_URI, classicui_theme_values(on))
+        update_state(theme_default_done=True)
+        log(f"用户{'打开' if on else '关掉'}了 WowType 主题")
+        message = apply_gnome_theme(on)
+        if message is None:
+            message = "已换成 WowType 主题" if on else "已换回 fcitx5 默认主题"
+        self.toast(message)
 
     def make_switch(self, key, title, subtitle):
         row = Adw.SwitchRow(title=title, subtitle=subtitle)
@@ -948,7 +1256,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         group.add(self.progress)
 
         self.restart_row = Adw.ActionRow(
-            title="已更新，重启输入法后生效",
+            title="已更新，重启输入法后生效（设置界面也会重新打开）",
             subtitle="重启后，浏览器等正在打开的应用可能要重新打开才能打字", visible=False)
         restart = Gtk.Button(label="重启输入法", valign=Gtk.Align.CENTER)
         restart.add_css_class("suggested-action")
@@ -1061,7 +1369,9 @@ class SettingsWindow(Adw.ApplicationWindow):
                 self.install_row.set_visible(False)
                 self.restart_row.set_visible(True)
                 self.latest_row.set_title(f"已安装 {self.release['version']}")
-                self.toast("更新已安装")
+                self.updated = True
+                log(f"更新已安装：{self.release['version']}")
+                self.toast("更新已安装，重启输入法后生效")
             elif code in (126, 127):  # pkexec：取消授权 / 没通过
                 self.install_failed("没有授权，已取消")
             else:
@@ -1079,6 +1389,11 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def on_restart_fcitx(self, _button):
         def done(ok):
+            if ok and getattr(self, "updated", False):
+                # 刚装了新版：这个窗口还是旧程序，换成新装的设置界面（停在「更新」页）
+                self.get_application().quit()
+                os.execv(sys.executable, [sys.executable, os.path.abspath(__file__),
+                                          "--page", "update"])
             self.toast("输入法已重启" if ok else "重启失败，可以注销后重新登录")
             if ok:
                 self.restart_row.set_visible(False)
@@ -1177,8 +1492,18 @@ class SettingsApp(Adw.Application):
 
 
 if __name__ == "__main__":
-    if "--check-update" in sys.argv:
-        sys.exit(background_check())
+    if "--startup" in sys.argv:
+        sys.exit(startup_tasks())
+    if "--check-update" in sys.argv:  # 旧版插件叫的是这个
+        sys.exit(startup_tasks())
+    if "--export-log" in sys.argv:
+        rest = sys.argv[sys.argv.index("--export-log") + 1:]
+        target = rest[0] if rest else os.path.join(os.getcwd(), default_log_name())
+        if target == "-":
+            sys.stdout.write(collect_diagnostics())
+        else:
+            print(f"已保存到 {export_diagnostics(os.path.abspath(target))}")
+        sys.exit(0)
     if "--self-test" in sys.argv:
         assert normalize_pinyin("Ni Hǎo") == "ni hao"
         assert normalize_pinyin("nihao") == "ni hao"
