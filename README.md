@@ -13,13 +13,16 @@
 
 [安装](#安装) · [使用](#使用) · [设置](#设置) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
 
-<img src="docs/images/candidates.png" width="640" alt="打 hengxianghouxuanci 时的横排候选条：横向候选词、横向、横向后选词……">
+<a href="docs/media/wowtype-intro.mp4"><img src="docs/images/video-cover.png" width="640" alt="WowType 介绍视频的封面：这一定是最好用的 Linux 输入法"></a>
 
-<sub>候选横排，和微信输入法一样：整句只留几个，后面是词，最后是单字</sub>
+<sub>▶ 点开看 38 秒介绍视频</sub>
 
 </div>
 
 ## 特性
+
+<p align="center"><img src="docs/images/candidates.png" width="720" alt="在文本编辑器里打 hengxianghouxuanci：横排候选条，第一个是横向候选词，后面是横向、横向后选词……"><br>
+<sub>候选横排，和微信输入法一样：整句只留几个，后面是词，最后是单字</sub></p>
 
 - **整句输入**：`xiangquzijieshangban` 直接出「想去字节上班」；后面跟着句子的前半截，可以先上屏一段，剩下的拼音接着改。
 - **半成品也有词**：`zhongg` 就有「中国」，不用打全。打全了的拼音正好是个词时，它一定排第一。
@@ -56,6 +59,18 @@
 <img src="docs/images/english.png" alt="打 wechat 时第一个候选是 WeChat"><br>
 <b>中英混打，不用切换</b><br>
 <sub><code>wechat</code> → WeChat，大小写按词表来</sub>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/images/emoji.png" alt="打 jintianhaokaixin 时第三个候选是开心😊"><br>
+<b>打着字，顺手就有表情</b><br>
+<sub>第三个候选是「开心😊」，选了上屏「今天好开心😊」</sub>
+</td>
+<td align="center">
+<img src="docs/images/voice.png" alt="按住右 Alt 说话：光标变成声波，下面是正在听、离线和实时波形"><br>
+<b>按住右 Alt 说话</b><br>
+<sub>离线识别，录音不上传</sub>
 </td>
 </tr>
 </table>
@@ -262,7 +277,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 换语音键（右 Ctrl、菜单键、F8–F10）或者关掉语音，在 [WowType 设置](#设置)的「语音」页里改。
 
-<img src="docs/images/settings-voice.png" width="420" alt="WowType 设置的语音页：语音输入开关、语音键选右 Alt、识别模型已下载">
+<img src="docs/images/voice.png" width="560" alt="按住右 Alt 说话：光标变成声波，下面是正在听、离线和实时波形">
 
 ### 设置
 
@@ -271,7 +286,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 <table>
 <tr>
 <td align="center" width="50%">
-<img src="docs/images/settings-general.png" alt="WowType 设置的常规页：输入法状态、候选排列方向、每页个数、模糊音、按错键纠正、双拼、繁体字"><br>
+<img src="docs/images/settings-general.png" alt="WowType 设置的常规页：输入法状态、候选排列方向、每页个数、绿色主题、模糊音、按错键纠正、双拼、繁体字、emoji 推荐"><br>
 <b>常规</b><br>
 <sub>候选横排还是竖排、每页几个，模糊音、纠错、双拼、繁体</sub>
 </td>
@@ -279,6 +294,18 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 <img src="docs/images/settings-words.png" alt="WowType 设置的自定义词页：输入词后拼音自动填好，下面是已经加过的词"><br>
 <b>自定义词</b><br>
 <sub>填上词，拼音自动查好</sub>
+</td>
+</tr>
+<tr>
+<td align="center">
+<img src="docs/images/settings-voice.png" alt="WowType 设置的语音页：语音输入开关、语音键选右 Alt、识别模型已下载"><br>
+<b>语音</b><br>
+<sub>开关、换语音键</sub>
+</td>
+<td align="center">
+<img src="docs/images/settings-update.png" alt="WowType 设置的更新页：有新版本 0.3.5，下载并安装按钮，下面是更新内容"><br>
+<b>更新</b><br>
+<sub>有新版本发通知，点一下装好</sub>
 </td>
 </tr>
 </table>
