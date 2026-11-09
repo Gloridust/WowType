@@ -114,12 +114,19 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: 打包
         run: scripts/package-deb.sh engine "$VERSION" dist/pkg
-      - name: 装上试一下
+      - name: 用一键安装脚本装上试一下
         run: |
-          apt-get install -y ./dist/pkg/wowtype_*.deb
+          mkdir -p /tmp/inst && cp dist/pkg/wowtype_*.deb /tmp/inst/
+          (cd /tmp/inst && sha256sum *.deb > SHA256SUMS)
+          WOWTYPE_VERSION="$VERSION" WOWTYPE_BASE_URL=file:///tmp/inst WOWTYPE_YES=1 ./install.sh
+          # fcitx5 没在跑：脚本直接把 WowType 写进 fcitx5 的输入法列表
+          grep -qx 'Name=wowtype' "$HOME/.config/fcitx5/profile"
           ls /usr/lib/*/fcitx5/libwowtype.so
-          wowtype-check --lexicon dist/data/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
-          wowtype-show --lexicon dist/data/lexicon.tsv nihao | tee /tmp/show.txt
+          # 词库和语言模型在安装包里
+          test -s /usr/share/wowtype/words.lm && test -s /usr/share/wowtype/english.txt
+          cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
+          wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
+          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee /tmp/show.txt
           grep -q '1\.你好' /tmp/show.txt
           # 设置界面：能 import GTK 4 / libadwaita，拼音整理逻辑正确
           wowtype-config --self-test
@@ -152,20 +159,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          data=$(cd dist && ls wowtype-data-rime-ice_*_all.deb)
           cat > notes.md <<EOF
-          ## 安装（Ubuntu / Debian）
+          ## 安装（Ubuntu 24.04 / 26.04、Debian 13）
 
-          按发行版下载对应的 \`wowtype_<版本>_<发行版>_amd64.deb\`（ubuntu24.04 / ubuntu26.04 / debian13），再加上词库包 \`$data\`：
+          一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：
 
           \`\`\`bash
-          sudo apt install ./wowtype_*_amd64.deb ./$data
-          fcitx5 -r -d
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
           \`\`\`
 
-          然后在 fcitx5 配置里添加「WowType」。完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
+          或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
+          完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
-          词库包的数据来自 [rime-ice](https://github.com/iDvel/rime-ice)，许可证 GPL-3.0。
+          安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
 
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \

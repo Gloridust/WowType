@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # 打 .deb 包（CI 发版用，本地也能跑）。
 #
-#   scripts/package-deb.sh engine <版本> [输出目录]   输入法本体：fcitx5 插件 + 自检工具
-#   scripts/package-deb.sh data <数据目录> [输出目录]  词库包：scripts/make-data.sh 的产物
+#   scripts/package-deb.sh engine <版本> [输出目录]   安装包：fcitx5 插件 + 设置界面 + 自检工具 + 词库
+#   scripts/package-deb.sh data <数据目录> [输出目录]  不用 deb 的系统用的词库压缩包
 #
-# 本体包和当前系统的 fcitx5 版本绑定，要在目标发行版上（或同版本容器里）打。
+# 词库（scripts/make-data.sh 的产物）直接打进安装包，用户只装一个文件。
+# 数据目录默认 dist/data，WOWTYPE_DATA_DIR=<目录> 可以改。
+# 以前词库是单独的 wowtype-data-rime-ice 包；新包 Conflicts/Replaces 它，apt 装新包时会顺手把它删掉。
+#
+# 安装包和当前系统的 fcitx5 版本绑定，要在目标发行版上（或同版本容器里）打。
 # 包的版本号带发行版（0.1.0-1~ubuntu24.04）；文件名里不用 ~（GitHub Release 会把它改成 .）：
 # wowtype_0.1.0_ubuntu24.04_amd64.deb。
 set -euo pipefail
@@ -32,6 +36,8 @@ build_deb() { # <包名> <版本> <架构> <依赖> <简介> <详细说明>
     echo "Installed-Size: $(du -sk --exclude=DEBIAN "$stage" | cut -f1)"
     [[ -n "$depends" ]] && echo "Depends: $depends"
     [[ -n "${RECOMMENDS:-}" ]] && echo "Recommends: $RECOMMENDS"
+    [[ -n "${REPLACES:-}" ]] && printf 'Conflicts: %s\nReplaces: %s\nProvides: %s\n' \
+      "$REPLACES" "$REPLACES" "$REPLACES"
     echo "Section: utils"
     echo "Priority: optional"
     echo "Homepage: $HOMEPAGE"
@@ -43,9 +49,34 @@ build_deb() { # <包名> <版本> <架构> <依赖> <简介> <详细说明>
   echo "$file"
 }
 
+data_copyright() { # <数据目录>：copyright 里词库那几段
+  echo "Files: usr/share/wowtype/lexicon.tsv usr/share/wowtype/english.txt"
+  echo "Comment: 转换自雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），见 DATA-SOURCE.txt"
+  echo "License: GPL-3.0"
+  sed 's/^$/./; s/^/ /' "$1/LICENSE"
+  echo
+  echo "Files: usr/share/wowtype/words.lm"
+  echo "Copyright: WowType contributors; statistics derived from LCCC (thu-coai, MIT)"
+  echo " and Chinese Wikipedia (Wikipedia contributors, CC BY-SA 4.0)"
+  echo "License: CC-BY-SA-4.0"
+  echo " Word-level language model built by wowtype-lmbuild from the LCCC corpus"
+  echo " (https://huggingface.co/datasets/thu-coai/lccc) and Chinese Wikipedia"
+  echo " (https://zh.wikipedia.org/). Licensed under the Creative Commons"
+  echo " Attribution-ShareAlike 4.0 International License:"
+  echo " https://creativecommons.org/licenses/by-sa/4.0/legalcode"
+}
+
+check_data() { # <数据目录>
+  for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
+    [[ -f "$1/$f" ]] || { echo "缺 $1/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
+  done
+}
+
 case "$MODE" in
 engine)
   version=$ARG
+  data=${WOWTYPE_DATA_DIR:-dist/data}
+  check_data "$data"
   . /etc/os-release
   distro="${ID}${VERSION_ID:-}"
   debver="${version}-1~${distro}"
@@ -65,9 +96,16 @@ engine)
                       while read -r f; do is_elf "$f" && echo "$f"; done)
   strip --strip-unneeded "${elfs[@]}"
 
+  # 词库：雾凇拼音（GPL-3.0）+ WowType 的词级语言模型（CC BY-SA 4.0）
+  for f in lexicon.tsv english.txt words.lm; do
+    install -Dm644 "$data/$f" "$stage/usr/share/wowtype/$f"
+  done
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
-  cat > "$doc/copyright" <<EOF
+  install -Dm644 "$data/SOURCE.txt" "$doc/DATA-SOURCE.txt"
+  install -Dm644 "$data/VERSION" "$doc/DATA-VERSION"
+  {
+  cat <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: WowType
 Source: $HOMEPAGE
@@ -78,7 +116,10 @@ License: MIT or Apache-2.0
 Files: usr/share/wowtype/s2t.tsv
 Comment: 由 OpenCC 的字符映射表生成（tools/opencc2tsv.py）
 License: Apache-2.0
+
 EOF
+  data_copyright "$data"
+  } > "$doc/copyright"
 
   # 运行时依赖交给 dpkg-shlibdeps 从 .so 里算（libfcitx5core、libstdc++ 等）
   mkdir -p "$work/debian"
@@ -88,53 +129,20 @@ EOF
 
   # 设置界面要 PyGObject + GTK 4 + libadwaita；不装也不影响打字
   RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1" \
+  REPLACES="wowtype-data-rime-ice" \
   DEB_FILE="wowtype_${version}_${distro}_$(dpkg --print-architecture).deb" \
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \
     "WeChat-style pinyin input method for fcitx5" \
 "拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-装完在 fcitx5 配置里添加「WowType」，设置在应用菜单「WowType 设置」里。
-需要词库包 wowtype-data-rime-ice，
-或者自己把 lexicon.tsv 放到 ~/.local/share/wowtype/。"
+自带雾凇拼音（rime-ice）词库和词级语言模型。
+装完在 fcitx5 配置里添加「WowType」，设置在应用菜单「WowType 设置」里。"
   ;;
 
 data)
   data=$ARG
-  for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
-    [[ -f "$data/$f" ]] || { echo "缺 $data/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
-  done
-  date=$(<"$data/VERSION")
-  version=${date//-/.}
-  install -Dm644 "$data/lexicon.tsv" "$stage/usr/share/wowtype/lexicon.tsv"
-  install -Dm644 "$data/english.txt" "$stage/usr/share/wowtype/english.txt"
-  install -Dm644 "$data/words.lm" "$stage/usr/share/wowtype/words.lm"
-  doc="$stage/usr/share/doc/wowtype-data-rime-ice"
-  install -Dm644 "$data/SOURCE.txt" "$doc/SOURCE.txt"
-  {
-    echo "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/"
-    echo "Upstream-Name: rime-ice"
-    echo "Source: https://github.com/iDvel/rime-ice"
-    echo
-    echo "Files: *"
-    echo "License: GPL-3.0"
-    echo
-    sed 's/^$/./; s/^/ /' "$data/LICENSE"
-    echo
-    echo "Files: usr/share/wowtype/words.lm"
-    echo "Copyright: WowType contributors; statistics derived from LCCC (thu-coai, MIT)"
-    echo " and Chinese Wikipedia (Wikipedia contributors, CC BY-SA 4.0)"
-    echo "License: CC-BY-SA-4.0"
-    echo " Word-level language model built by wowtype-lmbuild from the LCCC corpus"
-    echo " (https://huggingface.co/datasets/thu-coai/lccc) and Chinese Wikipedia"
-    echo " (https://zh.wikipedia.org/). Licensed under the Creative Commons"
-    echo " Attribution-ShareAlike 4.0 International License:"
-    echo " https://creativecommons.org/licenses/by-sa/4.0/legalcode"
-  } > "$doc/copyright"
-  build_deb wowtype-data-rime-ice "$version" all "" \
-    "Chinese lexicon for WowType (from rime-ice)" \
-"雾凇拼音（rime-ice）的中文词库与英文词表，转换成 WowType 的格式，
-外加 WowType 的词级语言模型 words.lm（让长句更准）。
-装到 /usr/share/wowtype/，WowType 启动时自动载入。"
-
+  check_data "$data"
+  version=$(<"$data/VERSION")
+  version=${version//-/.}
   # 不用 deb 的系统：解压到 ~/.local/share/wowtype/ 即可
   tarball="$OUT/wowtype-data-rime-ice-$version.tar.gz"
   tar -C "$data" -czf "$tarball" lexicon.tsv english.txt words.lm LICENSE SOURCE.txt

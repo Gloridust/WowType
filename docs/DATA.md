@@ -146,7 +146,7 @@ lmcnmac.bin 导不出来（§3），所以自己从语料训练。`wowtype-lmbui
 
 日常句和热词表（`data/hotwords.tsv`）是同一时间写的，热词带来的那 3 个点有自评成分。
 
-词库包从 `2026.10.31.2` 起自带 400 万搭配的那份（`/usr/share/wowtype/words.lm`，CC BY-SA 4.0），
+安装包里自带 400 万搭配的那份（`/usr/share/wowtype/words.lm`，CC BY-SA 4.0；0.3.3 及以前在单独的词库包 `2026.10.31.2` 里），
 `scripts/make-data.sh` 从 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)
 下载并核对 sha256。不带 NNLM 时（安装包用户的情况）日常句 84.8%、维基句 60.2%，逐键平均约 1.9 ms，和不带它时一样。
 
