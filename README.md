@@ -28,7 +28,8 @@
 - **简拼、省略韵母、中英混打**：`bjdx` → 北京大学；有的音节只打声母也行，`kyi` → 可以、`yongzwen` → 用中文；zh/ch/sh 可以当一个声母，`zhch`、`zhchi` → 支持；`github` → GitHub。
 - **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
-- **符号和繁体**：`/juhao` → 。；可切繁体输出；可开模糊音、自然码双拼。
+- **Emoji**：打「开心」「点赞」「生日快乐」时，第三个候选就是对应的 emoji；按 `Super` + `.` 打开表情面板，打拼音或英文搜 emoji 和符号（`xiao` → 😂、`pizza` → 🍕、`youjiantou` → →）。
+- **繁体、模糊音、双拼**：可切繁体输出；可开模糊音、自然码双拼。
 - **图形设置界面**：候选排列、模糊音、语音键都在「WowType 设置」里点一下就改，马上生效；还能加自定义词（人名、公司名、常用的长句），加进去的词排第一，简拼也能打。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次）。
 
@@ -220,7 +221,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | `Esc` | 清空正在打的内容 |
 | 退格 | 删一个字母；刚选过词时先撤销那次选词 |
 | `'` | 分隔音节，比如 `xi'an` → 西安 |
-| `/` + 拼音 | 符号：`/juhao` → 。，`/kuo` → （） |
+| `Super` + `.` | 表情面板：打拼音或英文搜 emoji 和符号，见下 |
 | 左 `Shift` | 临时切英文（fcitx5 的设置），打了一半的字母原样上屏 |
 | 右 `Alt` | 语音输入，见下 |
 
@@ -230,7 +231,22 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 **长句可以分段上屏**：打完一整句，候选里除了整句，还有它的前半截（比如「我今天晚上要」）。
 选了前半截就只上屏这一段，剩下的拼音留着继续选。
 
-中文标点自动转全角（`,` → ，`?` → ？）。
+中文标点自动转全角（`,` → ，`?` → ？）。`/`、`+`、`"` 这类没有对应中文标点的符号原样上屏；打拼音途中按它们，先上屏当前候选。
+
+### Emoji 和符号
+
+**打字时推荐**：打的词有对应的 emoji 时，它排在第三个候选（`kaixin` → 开心、开行、😊），按 `3` 只上屏 emoji。
+一句话以这样的词结尾时，推荐的是「开心😊」这种，选了上屏整句再加 emoji（`jintianhaokaixin` → 今天好开心😊）。
+只看两个字以上的词，「是」「好」这种单字不推荐。不想要可以在设置里关掉。
+
+**表情面板**：按 `Super` + `.`（Windows 键 + 句号，和 Windows 上一样）打开，再按一次或 `Esc` 关闭。
+
+- 没打字时列出全部 emoji，最近用过的排最前
+- 打拼音或英文搜索：`xiao` → 😄😂…，`gou` → 🐶，`pizza` → 🍕，`heart` → ❤️；符号名也能搜：`gou` → ✓、`youjiantou` → →、`juhao` → 。
+- 方向键挑，空格、回车或 `1`–`6` 上屏，退格删搜索词
+- 打了一半的拼音再按快捷键，直接拿它来搜（`gou` + `Super` + `.`）
+
+快捷键可以在设置里换成 `Ctrl` + `;`、`Ctrl` + `Shift` + `E`，或者不用。
 
 ### 语音输入
 
@@ -269,7 +285,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 | 页面 | 能改什么 |
 |---|---|
-| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字、打字时推荐 emoji、表情面板快捷键。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
 | 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
@@ -335,6 +351,8 @@ Shuangpin=False
 Traditional=False
 Voice=True
 VoiceKey=Alt_R
+EmojiSuggest=True
+EmojiKey=Super+period
 CheckUpdate=True
 ```
 
@@ -342,8 +360,9 @@ CheckUpdate=True
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`EmojiSuggest`、`CheckUpdate` | `True` / `False` |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
+| `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键 |
 
 文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
 
@@ -351,7 +370,7 @@ CheckUpdate=True
 
 | 变量 | 作用 |
 |---|---|
-| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1` | 对应上面的开关 |
+| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0` | 对应上面的开关 |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |
 | `WOWTYPE_LEXICON`、`WOWTYPE_ENGLISH` | 词库、英文词表路径（默认的查找顺序见下） |
 | `WOWTYPE_LM` | 词级语言模型，默认找 `words.lm`（`wowtype-lmbuild` 生成），也认旧的 `前词<TAB>后词<TAB>次数` 文本 |
@@ -385,6 +404,7 @@ CheckUpdate=True
 | `custom.tsv` | [自定义词](#自定义词)：在设置里加的词 |
 | `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
+| `emoji-recent.txt` | 最近用过的 emoji（表情面板里排最前） |
 | `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
 | `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
@@ -421,6 +441,8 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 | 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。用安装包装的话重装一遍（安装包自带词库）；从源码装的把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
 | 按右 Alt 提示「开不了麦克风」 | 在系统设置的「声音」里确认有输入设备；`arecord -l` 应该能列出麦克风 |
+| 按 Super + . 打不开表情面板 | 只在 WowType 是当前输入法时有效；桌面或别的程序占了这个键的话，到设置里换成 Ctrl + ; |
+| emoji 显示成方块 | 缺彩色 emoji 字体：`sudo apt install fonts-noto-color-emoji` |
 | 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，到设置的「语音」页换个键 |
 | 应用菜单里没有「WowType 设置」，或者打不开 | 缺 GTK 4 / libadwaita：`sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`。在终端里运行 `wowtype-config` 能看到报错 |
 | 设置里改了，打字时没变化 | 看看是不是设了 `WOWTYPE_*` 环境变量（`env \| grep WOWTYPE`），它们优先于设置；fcitx5 没在运行时，设置会在它下次启动时生效 |
@@ -501,10 +523,11 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 - [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，随安装包一起分发，许可证见 `/usr/share/doc/wowtype/copyright`）
 - [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
+- [Unicode CLDR](https://cldr.unicode.org/)：emoji 的中英文关键词（Unicode License v3）
 - [fcitx5](https://github.com/fcitx/fcitx5)：输入法框架
 - [voicekey](https://github.com/J3n5en/voicekey)：离线语音识别部分的代码
 - 微信输入法：体验和设计上的参照
 
 ## 许可证
 
-代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。

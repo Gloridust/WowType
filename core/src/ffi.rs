@@ -48,6 +48,8 @@ pub struct WowtypeCandidates {
     pinyins: Vec<CString>,
     /// 候选用掉了输入的多少字节；整句候选等于输入长度。
     consumed: Vec<usize>,
+    /// 选中后上屏的文字（emoji 推荐用）；空表示就是 text。
+    commits: Vec<CString>,
 }
 
 impl WowtypeCandidates {
@@ -59,6 +61,7 @@ impl WowtypeCandidates {
             scores,
             pinyins: vec![CString::default(); n],
             consumed: vec![0; n],
+            commits: Vec::new(),
         }
     }
 }
@@ -165,6 +168,7 @@ pub unsafe extern "C" fn wowtype_engine_input(
                 scores,
                 pinyins,
                 consumed,
+                commits: Vec::new(),
             }))
         }
         Ok(Err(error)) => {
@@ -604,6 +608,115 @@ pub unsafe extern "C" fn wowtype_symbol_search(
         }
     }
     Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
+}
+
+/// 打字时的 emoji 推荐：text 是首选候选的文字。结果的 text 是显示文字，
+/// 上屏文字用 wowtype_candidates_commit 取（整个词对上时只有 emoji，句尾对上时是整句 + emoji）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_emoji_recommend(
+    text: *const c_char,
+    limit: usize,
+) -> *mut WowtypeCandidates {
+    let Some(text) = (unsafe { cstr_to_str(text) }) else {
+        set_last_error("text is null or not utf8");
+        return ptr::null_mut();
+    };
+    let suggestions = crate::emoji::recommend(text, limit);
+    let mut texts = Vec::new();
+    let mut commits = Vec::new();
+    for suggestion in suggestions {
+        if let (Ok(display), Ok(commit)) = (
+            CString::new(suggestion.display),
+            CString::new(suggestion.commit),
+        ) {
+            texts.push(display);
+            commits.push(commit);
+        }
+    }
+    let scores = vec![0.0; texts.len()];
+    let mut out = WowtypeCandidates::plain(texts, scores);
+    out.commits = commits;
+    Box::into_raw(Box::new(out))
+}
+
+/// 表情面板的搜索：query 为空给全部 emoji；否则按拼音（经引擎转成中文词）、英文和
+/// 符号名一起找。engine 可为 NULL（只按英文和符号名找）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_emoji_search(
+    engine: *const WowtypeEngineHandle,
+    query: *const c_char,
+    limit: usize,
+) -> *mut WowtypeCandidates {
+    let Some(query) = (unsafe { cstr_to_str(query) }) else {
+        set_last_error("query is null or not utf8");
+        return ptr::null_mut();
+    };
+    let query = query.trim();
+    let results: Vec<String> = if query.is_empty() {
+        crate::emoji::all()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    } else {
+        let mut words: Vec<String> = Vec::new();
+        if let Some(handle) = unsafe { engine.as_ref() } {
+            if query.bytes().all(|b| b.is_ascii_alphabetic() || b == b'\'') {
+                let outcome =
+                    panic::catch_unwind(panic::AssertUnwindSafe(|| handle.engine.try_input(query)));
+                if let Ok(Ok(candidates)) = outcome {
+                    words = candidates
+                        .into_iter()
+                        .filter(|c| c.consumed >= query.len() && !c.text.is_ascii())
+                        .map(|c| c.text)
+                        .take(8)
+                        .collect();
+                }
+            } else if !query.is_ascii() {
+                words.push(query.to_string());
+            }
+        }
+        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
+        let mut out: Vec<String> = Vec::new();
+        let add = |items: Vec<&str>, out: &mut Vec<String>| {
+            for item in items {
+                if !out.iter().any(|x| x == item) {
+                    out.push(item.to_string());
+                }
+            }
+        };
+        let symbols = crate::symbols::search(query, limit);
+        let (named, prefixed): (Vec<_>, Vec<_>) =
+            symbols.into_iter().partition(|s| s.names.contains(&query));
+        // 符号名完全对上的、关键词完全对上的 emoji、以名字开头的符号、英文、关键词里包含这个词的
+        add(named.into_iter().map(|s| s.text).collect(), &mut out);
+        add(crate::emoji::search_words_exact(&refs, limit), &mut out);
+        add(prefixed.into_iter().map(|s| s.text).collect(), &mut out);
+        add(crate::emoji::search_english(query, limit), &mut out);
+        add(
+            crate::emoji::search_words_containing(&refs, limit),
+            &mut out,
+        );
+        out
+    };
+    let texts: Vec<CString> = results
+        .into_iter()
+        .take(limit.max(1))
+        .filter_map(|t| CString::new(t).ok())
+        .collect();
+    let scores = vec![0.0; texts.len()];
+    Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
+}
+
+/// 选中后上屏的文字：emoji 推荐的结果可能和显示的不一样，其他候选就是 text。越界返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_candidates_commit(
+    candidates: *const WowtypeCandidates,
+    index: usize,
+) -> *const c_char {
+    unsafe { candidates.as_ref() }
+        .and_then(|c| c.commits.get(index).or_else(|| c.texts.get(index)))
+        .map(|text| text.as_ptr())
+        .unwrap_or(ptr::null())
 }
 
 /// 记录选词并可携带拼音：选够次数后自动加入用户词库。pinyin 可为 NULL。

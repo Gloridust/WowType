@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <system_error>
@@ -39,6 +40,12 @@ constexpr unsigned int kMaxCandidates = 300;
 constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
 constexpr int kSaveEvery = 20;
+/// 表情面板最多列这么多个（空搜索时是全部 emoji）。
+constexpr std::size_t kMaxEmoji = 2000;
+/// 记住最近用过的 emoji 个数（面板里排最前，正好三行）。
+constexpr std::size_t kRecentEmoji = 18;
+/// 打字推荐的 emoji 插在第几个候选（从 0 数）：不挤掉前两个词。
+constexpr std::size_t kEmojiSlot = 2;
 
 bool envFlag(const char *name, bool fallback) {
     const char *value = std::getenv(name);
@@ -240,14 +247,41 @@ private:
 };
 
 /// 显示宽度（半角为 1、其他为 2），用来把展开面板的各列对齐。
+/// emoji 序列（变体选择符、肤色、零宽连接、旗帜）按一个宽字符算。
 std::size_t displayWidth(const std::string &text) {
     std::size_t width = 0;
-    for (unsigned char c : text) {
-        if (c < 0x80) {
-            width += 1;
-        } else if ((c & 0xC0) != 0x80) {
-            width += 2; // 多字节字符的首字节
+    bool joinNext = false;
+    bool pendingFlag = false;
+    for (std::size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        const std::size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
+        char32_t cp = len == 1 ? c : c & (0xFF >> (len + 1));
+        for (std::size_t k = 1; k < len && i + k < text.size(); ++k) {
+            cp = (cp << 6) | (static_cast<unsigned char>(text[i + k]) & 0x3F);
         }
+        i += len;
+        if (cp == 0x200D) {
+            joinNext = true;
+            continue;
+        }
+        const bool zeroWidth = cp == 0xFE0F || cp == 0xFE0E || cp == 0x20E3 ||
+                               (cp >= 0x1F3FB && cp <= 0x1F3FF) ||
+                               (cp >= 0xE0020 && cp <= 0xE007F);
+        if (zeroWidth || joinNext) {
+            joinNext = false;
+            continue;
+        }
+        if (cp >= 0x1F1E6 && cp <= 0x1F1FF) { // 两个地区指示符拼成一面旗
+            if (pendingFlag) {
+                pendingFlag = false;
+                continue;
+            }
+            pendingFlag = true;
+            width += 2;
+            continue;
+        }
+        pendingFlag = false;
+        width += cp < 0x80 ? 1 : 2;
     }
     return width;
 }
@@ -278,6 +312,11 @@ struct WowtypeCandidate {
     std::string pinyin;
     /// 用掉了剩余输入的多少字节；小于剩余长度说明是句首词候选。
     std::size_t consumed = 0;
+    /// emoji 候选：选中时上屏 commit，记进最近用过的 emoji，不学习选词。
+    bool emoji = false;
+    std::string commit;
+    /// emoji 本身（打字推荐的候选显示的是「开心😊」，这里是「😊」）。
+    std::string emojiText;
 };
 
 /// 每个输入上下文独立保存的缓冲区和候选。
@@ -292,6 +331,8 @@ public:
     std::size_t gridCursor_ = 0;
     /// 收起面板后普通候选列表的光标位置（刷新候选时归零）。
     std::size_t panelCursor_ = 0;
+    /// 表情面板开着：buffer_ 里是搜索词（可以为空）。
+    bool emojiPanel_ = false;
 
     std::size_t selectedBytes() const {
         std::size_t total = 0;
@@ -314,6 +355,7 @@ public:
     }
     bool composing() const { return !buffer_.empty(); }
     void clear() {
+        emojiPanel_ = false;
         buffer_.clear();
         selections_.clear();
         candidates_.clear();
@@ -359,6 +401,8 @@ void WowtypeEngine::applyConfig() {
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
+    emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
+    emojiKey_ = *config_.emojiKey;
 
     // 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8）优先，none 关掉
     fcitx::Key key = *config_.voice ? *config_.voiceKey : fcitx::Key();
@@ -385,6 +429,7 @@ void WowtypeEngine::applyConfig() {
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
              << " 模糊音=" << fuzzy_ << " 纠错=" << typo_ << " 双拼=" << shuangpin_
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
+             << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
              << " 检查更新=" << *config_.checkUpdate;
     if (core_) {
         applyCoreSettings();
@@ -440,6 +485,10 @@ bool WowtypeEngine::isVoiceKey(const fcitx::Key &key) const {
     }
     const fcitx::KeyStates mask{fcitx::KeyState::SimpleMask};
     return (key.states() & mask) == (voiceKey_.states() & mask);
+}
+
+bool WowtypeEngine::isEmojiKey(const fcitx::Key &key) const {
+    return emojiKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{emojiKey_});
 }
 
 WowtypeEngine::~WowtypeEngine() {
@@ -567,14 +616,7 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     }
 
     WowtypeCandidates *raw = nullptr;
-    if (input.front() == '/' && state->selections_.empty()) {
-        // 符号面板：/ 后面是拼音或中文名前缀
-        const std::string query = input.substr(1);
-        if (query.empty()) {
-            return;
-        }
-        raw = wowtype_symbol_search(query.c_str(), pageSize_);
-    } else {
+    {
         // 已经选了开头的词时，把它当上文，剩下的部分排序更准
         const std::string context = utf8Tail(recent_ + state->selectedText(), kContextBytes);
         wowtype_engine_set_context(core_, context.c_str());
@@ -598,6 +640,198 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
         state->candidates_.push_back({text, pinyin ? pinyin : "", consumed});
     }
     wowtype_candidates_free(raw);
+    if (emojiSuggest_) {
+        addEmojiSuggestions(state, input);
+    }
+}
+
+void WowtypeEngine::addEmojiSuggestions(WowtypeState *state, const std::string &input) {
+    auto &all = state->candidates_;
+    if (all.empty() || all.front().consumed < input.size()) {
+        return;
+    }
+    const std::string top = all.front().text;
+    WowtypeCandidates *raw = wowtype_emoji_recommend(top.c_str(), 1);
+    if (!raw) {
+        return;
+    }
+    std::vector<WowtypeCandidate> emoji;
+    for (std::size_t i = 0; i < wowtype_candidates_len(raw); ++i) {
+        const char *text = wowtype_candidates_text(raw, i);
+        const char *commit = wowtype_candidates_commit(raw, i);
+        if (!text || !commit) {
+            continue;
+        }
+        WowtypeCandidate candidate{text, "", input.size()};
+        candidate.emoji = true;
+        candidate.commit = commit;
+        // 句尾对上时 commit 是「整句 + emoji」
+        candidate.emojiText = candidate.commit.rfind(top, 0) == 0
+                                  ? candidate.commit.substr(top.size())
+                                  : candidate.commit;
+        emoji.push_back(std::move(candidate));
+    }
+    wowtype_candidates_free(raw);
+    const std::size_t at = std::min(kEmojiSlot, all.size());
+    all.insert(all.begin() + static_cast<std::ptrdiff_t>(at), emoji.begin(), emoji.end());
+}
+
+std::string WowtypeEngine::recentEmojiPath() const {
+    const std::string dir = userDataDir();
+    return dir.empty() ? std::string() : dir + "/emoji-recent.txt";
+}
+
+void WowtypeEngine::rememberEmoji(const std::string &emoji) {
+    if (emoji.empty()) {
+        return;
+    }
+    recentEmoji_.erase(std::remove(recentEmoji_.begin(), recentEmoji_.end(), emoji),
+                       recentEmoji_.end());
+    recentEmoji_.insert(recentEmoji_.begin(), emoji);
+    if (recentEmoji_.size() > kRecentEmoji) {
+        recentEmoji_.resize(kRecentEmoji);
+    }
+    const std::string path = recentEmojiPath();
+    if (path.empty()) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
+    std::ofstream out(path, std::ios::trunc);
+    for (const auto &item : recentEmoji_) {
+        out << item << '\n';
+    }
+}
+
+void WowtypeEngine::openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state) {
+    if (!recentEmojiLoaded_) {
+        recentEmojiLoaded_ = true;
+        std::ifstream in(recentEmojiPath());
+        std::string line;
+        while (recentEmoji_.size() < kRecentEmoji && std::getline(in, line)) {
+            if (!line.empty()) {
+                recentEmoji_.push_back(line);
+            }
+        }
+    }
+    // 打了一半的拼音拿来当搜索词（xiao + 快捷键 -> 笑相关的 emoji）
+    std::string query;
+    if (state->composing()) {
+        if (state->selections_.empty()) {
+            for (char c : state->remaining()) {
+                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+                    query.push_back(static_cast<char>(c | 0x20));
+                }
+            }
+        } else {
+            commitAll(ic, state, state->remaining(), {});
+        }
+    }
+    state->clear();
+    state->emojiPanel_ = true;
+    state->buffer_ = query;
+    refreshEmojiPanel(state);
+    updateInputPanel(ic, state);
+}
+
+void WowtypeEngine::refreshEmojiPanel(WowtypeState *state) {
+    state->candidates_.clear();
+    state->gridCursor_ = 0;
+    state->expanded_ = true;
+    const std::string &query = state->buffer_;
+    auto add = [&](const std::string &text) {
+        for (const auto &have : state->candidates_) {
+            if (have.text == text) {
+                return;
+            }
+        }
+        WowtypeCandidate candidate{text, "", 0};
+        candidate.emoji = true;
+        candidate.commit = text;
+        candidate.emojiText = text;
+        state->candidates_.push_back(std::move(candidate));
+    };
+    if (query.empty()) {
+        for (const auto &emoji : recentEmoji_) {
+            add(emoji);
+        }
+    }
+    WowtypeCandidates *raw =
+        wowtype_engine_emoji_search(coreReady() ? core_ : nullptr, query.c_str(), kMaxEmoji);
+    if (!raw) {
+        return;
+    }
+    for (std::size_t i = 0; i < wowtype_candidates_len(raw); ++i) {
+        if (const char *text = wowtype_candidates_text(raw, i)) {
+            add(text);
+        }
+    }
+    wowtype_candidates_free(raw);
+}
+
+void WowtypeEngine::closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state) {
+    state->clear();
+    updateInputPanel(ic, state);
+}
+
+bool WowtypeEngine::handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
+                                        const fcitx::Key &key) {
+    const auto sym = key.sym();
+    if (key.states().test(fcitx::KeyState::Ctrl) || key.states().test(fcitx::KeyState::Alt) ||
+        key.states().test(fcitx::KeyState::Super)) {
+        // 别的组合键（复制粘贴等）：收起面板，交给应用
+        closeEmojiPanel(ic, state);
+        return false;
+    }
+    if (sym == FcitxKey_Escape) {
+        closeEmojiPanel(ic, state);
+        return true;
+    }
+    if (sym == FcitxKey_BackSpace) {
+        if (state->buffer_.empty()) {
+            closeEmojiPanel(ic, state);
+            return true;
+        }
+        state->buffer_.pop_back();
+    } else if ((sym >= FcitxKey_a && sym <= FcitxKey_z) ||
+               (sym >= FcitxKey_A && sym <= FcitxKey_Z)) {
+        state->buffer_.push_back(static_cast<char>(sym | 0x20));
+    } else if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter || sym == FcitxKey_space) {
+        if (state->candidates_.empty()) {
+            closeEmojiPanel(ic, state);
+        } else {
+            commitEmoji(ic, state, std::min(state->gridCursor_, state->candidates_.size() - 1));
+        }
+        return true;
+    } else if (sym == FcitxKey_Up && state->gridCursor_ < kGridCols) {
+        return true; // 第一行再往上：不收起
+    } else if (!state->candidates_.empty() &&
+               (key.isDigit() || key.isCursorMove() || sym == FcitxKey_minus ||
+                sym == FcitxKey_equal)) {
+        handleGridKey(ic, state, key);
+        return true;
+    } else {
+        return true; // 其他键吃掉，免得打进应用
+    }
+    refreshEmojiPanel(state);
+    updateInputPanel(ic, state);
+    return true;
+}
+
+void WowtypeEngine::commitEmoji(fcitx::InputContext *ic, WowtypeState *state,
+                                std::size_t index) {
+    if (!ic || index >= state->candidates_.size()) {
+        return;
+    }
+    const WowtypeCandidate chosen = state->candidates_[index];
+    const std::string text = state->selectedText() + chosen.commit;
+    if (!text.empty()) {
+        ic->commitString(text);
+        rememberContext(text);
+    }
+    rememberEmoji(chosen.emojiText);
+    state->clear();
+    updateInputPanel(ic, state);
 }
 
 /// 还没选词的拼音，按第一个用完它的候选分好音节（hengxiang -> heng'xiang）。
@@ -620,6 +854,28 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
                                      WowtypeState *state) {
     auto &panel = ic->inputPanel();
     panel.reset();
+
+    if (state->emojiPanel_) {
+        fcitx::Text preedit;
+        preedit.append(state->buffer_, fcitx::TextFormatFlag::Underline);
+        preedit.setCursor(static_cast<int>(preedit.textLength()));
+        panel.setPreedit(preedit);
+        std::string aux = "表情";
+        if (state->buffer_.empty()) {
+            aux += "：打拼音或英文搜索，Esc 关闭";
+        } else if (state->candidates_.empty()) {
+            aux += "：没找到「" + state->buffer_ + "」";
+        } else {
+            aux += "：" + state->buffer_;
+        }
+        panel.setAuxUp(fcitx::Text(aux));
+        if (!state->candidates_.empty()) {
+            fillGridPanel(panel, state);
+        }
+        ic->updatePreedit();
+        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+        return;
+    }
 
     if (!state->composing()) {
         ic->updatePreedit();
@@ -798,6 +1054,10 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     if (!ic || !state || index >= state->candidates_.size()) {
         return;
     }
+    if (state->candidates_[index].emoji) {
+        commitEmoji(ic, state, index);
+        return;
+    }
     const WowtypeCandidate chosen = state->candidates_[index];
     const std::string input = state->remaining();
     if (chosen.consumed < input.size()) {
@@ -842,6 +1102,22 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     // 中英文切换交给 fcitx 自己的「临时切换输入法」热键（默认左 Shift），
     // 切走时 deactivate 会把打了一半的字母原样上屏。
     if (event.isRelease()) {
+        return;
+    }
+
+    if (isEmojiKey(key)) {
+        if (state->emojiPanel_) {
+            closeEmojiPanel(ic, state);
+        } else {
+            openEmojiPanel(ic, state);
+        }
+        event.filterAndAccept();
+        return;
+    }
+    if (state->emojiPanel_) {
+        if (handleEmojiPanelKey(ic, state, key)) {
+            event.filterAndAccept();
+        }
         return;
     }
 
@@ -964,6 +1240,18 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             return;
         }
 
+        // 其他可见字符（/ " + _ 等）：先上屏当前候选，再原样上屏这个字符
+        if (sym > FcitxKey_space && sym < FcitxKey_asciitilde + 1 && sym != FcitxKey_apostrophe &&
+            !((sym >= FcitxKey_a && sym <= FcitxKey_z) || (sym >= FcitxKey_A && sym <= FcitxKey_Z))) {
+            const std::string text(1, static_cast<char>(sym));
+            for (int guard = 0; state->composing() && guard < 16; ++guard) {
+                commitCurrent(ic, state);
+            }
+            commitPlain(ic, text);
+            event.filterAndAccept();
+            return;
+        }
+
         // 编辑区里光标没法移动，这些键吃掉，免得应用里的光标乱跑
         if (key.isCursorMove() || sym == FcitxKey_Tab || sym == FcitxKey_Delete) {
             event.filterAndAccept();
@@ -971,12 +1259,11 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     } else {
         // 没有正在输入的拼音时，把 ASCII 标点转成中文标点（映射表在 Rust 侧）。
-        if (sym != FcitxKey_slash) {
-            if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym))) {
-                commitPlain(ic, punct);
-                event.filterAndAccept();
-                return;
-            }
+        // 没收录的（/ " + 等）不处理，原样交给应用。
+        if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym))) {
+            commitPlain(ic, punct);
+            event.filterAndAccept();
+            return;
         }
     }
 
@@ -988,9 +1275,6 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     } else if (sym == FcitxKey_apostrophe && state->composing()) {
         // 隔音符（xi'an）；开头的隔音符没有意义
         input = '\'';
-    } else if (sym == FcitxKey_slash && !state->composing()) {
-        // / 开头进入符号面板
-        input = '/';
     }
 
     if (input != 0) {

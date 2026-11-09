@@ -374,6 +374,101 @@ void runCases(Instance &instance) {
     const bool tookAlt = send(ic.get(), Key(FcitxKey_Alt_R));
     check(!tookAlt && preedit(ic.get()) == "ni", "打拼音时右 Alt 交给应用、编辑区不动");
 
+    // / 不再进符号面板：直接交给应用，后面的拼音照常打（issue：/jixu 卡在编辑区）
+    fresh(ic.get());
+    type(ic.get(), "/jixu<sp>");
+    check(ic->passed == "/" && ic->committed == "继续",
+          "/ 交给应用、jixu 照常打，交给应用 " + ic->passed + " 上屏 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "nihao/");
+    check(ic->committed == "你好/" && ic->passed.empty(),
+          "打字途中按 /：先上屏再出 /，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "nihao+");
+    check(ic->committed == "你好+", "打字途中按 +：先上屏再出 +，实际 " + ic->committed);
+
+    // 打字时推荐 emoji：插在第三个候选
+    fresh(ic.get());
+    type(ic.get(), "kaixin");
+    {
+        const auto kaixin = page(ic.get());
+        check(kaixin.size() > 2 && kaixin[0] == "开心" && kaixin[2] == "😊",
+              "kaixin 第三个是 😊：" + join(kaixin));
+    }
+    type(ic.get(), "3");
+    check(ic->committed == "😊", "选 emoji 只上屏 emoji，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "jintianhaokaixin");
+    {
+        const auto sentence = page(ic.get());
+        int at = -1;
+        for (std::size_t i = 0; i < sentence.size(); ++i) {
+            if (sentence[i] == "开心😊") at = static_cast<int>(i);
+        }
+        check(at >= 0, "句尾是开心时推荐「开心😊」：" + join(sentence));
+        if (at >= 0) {
+            type(ic.get(), std::string(1, static_cast<char>('1' + at)));
+            check(ic->committed == sentence[0] + "😊", "句尾推荐：整句 + emoji，实际 " + ic->committed);
+        }
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        bool emoji = false;
+        for (const auto &t : page(ic.get())) emoji = emoji || t == "✅";
+        check(!emoji, "单字不推荐 emoji：" + join(page(ic.get())));
+    }
+
+    // 表情面板：Super+. 打开，空搜索列全部，空格选第一个，Esc 关闭
+    const Key emojiKey(FcitxKey_period, KeyState::Super);
+    fresh(ic.get());
+    check(send(ic.get(), emojiKey), "Super+. 被输入法接住");
+    check(ic->inputPanel().auxUp().toString().find("表情") != std::string::npos &&
+              !page(ic.get()).empty(),
+          "打开表情面板：" + ic->inputPanel().auxUp().toString());
+    // 上面刚选过 😊：最近用过的排最前，后面是全部 emoji（😀 开头）
+    check(!page(ic.get()).empty() && page(ic.get())[0].find("〔😊〕２　😀") != std::string::npos,
+          "最近用过的排最前：" + (page(ic.get()).empty() ? std::string() : page(ic.get())[0]));
+    type(ic.get(), "<right><sp>");
+    check(ic->committed == "😀", "右键移到第二个再选 😀，实际 " + ic->committed);
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    type(ic.get(), "<sp>");
+    check(ic->committed == "😀", "空格选第一个（刚用过的 😀），实际 " + ic->committed);
+    // 搜拼音、英文和符号名
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    type(ic.get(), "xiao");
+    check(join(page(ic.get())).find("😂") != std::string::npos, "搜 xiao 有 😂：" + join(page(ic.get())));
+    type(ic.get(), "<cr>");
+    check(!ic->committed.empty() && preedit(ic.get()).empty(), "回车选中并关闭面板，实际 " + ic->committed);
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    type(ic.get(), "pizza<sp>");
+    check(ic->committed == "🍕", "搜英文 pizza -> 🍕，实际 " + ic->committed);
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    type(ic.get(), "youjiantou<sp>");
+    check(ic->committed == "→", "符号也能搜：youjiantou -> →，实际 " + ic->committed);
+    // 打了一半的拼音带进面板当搜索词
+    fresh(ic.get());
+    type(ic.get(), "gou");
+    send(ic.get(), emojiKey);
+    check(ic->inputPanel().auxUp().toString().find("gou") != std::string::npos &&
+              join(page(ic.get())).find("🐶") != std::string::npos,
+          "gou + Super+. 搜狗：" + join(page(ic.get())));
+    type(ic.get(), "<esc>");
+    check(ic->committed.empty() && preedit(ic.get()).empty() && page(ic.get()).empty(),
+          "Esc 关闭面板，不上屏");
+    // 再按一次快捷键也关闭；退格删空后再退格关闭
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    send(ic.get(), emojiKey);
+    check(page(ic.get()).empty() && ic->committed.empty(), "再按一次快捷键关闭");
+    send(ic.get(), emojiKey);
+    type(ic.get(), "a<bs><bs>");
+    check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(), "退格删空再退格关闭");
+
     // 设置：改配置文件和自定义词，reloadConfig 后立刻生效（设置界面走的就是这条路）
     fresh(ic.get());
     const std::string configDir = std::string(std::getenv("XDG_CONFIG_HOME")) + "/fcitx5/conf";
@@ -384,7 +479,7 @@ void runCases(Instance &instance) {
     check(addon && addon->getConfig(), "插件有配置项");
     {
         std::ofstream(configDir + "/wowtype.conf")
-            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\n";
+            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\nEmojiSuggest=False\n";
         std::ofstream(customFile) << "# 测试\nni hao\t妮好\nwo de you xiang\t我的邮箱\n";
     }
     addon->reloadConfig();
@@ -403,6 +498,9 @@ void runCases(Instance &instance) {
     check(!send(ic.get(), Key(FcitxKey_Alt_R)), "关掉语音后右 Alt 交给应用");
     type(ic.get(), "wdyx<sp>");
     check(ic->committed == "我的邮箱", "自定义词也能简拼：wdyx -> " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "kaixin");
+    check(join(page(ic.get())).find("😊") == std::string::npos, "关掉 emoji 推荐后没有 😊：" + join(page(ic.get())));
 
     // 删掉文件再 reload：回到默认
     std::filesystem::remove(configDir + "/wowtype.conf");

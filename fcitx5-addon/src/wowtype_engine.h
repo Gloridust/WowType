@@ -62,6 +62,10 @@ FCITX_CONFIGURATION(
         this, "VoiceKey", "语音输入键（按住说话，或点一下开始）", fcitx::Key(FcitxKey_Alt_R),
         fcitx::KeyConstrain({fcitx::KeyConstrainFlag::AllowModifierOnly,
                              fcitx::KeyConstrainFlag::AllowModifierLess})};
+    fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
+        this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
+        fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
     fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（一天最多一次）", true};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
@@ -101,6 +105,21 @@ private:
     void applyCoreSettings();
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
+    bool isEmojiKey(const fcitx::Key &key) const;
+
+    // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
+    void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
+    void closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
+    void refreshEmojiPanel(WowtypeState *state);
+    /// 面板开着时的按键，处理了返回 true。
+    bool handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
+                             const fcitx::Key &key);
+    /// 首选候选对得上 emoji 时，插到候选列表里。
+    void addEmojiSuggestions(WowtypeState *state, const std::string &input);
+    /// 上屏选中的 emoji 候选（打字推荐的或面板里的）。
+    void commitEmoji(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
+    void rememberEmoji(const std::string &emoji);
+    std::string recentEmojiPath() const;
     void refreshCandidates(WowtypeState *state);
     /// 展开的候选面板（下键展开）：处理了这个键返回 true。
     bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
@@ -148,6 +167,12 @@ private:
     bool shuangpin_ = false;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
+    bool emojiSuggest_ = true;
+    /// 表情面板快捷键，FcitxKey_None 表示关掉。
+    fcitx::Key emojiKey_;
+    /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
+    std::vector<std::string> recentEmoji_;
+    bool recentEmojiLoaded_ = false;
 
     WowtypeVoice *voice_ = nullptr;
     /// 语音热键，默认右 Alt；FcitxKey_None 表示关掉语音。

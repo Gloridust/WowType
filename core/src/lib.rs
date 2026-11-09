@@ -6,6 +6,7 @@
 
 pub mod beam;
 pub mod convert;
+pub mod emoji;
 pub mod ffi;
 pub mod graph;
 pub mod learn;

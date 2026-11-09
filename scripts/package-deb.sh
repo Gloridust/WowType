@@ -117,6 +117,12 @@ Files: usr/share/wowtype/s2t.tsv
 Comment: 由 OpenCC 的字符映射表生成（tools/opencc2tsv.py）
 License: Apache-2.0
 
+Files: usr/lib/*/fcitx5/libwowtype.so
+Comment: 编进去的 emoji 关键词（core/src/emoji/cldr.tsv）来自 Unicode CLDR 和 emoji-test.txt
+Copyright: 1991-2026 Unicode, Inc.
+License: Unicode-3.0
+ https://www.unicode.org/license.txt
+
 EOF
   data_copyright "$data"
   } > "$doc/copyright"
@@ -128,7 +134,8 @@ EOF
   depends="${shlibs:+$shlibs, }fcitx5"
 
   # 设置界面要 PyGObject + GTK 4 + libadwaita；不装也不影响打字
-  RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1" \
+  # emoji 要彩色 emoji 字体才画得出来（桌面版系统一般都装了）
+  RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, fonts-noto-color-emoji" \
   REPLACES="wowtype-data-rime-ice" \
   DEB_FILE="wowtype_${version}_${distro}_$(dpkg --print-architecture).deb" \
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \

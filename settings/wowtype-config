@@ -69,6 +69,8 @@ DEFAULTS = {
     "Traditional": "False",
     "Voice": "True",
     "VoiceKey": "Alt_R",
+    "EmojiSuggest": "True",
+    "EmojiKey": "Super+period",
     "CheckUpdate": "True",
 }
 
@@ -79,6 +81,13 @@ VOICE_KEYS = [
     ("F8", "F8"),
     ("F9", "F9"),
     ("F10", "F10"),
+]
+
+EMOJI_KEYS = [
+    ("Super + .（Windows 键 + 句号）", "Super+period"),
+    ("Ctrl + ;", "Control+semicolon"),
+    ("Ctrl + Shift + E", "Control+Shift+E"),
+    ("不用快捷键", ""),
 ]
 
 # 合法拼音音节（和 core/src/syllable.rs 的 SYLLABLES 一致）
@@ -1110,11 +1119,30 @@ class SettingsWindow(Adw.ApplicationWindow):
             pinyin.add(self.make_switch(key, title, subtitle))
         page.add(pinyin)
 
+        emoji = Adw.PreferencesGroup(
+            title="表情",
+            description="按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
+                        "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。")
+        emoji.add(self.make_switch("EmojiSuggest", "打字时推荐 emoji",
+                                   "打「开心」「点赞」这类词时，第三个候选是对应的 emoji"))
+        current = self.values["EmojiKey"]
+        labels = [label for label, _ in EMOJI_KEYS]
+        self.emoji_keys = [name for _, name in EMOJI_KEYS]
+        if current not in self.emoji_keys:
+            labels.append(f"其他（{current}）")
+            self.emoji_keys.append(current)
+        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", model=Gtk.StringList.new(labels))
+        self.emoji_key_row.set_selected(self.emoji_keys.index(current))
+        self.emoji_key_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "EmojiKey", self.emoji_keys[row.get_selected()]))
+        emoji.add(self.emoji_key_row)
+        page.add(emoji)
+
         tips = Adw.PreferencesGroup(title="小技巧")
         for title, subtitle in (
             ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持"),
             ("长句分段选", "第一个候选不对时，先选开头的词，剩下的接着选"),
-            ("符号", "打 / 加名字找符号，比如 /gou → ✓、/youjiantou → →"),
+            ("符号", "表情面板里也能搜符号名：gou → ✓、youjiantou → →、juhao → 。"),
         ):
             tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
         page.add(tips)
@@ -1634,6 +1662,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
+            self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
             self.toast("已恢复默认设置")
         dialog.connect("response", answered)
         dialog.present(self)
