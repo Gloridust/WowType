@@ -99,13 +99,14 @@ EOF
 
 data)
   data=$ARG
-  for f in lexicon.tsv english.txt LICENSE SOURCE.txt VERSION; do
+  for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
     [[ -f "$data/$f" ]] || { echo "缺 $data/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
   done
   date=$(<"$data/VERSION")
   version=${date//-/.}
   install -Dm644 "$data/lexicon.tsv" "$stage/usr/share/wowtype/lexicon.tsv"
   install -Dm644 "$data/english.txt" "$stage/usr/share/wowtype/english.txt"
+  install -Dm644 "$data/words.lm" "$stage/usr/share/wowtype/words.lm"
   doc="$stage/usr/share/doc/wowtype-data-rime-ice"
   install -Dm644 "$data/SOURCE.txt" "$doc/SOURCE.txt"
   {
@@ -117,15 +118,26 @@ data)
     echo "License: GPL-3.0"
     echo
     sed 's/^$/./; s/^/ /' "$data/LICENSE"
+    echo
+    echo "Files: usr/share/wowtype/words.lm"
+    echo "Copyright: WowType contributors; statistics derived from LCCC (thu-coai, MIT)"
+    echo " and Chinese Wikipedia (Wikipedia contributors, CC BY-SA 4.0)"
+    echo "License: CC-BY-SA-4.0"
+    echo " Word-level language model built by wowtype-lmbuild from the LCCC corpus"
+    echo " (https://huggingface.co/datasets/thu-coai/lccc) and Chinese Wikipedia"
+    echo " (https://zh.wikipedia.org/). Licensed under the Creative Commons"
+    echo " Attribution-ShareAlike 4.0 International License:"
+    echo " https://creativecommons.org/licenses/by-sa/4.0/legalcode"
   } > "$doc/copyright"
   build_deb wowtype-data-rime-ice "$version" all "" \
     "Chinese lexicon for WowType (from rime-ice)" \
-"雾凇拼音（rime-ice）的中文词库与英文词表，转换成 WowType 的格式。
+"雾凇拼音（rime-ice）的中文词库与英文词表，转换成 WowType 的格式，
+外加 WowType 的词级语言模型 words.lm（让长句更准）。
 装到 /usr/share/wowtype/，WowType 启动时自动载入。"
 
   # 不用 deb 的系统：解压到 ~/.local/share/wowtype/ 即可
   tarball="$OUT/wowtype-data-rime-ice-$version.tar.gz"
-  tar -C "$data" -czf "$tarball" lexicon.tsv english.txt LICENSE SOURCE.txt
+  tar -C "$data" -czf "$tarball" lexicon.tsv english.txt words.lm LICENSE SOURCE.txt
   echo "$tarball"
   ;;
 

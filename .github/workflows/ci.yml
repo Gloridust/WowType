@@ -101,8 +101,8 @@ jobs:
         with:
           name: data
           path: dist/data
-      - name: 按键测试（私有 fcitx5 实例 + 真实词库）
-        run: scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - name: 按键测试（私有 fcitx5 实例 + 真实词库和语言模型）
+        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
       - name: 版本号
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then

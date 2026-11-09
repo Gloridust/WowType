@@ -145,6 +145,13 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     const auto started = std::chrono::steady_clock::now();
     WowtypeEngineHandle *core =
         wowtype_engine_new(lexicon.c_str(), lm.empty() ? nullptr : lm.c_str());
+    if (!core && !lm.empty()) {
+        // 语言模型坏了（版本不对、文件不完整）不该让输入法整个用不了：不带它再试一次
+        FCITX_WARN() << "WowType: 语言模型载入失败，不用它，文件=" << lm << "，错误="
+                     << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        lm.clear();
+        core = wowtype_engine_new(lexicon.c_str(), nullptr);
+    }
     if (!core) {
         FCITX_ERROR() << "WowType: 初始化 Rust 核心失败，词典=" << lexicon
                       << "，错误="
