@@ -1,6 +1,6 @@
 [package]
 name = "wowtype-voiced"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "语音输入常驻进程：全局热键 + 麦克风采集 + 上屏"
 
