@@ -1301,6 +1301,107 @@ void runVoiceCase(Instance &instance, std::function<void()> done) {
         });
 }
 
+/// 语音取消：按时间表（每格 0.1 秒）发按键、失焦，最后检查没有东西上屏。
+/// 识别是异步的，取消之后还要再等几秒，确认迟到的结果被丢掉、不会上屏。
+struct VoiceScript {
+    Instance &instance;
+    std::string name;
+    std::unique_ptr<HarnessInputContext> ic;
+    std::unique_ptr<EventSourceTime> timer;
+    std::vector<std::pair<int, std::function<void(VoiceScript &)>>> steps;
+    size_t next = 0;
+    int ticks = 0;
+};
+
+void runVoiceScript(Instance &instance, std::string name,
+                    std::vector<std::pair<int, std::function<void(VoiceScript &)>>> steps,
+                    std::function<void()> done) {
+    auto *s = new VoiceScript{instance, std::move(name),
+                              std::make_unique<HarnessInputContext>(instance.inputContextManager()),
+                              {}, std::move(steps)};
+    s->ic->focusIn();
+    instance.setCurrentInputMethod(s->ic.get(), "wowtype", true);
+    s->timer = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
+        [s, done](EventSourceTime *source, uint64_t) {
+            ++s->ticks;
+            while (s->next < s->steps.size() && s->steps[s->next].first <= s->ticks) {
+                s->steps[s->next].second(*s);
+                ++s->next;
+            }
+            if (s->next < s->steps.size()) {
+                source->setNextInterval(100000);
+                source->setOneShot();
+                return true;
+            }
+            s->ic.reset();
+            done();
+            dispatcher->schedule([s]() { delete s; });
+            return true;
+        });
+}
+
+void runVoiceCancelCases(Instance &instance, std::function<void()> done) {
+    const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
+    if (!wav || !*wav) {
+        std::printf("skip 语音取消（没给 WOWTYPE_VOICE_WAV）\n");
+        done();
+        return;
+    }
+    using Steps = std::vector<std::pair<int, std::function<void(VoiceScript &)>>>;
+    auto press = [](VoiceScript &s) {
+        KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R), false);
+        check(s.ic->keyEvent(e), s.name + "：按下右 Alt 开始录音");
+    };
+    auto release = [](VoiceScript &s) {
+        KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R, KeyState::Alt), true);
+        s.ic->keyEvent(e);
+    };
+    auto esc = [](VoiceScript &s) {
+        KeyEvent e(s.ic.get(), Key(FcitxKey_Escape), false);
+        check(s.ic->keyEvent(e), s.name + "：Esc 被输入法接住，不交给应用");
+        check(s.ic->inputPanel().auxUp().empty(),
+              s.name + "：Esc 后麦克风提示消失，实际 " + s.ic->inputPanel().auxUp().toString());
+    };
+    // 取消后等 6 秒：比正常识别出结果的时间长，结果要是没丢就会在这期间上屏
+    auto nothingCommitted = [](VoiceScript &s) {
+        check(s.ic->committed.empty(), s.name + "：取消后迟到的识别结果不上屏，实际 " + s.ic->committed);
+        check(s.ic->inputPanel().auxUp().empty(), s.name + "：提示没有残留");
+    };
+
+    // 1. 按住说话时按 Esc：放弃录音；之后松开热键也不再开始识别
+    Steps escWhileRecording{{1, press}, {8, esc}, {10, release}, {70, nothingCommitted}};
+    // 2. 松开热键（开始识别）后、结果出来前按 Esc
+    Steps escWhileRecognizing{{1, press}, {10, release}, {11, esc}, {71, nothingCommitted}};
+    // 3. 识别中输入框失去焦点：取消；焦点回来也不补上屏
+    Steps focusOut{{1, press},
+                   {10, release},
+                   {11, [](VoiceScript &s) { s.ic->focusOut(); }},
+                   {70, [](VoiceScript &s) { s.ic->focusIn(); }},
+                   {72, nothingCommitted}};
+    // 4. 打完一句后能正常再开始：取消不会把语音卡在「忙」的状态
+    Steps afterCancel{{1, press},
+                      {3, [](VoiceScript &s) {
+                           check(s.ic->inputPanel().auxUp().toString().find("🎙") != std::string::npos,
+                                 s.name + "：取消过之后还能再开始录音");
+                       }},
+                      {4, [](VoiceScript &s) {
+                           KeyEvent e(s.ic.get(), Key(FcitxKey_Escape), false);
+                           s.ic->keyEvent(e);
+                       }},
+                      {5, release}};
+
+    runVoiceScript(instance, "语音取消·录音中 Esc", escWhileRecording, [&instance, done, escWhileRecognizing,
+                                                                         focusOut, afterCancel]() {
+        runVoiceScript(instance, "语音取消·识别中 Esc", escWhileRecognizing, [&instance, done, focusOut,
+                                                                              afterCancel]() {
+            runVoiceScript(instance, "语音取消·识别中失焦", focusOut, [&instance, done, afterCancel]() {
+                runVoiceScript(instance, "语音取消·之后再开始", afterCancel, done);
+            });
+        });
+    });
+}
+
 /// 语音结果复制到剪贴板：用假的 wl-copy（把标准输入写进文件）代替真的剪贴板。
 void runClipboardCase() {
     const auto dir = std::filesystem::temp_directory_path() /
@@ -1362,8 +1463,10 @@ int main(int argc, char **argv) {
         runClipboardCase();
         runTranslateCase(instance, [&instance]() {
             runVoiceCase(instance, [&instance]() {
-                std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
-                instance.exit();
+                runVoiceCancelCases(instance, [&instance]() {
+                    std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
+                    instance.exit();
+                });
             });
         });
     });
