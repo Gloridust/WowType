@@ -96,7 +96,11 @@ DEFAULTS = {
     "SelectKeys": "Off",
     "DateTime": "True",
     "Calculator": "True",
+    "AutoSpace": "False",
+    "AutoSpaceLetters": "True",
+    "AutoSpaceDigits": "True",
     "Voice": "True",
+    "VoiceCopy": "False",
     "VoiceKey": "Alt_R",
     "EmojiSuggest": "True",
     "EmojiKey": "Super+period",
@@ -1852,6 +1856,17 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.select_row.connect("notify::selected", lambda row, _p: self.set_value(
             "SelectKeys", self.select_names[row.get_selected()]))
         extras.add(self.select_row)
+        auto_space = Adw.ExpanderRow(
+            title="中英文之间自动加空格",
+            subtitle="你好Linux → 你好 Linux、第5章 → 第 5 章。只在读得到光标前文字的输入框里生效"
+                     "（终端等不支持），密码、网址、邮箱输入框不加",
+            show_enable_switch=True)
+        auto_space.set_enable_expansion(self.values["AutoSpace"] == "True")
+        auto_space.connect("notify::enable-expansion", lambda r, _p: self.set_value(
+            "AutoSpace", "True" if r.get_enable_expansion() else "False"))
+        auto_space.add_row(self.make_switch("AutoSpaceLetters", "汉字和英文字母之间", None))
+        auto_space.add_row(self.make_switch("AutoSpaceDigits", "汉字和数字之间", None))
+        extras.add(auto_space)
         page.add(extras)
         return page
 
@@ -2080,6 +2095,12 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.switches["Voice"].bind_property("active", self.key_row, "sensitive",
                                              GObject.BindingFlags.SYNC_CREATE)
         group.add(self.key_row)
+        copy_row = self.make_switch(
+            "VoiceCopy", "同时复制到剪贴板",
+            "说完的话上屏后也放进剪贴板，方便贴到别处。要装 wl-clipboard（X11 下是 xclip 或 xsel）")
+        self.switches["Voice"].bind_property("active", copy_row, "sensitive",
+                                             GObject.BindingFlags.SYNC_CREATE)
+        group.add(copy_row)
         page.add(group)
 
         model = Adw.PreferencesGroup(title="识别模型")

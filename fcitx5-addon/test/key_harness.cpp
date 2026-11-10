@@ -14,6 +14,10 @@
 #include <vector>
 
 #include <fcitx/addoninstance.h>
+#include <unistd.h>
+#include <iterator>
+
+#include "clipboard_copy.h"
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputmethodentry.h>
@@ -30,6 +34,7 @@
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
+#include <fcitx-utils/utf8.h>
 
 using namespace fcitx;
 
@@ -137,6 +142,14 @@ void fresh(HarnessInputContext *ic) {
     type(ic, "<esc>");
     ic->committed.clear();
     ic->passed.clear();
+}
+
+/// 单按一个修饰键（按下 + 松开），比如单按 Shift 切中英文。
+void tapKey(HarnessInputContext *ic, KeySym sym) {
+    KeyEvent press(ic, Key(sym), false);
+    ic->keyEvent(press);
+    KeyEvent release(ic, Key(sym, KeyState::Shift), true);
+    ic->keyEvent(release);
 }
 
 void runCases(Instance &instance) {
@@ -794,6 +807,76 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     fresh(ic.get());
 
+    // 自动补空格（#36）：只看光标前一个字和要上屏的第一个字；读不到光标前的文字、密码框不补
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "AutoSpace=True\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    auto surround = [&](const std::string &text, int cursorBack = 0, int anchorBack = 0) {
+        const auto len = static_cast<unsigned>(utf8::length(text));
+        ic->surroundingText().setText(text, len - cursorBack, len - anchorBack);
+    };
+    ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+    fresh(ic.get());
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed == " 5" && ic->passed.empty(), "汉字后打数字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("第 5");
+    type(ic.get(), "zhangjie<sp>");
+    check(ic->committed == " 章节", "数字后上屏汉字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("Linux");
+    type(ic.get(), "xitong<sp>");
+    check(ic->committed == " 系统", "字母后上屏汉字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好");
+    tapKey(ic.get(), FcitxKey_Shift_R);  // 切到英文
+    type(ic.get(), "L");
+    surround("你好 L");
+    type(ic.get(), "i");
+    tapKey(ic.get(), FcitxKey_Shift_R);  // 回中文
+    check(ic->committed == " L" && ic->passed == "i",
+          "英文模式汉字后第一个字母补空格，后面的照常交给应用：[" + ic->committed + "] " + ic->passed);
+    fresh(ic.get());
+    surround("第 ");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "已经有空格不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好");
+    type(ic.get(), "shijie<sp>");
+    check(ic->committed == "世界", "纯中文不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好abc", 3, 0);  // 光标在「好」后面、选中了 abc
+    type(ic.get(), "5");
+    check(ic->committed == " 5", "有选区时看选区前面的字：[" + ic->committed + "]");
+    fresh(ic.get());
+    ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::SurroundingText, CapabilityFlag::Password});
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "密码框不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    ic->setCapabilityFlags(CapabilityFlags{});
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "读不到光标前的文字不补");
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "AutoSpace=True\nAutoSpaceDigits=False\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+    fresh(ic.get());
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "关掉数字那项后数字不补");
+    fresh(ic.get());
+    surround("Linux");
+    type(ic.get(), "xitong<sp>");
+    check(ic->committed == " 系统", "字母那项还开着：[" + ic->committed + "]");
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    ic->setCapabilityFlags(CapabilityFlags{});
+    fresh(ic.get());
+
     ic.reset();
 }
 
@@ -816,12 +899,6 @@ struct TranslateCase {
     std::string configFile;
 };
 
-void tapKey(HarnessInputContext *ic, KeySym sym) {
-    KeyEvent press(ic, Key(sym), false);
-    ic->keyEvent(press);
-    KeyEvent release(ic, Key(sym, KeyState::Shift), true);
-    ic->keyEvent(release);
-}
 
 std::string aux(HarnessInputContext *ic) { return ic->inputPanel().auxUp().toString(); }
 std::string auxDown(HarnessInputContext *ic) { return ic->inputPanel().auxDown().toString(); }
@@ -1092,6 +1169,45 @@ void runVoiceCase(Instance &instance, std::function<void()> done) {
         });
 }
 
+/// 语音结果复制到剪贴板：用假的 wl-copy（把标准输入写进文件）代替真的剪贴板。
+void runClipboardCase() {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("wowtype-clip-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const auto out = dir / "copied.txt";
+    {
+        std::ofstream script(dir / "wl-copy");
+        script << "#!/bin/sh\ncat > \"" << out.string() << ".tmp\" && mv \"" << out.string()
+               << ".tmp\" \"" << out.string() << "\"\n";
+    }
+    std::filesystem::permissions(dir / "wl-copy", std::filesystem::perms::owner_all);
+    const std::string oldPath = std::getenv("PATH") ? std::getenv("PATH") : "";
+    const char *oldWayland = std::getenv("WAYLAND_DISPLAY");
+    const std::string savedWayland = oldWayland ? oldWayland : "";
+    ::setenv("PATH", (dir.string() + ":" + oldPath).c_str(), 1);
+    ::setenv("WAYLAND_DISPLAY", "wayland-test", 1);
+
+    const std::string text = "语音结果 \"$HOME\" `id`\n第二行";
+    const bool started = wowtype::copyToClipboard(text);
+    std::string copied;
+    for (int i = 0; i < 100 && copied.empty(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::ifstream in(out);
+        copied.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    check(started && copied == text, "语音结果复制到剪贴板（原样，不经 shell 展开）：" + copied);
+    check(!wowtype::copyToClipboard(""), "空的不复制");
+    check(!wowtype::copyToClipboard(std::string(40 * 1024, 'a')), "太长的不复制");
+
+    ::setenv("PATH", oldPath.c_str(), 1);
+    if (oldWayland) {
+        ::setenv("WAYLAND_DISPLAY", savedWayland.c_str(), 1);
+    } else {
+        ::unsetenv("WAYLAND_DISPLAY");
+    }
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1108,6 +1224,7 @@ int main(int argc, char **argv) {
     dispatcher = &mainDispatcher;
     mainDispatcher.schedule([&instance]() {
         runCases(instance);
+        runClipboardCase();
         runTranslateCase(instance, [&instance]() {
             runVoiceCase(instance, [&instance]() {
                 std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);

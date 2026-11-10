@@ -680,6 +680,17 @@ pub extern "C" fn wowtype_punct(code: c_int, style: c_int, prev: c_int) -> *cons
     })
 }
 
+/// 中英文之间自动补空格（ABI 1.2 起）：prev 是光标前一个字，next 是要上屏的第一个字，
+/// flags：1 汉字和字母之间、2 汉字和数字之间。要补空格返回 1，否则 0。
+#[no_mangle]
+pub extern "C" fn wowtype_autospace(prev: c_int, next: c_int, flags: c_int) -> c_int {
+    let (Some(prev), Some(next)) = (char::from_u32(prev as u32), char::from_u32(next as u32))
+    else {
+        return 0;
+    };
+    c_int::from(crate::autospace::needs_space(prev, next, flags as u32))
+}
+
 /// 符号检索。query 为拼音或中文名前缀，结果放在候选结构里（score 恒为 0）。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_symbol_search(

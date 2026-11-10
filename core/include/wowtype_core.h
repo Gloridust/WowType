@@ -85,6 +85,11 @@ const char *wowtype_fullwidth_punct(int ascii_codepoint);
  * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字后的小数点）。 */
 const char *wowtype_punct(int ascii_codepoint, int style, int prev_codepoint);
 
+/* 中英文之间自动补空格（ABI 1.2 起）：prev 是光标前一个字，next 是要上屏的第一个字；
+ * flags 1 = 汉字和字母之间、2 = 汉字和数字之间。要在两者之间补一个空格返回 1，否则 0。
+ * 只看这一处边界，词里原有的字母（T恤、卡拉OK）不拆。 */
+int wowtype_autospace(int prev_codepoint, int next_codepoint, int flags);
+
 /* 符号检索（拼音/中文名前缀），结果用 wowtype_candidates_* 读取并释放。 */
 WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
 

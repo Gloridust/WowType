@@ -4,6 +4,7 @@
 //! 输入预处理 -> 音节图 -> 束搜索（词典 + 二元 LM） -> 特征/线性打分 -> 候选。
 //! LTR / 神经重排 / MixRank 只在接口上预留，尚未接入真实模型。
 
+pub mod autospace;
 pub mod beam;
 pub mod calc;
 pub mod convert;

@@ -1,4 +1,5 @@
 #include "wowtype_engine.h"
+#include "clipboard_copy.h"
 #include "wowtype_log.h"
 
 #include <algorithm>
@@ -30,6 +31,7 @@
 #include <fcitx-utils/keysym.h>
 #include <fcitx-utils/log.h>
 #include <fcitx-utils/misc.h>
+#include <fcitx-utils/utf8.h>
 #include <fcitx-utils/textformatflags.h>
 
 namespace {
@@ -598,6 +600,12 @@ void WowtypeEngine::applyConfig() {
     }
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
+    autoSpaceFlags_ = *config_.autoSpace ? (*config_.autoSpaceLetters ? 1 : 0) |
+                                               (*config_.autoSpaceDigits ? 2 : 0)
+                                         : 0;
+    if (const char *env = std::getenv("WOWTYPE_AUTOSPACE"); env && *env) {
+        autoSpaceFlags_ = static_cast<int>(std::strtol(env, nullptr, 0)) & 3;
+    }
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
     shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
@@ -646,6 +654,7 @@ void WowtypeEngine::applyConfig() {
         voiceKeyDown_ = false;
     }
     voiceKey_ = key;
+    voiceCopy_ = envOr("WOWTYPE_VOICE_COPY", *config_.voiceCopy);
     if (voiceKey_.sym() != FcitxKey_None && !voice_) {
         // 只建句柄：不开麦克风、不下载模型，第一次按热键时才做
         const char *dir = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
@@ -1550,6 +1559,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
 
     // 英文模式：按键原样交给应用（字母、半角标点都直接上屏）
     if (asciiMode_ && !state->composing()) {
+        if (autoSpaceKey(ic, key)) {
+            event.filterAndAccept();
+        }
         return;
     }
 
@@ -1781,6 +1793,11 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             return;
         }
     } else {
+        // 汉字后面直接打数字（第5章）：要补空格就自己上屏，否则照常交给应用
+        if (key.isDigit() && autoSpaceKey(ic, key)) {
+            event.filterAndAccept();
+            return;
+        }
         // 没有正在输入的拼音时，把 ASCII 标点转成中文标点（映射表在 Rust 侧）。
         // 没收录的（/ " + 等）、半角样式、数字后的小数点不处理，原样交给应用。
         if (const std::string punct = punctFor(ic, state, sym); !punct.empty()) {
@@ -2157,6 +2174,11 @@ bool WowtypeEngine::pollVoice() {
     case WOWTYPE_VOICE_RESULT:
         clearVoice(true);
         commitPlain(ic, text);
+        // 上屏以后再复制，复制不成也不影响上屏；密码框里说的话不进剪贴板
+        if (voiceCopy_ && !ic->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive) &&
+            !wowtype::copyToClipboard(text)) {
+            WLOG_I() << "WowType: 没能复制到剪贴板（要装 wl-clipboard，X11 下装 xclip 或 xsel）";
+        }
         if (translating(ic)) {
             // 互译模式：说的话进了原文
             updateInputPanel(ic, ic->propertyFor(&factory_));
@@ -2273,12 +2295,64 @@ void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
     st->afterDigit_ = text.back() >= '0' && text.back() <= '9';
     ++st->emits_;
     if (!translating(ic)) {
-        ic->commitString(text);
+        ic->commitString(needsAutoSpace(ic, text) ? " " + text : text);
         return;
     }
     auto *state = ic->propertyFor(&factory_);
     state->tsource_ += text;
     translateSourceChanged(ic, state, endsSentence(text));
+}
+
+bool WowtypeEngine::needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const {
+    if (!autoSpaceFlags_ || !ic || next.empty()) {
+        return false;
+    }
+    // 读不到光标前的文字就不猜；密码框、网址、邮箱输入框不动
+    const auto caps = ic->capabilityFlags();
+    if (!caps.test(fcitx::CapabilityFlag::SurroundingText) ||
+        caps.testAny(fcitx::CapabilityFlags{fcitx::CapabilityFlag::PasswordOrSensitive,
+                                            fcitx::CapabilityFlag::Url,
+                                            fcitx::CapabilityFlag::Email})) {
+        return false;
+    }
+    const auto &surrounding = ic->surroundingText();
+    if (!surrounding.isValid()) {
+        return false;
+    }
+    // 光标位置按字算；选中了文字时看选区前面那个字
+    const unsigned pos = std::min(surrounding.cursor(), surrounding.anchor());
+    const std::string &before = surrounding.text();
+    if (pos == 0 || pos > fcitx::utf8::length(before)) {
+        return false;
+    }
+    const auto offset = fcitx::utf8::ncharByteLength(before.begin(), pos - 1);
+    const uint32_t prev = fcitx::utf8::getChar(before.begin() + offset, before.end());
+    const uint32_t first = fcitx::utf8::getChar(next.begin(), next.end());
+    if (!fcitx::utf8::isValidChar(prev) || !fcitx::utf8::isValidChar(first)) {
+        return false;
+    }
+    return wowtype_autospace(static_cast<int>(prev), static_cast<int>(first), autoSpaceFlags_) == 1;
+}
+
+bool WowtypeEngine::autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key) {
+    if (!autoSpaceFlags_ || key.states().testAny(fcitx::KeyStates{
+                                fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
+                                fcitx::KeyState::Super})) {
+        return false;
+    }
+    const auto sym = key.sym();
+    const bool letter = (sym >= FcitxKey_a && sym <= FcitxKey_z) ||
+                        (sym >= FcitxKey_A && sym <= FcitxKey_Z);
+    const bool digit = sym >= FcitxKey_0 && sym <= FcitxKey_9;
+    if (!letter && !digit) {
+        return false;
+    }
+    const std::string text(1, static_cast<char>(sym));
+    if (!needsAutoSpace(ic, text)) {
+        return false;
+    }
+    ic->commitString(" " + text);
+    return true;
 }
 
 void WowtypeEngine::translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state,

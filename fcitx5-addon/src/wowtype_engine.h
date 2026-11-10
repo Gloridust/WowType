@@ -166,11 +166,15 @@ FCITX_CONFIGURATION(
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
                                    true};
+    fcitx::Option<bool> autoSpace{this, "AutoSpace", "汉字和英文、数字之间自动加空格", false};
+    fcitx::Option<bool> autoSpaceLetters{this, "AutoSpaceLetters", "汉字和英文字母之间", true};
+    fcitx::Option<bool> autoSpaceDigits{this, "AutoSpaceDigits", "汉字和数字之间", true};
     fcitx::Option<bool> voice{this, "Voice", "语音输入", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> voiceKey{
         this, "VoiceKey", "语音输入键（按住说话，或点一下开始）", fcitx::Key(FcitxKey_Alt_R),
         fcitx::KeyConstrain({fcitx::KeyConstrainFlag::AllowModifierOnly,
                              fcitx::KeyConstrainFlag::AllowModifierLess})};
+    fcitx::Option<bool> voiceCopy{this, "VoiceCopy", "语音识别的结果同时复制到剪贴板", false};
     fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
@@ -255,6 +259,10 @@ private:
     std::string translateKeyFile() const;
     /// 上屏一段文字：互译模式下攒进原文，否则直接交给应用。所有上屏都走这里。
     void emit(fcitx::InputContext *ic, const std::string &text);
+    /// 上屏 next 之前要不要先补一个空格（光标前是汉字、next 是字母数字，或反过来）。
+    bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
+    /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
+    bool autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key);
     /// 原文变了：过一会儿（句末标点立刻）发请求。
     void translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state, bool now);
     /// 互译模式下、没有正在打的拼音时的按键，处理了返回 true。
@@ -351,6 +359,8 @@ private:
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool dateTime_ = true;
     bool calculator_ = true;
+    /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
+    int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
@@ -379,6 +389,8 @@ private:
     bool recentEmojiLoaded_ = false;
 
     WowtypeVoice *voice_ = nullptr;
+    /// 语音结果同时复制到剪贴板（默认关）。
+    bool voiceCopy_ = false;
     /// 语音热键，默认右 Alt；FcitxKey_None 表示关掉语音。
     fcitx::Key voiceKey_;
     /// 热键按下还没松开（松开那一下也要吃掉，免得应用把单按 Alt 当成打开菜单）。
