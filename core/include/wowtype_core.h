@@ -215,7 +215,7 @@ int wowtype_voice_is_tap(const WowtypeVoice *voice);
  * 互译：调用户配置的大模型（OpenAI 格式 chat/completions，流式）把原文译成外文，
  * 原文不是中文时译成简体中文。网络请求交给系统的 curl，在后台线程里跑；
  * 下面的函数都不阻塞。用法：原文变了调 start，之后每几十毫秒 poll 一次，
- * 按状态显示 wowtype_translate_variant（一种译法一个候选）。
+ * 显示 wowtype_translate_text（流式输出时边写边变）。
  */
 typedef struct WowtypeTranslator WowtypeTranslator;
 
@@ -229,11 +229,10 @@ enum {
 WowtypeTranslator *wowtype_translate_new(void);
 void wowtype_translate_free(WowtypeTranslator *translator);
 /* base_url 如 https://api.openai.com/v1；target 是语言代码（en、ja……）；
- * variants 是要几种译法（1–3）；key_file 是放 API Key 的文件（一行），NULL/空串表示不带 Key。
- * 字符串都可为 NULL。 */
+ * key_file 是放 API Key 的文件（一行），NULL/空串表示不带 Key。字符串都可为 NULL。 */
 void wowtype_translate_configure(WowtypeTranslator *translator, const char *base_url,
                                  const char *model, const char *target, int formal,
-                                 int variants, const char *key_file);
+                                 const char *key_file);
 /* 填了地址和模型时返回 1。 */
 int wowtype_translate_ready(const WowtypeTranslator *translator);
 /* 开始翻译 text，取消别的请求；正在译或已经译好同一句话时什么也不做。 */
@@ -242,10 +241,8 @@ void wowtype_translate_cancel(WowtypeTranslator *translator);
 /* 拍一份当前结果的快照，返回 WOWTYPE_TRANSLATE_*。下面取文字的函数读的都是这份快照，
  * 指针在下一次 poll 前有效。 */
 int wowtype_translate_poll(WowtypeTranslator *translator);
-size_t wowtype_translate_count(const WowtypeTranslator *translator);
-/* 已经写完、可以上屏的译法种数（流式输出时最后一种可能还没写完）。 */
-size_t wowtype_translate_complete(const WowtypeTranslator *translator);
-const char *wowtype_translate_variant(const WowtypeTranslator *translator, size_t index);
+/* 到目前的译文；状态是 RUNNING 时可能还没写完，没有就是空串。 */
+const char *wowtype_translate_text(const WowtypeTranslator *translator);
 /* 快照对应的原文。 */
 const char *wowtype_translate_source(const WowtypeTranslator *translator);
 const char *wowtype_translate_error(const WowtypeTranslator *translator);

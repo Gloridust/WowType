@@ -198,11 +198,14 @@ bigram 格式（可选）：
 `Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）。
 核心在 `core/src/translate.rs`（C 接口 `wowtype_translate_*`，见 `wowtype_core.h`）：
 
-- 所有上屏都经 `WowtypeEngine::emit()`；互译时不上屏，攒进 `WowtypeState::tsource_`（编辑区带下划线显示，打拼音时排在拼音前面）
+- 所有上屏都经 `WowtypeEngine::emit()`；互译时不上屏，攒进 `WowtypeState::tsource_`
+- 照微信输入法摆：候选框当原文框（`auxUp` 是「中→英 互译：」，面板自己的 `preedit` 是原文 + 已选的词 + 拼音，
+  拼音候选照常列在下面），译文写进应用的输入框（`clientPreedit`，带下划线）。应用不支持客户端编辑区时译文写在 `auxDown`
+- 原文改了、新译文还没写到上一句那么长时，输入框里先留着上一句（`tshown_`），免得一闪一闪
 - 原文停 0.5 秒（`kTranslateDelayUsec`，句末标点立刻）后 `wowtype_translate_start`：后台线程起系统 `curl`，
   配置（含 `Authorization`）从标准输入给，不进命令行；请求 `stream:true`，按 SSE 边收边解析，服务不流式也认
-- 一次要 `TranslateVariants` 种译法（一行一种），竖排成候选，没写完的那种后面带「…」；同一句话缓存 64 句
-- `回车` / `空格` 上屏光标处的译法，没写完就记 `tpending_`，写完了自动上屏；`Shift+回车` 上屏原文；
+- 只要一种译法；译文行数超过原文就截掉并断开请求（有的模型译完还往下说）；同一句话缓存 64 句
+- `回车` / `空格` 上屏译文，没写完就记 `tpending_`，写完了自动上屏；`Shift+回车` 上屏原文；
   `Esc` 清空；`退格` 删原文最后一个字；数字和 `/` `+` 等也进原文
 - 切回中文、切输入法时原文原样上屏；`reset`、失去焦点时丢掉原文（有的程序在 reset 时自己把编辑区上屏）
 - 密码框（`Password` / `Sensitive`）里照常打中文。Key 只从 Key 文件读，错误信息里出现的 Key 换成 `***`

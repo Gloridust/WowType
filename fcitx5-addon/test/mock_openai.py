@@ -3,7 +3,7 @@
 
     python3 fcitx5-addon/test/mock_openai.py        # 第一行打印端口
 
-每种译法是「T<n>:原文」，一次给三种，几个字一块慢慢流出来；
+译文是「EN:原文」，几个字一块慢慢流出来；
 原文里有「错误」或者 Key 不是 sk-harness 时回 401。
 """
 import json
@@ -27,13 +27,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
-        text = "\n".join(f"T{i}:{source}" for i in (1, 2, 3))
-        for i in range(0, len(text), 4):
-            chunk = {"choices": [{"delta": {"content": text[i : i + 4]}}]}
-            self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
-            self.wfile.flush()
-            time.sleep(0.02)
-        self.wfile.write(b"data: [DONE]\n\n")
+        text = f"EN:{source}"
+        try:
+            for i in range(0, len(text), 2):
+                chunk = {"choices": [{"delta": {"content": text[i : i + 2]}}]}
+                self.wfile.write(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode())
+                self.wfile.flush()
+                time.sleep(0.02)
+            self.wfile.write(b"data: [DONE]\n\n")
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # 输入法那边取消了（原文又改了）
 
     def log_message(self, *args):
         pass

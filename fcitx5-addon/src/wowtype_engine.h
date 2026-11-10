@@ -166,8 +166,6 @@ FCITX_CONFIGURATION(
     fcitx::Option<std::string> translateModel{this, "TranslateModel", "翻译用的模型", ""};
     fcitx::Option<bool> translateFormal{this, "TranslateFormal", "译文用正式语气（默认聊天口吻）",
                                         false};
-    fcitx::Option<int, fcitx::IntConstrain> translateVariants{
-        this, "TranslateVariants", "给几种译法", 3, fcitx::IntConstrain(1, 3)};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
 class WowtypeEngine final : public fcitx::InputMethodEngineV2 {
@@ -198,14 +196,16 @@ public:
     /// 预编辑去向：全局开关（「在程序中显示预编辑文本」）打开且应用申报
     /// Preedit 能力时送进应用输入框（on-the-spot），否则画在候选窗顶部。
     void sendPreedit(fcitx::InputContext *ic, const fcitx::Text &preedit);
+    /// 编辑区画在应用的输入框里（应用支持、全局设置也开着）。
+    bool inlinePreedit(fcitx::InputContext *ic) const;
     /// 选中第 index 个候选（全局下标）：整句候选直接上屏，
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
                          std::size_t index);
     /// 展开的候选面板里点了第 row 行：光标在这行就选光标处的词，否则选这行第一个。
     void selectGridRow(fcitx::InputContext *ic, WowtypeState *state, std::size_t row);
-    /// 互译：上屏第 index 种译法；还没译好就记下来，好了再上屏。
-    void commitTranslation(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
+    /// 互译：上屏译文；还没译好就记下来，好了再上屏。
+    void commitTranslation(fcitx::InputContext *ic, WowtypeState *state);
 
 private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
@@ -242,7 +242,10 @@ private:
     bool pollTranslate();
     /// 面板上翻译部分的内容摘要：变了才重画
     std::string translateSignature(WowtypeState *state, int phase, bool fresh) const;
-    void fillTranslatePanel(fcitx::InputContext *ic, WowtypeState *state, fcitx::InputPanel &panel);
+    /// 照微信输入法：译文直接写在应用的输入框里（编辑区），候选框当原文框
+    /// （顶上是方向，下面是原文和正在打的拼音，拼音候选照常列在下面）。
+    /// 只设编辑区和提示行，不动候选列表。
+    void fillTranslateView(fcitx::InputContext *ic, WowtypeState *state, fcitx::InputPanel &panel);
     /// 双拼方案用分号当键（微软、搜狗、紫光的 ing），且现在正等第二个键。
     bool semicolonIsKey(WowtypeState *state) const;
     /// 分号/引号选词：这个键要选第几个候选（1 起），不选返回 0。

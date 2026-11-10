@@ -8,7 +8,6 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
-use std::ptr;
 
 use crate::translate::{direction_tag, JobState, TranslateConfig, Translator};
 
@@ -40,8 +39,7 @@ pub struct WowtypeTranslator {
     translator: Translator,
     state: c_int,
     source: CString,
-    variants: Vec<CString>,
-    complete: usize,
+    text: CString,
     error: CString,
     tag: CString,
 }
@@ -52,8 +50,7 @@ pub extern "C" fn wowtype_translate_new() -> *mut WowtypeTranslator {
         translator: Translator::new(),
         state: TRANSLATE_IDLE,
         source: CString::default(),
-        variants: Vec::new(),
-        complete: 0,
+        text: CString::default(),
         error: CString::default(),
         tag: CString::default(),
     }))
@@ -74,7 +71,6 @@ pub unsafe extern "C" fn wowtype_translate_configure(
     model: *const c_char,
     target: *const c_char,
     formal: c_int,
-    variants: c_int,
     key_file: *const c_char,
 ) {
     let Some(handle) = (unsafe { handle.as_mut() }) else {
@@ -91,7 +87,6 @@ pub unsafe extern "C" fn wowtype_translate_configure(
             target
         },
         formal: formal != 0,
-        variants: variants.max(1) as usize,
         key_file: (!key_file.is_empty()).then(|| PathBuf::from(key_file)),
     });
 }
@@ -137,33 +132,15 @@ pub unsafe extern "C" fn wowtype_translate_poll(handle: *mut WowtypeTranslator) 
         JobState::Error => TRANSLATE_ERROR,
     };
     handle.source = to_c(&snap.source);
-    handle.variants = snap.variants.iter().map(|v| to_c(v)).collect();
-    handle.complete = snap.complete;
+    handle.text = to_c(&snap.text);
     handle.error = to_c(&snap.error);
     handle.state
 }
 
-/// 快照里的译法种数。
+/// 快照里到目前的译文（状态是 RUNNING 时可能还没写完；没有就是空串）。
 #[no_mangle]
-pub unsafe extern "C" fn wowtype_translate_count(handle: *const WowtypeTranslator) -> usize {
-    unsafe { handle.as_ref() }.map_or(0, |h| h.variants.len())
-}
-
-/// 快照里已经写完、可以上屏的译法种数（流式输出时最后一种可能还没写完）。
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_translate_complete(handle: *const WowtypeTranslator) -> usize {
-    unsafe { handle.as_ref() }.map_or(0, |h| h.complete)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_translate_variant(
-    handle: *const WowtypeTranslator,
-    index: usize,
-) -> *const c_char {
-    match unsafe { handle.as_ref() }.and_then(|h| h.variants.get(index)) {
-        Some(text) => text.as_ptr(),
-        None => ptr::null(),
-    }
+pub unsafe extern "C" fn wowtype_translate_text(handle: *const WowtypeTranslator) -> *const c_char {
+    unsafe { handle.as_ref() }.map_or(empty(), |h| h.text.as_ptr())
 }
 
 /// 快照对应的原文。
@@ -199,6 +176,7 @@ pub unsafe extern "C" fn wowtype_translate_tag(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ptr;
 
     #[test]
     fn ffi_without_config() {
@@ -214,7 +192,6 @@ mod tests {
                 model.as_ptr(),
                 ja.as_ptr(),
                 0,
-                3,
                 ptr::null(),
             );
             assert_eq!(wowtype_translate_ready(handle), 1);
@@ -222,8 +199,10 @@ mod tests {
             let tag = CStr::from_ptr(wowtype_translate_tag(handle, text.as_ptr()));
             assert_eq!(tag.to_str().unwrap(), "中→日");
             assert_eq!(wowtype_translate_poll(handle), TRANSLATE_IDLE);
-            assert_eq!(wowtype_translate_count(handle), 0);
-            assert!(wowtype_translate_variant(handle, 0).is_null());
+            assert_eq!(
+                CStr::from_ptr(wowtype_translate_text(handle)).to_bytes(),
+                b""
+            );
             wowtype_translate_cancel(handle);
             wowtype_translate_free(handle);
             // 空句柄不崩
