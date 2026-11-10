@@ -83,6 +83,7 @@ DEFAULTS = {
     "ShuangpinScheme": "Ziranma",
     "ShiftToggle": "Both",
     "Traditional": "False",
+    "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
     "DateTime": "True",
     "Calculator": "True",
@@ -156,6 +157,11 @@ SELECT_KEYS = [
     ("不用", "Off"),
     ("分号选第 2 个", "Semicolon"),
     ("分号选第 2 个、引号选第 3 个", "SemicolonQuote"),
+]
+
+PUNCT_STYLES = [
+    ("全角（，。（）中文标点）", "Fullwidth"),
+    ("半角（,.() 英文标点）", "Halfwidth"),
 ]
 
 SHIFT_TOGGLES = [
@@ -1693,6 +1699,16 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("Traditional", "繁体字", "候选词转成繁体"),
         ):
             pinyin.add(self.make_switch(key, title, subtitle))
+        self.punct_names = [name for _, name in PUNCT_STYLES]
+        self.punct_row = Adw.ComboRow(
+            title="标点样式", subtitle="中文状态下打的标点。全角时数字后面的句点仍是小数点（3.14）",
+            model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
+        current = self.values.get("PunctuationStyle", "Fullwidth")
+        self.punct_row.set_selected(
+            self.punct_names.index(current) if current in self.punct_names else 0)
+        self.punct_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "PunctuationStyle", self.punct_names[row.get_selected()]))
+        pinyin.add(self.punct_row)
         page.add(pinyin)
 
         extras = Adw.PreferencesGroup(title="快捷输入")

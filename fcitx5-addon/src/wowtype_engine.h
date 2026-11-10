@@ -76,6 +76,19 @@ struct WowtypeSelectKeysAnnotation {
     }
 };
 
+/// 标点样式：中文标点 / ASCII 标点。
+enum class WowtypePunctStyle { Fullwidth, Halfwidth };
+FCITX_CONFIG_ENUM_NAME(WowtypePunctStyle, "Fullwidth", "Halfwidth");
+
+struct WowtypePunctStyleAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "全角（中文标点）");
+        config.setValueByPath("EnumI18n/1", "半角（英文标点）");
+    }
+};
+
 /// 单按哪个 Shift 切换中英文。
 enum class WowtypeShiftToggle { Both, Left, Right, Off };
 FCITX_CONFIG_ENUM_NAME(WowtypeShiftToggle, "Both", "Left", "Right", "Off");
@@ -136,6 +149,9 @@ FCITX_CONFIGURATION(
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
     fcitx::Option<bool> traditional{this, "Traditional", "输出繁体字", false};
+    fcitx::Option<WowtypePunctStyle, fcitx::NoConstrain<WowtypePunctStyle>,
+                  fcitx::DefaultMarshaller<WowtypePunctStyle>, WowtypePunctStyleAnnotation>
+        punctStyle{this, "PunctuationStyle", "标点样式", WowtypePunctStyle::Fullwidth};
     fcitx::Option<WowtypeSelectKeys, fcitx::NoConstrain<WowtypeSelectKeys>,
                   fcitx::DefaultMarshaller<WowtypeSelectKeys>, WowtypeSelectKeysAnnotation>
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
@@ -218,6 +234,8 @@ private:
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
+    /// 按标点样式和光标前一个字符取标点；返回空串表示原样上屏 ASCII。
+    std::string punctFor(fcitx::InputContext *ic, WowtypeState *state, unsigned sym) const;
     bool handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
                            fcitx::KeyEvent &event);
     /// Shift 循环切换：中 → 英 → 译（配置了翻译服务才有）→ 中。
@@ -331,6 +349,7 @@ private:
     std::string shuangpinScheme_ = "Ziranma";
     bool shuangpinSemicolon_ = false;
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
+    WowtypePunctStyle punctStyle_ = WowtypePunctStyle::Fullwidth;
     /// 英文模式：按键原样交给应用（中英文切换全局生效，切到别的窗口也保持）。
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。

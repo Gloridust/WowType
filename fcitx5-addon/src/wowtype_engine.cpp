@@ -443,6 +443,10 @@ public:
     std::string tshown_;
     /// 按了回车但译文还没好：好了就上屏。
     bool tpending_ = false;
+    /// 光标前一个字符是数字（应用不报告周围文字时，靠这个判断小数点）。
+    bool afterDigit_ = false;
+    /// emit 上屏次数，用来判断一次按键有没有自己上屏东西。
+    unsigned emits_ = 0;
 
     std::size_t selectedBytes() const {
         std::size_t total = 0;
@@ -601,6 +605,12 @@ void WowtypeEngine::applyConfig() {
     if (shiftToggle_ == WowtypeShiftToggle::Off) {
         asciiMode_ = false;
         translateMode_ = false;
+    }
+    punctStyle_ = *config_.punctStyle;
+    if (const char *env = std::getenv("WOWTYPE_PUNCT_STYLE"); env && *env) {
+        const std::string name = env;
+        punctStyle_ = name == "half" || name == "halfwidth" ? WowtypePunctStyle::Halfwidth
+                                                            : WowtypePunctStyle::Fullwidth;
     }
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
@@ -1484,6 +1494,25 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
+    // 记下光标前是不是数字（数字后的 . 是小数点）：这次按键自己没上屏东西时，
+    // 原样交给应用的数字键算数字，其他键（退格、方向键……）就不知道了，当不是。
+    struct DigitTracker {
+        WowtypeState *state;
+        unsigned emits;
+        bool digit;
+        bool modifier;
+        ~DigitTracker() {
+            if (state->emits_ == emits && !modifier) {
+                state->afterDigit_ = digit;
+            }
+        }
+    } digitTracker{state, state->emits_,
+                   key.isDigit() && !state->composing() &&
+                       !key.states().testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl,
+                                                              fcitx::KeyState::Alt,
+                                                              fcitx::KeyState::Super}),
+                   key.isModifier()};
+
     if (isEmojiKey(key)) {
         if (state->emojiPanel_) {
             closeEmojiPanel(ic, state);
@@ -1687,13 +1716,15 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             }
         }
 
-        // 打字途中按标点：先上屏当前候选，再上屏中文标点
-        if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym));
-            punct && sym != FcitxKey_apostrophe) {
-            const std::string text = punct;
+        // 打字途中按标点：先上屏当前候选，再上屏标点（全角样式是中文标点）
+        if (wowtype_fullwidth_punct(static_cast<int>(sym)) && sym != FcitxKey_apostrophe) {
             // 光标停在句首词上时，选完它还剩半句：接着选第一个候选，直到整句上屏
             for (int guard = 0; state->composing() && guard < 16; ++guard) {
                 commitCurrent(ic, state);
+            }
+            std::string text = punctFor(ic, state, sym);
+            if (text.empty()) {
+                text.assign(1, static_cast<char>(sym));
             }
             commitPlain(ic, text);
             if (translating(ic)) {
@@ -1725,8 +1756,8 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     } else {
         // 没有正在输入的拼音时，把 ASCII 标点转成中文标点（映射表在 Rust 侧）。
-        // 没收录的（/ " + 等）不处理，原样交给应用。
-        if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym))) {
+        // 没收录的（/ " + 等）、半角样式、数字后的小数点不处理，原样交给应用。
+        if (const std::string punct = punctFor(ic, state, sym); !punct.empty()) {
             commitPlain(ic, punct);
             if (translating(ic)) {
                 updateInputPanel(ic, state);
@@ -1877,6 +1908,37 @@ bool WowtypeEngine::semicolonIsKey(WowtypeState *state) const {
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
+std::string WowtypeEngine::punctFor(fcitx::InputContext *ic, WowtypeState *state,
+                                    unsigned sym) const {
+    int prev = state->afterDigit_ ? '0' : 0;
+    // 没在打拼音时，应用报告了周围文字就以它为准（鼠标挪过光标也对）
+    if (!state->composing() &&
+        ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText) &&
+        ic->surroundingText().isValid()) {
+        const auto &surrounding = ic->surroundingText();
+        const std::string &text = surrounding.text();
+        const unsigned cursor = surrounding.cursor();
+        // cursor 按字符数算：找到光标前那个字符的首字节。只关心它是不是 ASCII 数字，
+        // 非 ASCII 字符一律当成「不是数字」。
+        prev = 0;
+        unsigned chars = 0;
+        std::size_t last = std::string::npos;
+        for (std::size_t i = 0; i < text.size() && chars < cursor; ++i) {
+            if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) {
+                last = i;
+                ++chars;
+            }
+        }
+        if (chars == cursor && last != std::string::npos) {
+            const auto byte = static_cast<unsigned char>(text[last]);
+            prev = byte < 0x80 ? byte : 0x4E00;
+        }
+    }
+    const char *punct = wowtype_punct(static_cast<int>(sym),
+                                      punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0, prev);
+    return punct ? punct : std::string();
+}
+
 bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
                                       fcitx::KeyEvent &event) {
     const auto sym = event.key().sym();
@@ -2181,6 +2243,9 @@ void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
     if (!ic || text.empty()) {
         return;
     }
+    auto *st = ic->propertyFor(&factory_);
+    st->afterDigit_ = text.back() >= '0' && text.back() <= '9';
+    ++st->emits_;
     if (!translating(ic)) {
         ic->commitString(text);
         return;

@@ -164,6 +164,18 @@ void runCases(Instance &instance) {
     type(ic.get(), "nihao,");
     check(ic->committed == "你好，", "打字途中按逗号：先上屏再出中文逗号，实际 " + ic->committed);
 
+    // 数字后的句点是小数点（#50）：数字原样交给应用，句点也原样
+    fresh(ic.get());
+    type(ic.get(), "3.14");
+    check(ic->committed.empty() && ic->passed == "3.14", "3.14 原样（小数点不换成句号），实际 上屏「" +
+                                                            ic->committed + "」交给应用「" + ic->passed + "」");
+    fresh(ic.get());
+    type(ic.get(), "nihao.");
+    check(ic->committed == "你好。", "汉字后面的句点还是句号，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "3<bs>.");
+    check(ic->committed == "。", "删掉数字后句点是句号，实际 " + ic->committed);
+
     fresh(ic.get());
     type(ic.get(), "zhognguo<sp>");
     check(ic->committed == "中国", "按反纠错 zhognguo -> 中国，实际 " + ic->committed);
@@ -685,6 +697,18 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     type(ic.get(), "liunai");
     check(join(page(ic.get())).find("牛奶") != std::string::npos, "打开 n=l 后 liunai 出牛奶：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // 标点样式：半角（#51）
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "PunctuationStyle=Halfwidth\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao,");
+    check(ic->committed == "你好,", "半角：打字途中逗号是英文逗号，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "(.)");
+    check(ic->committed.empty() && ic->passed == "(.)", "半角：没在打字时标点原样交给应用，实际 " + ic->passed);
     fresh(ic.get());
 
     // 自定义词：非拼音编码、\n 换行
