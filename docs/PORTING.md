@@ -120,7 +120,7 @@ macos/           macOS 外壳：IMK 输入法 + 设置窗口 + 打包脚本
 | 设置界面 | GTK 4 | SwiftUI 小窗，和输入法同一个 bundle；配置文件 `~/Library/Application Support/WowType/wowtype.conf`，键名同 Linux |
 | 安装 | deb / rpm / Arch / Nix | 输入法不能沙盒，上不了 App Store；先发 zip，解到 `~/Library/Input Methods`，ad-hoc 签名；以后再考虑 Developer ID 签名和公证 |
 | 更新 | 设置里下载对应发行版的包 | 同一套「查 GitHub Release」逻辑，下载 zip 替换 bundle |
-| CI | ubuntu、debian、fedora、arch、nix | 加 `macos-14`（Apple Silicon）：`cargo test --workspace`、`abi-smoke.sh`、编外壳、打 zip |
+| CI | ubuntu、debian、fedora、arch、nix | 加 `macos-latest`（Apple Silicon）：`cargo test --workspace`、`abi-smoke.sh`、编外壳、打 zip |
 
 ## 数据和许可证
 
