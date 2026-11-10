@@ -1,6 +1,6 @@
 name: CI
 
-# PR 和推送到 main：跑测试，在三个发行版上编插件、跑按键测试、打 .deb（结果在 Actions 页的 Artifacts 里）。
+# PR 和推送到 main：跑测试，在三个 Debian/Ubuntu 版本和 Arch Linux 上编插件、跑按键测试、打包（结果在 Artifacts 里）。
 # 只改了文档（*.md、docs/、截图）的提交不跑。
 # 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：总是跑，并把这些包发到 GitHub Release。
 # 其他分支想跑一次：Actions 页手动运行（workflow_dispatch）。
@@ -117,7 +117,7 @@ jobs:
       - name: 用一键安装脚本装上试一下
         run: |
           mkdir -p /tmp/inst && cp dist/pkg/wowtype_*.deb /tmp/inst/
-          (cd /tmp/inst && sha256sum *.deb > SHA256SUMS)
+          (cd /tmp/inst && sha256sum -- *.deb > SHA256SUMS)
           WOWTYPE_VERSION="$VERSION" WOWTYPE_BASE_URL=file:///tmp/inst WOWTYPE_YES=1 ./install.sh
           # fcitx5 没在跑：脚本直接把 WowType 写进 fcitx5 的输入法列表
           grep -qx 'Name=wowtype' "$HOME/.config/fcitx5/profile"
@@ -144,14 +144,18 @@ jobs:
     needs: data
     runs-on: ubuntu-24.04
     container: archlinux:latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: 系统依赖
-        # archlinux 镜像里没有 sudo，也没有 Arch 的 base-devel；rust 包自带 cargo，
-        # fcitx5 包里就有 Fcitx5Core/Config/Utils 的 CMake 配置，不用另装 -dev
+        # rust 包自带 cargo；fcitx5 包含 CMake 配置和按键测试用的 testim 插件。
+        # 设置界面也在安装后测试，故装好 GTK / PyGObject（包本身把它们列为可选依赖）。
         run: |
-          pacman -Syu --noconfirm
-          pacman -S --noconfirm --needed base-devel cmake extra-cmake-modules \
-            fcitx5 alsa-lib rust pkgconf python git zstd libarchive
+          pacman -Syu --noconfirm --needed base-devel cmake extra-cmake-modules \
+            fcitx5 alsa-lib rust pkgconf python git ca-certificates util-linux \
+            python-gobject gtk4 libadwaita
+          useradd --create-home builder
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -168,20 +172,38 @@ jobs:
             version="${base}~git$(date -u +%Y%m%d).$(echo "$GITHUB_SHA" | cut -c1-7)"
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: 打 pacman 包
-        run: scripts/package-arch.sh "$VERSION" dist/pkg
+      - name: 用 makepkg 打 pacman 包（普通用户、从源码重建）
+        run: |
+          install -d -o builder -g builder dist/pkg
+          runuser -u builder -- scripts/package-arch.sh "$VERSION" dist/pkg
       - name: 用 pacman 装上试一下
         run: |
           pacman -U --noconfirm dist/pkg/wowtype-*.pkg.tar.zst
+          pacman -Qip dist/pkg/wowtype-*.pkg.tar.zst
+          pacman -Qkk wowtype
           test -f /usr/lib/fcitx5/libwowtype.so
+          ldd /usr/lib/fcitx5/libwowtype.so | tee dist/ldd.txt
+          if grep -q 'not found' dist/ldd.txt; then
+            echo '插件有未解析的动态库依赖' >&2
+            exit 1
+          fi
+          test -s /usr/share/wowtype/words.lm
+          test -s /usr/share/wowtype/english.txt
           cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
+          cmp /usr/share/wowtype/words.lm dist/data/words.lm
           wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
-          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | grep -q '你好'
+          # 不用 grep -q 直接接在管道后面，避免 pipefail 把上游 SIGPIPE 当成测试失败。
+          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee dist/show.txt
+          grep -q '1\.你好' dist/show.txt
+          wowtype-config --self-test
+          test -f /usr/share/icons/hicolor/scalable/apps/wowtype.svg
+          test -f /usr/share/icons/hicolor/22x22/apps/wowtype.png
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-archlinux
-          path: dist/pkg
+          path: dist/pkg/*.pkg.tar.zst
+          if-no-files-found: error
 
   release:
     name: 发布
@@ -198,7 +220,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: 校验和
-        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+        run: cd dist && sha256sum -- * > SHA256SUMS && cat SHA256SUMS
       - name: 发布到 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -213,7 +235,7 @@ jobs:
           \`\`\`
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
-          Arch Linux：下载 \`wowtype_<版本>-1-x86_64.pkg.tar.zst\`，然后 \`sudo pacman -U wowtype-*.pkg.tar.zst\`，装完 \`wowtype-config --add-to-group\`。
+          Arch Linux：下载 \`wowtype-<版本>-1-x86_64.pkg.tar.zst\`，然后 \`sudo pacman -U wowtype-*.pkg.tar.zst\`，装完 \`wowtype-config --add-to-group\`。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
