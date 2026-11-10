@@ -178,6 +178,9 @@ jobs:
           runuser -u builder -- scripts/package-arch.sh "$VERSION" dist/pkg
       - name: 用 pacman 装上试一下
         run: |
+          # archlinux 容器的 pacman.conf 用 NoExtract 跳过了 /usr/share/doc 等，
+          # 不去掉的话 pacman -Qkk 会把没解出来的文档当成文件缺失
+          sed -i '/^NoExtract/d' /etc/pacman.conf
           pacman -U --noconfirm dist/pkg/wowtype-*.pkg.tar.zst
           pacman -Qip dist/pkg/wowtype-*.pkg.tar.zst
           pacman -Qkk wowtype
