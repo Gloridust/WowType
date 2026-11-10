@@ -1954,7 +1954,13 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         previous = self.tmodel_row.get_text().strip()
         suggested = {m for _, _, m in TRANSLATE_PROVIDERS if m}
-        self.url_row.set_text(url)
+        # 换地址时输入框先清空再填（中间会发一次空地址的 changed），这时不能回头改下拉框：
+        # 下拉框还在处理这次点击，选中项被改成「其他」再改回来，GTK 会在里面死循环
+        self.provider_syncing = True
+        try:
+            self.url_row.set_text(url)
+        finally:
+            self.provider_syncing = False
         # 模型框空着（或者还是别家建议的模型）时换成这家建议的
         if not previous or previous in suggested:
             self.tmodel_row.set_text(model)
@@ -1962,9 +1968,14 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_url_changed(self, row):
         text = row.get_text().strip()
         self.set_value("TranslateBaseUrl", text)
-        self.provider_syncing = True
-        self.provider_row.set_selected(provider_index(text))
-        self.provider_syncing = False
+        # 自己改地址时下拉框跟着变；地址是下拉框填进来的就不用管
+        index = provider_index(text)
+        if not self.provider_syncing and self.provider_row.get_selected() != index:
+            self.provider_syncing = True
+            try:
+                self.provider_row.set_selected(index)
+            finally:
+                self.provider_syncing = False
         self.refresh_translate_status()
 
     def on_key_changed(self, _row):
