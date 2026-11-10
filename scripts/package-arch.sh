@@ -56,18 +56,30 @@ options=('!debug')
 source=('wowtype-src.tar')
 install=wowtype.install
 
+prepare() {
+  cd "$srcdir" || return
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
 build() {
   cd "$srcdir" || return
-  cargo build --release --locked -p wowtype-core
-  cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release \
+  cargo build --release --frozen -p wowtype-core --lib \
+    --bin wowtype-check --bin wowtype-show
+  cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=None \
     -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DWOWTYPE_VERSION="$pkgver"
   cmake --build build -j"$(nproc)"
+}
+
+check() {
+  cd "$srcdir" || return
+  cargo test --release --frozen -p wowtype-core --lib
 }
 
 package() {
   cd "$srcdir" || return
   DESTDIR="$pkgdir" cmake --install build
-  rm -rf "$pkgdir/usr/include"
+  rm -r "$pkgdir/usr/include/wowtype"
+  rmdir --ignore-fail-on-non-empty "$pkgdir/usr/include"
   for bin in wowtype-check wowtype-show; do
     install -Dm755 "target/release/$bin" "$pkgdir/usr/bin/$bin"
   done
