@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 4
+#define WOWTYPE_ABI_VERSION_MINOR 5
 
 #ifdef __cplusplus
 extern "C" {
@@ -294,7 +294,7 @@ const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
 
-/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节；见 docs/PORTING.md、docs/ABI.md）----
+/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习；见 docs/PORTING.md、docs/ABI.md）----
  *
  * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
  * 画编辑区、上屏。会话只能在一个线程里用。
@@ -305,7 +305,7 @@ const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *tex
  *
  * 已经由会话处理的键：字母、隔音符（编辑区不空时）、退格（先撤销最后一次选词，没有选词
  * 才删字母）、Esc（清空）。候选列表（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）
- * 和编辑区分音节也由会话算（1.4 起）。 */
+ * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）。 */
 
 typedef struct WowtypeSession WowtypeSession;
 
@@ -368,22 +368,22 @@ const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKe
 /* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时）。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
 
-/* 过渡：候选、上屏还在外壳时，外壳用这些读写编辑区。返回的字符串在同一会话下一次调用前有效。 */
+/* 过渡：选词键、标点等还在外壳时，外壳用这些读写编辑区、选词。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */
 const char *wowtype_session_remaining(WowtypeSession *session);     /* 还没选词的部分 */
 const char *wowtype_session_selected_text(WowtypeSession *session); /* 已选的词连起来 */
-size_t wowtype_session_selection_count(const WowtypeSession *session);
-/* 第 index 个已选词的拼音（空格分音节）；越界返回 NULL。 */
-const char *wowtype_session_selection_pinyin(WowtypeSession *session, size_t index);
-/* 选了句首词：压进已选栈，bytes 是它用掉的原始输入字节数。 */
-void wowtype_session_push_selection(WowtypeSession *session, const char *text, const char *pinyin,
-                                    size_t bytes);
+/* 选第 index 个候选（全部候选里的序号，不分页）：emoji、计算结果、日期时间原样上屏不学习；
+ * 句首词进已选栈、记一次选词；其余已选的词 + 它上屏，记选词（分几次选出来的整句也记一次）。
+ * 序号不对时 handled 为 0。 */
+const WowtypeFrame *wowtype_session_choose(WowtypeSession *session, size_t index);
+/* 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。 */
+const WowtypeFrame *wowtype_session_commit_input(WowtypeSession *session);
 /* 往原始输入后面加字（计算器算式、双拼分号、表情面板搜索词）。 */
 void wowtype_session_append(WowtypeSession *session, const char *text);
 /* 光标前已经上屏的字（选了开头的词以后，拿它 + 已选的词当上文给剩下的部分排序）。 */
 void wowtype_session_set_context(WowtypeSession *session, const char *text);
 
-/* 过渡：选词还在外壳时，外壳把整个候选列表（不分页）抄过去。 */
+/* 过渡：选词键、翻页还在外壳时，外壳把整个候选列表（不分页）抄过去画候选框。 */
 #define WOWTYPE_CAND_WORD 0  /* 引擎的候选：选中要学习 */
 #define WOWTYPE_CAND_PLAIN 1 /* 计算结果、日期时间、带换行的自定义词：原样上屏，不学习 */
 #define WOWTYPE_CAND_EMOJI 2 /* emoji：上屏 commit，不学习 */

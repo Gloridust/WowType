@@ -12,7 +12,7 @@ use std::panic;
 use std::ptr;
 
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
-use crate::session::{Candidate, CandidateKind, Config, Frame, Key, Selection, Session};
+use crate::session::{Candidate, CandidateKind, Config, Frame, Key, Session};
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
 /// 以后在末尾加字段，旧外壳传的 size 小，没传的字段当 0。
@@ -402,44 +402,41 @@ pub unsafe extern "C" fn wowtype_session_selected_text(
     handle.text(&text)
 }
 
-/// 已选词的个数。
+/// 选第 index 个候选（全部候选里的序号，不分页）：句首词进已选栈，其余上屏并记选词，
+/// 见 `Session::choose`。序号不对时 handled 为 0。
 #[no_mangle]
-pub unsafe extern "C" fn wowtype_session_selection_count(session: *const WowtypeSession) -> usize {
-    unsafe { session.as_ref() }.map_or(0, |handle| handle.session.selections().len())
-}
-
-/// 第 index 个已选词的拼音（空格分音节）；越界返回 NULL。
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_session_selection_pinyin(
+pub unsafe extern "C" fn wowtype_session_choose(
     session: *mut WowtypeSession,
     index: usize,
-) -> *const c_char {
+) -> *const WowtypeFrame {
     let Some(handle) = (unsafe { session.as_mut() }) else {
         return ptr::null();
     };
-    match handle.session.selections().get(index) {
-        Some(selection) => {
-            let pinyin = selection.pinyin.clone();
-            handle.text(&pinyin)
+    let inner = &mut handle.session;
+    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.choose(index))) {
+        Ok(frame) => handle.publish(frame),
+        Err(_) => {
+            set_last_error("session choose panicked");
+            handle.current(false)
         }
-        None => ptr::null(),
     }
 }
 
-/// 选了句首词：压进已选栈。bytes 是它用掉的原始输入字节数。
+/// 上屏已选的词 + 还没选的原始输入，原始输入也记一次选词（回车、打字途中按标点）。
 #[no_mangle]
-pub unsafe extern "C" fn wowtype_session_push_selection(
+pub unsafe extern "C" fn wowtype_session_commit_input(
     session: *mut WowtypeSession,
-    text: *const c_char,
-    pinyin: *const c_char,
-    bytes: usize,
-) {
-    if let Some(handle) = unsafe { session.as_mut() } {
-        handle.session.push_selection(Selection {
-            text: unsafe { arg(text) },
-            pinyin: unsafe { arg(pinyin) },
-            bytes,
-        });
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    let inner = &mut handle.session;
+    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.commit_input())) {
+        Ok(frame) => handle.publish(frame),
+        Err(_) => {
+            set_last_error("session commit panicked");
+            handle.current(false)
+        }
     }
 }
 
@@ -529,25 +526,19 @@ mod tests {
         for ch in "nihaoma".bytes() {
             assert_eq!(press(session, u32::from(ch)).handled, 1);
         }
-        let text = CString::new("你好").unwrap();
-        let pinyin = CString::new("ni hao").unwrap();
-        unsafe { wowtype_session_push_selection(session, text.as_ptr(), pinyin.as_ptr(), 5) };
-        assert_eq!(c(unsafe { wowtype_session_remaining(session) }), "ma");
-        assert_eq!(unsafe { wowtype_session_selection_count(session) }, 1);
-        assert_eq!(
-            c(unsafe { wowtype_session_selection_pinyin(session, 0) }),
-            "ni hao"
-        );
-        assert!(unsafe { wowtype_session_selection_pinyin(session, 1) }.is_null());
+        assert_eq!(c(unsafe { wowtype_session_remaining(session) }), "nihaoma");
+        // 没有引擎：没有候选，选不了
+        assert_eq!(unsafe { wowtype_session_candidate_total(session) }, 0);
+        assert_eq!(unsafe { &*wowtype_session_choose(session, 0) }.handled, 0);
 
         let frame = press(session, keysym::BACKSPACE);
         assert_eq!(frame.handled, 1);
         assert!(frame.commit.is_null());
-        assert_eq!(c(frame.preedit), "nihaoma");
+        assert_eq!(c(frame.preedit), "nihaom");
         assert_eq!(frame.size as usize, size_of::<WowtypeFrame>());
 
         let frame = unsafe { &*wowtype_session_reset(session, 1) };
-        assert_eq!(c(frame.commit), "nihaoma");
+        assert_eq!(c(frame.commit), "nihaom");
         assert_eq!(c(frame.preedit), "");
         unsafe { wowtype_session_free(session) };
     }
@@ -573,7 +564,12 @@ mod tests {
     fn null_handles() {
         assert!(unsafe { wowtype_session_key(ptr::null_mut(), ptr::null()) }.is_null());
         assert!(unsafe { wowtype_session_reset(ptr::null_mut(), 0) }.is_null());
-        assert_eq!(unsafe { wowtype_session_selection_count(ptr::null()) }, 0);
+        assert_eq!(
+            unsafe { wowtype_session_candidate_total(ptr::null_mut()) },
+            0
+        );
+        assert!(unsafe { wowtype_session_choose(ptr::null_mut(), 0) }.is_null());
+        assert!(unsafe { wowtype_session_commit_input(ptr::null_mut()) }.is_null());
         unsafe { wowtype_session_free(ptr::null_mut()) };
     }
 }
