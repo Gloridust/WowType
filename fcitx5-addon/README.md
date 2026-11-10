@@ -1,4 +1,4 @@
-# WowType fcitx5 插件骨架
+# WowType fcitx5 插件
 
 这是把 WeType（微信输入法）拼音排序思路移植到 Linux 的外壳层：
 
@@ -21,51 +21,33 @@ Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负�
       src/ffi.rs                    # C ABI 的 Rust 实现
       data/demo_lexicon.tsv         # 演示词典
 
-## Ubuntu 依赖
+## 依赖、构建和安装
 
-以 Ubuntu 22.04/24.04 为例（fcitx5 5.1.x）：
+需要 **Fcitx5 5.1 或更新、C++20 和 Rust**。各发行版的软件包名称、词库准备、安装和桌面启用步骤统一见
+[安装说明](../docs/INSTALL.md)。Ubuntu 22.04 默认仓库的 Fcitx5 版本不满足要求。
 
-    sudo apt update
-    sudo apt install -y \
-        build-essential cmake pkg-config \
-        libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
-        cargo rustc
+在仓库根目录构建并安装：
 
-如果发行版自带的 Rust 太旧，建议用 rustup 安装稳定版：
+```bash
+cargo build --release --locked -p wowtype-core
+cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build build --parallel "$(nproc)"
+sudo cmake --install build
+```
 
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+插件使用 Fcitx5 自己导出的安装目录：Arch 通常为 `/usr/lib/fcitx5`，Fedora/openSUSE
+为 `/usr/lib64/fcitx5`，Debian/Ubuntu 为 `/usr/lib/<multiarch>/fcitx5`。
+输入法注册文件和系统词库安装到 `<前缀>/share/fcitx5` 和 `<前缀>/share/wowtype`；
+自定义前缀（包括 Nix store）使用该前缀自己的目录，不会写入另一个 Fcitx5 包的目录。
 
-## 编译
-
-先编译 Rust 核心：
-
-    cd core
-    cargo test
-    cargo build --release
-
-再编译 C++ addon：
-
-    cd ../fcitx5-addon
-    cmake -S . -B build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr
-    cmake --build build -j"$(nproc)"
-
-## 安装
-
-    sudo cmake --install build
-
-CMake 会安装：
-
-    /usr/lib/<multiarch>/fcitx5/libwowtype.so
-    /usr/share/fcitx5/addon/wowtype.conf
-    /usr/share/fcitx5/inputmethod/wowtype.conf
-    /usr/share/wowtype/demo_lexicon.tsv
-    /usr/share/wowtype/s2t.tsv
+仓库只带演示词典；日常使用还需要按安装说明准备完整词库。`scripts/build-linux.sh --addon`
+也可构建并测试工作区；缺完整数据时会明确跳过真实数据测试，测试失败会返回非零退出码。
 
 Rust 核心默认**静态链接**进 libwowtype.so，不需要再装 libwowtype_core.so，
 Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲突。
 要动态链接用 `-DWOWTYPE_CORE_STATIC=OFF`（此时会一起装 libwowtype_core.so，RPATH 为 `$ORIGIN/..`）。
+文字输入专用构建须同时使用 Cargo 的 `--no-default-features` 和 CMake 的 `-DWOWTYPE_VOICE=OFF`，
+才能去掉默认语音功能的 ALSA 依赖。
 
 ## 启用
 

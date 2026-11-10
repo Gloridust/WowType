@@ -1,6 +1,6 @@
 name: CI
 
-# PR 和推送到 main：跑测试，在三个 Debian/Ubuntu 版本和 Arch Linux 上编插件、跑按键测试、打包（结果在 Artifacts 里）。
+# PR 和推送到 main：验证安装器、更新器及各发行版构建，安装包保存在 Artifacts。
 # 只改了文档（*.md、docs/、截图）的提交不跑。
 # 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：总是跑，并把这些包发到 GitHub Release。
 # 其他分支想跑一次：Actions 页手动运行（workflow_dispatch）。
@@ -33,6 +33,15 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  installer:
+    name: 安装与更新回归
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: for script in install.sh scripts/*.sh; do bash -n "$script"; done
+      - run: bash scripts/test-install.sh
+      - run: python3 scripts/test-update.py
+
   core:
     name: Rust 核心测试
     runs-on: ubuntu-24.04
@@ -154,7 +163,7 @@ jobs:
         run: |
           pacman -Syu --noconfirm --needed base-devel cmake extra-cmake-modules \
             fcitx5 alsa-lib rust pkgconf python git ca-certificates util-linux \
-            python-gobject gtk4 libadwaita
+            python-gobject gtk4 libadwaita curl
           useradd --create-home builder
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -176,12 +185,13 @@ jobs:
         run: |
           install -d -o builder -g builder dist/pkg
           runuser -u builder -- scripts/package-arch.sh "$VERSION" dist/pkg
-      - name: 用 pacman 装上试一下
+      - name: 用一键安装脚本安装 Arch 包
         run: |
           # archlinux 容器的 pacman.conf 用 NoExtract 跳过了 /usr/share/doc 等，
           # 不去掉的话 pacman -Qkk 会把没解出来的文档当成文件缺失
           sed -i '/^NoExtract/d' /etc/pacman.conf
-          pacman -U --noconfirm dist/pkg/wowtype-*.pkg.tar.zst
+          (cd dist/pkg && sha256sum -- *.pkg.tar.zst > SHA256SUMS)
+          WOWTYPE_VERSION="$VERSION" WOWTYPE_BASE_URL="file://$PWD/dist/pkg" WOWTYPE_YES=1 ./install.sh
           pacman -Qip dist/pkg/wowtype-*.pkg.tar.zst
           pacman -Qkk wowtype
           test -f /usr/lib/fcitx5/libwowtype.so
@@ -209,10 +219,14 @@ jobs:
           if-no-files-found: error
 
   fedora:
-    name: 插件 · fedora
+    name: 插件 · fedora${{ matrix.version }}
     needs: data
     runs-on: ubuntu-24.04
-    container: fedora:latest
+    container: fedora:${{ matrix.version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version: [43, 44, 45]
     defaults:
       run:
         shell: bash
@@ -225,7 +239,7 @@ jobs:
             rust cargo cmake extra-cmake-modules gcc-c++ pkgconf-pkg-config \
             fcitx5 fcitx5-devel alsa-lib-devel rpm-build \
             python3 python3-gobject gtk4 libadwaita gobject-introspection \
-            git ca-certificates findutils file which
+            git ca-certificates findutils file which curl
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
@@ -244,11 +258,12 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: 用 rpmbuild 打 rpm 包（从源码重建）
         run: scripts/package-rpm.sh "$VERSION" dist/pkg
-      - name: 用 dnf 装上试一下
+      - name: 用一键安装脚本安装 Fedora 包
         run: |
           # fedora 容器的 dnf 默认 tsflags=nodocs，去掉免得 rpm -V 把没装的文档当成缺失
           sed -i '/^tsflags=nodocs/d' /etc/dnf/dnf.conf
-          dnf install -y ./dist/pkg/wowtype-*.rpm
+          (cd dist/pkg && sha256sum -- *.rpm > SHA256SUMS)
+          WOWTYPE_VERSION="$VERSION" WOWTYPE_BASE_URL="file://$PWD/dist/pkg" WOWTYPE_YES=1 ./install.sh
           rpm -qip dist/pkg/wowtype-*.rpm
           rpm -V wowtype
           # Fedora 的 fcitx5 插件目录是 /usr/lib64/fcitx5
@@ -276,9 +291,51 @@ jobs:
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
       - uses: actions/upload-artifact@v4
         with:
-          name: pkg-fedora
+          name: pkg-fedora${{ matrix.version }}
           path: dist/pkg/*.rpm
           if-no-files-found: error
+
+  opensuse:
+    name: 源码安装 · openSUSE Tumbleweed
+    needs: data
+    runs-on: ubuntu-24.04
+    container: opensuse/tumbleweed:latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 系统依赖
+        run: |
+          zypper --non-interactive refresh
+          zypper --non-interactive install --no-recommends \
+            rust cargo gcc-c++ make cmake extra-cmake-modules pkgconf-pkg-config \
+            fcitx5 fcitx5-devel alsa-devel python3 python3-gobject python3-gobject-Gdk \
+            typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 git ca-certificates file findutils
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: 编译并安装到系统 Fcitx 目录
+        run: |
+          cargo build --release --locked -p wowtype-core
+          cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+          install -m755 target/release/wowtype-check target/release/wowtype-show /usr/bin/
+          install -m644 dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm /usr/share/wowtype/
+      - name: 插件路径、依赖、真实词库和设置界面
+        run: |
+          addon_dir="$(pkg-config --variable=libdir Fcitx5Core)/fcitx5"
+          test -f "$addon_dir/libwowtype.so"
+          ldd "$addon_dir/libwowtype.so" | tee dist/ldd.txt
+          if grep -q 'not found' dist/ldd.txt; then exit 1; fi
+          test -f /usr/share/fcitx5/addon/wowtype.conf
+          test -f /usr/share/fcitx5/inputmethod/wowtype.conf
+          wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
+          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee dist/show.txt
+          grep -q '1\.你好' dist/show.txt
+          wowtype-config --self-test
 
   nix:
     name: Nix flake
@@ -294,7 +351,7 @@ jobs:
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [core, data, addon, arch, fedora]
+    needs: [installer, core, data, addon, arch, fedora, opensuse, nix]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -312,7 +369,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## 安装（Ubuntu 24.04 / 26.04、Debian 13）
+          ## 安装（Ubuntu / Debian、Arch Linux、Fedora）
 
           一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：
 
@@ -321,8 +378,9 @@ jobs:
           \`\`\`
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
-          Arch Linux：下载 \`wowtype-<版本>-1-x86_64.pkg.tar.zst\`，然后 \`sudo pacman -U wowtype-*.pkg.tar.zst\`，装完 \`wowtype-config --add-to-group\`。
-          Fedora：下载 \`wowtype-<版本>-1.fc<版本>.x86_64.rpm\`，然后 \`sudo dnf install ./wowtype-*.rpm\`，装完 \`wowtype-config --add-to-group\`。
+          Arch Linux / EndeavourOS / Garuda / CachyOS：一键脚本会先完整升级系统，再用 pacman 安装对应包。
+          Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 24.04 / 26.04 及明确声明兼容基线的衍生版使用对应 deb。
+          Manjaro：按安装说明在本机用 makepkg 打包；openSUSE Tumbleweed：按安装说明从源码构建。
           NixOS：用仓库里的 flake，把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
