@@ -13,7 +13,7 @@
 ![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
-[安装](#安装) · [使用](#使用) · [设置](#设置) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
+[安装](#安装) · [使用](#使用) · [设置](#设置) · [更多文档](#更多文档) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
 
 https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
@@ -74,24 +74,6 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 </td>
 </tr>
 </table>
-
-## 示例
-
-更多例子（默认词库雾凇拼音实际打出来的候选，可以用 `wowtype-show` 自己试）：
-
-| 输入 | 候选（前几个） | 说明 |
-|---|---|---|
-| `xiangquzijieshangban` | **想去字节上班** · 想去字节 · 想去字节商办 · 想去自解上班 · 想去 | 整句；第 2 个是句子前半截，选了只上屏这一段 |
-| `hengxianghouxuanci` | **横向候选词** · 横向 · 横向后选词 · 横 · 哼 · 衡 | 整句只留几个，然后是词，再是单字 |
-| `zhongg` | **中国** · 中共 · 忠告 · 中高 · 重工 | 没打完也有词 |
-| `weixni` | **微信** · 威信 · 唯心 · 为新 | 两个键按反了（`xin` 打成 `xni`） |
-| `zhognguo` | **中国** · 种过 · 重过 | 两个键按反了 |
-| `bjdx` | **北京大学** · 北京电信 · 半径大小 | 简拼 |
-| `sz` | **设置** · 甚至 · 随着 · 深圳 · 是指 | 简拼 |
-| `wanqky` | **完全可以** · 晚期一 · 完企业 · 完其余 · 完全开源 | 全拼和简拼混着打 |
-| `yongzwen` | **用中文** · 用正文 · 拥着我 · 用在 · 用作 | 全拼和只打声母的音节混着打 |
-| `wechat` | **WeChat** · 色差他 · 色插图 | 英文词按词表里的写法给出 |
-| `github` | **GitHub** | 同上 |
 
 ## 安装
 
@@ -225,6 +207,8 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 ## 使用
 
+更多输入示例见 [docs/USAGE.md](docs/USAGE.md)。
+
 | 按键 | 作用 |
 |---|---|
 | 空格 | 上屏第一个（或光标所在的）候选 |
@@ -323,6 +307,8 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
 | 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
 
+各设置项对应的配置文件键名、环境变量、数据文件位置，见 [docs/CONFIG.md](docs/CONFIG.md)。
+
 右上角菜单里还有：用文本编辑器打开自定义词文件、导出日志、恢复默认设置（不影响自定义词）、关于。
 
 - `wowtype-config --page voice`（或 `general`、`words`、`update`）直接打开某一页。
@@ -351,79 +337,6 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 
 主题文件在 `themes/`：`themes/fcitx5/` 是经典界面主题，图片由 `themes/src/*.svg` 经 `themes/render.sh` 生成；`themes/gnome-shell/` 是 GNOME 扩展。
 
-#### 自定义词
-
-加进去的词总是排在候选第一个，简拼也能打：加了「字节跳动」（`zi jie tiao dong`），打 `zijietiaodong` 或者 `zjtd` 都能出来。
-
-自定义词存在 `~/.local/share/wowtype/custom.tsv`，一行一个，也可以手动编辑：
-
-```
-# 拼音<TAB>词[<TAB>频次]
-zi jie tiao dong	字节跳动
-zhangwei	张伟
-```
-
-拼音可以用空格隔开音节，也可以连着写（`zhangwei`）。在设置界面里加的词马上能用；手动改了文件，要让 fcitx5 重新读一下：
-
-```bash
-dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
-  org.fcitx.Fcitx.Controller1.ReloadAddonConfig string:wowtype
-```
-
-手动改 `wowtype.conf` 也一样。（重启 fcitx5 也行，但 Chrome 这类程序要跟着重开，见[第 3 步](#第-3-步把-wowtype-加进输入法列表)。）
-
-#### 配置文件和环境变量
-
-设置存在 `~/.config/fcitx5/conf/wowtype.conf`，设置界面和 Fcitx 5 配置改的都是这个文件：
-
-```ini
-CandidateLayout=Horizontal
-PageSize=9
-Fuzzy=False
-TypoCorrection=True
-Shuangpin=False
-ShuangpinScheme=Ziranma
-ShiftToggle=Both
-Traditional=False
-Voice=True
-VoiceKey=Alt_R
-EmojiSuggest=True
-EmojiKey=Super+period
-CheckUpdate=True
-```
-
-| 键 | 取值 |
-|---|---|
-| `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
-| `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`EmojiSuggest`、`CheckUpdate` | `True` / `False` |
-| `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
-| `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off` |
-| `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
-| `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键 |
-
-文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
-
-下面这些环境变量主要是**调试和测试用**，设了的话**优先于**配置文件（在设置界面里改了也不起作用），平时用不着：
-
-| 变量 | 作用 |
-|---|---|
-| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0` | 对应上面的开关 |
-| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼 |
-| `WOWTYPE_SHIFT_TOGGLE` | `both`、`left`、`right`、`off` |
-| `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |
-| `WOWTYPE_VOICE_OVERLAY=0` | GNOME 上也不用语音浮条，用候选框里的文字提示 |
-| `WOWTYPE_LEXICON`、`WOWTYPE_ENGLISH` | 词库、英文词表路径（默认的查找顺序见下） |
-| `WOWTYPE_LM` | 词级语言模型，默认找 `words.lm`（`wowtype-lmbuild` 生成），也认旧的 `前词<TAB>后词<TAB>次数` 文本 |
-| `WOWTYPE_S2T` | 简繁对照表，默认 `/usr/share/wowtype/s2t.tsv` |
-| `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
-| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal` |
-| `WOWTYPE_NNLM` | 神经语言模型路径，默认 `~/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin` |
-| `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新，也不自动打开默认主题 |
-| `WOWTYPE_LOG` | 日志文件路径，默认 `~/.local/state/wowtype/wowtype.log`；`0` 不写 |
-
-临时试一下：`WOWTYPE_FUZZY=1 fcitx5 -r -d`。长期用写进 `~/.config/environment.d/wowtype.conf`，注销重新登录后生效。
-
 ### 更新
 
 用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
@@ -431,47 +344,6 @@ CheckUpdate=True
 按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
 也可以重新运行[一行安装命令](#一行命令安装推荐)。
 不想自动检查，在「更新」页关掉「自动检查更新」（就是配置文件里的 `CheckUpdate=False`）。从源码装的只会提示新版本，要自己更新。
-
-### 数据文件
-
-词库和英文词表按这个顺序找，用第一个找到的：环境变量 → `~/.local/share/wowtype/` → `/usr/share/wowtype/`。
-都找不到时用只有十几个词的演示词库（能打 `nihao`，但没法日常用）。
-
-| 文件 | 内容 |
-|---|---|
-| `lexicon.tsv` | 词库，一行一个：`拼音（空格分隔）<TAB>词<TAB>词频` |
-| `english.txt` | 英文词表 |
-| `words.lm` | 词级语言模型（哪些词常连着用），有它长句更准；安装包里自带，见下 |
-| `custom.tsv` | [自定义词](#自定义词)：在设置里加的词 |
-| `user.tsv` | 自动学到的新词（同一个词选够 3 次就收进来） |
-| `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
-| `emoji-recent.txt` | 最近用过的 emoji（表情面板里排最前） |
-| `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
-| `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
-| `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
-
-**词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
-安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
-是用清华的对话语料 [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（MIT）加中文维基百科（CC BY-SA 4.0）训练的，
-单独下载见 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)。
-载入约 0.06 秒，多占约 90 MB 内存，对按键速度几乎没有影响。想用自己的语料重新训练：
-
-```bash
-cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
-    --lexicon ~/.local/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv \
-    --out ~/.local/share/wowtype/words.lm lccc.txt wiki.txt
-```
-
-语料是纯文本、一行一段，繁体会转成简体。约 12 亿字、8 线程要 14 分钟，内存峰值约 3GB。
-
-**神经语言模型（可选）**：微信输入法自带一个按字预测下一个字的小模型（`nlrgpt2_nnlm.bin`），
-WowType 能读它来给整句候选重排（日常整句的首选命中率从约 75% 提到约 84%，每次按键多 2ms 左右）。
-模型是腾讯的，WowType 不分发；手上有微信输入法 macOS 版（3.0.0）的安装包或程序时，运行
-`python3 tools/install_wetype_nnlm.py <WeType 的 .zip 或 .app>` 取出来，重启 fcitx5 生效。
-
-想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动（自定义词不受影响）。
-
-想用自己的词库：任何 Rime 格式的词库（`.dict.yaml`）都能用 `python3 tools/rime2tsv.py xxx.dict.yaml > lexicon.tsv` 转过来。
 
 ## 常见问题
 
@@ -501,21 +373,6 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 WowType 自己的日志在 `~/.local/state/wowtype/wowtype.log`（满 512 KB 换一个，旧的留一份 `.1`）。
 
 问题没解决，欢迎[提 issue](https://github.com/Gloridust/WowType/issues)，把导出的日志拖进去。
-
-## 卸载
-
-```bash
-# 安装包装的
-sudo apt remove wowtype
-
-# 源码装的（在仓库目录里）
-sudo xargs rm -v < build/install_manifest.txt
-
-# 学到的数据、自定义词、设置和缓存（可选）
-rm -rf ~/.local/share/wowtype ~/.local/state/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
-```
-
-卸载后到 Fcitx 5 配置里把 WowType 从输入法列表里删掉，再 `fcitx5 -r -d`。
 
 ## 工作原理
 
@@ -554,11 +411,12 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 | `tools/` | 词库转换、评测用例生成 |
 | `docs/` | [引擎细节](docs/ENGINE.md)、[体验审查](docs/UX-AUDIT.md)、[接手指南](docs/HANDOFF.md)、[语音](docs/VOICE.md)、[数据格式](docs/DATA.md) |
 
-## 现在还不行的
+## 更多文档
 
-- 只有 x86_64 的安装包；Arch、Fedora 等要从源码构建
-- 没有用语料训练的语言模型，「祝你 / 祝您」「在 / 再」这类同音词，没用过时只能靠词频排
-- 语音输入只有一个识别结果，不能在候选里改；不能选麦克风（用系统默认的输入设备）
+- 输入示例：[docs/USAGE.md](docs/USAGE.md)
+- 设置项、环境变量、数据文件：[docs/CONFIG.md](docs/CONFIG.md)
+- 卸载：[docs/INSTALL.md](docs/INSTALL.md#卸载)
+- 目前做不到的：[docs/LIMITATIONS.md](docs/LIMITATIONS.md)
 
 ## 致谢
 

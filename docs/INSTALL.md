@@ -169,7 +169,7 @@ Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成�
 
 ## 环境变量
 
-平时的设置用 `wowtype-config`（存在 `~/.config/fcitx5/conf/wowtype.conf`，键名见 [README](../README.md#配置文件和环境变量)）。
+平时的设置用 `wowtype-config`（存在 `~/.config/fcitx5/conf/wowtype.conf`，键名见 [CONFIG.md](CONFIG.md#配置文件和环境变量)）。
 下面的环境变量主要用来调试和测试，设了就**优先于**配置文件。
 
 | 变量 | 作用 | 默认 |
@@ -197,3 +197,18 @@ Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成�
 - 简繁转换是字符级的，不处理「发/髮」这类词组歧义
 - 语音的采集与全局热键**没有在 Linux 上实机验证过**（见 `docs/VOICE.md`）
 - fcitx5 插件是本项目唯一没有经过编译验证的代码（API 已逐项核对）
+
+## 卸载
+
+```bash
+# 安装包装的
+sudo apt remove wowtype
+
+# 源码装的（在仓库目录里）
+sudo xargs rm -v < build/install_manifest.txt
+
+# 学到的数据、自定义词、设置和缓存（可选）
+rm -rf ~/.local/share/wowtype ~/.local/state/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
+```
+
+卸载后到 Fcitx 5 配置里把 WowType 从输入法列表里删掉，再 `fcitx5 -r -d`。
