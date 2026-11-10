@@ -12,8 +12,9 @@
 [![Release](https://img.shields.io/github/v/release/Gloridust/WowType?include_prereleases&label=release)](https://github.com/Gloridust/WowType/releases)
 ![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
+[![Telegram](https://img.shields.io/badge/Telegram-%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?logo=telegram&logoColor=white)](https://t.me/+Kxk-4VkXIS9lODM1)
 
-[安装](#安装) · [使用](#使用) · [设置](#设置) · [更多文档](#更多文档) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
+[安装](#安装) · [使用](#使用) · [设置](#设置) · [更多文档](#更多文档) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发) · [Telegram 交流群](https://t.me/+Kxk-4VkXIS9lODM1)
 
 https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
