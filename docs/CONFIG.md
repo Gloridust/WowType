@@ -86,7 +86,13 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 
 数字键或方向键加空格/回车选择，退格返回上一层，Esc 关闭；工具栏开着时别的键不会打进应用，`Ctrl+C` 这类组合键会收起工具栏、交给应用。
 
-**剪贴板历史**只在内存里，不写到磁盘，重启 fcitx5 就清空。WowType 自己读不到系统剪贴板，是从 fcitx5 自带的 clipboard 插件拿最新一条：打开工具栏、切换输入框时各取一次，所以连着复制了好几次、中间没切换输入框的话，只记得到最后一次。没装或关掉了 fcitx5 的 clipboard 插件就没有记录。光标在密码框里时不记；在别处复制的密码，clipboard 插件按应用标的「这是密码」跳过，没标的会被记下。不想要就在设置里关掉「记录剪贴板历史」（`ClipboardHistory=False`），关掉时立刻清空。
+**剪贴板历史默认关**，在设置「输入」页打开「记录剪贴板历史」（`ClipboardHistory=True`）。打开后只在内存里记，不写到磁盘，重启 fcitx5 就清空；再关掉时立刻清空。
+
+WowType 自己读不到系统剪贴板，是从 fcitx5 自带的 clipboard 插件拿最新一条：打开工具栏、切换输入框时各取一次，所以连着复制了好几次、中间没切换输入框的话，只记得到最后一次。没装或关掉了 fcitx5 的 clipboard 插件就没有记录。
+
+**密码**：光标在密码框里时不取剪贴板。但从密码管理器复制的密码，fcitx5 自己的剪贴板会显示成圆点、30 秒后清掉，它对外给输入法的接口却不带「这是密码」的标记，所以 WowType 分不出来，会把它当普通文字记下、在工具栏里明文显示，直到重启 fcitx5 或关掉这个开关。常用密码管理器的话，建议保持关闭，或者在 fcitx5 的剪贴板设置里打开「Do not show password from password managers」（这样 fcitx5 根本不收这类内容）。
+
+互译模式（「译」）下不开工具栏。
 
 ## 配置文件和环境变量
 
@@ -117,7 +123,7 @@ SelectKeys=Off
 DateTime=True
 Calculator=True
 Toolbar=True
-ClipboardHistory=True
+ClipboardHistory=False
 AutoSpace=False
 AutoSpaceLetters=True
 AutoSpaceDigits=True

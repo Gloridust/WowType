@@ -172,8 +172,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> toolbar{this, "Toolbar",
                                 "v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）",
                                 true};
+    // 默认关：fcitx5 的 clipboard 插件不告诉我们哪条是密码管理器复制的密码
     fcitx::Option<bool> clipboardHistory{this, "ClipboardHistory",
-                                         "记录剪贴板历史（只在内存里，最多 20 条）", true};
+                                         "记录剪贴板历史（只在内存里，最多 20 条）", false};
     fcitx::Option<bool> autoSpace{this, "AutoSpace", "汉字和英文、数字之间自动加空格", false};
     fcitx::Option<bool> autoSpaceLetters{this, "AutoSpaceLetters", "汉字和英文字母之间", true};
     fcitx::Option<bool> autoSpaceDigits{this, "AutoSpaceDigits", "汉字和数字之间", true};
@@ -390,7 +391,7 @@ private:
     bool dateTime_ = true;
     bool calculator_ = true;
     bool toolbar_ = true;
-    bool clipboardHistory_ = true;
+    bool clipboardHistory_ = false;
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;

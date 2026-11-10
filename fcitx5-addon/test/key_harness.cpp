@@ -582,7 +582,8 @@ void runCases(Instance &instance) {
     check(addon && addon->getConfig(), "插件有配置项");
     {
         std::ofstream(configDir + "/wowtype.conf")
-            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\nEmojiSuggest=False\n";
+            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\nEmojiSuggest=False\n"
+               "ClipboardHistory=True\n";
         std::ofstream(customFile) << "# 测试\nni hao\t妮好\nwo de you xiang\t我的邮箱\n";
     }
     addon->reloadConfig();
@@ -618,6 +619,14 @@ void runCases(Instance &instance) {
           "常用语按文件顺序：" + join(page(ic.get())));
     type(ic.get(), "2");
     check(ic->committed == "我的邮箱" && page(ic.get()).empty(), "数字键选常用语：" + ic->committed);
+    if (std::getenv("WOWTYPE_HARNESS_REAL_CLIPBOARD")) {
+        // 系统装的 clipboard 插件（没有显示器，历史是空的）：只确认调用它不出错
+        fresh(ic.get());
+        type(ic.get(), "v<sp>1");
+        check(ic->inputPanel().auxUp().toString().find("剪贴板") != std::string::npos,
+              "真的 clipboard 插件：打开剪贴板不出错：" + ic->inputPanel().auxUp().toString());
+        type(ic.get(), "<esc>");
+    } else {
     // 剪贴板：插件从 fcitx5 的 clipboard 插件取最新一条记下来，最新的在前；
     // 换行显示成 ⏎、上屏时是真的换行
     fresh(ic.get());
@@ -640,6 +649,7 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "v<sp>1<cr>");
     check(ic->committed == "line1\nline2", "回车选第一条，换行原样：" + ic->committed);
+    }
     // 退格返回菜单，菜单里再退格关闭
     fresh(ic.get());
     type(ic.get(), "v<sp>1<bs>");
@@ -681,6 +691,13 @@ void runCases(Instance &instance) {
     check(panelList && panelList->layoutHint() == CandidateLayoutHint::Horizontal &&
               page(ic.get()).size() == 9 && page(ic.get())[0] == "你好",
           "恢复默认：横排、9 个、你好第一：" + join(page(ic.get())));
+    fresh(ic.get());
+    // 剪贴板历史默认关：关掉时清空，工具栏里提示去哪打开
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).empty() &&
+              ic->inputPanel().auxUp().toString().find("没打开") != std::string::npos,
+          "默认不记剪贴板，关掉时清空：" + ic->inputPanel().auxUp().toString() + " | " +
+              join(page(ic.get())));
     fresh(ic.get());
 
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
@@ -955,6 +972,13 @@ void runCases(Instance &instance) {
     type(ic.get(), "5");
     check(ic->committed.empty() && ic->passed == "5", "密码框不补：[" + ic->committed + "]");
     fresh(ic.get());
+    for (const auto flag : {CapabilityFlag::Url, CapabilityFlag::Email}) {
+        ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::SurroundingText, flag});
+        surround("第");
+        type(ic.get(), "5");
+        check(ic->committed.empty() && ic->passed == "5", "网址、邮箱输入框不补：[" + ic->committed + "]");
+        fresh(ic.get());
+    }
     ic->setCapabilityFlags(CapabilityFlags{});
     type(ic.get(), "5");
     check(ic->committed.empty() && ic->passed == "5", "读不到光标前的文字不补");
@@ -1054,6 +1078,15 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
     s.push_back({"回车上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
                  [](HarnessInputContext *ic) {
                      return ic->committed == "EN:你好" && preedit(ic).empty() && inlineText(ic).empty();
+                 }});
+    s.push_back({"互译模式下 v + 空格不开工具栏",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "v<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return aux(ic).find("工具栏") == std::string::npos &&
+                            join(page(ic)).find("剪贴板") == std::string::npos;
                  }});
     s.push_back({"同一句话再打一遍：记住了，马上就有译文",
                  [reset](HarnessInputContext *ic) {
@@ -1319,7 +1352,8 @@ int main(int argc, char **argv) {
     Instance instance(3, args);
     FakeClipboardFactory clipboardFactory;
     StaticAddonRegistry registry{{"clipboard", &clipboardFactory}};
-    instance.addonManager().registerDefaultLoader(&registry);
+    instance.addonManager().registerDefaultLoader(
+        std::getenv("WOWTYPE_HARNESS_REAL_CLIPBOARD") ? nullptr : &registry);
     EventDispatcher mainDispatcher;
     mainDispatcher.attach(&instance.eventLoop());
     dispatcher = &mainDispatcher;

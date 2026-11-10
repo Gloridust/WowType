@@ -1317,7 +1317,7 @@ void WowtypeEngine::fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state)
     case WowtypeTool::Clipboard:
         aux = state->candidates_.empty()
                   ? (clipboardHistory_ ? "剪贴板：还没有记录，复制过的文字会出现在这里"
-                                       : "剪贴板：设置里关掉了剪贴板历史")
+                                       : "剪贴板：没打开，在 WowType 设置「输入」页打开「记录剪贴板历史」")
                   : "剪贴板：选一条上屏，退格返回";
         break;
     case WowtypeTool::Phrases:
@@ -1910,7 +1910,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
         if (sym == FcitxKey_space) {
             // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字）
-            if (toolbar_ && !shuangpin_ && state->buffer_ == "v" && state->selections_.empty()) {
+            // （互译模式下不开：工具栏选的字会绕过攒着的原文直接上屏）
+            if (toolbar_ && !shuangpin_ && !translating(ic) && state->buffer_ == "v" &&
+                state->selections_.empty()) {
                 openTool(ic, state, WowtypeTool::Menu);
                 event.filterAndAccept();
                 return;

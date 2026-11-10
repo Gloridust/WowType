@@ -43,7 +43,9 @@ Library=libtestim
 Type=SharedLibrary
 OnDemand=False
 ADDON
-# 假的 clipboard 插件（测试程序里注册的静态插件），盖掉系统的那个
+# 假的 clipboard 插件（测试程序里注册的静态插件），盖掉系统的那个。
+# WOWTYPE_HARNESS_REAL_CLIPBOARD=1 时用系统装的 clipboard 插件，只确认调用它不出错
+if [[ -z "${WOWTYPE_HARNESS_REAL_CLIPBOARD:-}" ]]; then
 cat > "$ROOT/data/fcitx5/addon/clipboard.conf" <<'ADDON'
 [Addon]
 Name=clipboard
@@ -52,6 +54,7 @@ Library=clipboard
 Type=StaticLibrary
 OnDemand=False
 ADDON
+fi
 cat > "$ROOT/config/fcitx5/profile" <<'PROFILE'
 [Groups/0]
 Name=Default
@@ -84,5 +87,6 @@ env -i PATH="$PATH" HOME="$ROOT" \
   WOWTYPE_HARNESS_TRANSLATE_URL="$TRANSLATE_URL" WOWTYPE_TRANSLATE_KEY_FILE="$ROOT/translate.key" \
   WOWTYPE_VOICE_WAV="$VOICE_WAV" WOWTYPE_VOICE_MODEL_DIR="$VOICE_MODEL_DIR" \
   DBUS_SESSION_BUS_ADDRESS="${WOWTYPE_HARNESS_DBUS:-}" \
+  WOWTYPE_HARNESS_REAL_CLIPBOARD="${WOWTYPE_HARNESS_REAL_CLIPBOARD:-}" \
   WOWTYPE_NO_UPDATE_CHECK=1 WOWTYPE_HARNESS_SHOW="${WOWTYPE_HARNESS_SHOW:-}" WOWTYPE_VOICE_EXPECT="${WOWTYPE_VOICE_EXPECT:-}" \
   "$BUILD/wowtype-key-harness"
