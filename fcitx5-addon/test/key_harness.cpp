@@ -492,6 +492,101 @@ void runCases(Instance &instance) {
         const auto p1 = page(ic.get());
         check(ic->committed.size() > 0, "小键盘数字选词，实际 " + ic->committed);
     }
+    auto horizontalList = [&]() {
+        auto *list = common();
+        return list && list->layoutHint() == CandidateLayoutHint::Horizontal;
+    };
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down><tab>");
+        auto *list = common();
+        check(horizontalList() && page(ic.get()) == p1 && list && list->globalCursorIndex() == 1,
+              "展开后按 Tab：收起，再按全局的下一个候选移光标");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down>");
+        check(send(ic.get(), Key(FcitxKey_Home)) && horizontalList() && page(ic.get()) == p1 &&
+                  ic->committed.empty(),
+              "展开后按 Home：收起、吃掉");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down><right>,");
+        check(p1.size() > 1 && ic->committed == p1[1] + "，",
+              "展开后右移再按逗号：收起，上屏光标处的词和逗号，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down>");
+        KeyEvent press(ic.get(), Key(FcitxKey_Shift_R), false);
+        ic->keyEvent(press);
+        check(horizontalList() && page(ic.get()) == p1 && ic->committed.empty(),
+              "展开后按下 Shift：收起，不上屏");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        send(ic.get(), Key(FcitxKey_Right, KeyState::Shift));
+        auto *list = common();
+        check(list && list->globalCursorIndex() == 1, "Shift+右键也移光标");
+        send(ic.get(), Key(FcitxKey_space, KeyState::Shift));
+        check(p1.size() > 1 && ic->committed == p1[1], "Shift+空格选光标处的词，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        if (auto *list = common()) {
+            list->nextCandidate(); // 候选框上滚轮、按钮直接调列表
+        }
+        type(ic.get(), "<sp>");
+        check(p1.size() > 1 && ic->committed == p1[1], "列表 nextCandidate 后空格选第二个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        if (auto *list = common()) {
+            list->prevCandidate();
+        }
+        auto *list = common();
+        const auto last = page(ic.get());
+        check(list && !list->hasNext() && list->cursorIndex() == list->size() - 1,
+              "列表 prevCandidate 从第一个绕到最后一个");
+        type(ic.get(), "<sp>");
+        check(!last.empty() && ic->committed == last.back(), "接着空格选最后一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<pgdn>");
+        if (auto *list = common()) {
+            list->prev();
+        }
+        auto *list = common();
+        check(page(ic.get()) == p1 && list && list->cursorIndex() == 0, "列表 prev 翻回第一页、光标在第一个");
+        type(ic.get(), "2");
+        check(p1.size() > 1 && ic->committed == p1[1], "接着数字按第一页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi<pgdn>");
+    {
+        const auto p2 = page(ic.get());
+        if (auto list = ic->inputPanel().candidateList(); list && list->size() > 1) {
+            list->candidate(1).select(ic.get()); // 鼠标点候选
+        }
+        check(p2.size() > 1 && ic->committed == p2[1], "翻页后点第二个候选，实际 " + ic->committed);
+    }
 
     // 退格删到空，编辑区关闭
     fresh(ic.get());
@@ -714,6 +809,24 @@ void runCases(Instance &instance) {
     type(ic.get(), "<down><sp>");
     check(vertical.size() > 1 && ic->committed == vertical[1],
           "竖排下键选第二个，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto v1 = page(ic.get());
+        type(ic.get(), "<right>");
+        const auto v2 = page(ic.get());
+        check(!v2.empty() && v2 != v1, "竖排右键翻页：" + join(v2));
+        type(ic.get(), "<left>");
+        check(page(ic.get()) == v1, "竖排左键翻回来");
+        type(ic.get(), "<up>");
+        auto list = ic->inputPanel().candidateList();
+        check(list && list->cursorIndex() == list->size() - 1 && page(ic.get()) != v1,
+              "竖排第一个上按上键：绕到最后一个");
+        type(ic.get(), "<down>");
+        check(page(ic.get()) == v1, "再按下键绕回第一个");
+        type(ic.get(), "<sp>");
+        check(!v1.empty() && ic->committed == v1[0], "空格选第一个，实际 " + ic->committed);
+    }
     fresh(ic.get());
     check(!send(ic.get(), Key(FcitxKey_Alt_R)), "关掉语音后右 Alt 交给应用");
     type(ic.get(), "wdyx<sp>");
