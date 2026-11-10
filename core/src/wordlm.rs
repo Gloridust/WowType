@@ -107,13 +107,17 @@ impl WordLm {
 
 impl LanguageModel for WordLm {
     fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
-        // 模型里没有的词（语料里太少见、被裁掉了）给 0，不当成没见过的搭配罚分：
-        // 实测罚分会把这类词的整句挤出前几名，NNLM 也就救不回来（日常句 90.6% -> 87.7%）
+        // 前一个词不在模型里：没有可用的信息，给 0
         let Some(&p) = self.ids.get(prev.unwrap_or(BOS)) else {
             return 0.0;
         };
+        // 当前词不在模型里（语料里太少见、被裁掉了）：按「没见过的搭配」给回退分（≤ 0），
+        // 和模型认识、但没跟 prev 搭配过的词一样。以前给 0，比回退分高，
+        // 结果模型不认识的冷僻词、错字词反而比常用词分高：
+        // fenbenglixi 首选成了「分崩离兮」，pingwenguodu 成了「平稳过度」。
+        // 不再额外罚分：实测再罚会把这类词所在的整句挤出前几名（日常句 90.6% -> 87.7%）。
         let Some(&c) = self.ids.get(cur) else {
-            return 0.0;
+            return self.backoff[p as usize] as f64;
         };
         match self.pair(p, c) {
             Some(s) => s as f64,
@@ -351,7 +355,8 @@ mod tests {
         assert!(lm.score(Some("明天"), "面") <= 0.0);
         assert!(lm.score(None, "我们") > 0.0);
         assert_eq!(lm.score(Some("不认识"), "见"), 0.0);
-        assert_eq!(lm.score(Some("明天"), "不认识"), 0.0);
+        // 不认识的词和「认识但没搭配过」的词同分，不会比常用词高
+        assert_eq!(lm.score(Some("明天"), "不认识"), lm.score(Some("明天"), "面"));
         assert_eq!(lm.top_next("明天", 1)[0].0, "见");
     }
 }
