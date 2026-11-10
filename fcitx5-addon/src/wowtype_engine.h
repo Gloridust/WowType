@@ -300,12 +300,6 @@ private:
     /// （顶上是方向，下面是原文和正在打的拼音，拼音候选照常列在下面）。
     /// 只设编辑区和提示行，不动候选列表。
     void fillTranslateView(fcitx::InputContext *ic, WowtypeState *state, fcitx::InputPanel &panel);
-    /// 双拼方案用分号当键（微软、搜狗、紫光的 ing），且现在正等第二个键。
-    bool semicolonIsKey(WowtypeState *state) const;
-    /// 分号/引号选词：这个键要选第几个候选（1 起），不选返回 0。
-    int selectKeyIndex(fcitx::KeySym sym) const;
-    /// V 模式计算器：编辑区是 v + 算式（或刚打了 v）。
-    bool calcActive(WowtypeState *state) const;
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
@@ -332,22 +326,31 @@ private:
     std::string recentEmojiPath() const;
     /// 把引擎、上文、设置同步给会话（引擎是后台载入的，设置可能刚改过）。
     void syncSession(WowtypeState *state);
-    /// 同步后交给会话处理一个按下的键，会话处理了返回 true。
-    bool sessionKey(WowtypeState *state, const fcitx::Key &key);
-    /// 候选由会话算，外壳抄一份（选词还在外壳）。
+    /// 同步后交给会话处理一个按下的键；action 是 WOWTYPE_KEY_ACTION_*（fcitx5 全局的翻页、
+    /// 移动候选热键）。返回会话的 frame（会话没建好时为 NULL）。
+    const WowtypeFrame *sessionKey(WowtypeState *state, const fcitx::Key &key,
+                                   uint32_t action = WOWTYPE_KEY_ACTION_NONE);
+    /// 这个键对应的 fcitx5 全局翻页、移动候选热键（方向键不算，照横排竖排的规则走）。
+    uint32_t keyAction(const fcitx::Key &key) const;
+    /// 会话处理了一个键以后：上屏、记 emoji、照会话的候选框重画（或只挪页码和光标）。
+    void applySessionFrame(fcitx::InputContext *ic, WowtypeState *state,
+                           const WowtypeFrame *frame);
+    /// 候选由会话算，外壳抄一份画候选框（fcitx5 的候选框要整个列表），连同页码、光标。
     void refreshCandidates(WowtypeState *state);
-    /// 展开的候选面板（下键展开）：处理了这个键返回 true。
+    /// 会话的候选重算过才重新抄；返回 true 表示重抄了。页码、光标每次都抄。
+    bool syncView(WowtypeState *state);
+    /// 表情面板（和普通候选的展开面板一个样子）：处理了这个键返回 true。
     bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
     /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；learned 时攒着存用户词库。
     void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
                       bool learned);
-    /// 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。
+    /// 上屏已选的词 + 还没选的原始输入（切输入法、打到一半切英文），原始输入也记一次选词。
     void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
     void commitPlain(fcitx::InputContext *ic, const std::string &text);
-    /// 选中光标所在的候选；没有候选时上屏原始输入。
+    /// 选中光标所在的候选；没有候选时上屏原始输入（交给会话按一次空格）。
     void commitCurrent(fcitx::InputContext *ic, WowtypeState *state);
     void rememberContext(const std::string &text);
     void maybeSaveUserDict(bool force);
@@ -399,7 +402,6 @@ private:
     bool shuangpin_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
-    bool shuangpinSemicolon_ = false;
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
     WowtypePunctStyle punctStyle_ = WowtypePunctStyle::Fullwidth;
     /// 打开的翻页键组（Page Up/Down、方向键、fcitx 全局翻页键一直可用）
