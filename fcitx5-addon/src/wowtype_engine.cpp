@@ -32,7 +32,11 @@
 
 namespace {
 
-constexpr const char *kSystemDataDir = "/usr/share/wowtype";
+// 系统词库目录：CMake 按安装前缀传进来（Nix 等不装在 /usr 的发行版）
+#ifndef WOWTYPE_SYSTEM_DATA_DIR
+#define WOWTYPE_SYSTEM_DATA_DIR "/usr/share/wowtype"
+#endif
+constexpr const char *kSystemDataDir = WOWTYPE_SYSTEM_DATA_DIR;
 /// 展开的候选面板：每行几个、一屏几行（照微信输入法：6 × 6）。
 constexpr std::size_t kGridCols = 6;
 constexpr std::size_t kGridRows = 6;
