@@ -71,6 +71,10 @@ int wowtype_engine_load_conversion(WowtypeEngineHandle *engine, const char *path
 /* ASCII 标点转中文标点；未收录返回 NULL。指针在下一次调用前有效。 */
 const char *wowtype_fullwidth_punct(int ascii_codepoint);
 
+/* 按标点样式转换：style 0 全角、1 半角；prev 是光标前一个字符（不知道传 0）。
+ * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字后的小数点）。 */
+const char *wowtype_punct(int ascii_codepoint, int style, int prev_codepoint);
+
 /* 符号检索（拼音/中文名前缀），结果用 wowtype_candidates_* 读取并释放。 */
 WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
 

@@ -103,6 +103,27 @@ pub fn fullwidth_punct(ascii: char) -> Option<&'static str> {
     Some(text)
 }
 
+/// 标点样式：全角（中文标点）或半角（ASCII 原样上屏）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PunctStyle {
+    Fullwidth,
+    Halfwidth,
+}
+
+/// 按样式和光标前一个字符决定标点。返回 `None` 表示原样上屏这个 ASCII 字符。
+///
+/// - 半角样式：一律原样上屏
+/// - 全角样式：数字后面的 `.` 是小数点（3.14），不换成句号
+pub fn punct(ascii: char, style: PunctStyle, prev: Option<char>) -> Option<&'static str> {
+    if style == PunctStyle::Halfwidth {
+        return None;
+    }
+    if ascii == '.' && prev.is_some_and(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    fullwidth_punct(ascii)
+}
+
 /// 按拼音或中文名前缀检索符号。
 pub fn search(query: &str, limit: usize) -> Vec<&'static Symbol> {
     let q = query.trim().to_lowercase();
@@ -133,6 +154,26 @@ mod tests {
         assert_eq!(fullwidth_punct(','), Some("，"));
         assert_eq!(fullwidth_punct('?'), Some("？"));
         assert_eq!(fullwidth_punct('a'), None);
+    }
+
+    #[test]
+    fn punct_follows_style() {
+        use PunctStyle::*;
+        for c in [',', '.', '(', ')', ';', ':', '?', '!'] {
+            assert_eq!(punct(c, Halfwidth, None), None, "{c}");
+            assert_eq!(punct(c, Fullwidth, None), fullwidth_punct(c), "{c}");
+        }
+        assert_eq!(punct(',', Fullwidth, Some('好')), Some("，"));
+    }
+
+    #[test]
+    fn dot_after_digit_is_decimal_point() {
+        use PunctStyle::*;
+        assert_eq!(punct('.', Fullwidth, Some('3')), None);
+        assert_eq!(punct('.', Fullwidth, Some('好')), Some("。"));
+        assert_eq!(punct('.', Fullwidth, Some('a')), Some("。"));
+        // 只管句点：数字后面的逗号还是中文逗号
+        assert_eq!(punct(',', Fullwidth, Some('3')), Some("，"));
     }
 
     #[test]
