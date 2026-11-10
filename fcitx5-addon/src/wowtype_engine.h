@@ -26,6 +26,7 @@ class Instance;
 class InputContext;
 class InputContextEvent;
 class InputPanel;
+class Text;
 class InputMethodEntry;
 class KeyEvent;
 } // namespace fcitx
@@ -91,6 +92,9 @@ public:
     void reloadConfig() override;
 
     void updateInputPanel(fcitx::InputContext *ic, WowtypeState *state);
+    /// 预编辑去向：全局开关（「在程序中显示预编辑文本」）打开且应用申报
+    /// Preedit 能力时送进应用输入框（on-the-spot），否则画在候选窗顶部。
+    void sendPreedit(fcitx::InputContext *ic, const fcitx::Text &preedit);
     /// 选中第 index 个候选（全局下标）：整句候选直接上屏，
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
