@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 3
+#define WOWTYPE_ABI_VERSION_MINOR 4
 
 #ifdef __cplusplus
 extern "C" {
@@ -294,7 +294,7 @@ const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
 
-/* ---- 输入会话（ABI 1.3 起，见 docs/PORTING.md、docs/ABI.md）----
+/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节；见 docs/PORTING.md、docs/ABI.md）----
  *
  * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
  * 画编辑区、上屏。会话只能在一个线程里用。
@@ -304,7 +304,8 @@ const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *tex
  * 「会话还不管这个键」，外壳接着用自己的逻辑处理（挪完以后就是「交给应用」）。
  *
  * 已经由会话处理的键：字母、隔音符（编辑区不空时）、退格（先撤销最后一次选词，没有选词
- * 才删字母）、Esc（清空）。 */
+ * 才删字母）、Esc（清空）。候选列表（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）
+ * 和编辑区分音节也由会话算（1.4 起）。 */
 
 typedef struct WowtypeSession WowtypeSession;
 
@@ -325,9 +326,14 @@ typedef struct {
     uint32_t prev_char; /* 光标前一个字符（Unicode 码位），不知道给 0 */
 } WowtypeKey;
 
-/* 建会话的设置。size 填 sizeof(WowtypeSessionConfig)；现在没有可设的项，可以传 NULL。 */
+/* 会话的设置。size 填 sizeof(WowtypeSessionConfig)；外壳没填的字段（size 短）用默认值。
+ * 传 NULL 全用默认。双拼开不开看引擎（wowtype_engine_set_shuangpin）。 */
 typedef struct {
     uint32_t size;
+    uint32_t page_size; /* 一页几个候选，0 用默认（9）；数字按键 emoji 只在第一页里找 */
+    int calculator;     /* V 模式计算器，默认 1（双拼时不开） */
+    int date_time;      /* 日期时间候选，默认 1 */
+    int emoji_suggest;  /* 打字推荐 emoji，默认 1 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -336,7 +342,8 @@ typedef struct {
     uint32_t size;
     int handled;           /* 会话处理了这个键；0 见上面「暂定」 */
     const char *commit;    /* 要上屏的字，没有为 NULL */
-    const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 原始输入，分音节显示还没挪 */
+    const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 还没选的输入（分好音节，
+                            * nihao 显示成 ni'hao，双拼显示成全拼；没有引擎时是原始输入） */
     int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
     const char *aux;       /* 候选框上方的提示，没有为 NULL（还没用） */
     int panel;             /* 0 普通 1 展开面板 2 表情面板（还没用，恒为 0） */
@@ -346,9 +353,16 @@ typedef struct {
     uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
 } WowtypeFrame;
 
-/* 建会话。engine 现在还不用，可以传 NULL（词库没载入好时也能打字）；传了的话要比会话活得久。 */
+/* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；
+ * 传了的话要比会话活得久。config 可以传 NULL。 */
 WowtypeSession *wowtype_session_new(WowtypeEngineHandle *engine, const WowtypeSessionConfig *config);
 void wowtype_session_free(WowtypeSession *session);
+/* 换引擎，可以传 NULL。 */
+void wowtype_session_set_engine(WowtypeSession *session, WowtypeEngineHandle *engine);
+/* 改设置；config 为 NULL 全用默认。 */
+void wowtype_session_configure(WowtypeSession *session, const WowtypeSessionConfig *config);
+/* 现在的编辑区（不处理按键，handled 为 0）。session 为 NULL 时返回 NULL。 */
+const WowtypeFrame *wowtype_session_frame(WowtypeSession *session);
 /* 处理一次按键（按下和松开都给）。session 或 key 为 NULL 时返回 NULL。 */
 const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKey *key);
 /* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时）。 */
@@ -366,6 +380,27 @@ void wowtype_session_push_selection(WowtypeSession *session, const char *text, c
                                     size_t bytes);
 /* 往原始输入后面加字（计算器算式、双拼分号、表情面板搜索词）。 */
 void wowtype_session_append(WowtypeSession *session, const char *text);
+/* 光标前已经上屏的字（选了开头的词以后，拿它 + 已选的词当上文给剩下的部分排序）。 */
+void wowtype_session_set_context(WowtypeSession *session, const char *text);
+
+/* 过渡：选词还在外壳时，外壳把整个候选列表（不分页）抄过去。 */
+#define WOWTYPE_CAND_WORD 0  /* 引擎的候选：选中要学习 */
+#define WOWTYPE_CAND_PLAIN 1 /* 计算结果、日期时间、带换行的自定义词：原样上屏，不学习 */
+#define WOWTYPE_CAND_EMOJI 2 /* emoji：上屏 commit，不学习 */
+typedef struct {
+    uint32_t size;      /* 填 sizeof(WowtypeCandidateInfo) */
+    const char *text;   /* 候选框里显示的字 */
+    const char *pinyin; /* 空格分音节；计算结果、emoji 这类为空串 */
+    size_t consumed;    /* 用掉了还没选词那部分输入的多少字节；比它短是句首词 */
+    int kind;           /* WOWTYPE_CAND_* */
+    const char *commit; /* 选中时上屏的字（emoji 推荐在句尾对上时是「整句 + emoji」） */
+    const char *emoji;  /* emoji 本身；不是 emoji 为空串 */
+} WowtypeCandidateInfo;
+/* 候选个数。没有引擎、没在打字时为 0。 */
+size_t wowtype_session_candidate_total(WowtypeSession *session);
+/* 第 index 个候选写进 out（按 out->size 写）。返回 0 成功，-1 越界或参数为 NULL。
+ * 字符串在同一会话下一次改了编辑区、上文、引擎或设置的调用前有效。 */
+int wowtype_session_candidate_info(WowtypeSession *session, size_t index, WowtypeCandidateInfo *out);
 
 #ifdef __cplusplus
 }

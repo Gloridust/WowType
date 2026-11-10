@@ -512,7 +512,7 @@ impl<'e> Session<'e> {
         &self.selections
     }
 
-    /// 过渡：外壳选了句首词，压进已选栈（候选还在外壳里）。
+    /// 过渡：外壳选了句首词，压进已选栈（选词还在外壳里）。
     pub fn push_selection(&mut self, selection: Selection) {
         self.selections.push(selection);
         self.fresh = false;
