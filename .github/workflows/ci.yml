@@ -52,7 +52,7 @@ jobs:
     # macOS 外壳（docs/PORTING.md）还没写；先保证核心和 C 接口在 macOS 上一直能编、能过测试。
     # 不在 release 的 needs 里，挂了不挡 Linux 发版。
     name: Rust 核心测试（macOS）
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install stable --profile minimal && rustup default stable
