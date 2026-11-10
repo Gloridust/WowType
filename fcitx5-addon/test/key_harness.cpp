@@ -3,6 +3,7 @@
 //
 // 由 scripts/addon-test.sh 设置好隔离的 XDG 目录和词库后运行。
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -999,6 +1000,58 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     ic->setCapabilityFlags(CapabilityFlags{});
     fresh(ic.get());
+
+    // 换词库（设置里切到万象就是写 Lexicon=）：reloadConfig 后在后台换，换好前按键照常进编辑区
+    {
+        const std::string dictFile =
+            std::string(std::getenv("XDG_DATA_HOME")) + "/wowtype/dicts/harness/lexicon.tsv";
+        std::filesystem::create_directories(std::filesystem::path(dictFile).parent_path());
+        std::ofstream(dictFile) << "ping guo\t平锅\t1000000\nce shi ci ku\t测试词库\t100\n";
+        // 环境变量 WOWTYPE_LEXICON 优先于配置，测配置时先拿掉
+        const char *envLexicon = std::getenv("WOWTYPE_LEXICON");
+        const std::string savedLexicon = envLexicon ? envLexicon : "";
+        unsetenv("WOWTYPE_LEXICON");
+        std::ofstream(configDir + "/wowtype.conf") << "Lexicon=" << dictFile << "\nEmojiSuggest=False\n";
+        addon->reloadConfig();
+        // 等到候选里出现 word（换词库在后台，最多 30 秒）
+        const auto waitFor = [&ic](const std::string &keys, const std::string &word) {
+            for (int i = 0; i < 300; ++i) {
+                fresh(ic.get());
+                type(ic.get(), keys);
+                const auto shown = page(ic.get());
+                if (std::find(shown.begin(), shown.end(), word) != shown.end()) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            return false;
+        };
+        // 先等再拼说明：参数的求值顺序不定，写在一行里 join 可能先于等待执行
+        const bool switched = waitFor("ceshiciku", "测试词库");
+        check(switched, "配置换了词库后用上新词库：" + join(page(ic.get())));
+        fresh(ic.get());
+        // 默认词库里的「苹果」不在了（用户学过的词会跟过来，这里挑一个前面没打过的）
+        type(ic.get(), "pingguo<sp>");
+        check(ic->committed == "平锅", "新词库里 pingguo -> 平锅，实际 " + ic->committed);
+        // 改别的设置不重新载入词库
+        std::ofstream(configDir + "/wowtype.conf")
+            << "Lexicon=" << dictFile << "\nEmojiSuggest=False\nPageSize=6\n";
+        addon->reloadConfig();
+        fresh(ic.get());
+        type(ic.get(), "ceshiciku<sp>");
+        check(ic->committed == "测试词库", "只改别的设置时词库不动，实际 " + ic->committed);
+        // 换回来
+        std::filesystem::remove(configDir + "/wowtype.conf");
+        if (!savedLexicon.empty()) {
+            setenv("WOWTYPE_LEXICON", savedLexicon.c_str(), 1);
+        }
+        addon->reloadConfig();
+        // 刚学过「平锅」，它可能还排在前面；只看默认词库里的「苹果」回来了没有
+        const bool restored = waitFor("pingguo", "苹果");
+        check(restored, "去掉 Lexicon 后换回默认词库：" + join(page(ic.get())));
+        fresh(ic.get());
+        std::filesystem::remove_all(std::filesystem::path(dictFile).parent_path());
+    }
 
     ic.reset();
 }

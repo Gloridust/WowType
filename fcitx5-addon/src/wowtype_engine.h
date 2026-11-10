@@ -212,6 +212,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<int, fcitx::IntConstrain> translateIdleMinutes{
         this, "TranslateIdleMinutes", "本地模型闲置几分钟后释放内存（0 不释放）", 5,
         fcitx::IntConstrain(0, 240)};
+    // 词库文件（拼音<TAB>词<TAB>频次）。WowType 设置里切换「万象」时写成
+    // ~/.local/share/wowtype/dicts/wanxiang/lexicon.tsv；文件不在就用默认的
+    fcitx::Option<std::string> lexicon{this, "Lexicon", "词库文件（留空用自带的雾凇词库）", ""};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
 class WowtypeEngine final : public fcitx::InputMethodEngineV2 {
@@ -256,6 +259,9 @@ public:
 private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
     bool coreReady();
+    /// 配置里换了词库：存好用户词、清掉各输入框的编辑状态，在后台换新词库。
+    /// 上一次载入还没完就先记着，载完再换（不在主线程上等）。
+    void maybeSwitchLexicon();
     /// 把配置（和环境变量覆盖）算成下面的 effective 值，按需建语音句柄。
     void applyConfig();
     /// 词库载入好以后，把开关和自定义词交给核心。
@@ -373,6 +379,9 @@ private:
     fcitx::Instance *instance_;
     WowtypeEngineHandle *core_;
     std::future<WowtypeEngineHandle *> loading_;
+    /// core_ / loading_ 用的词库文件，和配置要的词库文件（不一样就该换了）。
+    std::string lexicon_;
+    std::string wantedLexicon_;
     fcitx::FactoryFor<WowtypeState> factory_;
     /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字节，按字符边界截）。
     std::string recent_;
