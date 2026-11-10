@@ -1,9 +1,11 @@
 #ifndef WOWTYPE_FCITX5_ENGINE_H
 #define WOWTYPE_FCITX5_ENGINE_H
 
+#include <chrono>
 #include <cstddef>
 #include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -188,7 +190,7 @@ FCITX_CONFIGURATION(
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
-    fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（一天最多一次）", true};
+    fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（最多一小时一次）", true};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
     fcitx::Option<bool> translate{this, "Translate", "互译（Shift 切到「译」，打中文出外文）",
                                   false};
@@ -429,7 +431,7 @@ private:
     /// 热键按下还没松开（松开那一下也要吃掉，免得应用把单按 Alt 当成打开菜单）。
     bool voiceKeyDown_ = false;
     /// 这次 fcitx5 运行里查过更新没有（只在第一次切到 WowType 时查）。
-    bool updateChecked_ = false;
+    std::optional<std::chrono::steady_clock::time_point> updateCheckedAt_;
     /// 正在显示语音提示（录音、识别中、出错提示）。
     bool voiceShowing_ = false;
     /// 出错提示显示到这个时刻（单调时钟，微秒）。

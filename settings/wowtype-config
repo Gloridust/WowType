@@ -207,7 +207,7 @@ STYLE_LIGHT = """
 .wt-nav row:selected { background: #0EAF76; color: white; }
 .wt-nav row:selected image, .wt-nav row:selected label { color: white; }
 .wt-content, .wt-content headerbar { background: #f5f7f6; box-shadow: none; }
-.wt-page-title { font-weight: 800; font-size: 17pt; margin-left: 10px; }
+.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: white; box-shadow: 0 0 0 1px #e6eae8; }
 .wt-content preferencesgroup > box > box > label.heading { color: #6b7570; }
 """
@@ -222,8 +222,9 @@ STYLE_DARK = """
 .wt-nav row:selected { background: #0EAF76; color: white; }
 .wt-nav row:selected image, .wt-nav row:selected label { color: white; }
 .wt-content, .wt-content headerbar { background: #1d201f; box-shadow: none; }
-.wt-page-title { font-weight: 800; font-size: 17pt; margin-left: 10px; }
+.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: #282c2a; box-shadow: 0 0 0 1px #3b4144; }
+.wt-content preferencesgroup > box > box > label.heading { color: #a3aca8; }
 """
 # 开关、单选框、主按钮换成 WowType 绿（旧版 libadwaita 用命名颜色，1.6 起用 CSS 变量）
 STYLE_ACCENT = """
@@ -886,7 +887,7 @@ def init_default_theme():
 
 
 def startup_tasks():
-    """插件每次 fcitx5 运行里第一次切到 WowType 时在后台叫（wowtype-config --startup）。"""
+    """插件切到 WowType 时在后台叫（wowtype-config --startup），最多一小时一次。"""
     try:
         init_default_theme()
     except Exception as e:  # 主题弄不好也别耽误检查更新
@@ -1066,8 +1067,8 @@ ENGINE_PKG = "wowtype"
 # 0.3.3 及以前词库是单独的包，0.3.4 起打进了安装包（新包会把旧词库包替换掉）
 DATA_PKG = "wowtype-data-rime-ice"
 DATA_VERSION_FILE = "/usr/share/doc/wowtype/DATA-VERSION"
-# 自动检查最多这么久一次
-CHECK_INTERVAL = 20 * 3600
+# 自动检查最多这么久一次（插件一小时叫一次，这里留几分钟余量，免得正好差几秒被跳过）
+CHECK_INTERVAL = 55 * 60
 
 
 def current_version():
@@ -1217,6 +1218,24 @@ def _md_inline(text):
     return "".join(out)
 
 
+def release_highlights(notes):
+    """发布说明里只留「## 这一版」那一节（去掉标题本身）；没有这一节就原样返回。
+
+    后面的安装步骤、自动生成的提交列表对已经装好的人没用，放进「更新内容」只会很长。
+    """
+    lines = notes.strip().splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^##\s*这一版\s*$", line.strip()):
+            body = []
+            for rest in lines[i + 1:]:
+                if re.match(r"^#{1,2}\s", rest):
+                    break
+                body.append(rest)
+            text = "\n".join(body).strip()
+            return text or notes.strip()
+    return notes.strip()
+
+
 def markdown_to_pango(md):
     """GitHub Release 说明（Markdown）→ Gtk.Label 能显示的 Pango 标记。
 
@@ -1357,7 +1376,7 @@ def write_update_state(state):
 def background_check():
     """fcitx5 切到 WowType 时在后台跑（wowtype-config --check-update）。
 
-    一天最多查一次；有新版本就发一条桌面通知（同一版本只提醒一次），点开进设置的「更新」页。
+    最多一小时查一次；有新版本就发一条桌面通知（同一版本只提醒一次），点开进设置的「更新」页。
     """
     values, _ = read_config()
     if values.get("CheckUpdate") != "True":
@@ -1774,6 +1793,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.nav.add_css_class("wt-nav")
         self.nav_rows = {}
         for name, title, icon, build in pages:
+            self.building_title = title
             self.stack.add_titled(build(), name, title)
             box = Gtk.Box(spacing=12)
             box.append(Gtk.Image(icon_name=icon))
@@ -1809,12 +1829,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         sidebar.set_content(side_box)
         sidebar.set_size_request(210, -1)
 
-        # 右边：页面标题 + 菜单，下面是页面
+        # 右边：顶栏只放菜单和窗口按钮；页面标题在每页内容的最上面（new_page），和卡片对齐
         header = Adw.HeaderBar(show_start_title_buttons=False)
         header.set_title_widget(Gtk.Box())
-        self.page_title = Gtk.Label(xalign=0)
-        self.page_title.add_css_class("wt-page-title")
-        header.pack_start(self.page_title)
         menu = Gio.Menu()
         menu.append("用文本编辑器打开自定义词", "win.open-custom")
         menu.append("导出日志…", "win.export-log")
@@ -1850,6 +1867,21 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.update_files = []
         self.on_check_update()
 
+    def new_page(self):
+        """设置页：第一行是页面标题。
+
+        标题放进页面本身（不放顶栏）：和下面的卡片左边对齐，上面留出空白，跟着内容一起滚动。
+        PreferencesGroup.add 收到的不是行时直接放进组里，不套卡片。
+        """
+        page = Adw.PreferencesPage()
+        head = Adw.PreferencesGroup()
+        head.add_css_class("wt-page-head")
+        label = Gtk.Label(label=self.building_title, xalign=0)
+        label.add_css_class("wt-page-title")
+        head.add(label)
+        page.add(head)
+        return page
+
     def show_page(self, name):
         if name not in self.nav_rows:
             name = "general"
@@ -1865,8 +1897,6 @@ class SettingsWindow(Adw.ApplicationWindow):
         row = self.nav_rows.get(name)
         if row is not None and self.nav.get_selected_row() is not row:
             self.nav.select_row(row)
-        self.page_title.set_label(self.stack.get_page(self.stack.get_visible_child()).get_title()
-                                  if self.stack.get_visible_child() else "")
         # fcitx5 的快捷键可能在别处改过，切到这两页时重新看一眼
         if name in ("input", "translate") and hasattr(self, "shift_free_row"):
             self.refresh_shift_conflict()
@@ -1874,7 +1904,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 常规
 
     def build_general(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
 
         status = Adw.PreferencesGroup(title="输入法")
         self.status_row = Adw.ActionRow(title="正在检查 fcitx5…")
@@ -1954,7 +1984,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 输入
 
     def build_input(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
 
         mode = Adw.PreferencesGroup(title="输入方式")
         self.full_pinyin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
@@ -2080,7 +2110,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 表情
 
     def build_emoji(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
         emoji = Adw.PreferencesGroup(
             title="表情",
             description="按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
@@ -2276,7 +2306,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 语音
 
     def build_voice(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
         group = Adw.PreferencesGroup(
             title="语音输入",
             description="按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
@@ -2323,7 +2353,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 翻译
 
     def build_translate(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
         intro = Adw.PreferencesGroup(
             title="互译",
             description="单按 Shift 在「中 → 英 → 译」之间切换。切到「译」照常打中文，原文在候选框里，"
@@ -2736,7 +2766,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 自定义词
 
     def build_words(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
         add = Adw.PreferencesGroup(
             title="添加自定义词",
             description="人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总是排在候选第一个，"
@@ -2915,7 +2945,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     # ---------------- 更新
 
     def build_update(self):
-        page = Adw.PreferencesPage()
+        page = self.new_page()
         group = Adw.PreferencesGroup(title="版本")
         manager, _distro, _arch, reason = update_platform()
         installed = package_version(manager)
@@ -2957,8 +2987,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(group)
 
         self.notes_group = Adw.PreferencesGroup(title="更新内容", visible=False)
+        # hexpand + max_width_chars：换行的标签默认只按自然宽度排，会只占卡片的一半
         self.notes_label = Gtk.Label(wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
-                                     xalign=0, selectable=True,
+                                     xalign=0, selectable=True, hexpand=True, max_width_chars=90,
                                      margin_top=14, margin_bottom=14,
                                      margin_start=16, margin_end=16)
         notes_card = Gtk.Box()
@@ -2969,7 +3000,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         auto = Adw.PreferencesGroup()
         auto.add(self.make_switch("CheckUpdate", "自动检查更新",
-                                  "切到 WowType 时在后台检查，一天最多一次，有新版本发通知"))
+                                  "切到 WowType 时在后台检查，最多一小时一次，有新版本发通知"))
         page.add(auto)
         return page
 
@@ -3011,7 +3042,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                 reason or "要下载：" + "、".join(name for name, _ in files)))
             self.install_button.set_visible(bool(files))
             self.page_button.set_label("打开下载页" if files else "打开安装说明")
-            notes = release["notes"].strip()
+            notes = release_highlights(release["notes"])
             self.notes_group.set_visible(bool(notes))
             try:
                 self.notes_label.set_markup(markdown_to_pango(notes[:6000]))
@@ -3314,6 +3345,9 @@ if __name__ == "__main__":
         assert '<a href="https://x.y/?a=1&amp;b=2">链接</a>' in notes
         assert "    ◦ 子项" in notes and "<tt>sudo apt &lt;x&gt;</tt>" in notes
         assert "```" not in notes and '<a href="https://x.y/z">' in notes
+        assert release_highlights("## 这一版\n\n- 新功能\n\n升级后重启。\n\n## 安装\n\n装法\n") == \
+            "- 新功能\n\n升级后重启。"
+        assert release_highlights("## What's Changed\n* x") == "## What's Changed\n* x"
         import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             profile = os.path.join(tmp, "profile")
