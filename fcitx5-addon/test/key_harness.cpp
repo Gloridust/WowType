@@ -588,6 +588,64 @@ void runCases(Instance &instance) {
         check(p2.size() > 1 && ic->committed == p2[1], "翻页后点第二个候选，实际 " + ic->committed);
     }
 
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 一直 PgDn 翻到最后一页：停在最后一页，光标在这页开头，空格选它
+        auto *list = common();
+        int guard = 0;
+        while (list && list->hasNext() && guard++ < 100) {
+            type(ic.get(), "<pgdn>");
+            list = common();
+        }
+        const auto last = page(ic.get());
+        check(list && !list->hasNext() && list->totalPages() > 1 &&
+                  list->currentPage() == list->totalPages() - 1 && list->cursorIndex() == 0,
+              "PgDn 翻到最后一页");
+        type(ic.get(), "<pgdn>");
+        list = common();
+        check(list && list->currentPage() == list->totalPages() - 1, "最后一页再按 PgDn 不动");
+        type(ic.get(), "<sp>");
+        check(!last.empty() && ic->committed == last[0], "最后一页空格选第一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 翻页按钮（直接调列表的 next）翻到最后一页
+        auto *list = common();
+        int guard = 0;
+        while (list && list->currentPage() + 2 < list->totalPages() && guard++ < 100) {
+            type(ic.get(), "<pgdn>");
+            list = common();
+        }
+        if (list) {
+            list->next();
+        }
+        list = common();
+        check(list && !list->hasNext() && list->currentPage() == list->totalPages() - 1 &&
+                  list->usedNextBefore(),
+              "列表 next 翻到最后一页");
+        const auto last = page(ic.get());
+        type(ic.get(), "2");
+        check(last.size() > 1 && ic->committed == last[1], "接着数字按最后一页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 光标右移跨到下一页：候选框跟着翻页，光标在新一页的第一个
+        auto *list = common();
+        const int size = list ? list->size() : 0;
+        for (int i = 0; i < size; ++i) {
+            type(ic.get(), "<right>");
+        }
+        list = common();
+        const auto p2 = page(ic.get());
+        check(list && list->currentPage() == 1 && list->cursorIndex() == 0,
+              "右键跨页");
+        type(ic.get(), "<sp>");
+        check(!p2.empty() && ic->committed == p2[0], "跨页后空格选新一页第一个，实际 " + ic->committed);
+    }
+
     // 退格删到空，编辑区关闭
     fresh(ic.get());
     type(ic.get(), "ni<bs><bs>");

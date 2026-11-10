@@ -491,6 +491,11 @@ public:
     void prevCandidate() override { act(WOWTYPE_KEY_ACTION_PREV_CANDIDATE); }
     void nextCandidate() override { act(WOWTYPE_KEY_ACTION_NEXT_CANDIDATE); }
     void setPage(int page) override {
+        if (mirroring_) {
+            // mirror 里调的 CommonCandidateList::next() 会走到这里：只摆自己，不再翻会话
+            CommonCandidateList::setPage(page);
+            return;
+        }
         for (int guard = 0; guard < 1000 && page != currentPage(); ++guard) {
             const int before = currentPage();
             act(page < before ? WOWTYPE_KEY_ACTION_PREV_PAGE : WOWTYPE_KEY_ACTION_NEXT_PAGE);
@@ -502,6 +507,7 @@ public:
 
     /// 照会话的页码和光标摆好（页码往后翻一页时用 next()，fcitx5 记得「用过下一页」）。
     void mirror(std::size_t page, std::size_t cursor) {
+        mirroring_ = true;
         const int target = static_cast<int>(page);
         if (target != currentPage() && target >= 0 && target < totalPages()) {
             if (target == currentPage() + 1) {
@@ -513,6 +519,7 @@ public:
         if (static_cast<int>(cursor) < totalSize()) {
             setGlobalCursorIndex(static_cast<int>(cursor));
         }
+        mirroring_ = false;
     }
 
 private:
@@ -529,6 +536,7 @@ private:
     }
 
     WowtypeState *state_;
+    bool mirroring_ = false;
 };
 
 } // namespace

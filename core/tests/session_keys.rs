@@ -965,7 +965,7 @@ fn expanded_panel() {
     type_keys(&mut session, "<down><right>");
     let frame = type_keys(&mut session, "<tab>");
     assert!(!frame.handled);
-    assert_eq!(session.view().expanded, false);
+    assert!(!session.view().expanded);
     assert_eq!(session.view().cursor, 1);
 
     // 退格：收起再删字母
@@ -975,16 +975,24 @@ fn expanded_panel() {
     assert_eq!(frame.panel, Panel::Normal);
     assert_eq!(frame.preedit, "sh");
 
-    // 只有一个候选不展开
-    let mut session = with(many_engine());
+    // 只有一个候选不展开（下键交给外壳吃掉）
+    let lexicon: Arc<dyn Lexicon> =
+        Arc::new(MemoryLexicon::from_tsv_str("heng xiang\t横向\t5000\n").unwrap());
+    let engine: &'static Engine = Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )));
+    let mut session = with(engine);
     session.configure(Config {
         emoji_suggest: false,
+        date_time: false,
         ..Config::default()
     });
-    type_keys(&mut session, "nihao");
-    if texts(&mut session).len() == 1 {
-        assert_eq!(type_keys(&mut session, "<down>").panel, Panel::Normal);
-    }
+    type_keys(&mut session, "hengxiang");
+    assert_eq!(texts(&mut session), ["横向"]);
+    let frame = type_keys(&mut session, "<down>");
+    assert!(!frame.handled);
+    assert_eq!(frame.panel, Panel::Normal);
 }
 
 #[test]
