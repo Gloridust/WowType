@@ -21,7 +21,7 @@ thread_local! {
         RefCell::new(CString::new("no error").expect("static error string"));
 }
 
-fn set_last_error(message: impl Into<String>) {
+pub(crate) fn set_last_error(message: impl Into<String>) {
     let text = message.into().replace('\0', " ");
     let value = CString::new(text)
         .unwrap_or_else(|_| CString::new("unknown error").expect("static error string"));
@@ -1073,7 +1073,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 2;
+pub const ABI_VERSION_MINOR: c_int = 3;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1130,7 +1130,7 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1002);
+        assert_eq!(wowtype_abi_version(), 1003);
     }
 }
 
