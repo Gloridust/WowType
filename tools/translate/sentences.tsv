@@ -1,0 +1,41 @@
+# 方向<TAB>原文。zh = 中译英，en = 英译中。用来人工检查本地翻译模型（issue #53 验收：每个方向 ≥ 17/20）。
+zh	今天天气不错，我们下午三点开会。
+zh	这个功能什么时候能上线？
+zh	虽然项目进度落后了两周，但我们还是有信心在月底前交付。
+zh	入乡随俗。
+zh	请把这段代码里的死循环改掉。
+zh	微信输入法的翻译是在云端做的。
+zh	这个 PR 明天 merge。
+zh	这个版本在老设备上会闪退。
+zh	画蛇添足。
+zh	我刚把 Docker 镜像推到仓库了，你拉一下试试。
+zh	明天早上八点在公司楼下的咖啡店见。
+zh	这家餐厅的菜又便宜又好吃，就是要排很久的队。
+zh	内存泄漏导致服务每隔几个小时就要重启一次。
+zh	你周末有空吗？一起去爬山吧。
+zh	三天打鱼，两天晒网，怎么可能学好英语。
+zh	麻烦帮我把这份文件转成 PDF 再发给我。
+zh	他说话总是拐弯抹角的，让人摸不着头脑。
+zh	这次 bug 是因为缓存没有及时失效。
+zh	谢谢你的耐心，有问题随时联系我。
+zh	我们的输入法完全在本地运行，不会上传你打的字。
+en	It's on the house.
+en	Could you send me the slides before the meeting?
+en	The build is failing because of a missing dependency.
+en	Break a leg tonight!
+en	I'll circle back with you after lunch.
+en	This feature is still behind a flag.
+en	Let's grab a coffee sometime next week.
+en	The server crashed again last night, so I rolled back the deploy.
+en	Better late than never.
+en	Please don't hesitate to reach out if you have any questions.
+en	We need to refactor this module before adding new features.
+en	The weather is supposed to clear up by the weekend.
+en	He's been under the weather all week.
+en	Can you double-check the numbers in the spreadsheet?
+en	The meeting has been pushed to Thursday afternoon.
+en	I couldn't agree more.
+en	This app drains my battery like crazy.
+en	Make sure to back up your data before upgrading.
+en	The early bird catches the worm.
+en	Thanks for covering for me yesterday.

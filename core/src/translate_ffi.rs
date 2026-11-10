@@ -6,7 +6,7 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::ffi::{CStr, CString};
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_uint};
 use std::path::PathBuf;
 
 use crate::translate::{direction_tag, JobState, TranslateConfig, Translator};
@@ -78,6 +78,8 @@ pub unsafe extern "C" fn wowtype_translate_configure(
     };
     let key_file = unsafe { arg(key_file) };
     let target = unsafe { arg(target) };
+    // 本地模型的设置单独由 wowtype_translate_configure_local 改，这里保留
+    let local = handle.translator.config().local;
     handle.translator.configure(TranslateConfig {
         base_url: unsafe { arg(base_url) },
         model: unsafe { arg(model) },
@@ -88,7 +90,53 @@ pub unsafe extern "C" fn wowtype_translate_configure(
         },
         formal: formal != 0,
         key_file: (!key_file.is_empty()).then(|| PathBuf::from(key_file)),
+        local,
     });
+}
+
+/// 用本地模型翻译（ABI 1.1 起）：model 是 GGUF 文件；server 是 llama-server 的路径或名字
+/// （NULL/空串表示在 PATH 里找 llama-server）；闲置 idle_secs 秒后停掉（0 表示不停）。
+/// model 为 NULL/空串时改回用 wowtype_translate_configure 配的接口，并马上停掉本地服务。
+/// llama-server 第一次翻译时才启动，只监听 127.0.0.1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_translate_configure_local(
+    handle: *mut WowtypeTranslator,
+    model: *const c_char,
+    server: *const c_char,
+    idle_secs: c_uint,
+) {
+    let Some(handle) = (unsafe { handle.as_mut() }) else {
+        return;
+    };
+    let model = unsafe { arg(model) };
+    let mut config = handle.translator.config();
+    config.local = (!model.trim().is_empty()).then(|| crate::llama::LocalConfig {
+        model: crate::llama::expand_home(model.trim()),
+        server: {
+            let server = unsafe { arg(server) };
+            let server = server.trim();
+            if server.starts_with("~/") {
+                crate::llama::expand_home(server)
+                    .to_string_lossy()
+                    .into_owned()
+            } else {
+                server.to_string()
+            }
+        },
+        idle_secs: u64::from(idle_secs),
+    });
+    handle.translator.configure(config);
+}
+
+/// 本地模型的 llama-server 现在在跑时返回 1（ABI 1.1 起）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_translate_local_running(
+    handle: *const WowtypeTranslator,
+) -> c_int {
+    match unsafe { handle.as_ref() } {
+        Some(handle) => c_int::from(handle.translator.local_running()),
+        None => 0,
+    }
 }
 
 /// 填了地址和模型时返回 1。

@@ -56,6 +56,22 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 - 打字时要等它翻译，挑又小又快的模型（各家的 mini、flash、turbo 版）；推理模型会慢很多。
   设置里的「测试连接」会显示一次要多久。
 
+### 本地模型（离线）
+
+不想把字发出去，可以在「翻译」页打开「用本地模型翻译」，用腾讯混元的翻译模型
+[HY-MT 1.5 1.8B](https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF)（Q4_K_M，1.13 GB）在本机翻：
+
+- 要先装 llama.cpp 的 `llama-server`：Debian / Ubuntu `sudo apt install llama.cpp`，Arch `llama.cpp` 包，
+  或者从 [llama.cpp 的发布页](https://github.com/ggml-org/llama.cpp/releases)下载，在设置里填路径。
+- 模型点「下载」获取，放在 `~/.local/share/wowtype/models/`，下载完校验 SHA256，断了再点会接着下。
+  命令行也行：`wowtype-config --download-model`（加 `--accept-license` 跳过确认）。
+- 第一次翻译时才启动 `llama-server`（只监听 127.0.0.1 的随机端口，载入要几秒），
+  闲置 `TranslateIdleMinutes` 分钟（默认 5）后停掉，内存还回去；关掉互译或退出 fcitx5 时也停。
+  翻译时 llama-server 占 1.5 GB 左右内存，一句话 1–3 秒。
+- **许可**：模型用的是腾讯混元社区许可协议（Tencent HY Community License），不是开源协议。
+  它**不适用于欧盟、英国和韩国**；月活超过 1 亿的产品要另找腾讯授权。WowType 不分发这个模型，
+  是你自己从 Hugging Face 下载，下载前设置界面会让你确认。[协议全文](https://huggingface.co/tencent/HY-MT1.5-1.8B/blob/main/License.txt)
+
 ## 配置文件和环境变量
 
 设置存在 `~/.config/fcitx5/conf/wowtype.conf`，设置界面和 Fcitx 5 配置改的都是这个文件：
@@ -90,6 +106,10 @@ TranslateTarget=en
 TranslateBaseUrl=
 TranslateModel=
 TranslateFormal=False
+TranslateLocal=False
+TranslateLocalModel=
+TranslateLlamaServer=
+TranslateIdleMinutes=5
 CheckUpdate=True
 ```
 
@@ -97,7 +117,7 @@ CheckUpdate=True
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Voice`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Voice`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateLocal`、`CheckUpdate` | `True` / `False` |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
@@ -106,6 +126,9 @@ CheckUpdate=True
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键 |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
 | `TranslateBaseUrl`、`TranslateModel` | 翻译服务（OpenAI 格式）的地址和模型，见[互译](#互译) |
+| `TranslateLocalModel` | 本地模型文件，留空用 `~/.local/share/wowtype/models/HY-MT1.5-1.8B-Q4_K_M.gguf`，见[本地模型](#本地模型离线) |
+| `TranslateLlamaServer` | `llama-server` 的路径，留空在 `PATH` 里找 |
+| `TranslateIdleMinutes` | 本地模型闲置几分钟后释放，0–240，0 表示不自动释放 |
 
 文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
 

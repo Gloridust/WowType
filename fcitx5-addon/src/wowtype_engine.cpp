@@ -671,6 +671,18 @@ void WowtypeEngine::applyConfig() {
         wowtype_translate_configure(translator_, translateUrl.c_str(), translateModel.c_str(),
                                     translateTarget.c_str(), *config_.translateFormal ? 1 : 0,
                                     translateKeyFile().c_str());
+        std::string localModel;
+        if (*config_.translateLocal) {
+            localModel = *config_.translateLocalModel;
+            if (localModel.empty()) {
+                localModel = userDataDir() + "/models/HY-MT1.5-1.8B-Q4_K_M.gguf";
+            }
+            translateModel = "本地 HY-MT";
+        }
+        // 没选本地模型时传空串：不起进程、不占端口（已经起了的马上停掉）
+        wowtype_translate_configure_local(
+            translator_, localModel.c_str(), (*config_.translateLlamaServer).c_str(),
+            static_cast<unsigned>(*config_.translateIdleMinutes) * 60u);
     }
     if (translateMode_ && !translateAvailable()) {
         translateMode_ = false;
