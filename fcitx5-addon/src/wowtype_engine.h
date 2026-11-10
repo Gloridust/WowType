@@ -314,10 +314,6 @@ private:
     int selectKeyIndex(fcitx::KeySym sym) const;
     /// V 模式计算器：编辑区是 v + 算式（或刚打了 v）。
     bool calcActive(WowtypeState *state) const;
-    /// 打 riqi / shijian 等时，把当前日期时间插到首选后面。
-    void addDateTimeCandidates(WowtypeState *state, const std::string &input);
-    /// 上屏不学习的候选（日期时间、计算结果、自定义编码等）。
-    void commitPlainCandidate(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
@@ -338,21 +334,25 @@ private:
     /// 面板开着时的按键，处理了返回 true。
     bool handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
                              const fcitx::Key &key);
-    /// 首选候选对得上 emoji 时，插到候选列表里。
-    void addEmojiSuggestions(WowtypeState *state, const std::string &input);
-    void addKeycapSuggestion(WowtypeState *state, const std::string &input);
     /// 上屏选中的 emoji 候选（打字推荐的或面板里的）。
     void commitEmoji(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
     void rememberEmoji(const std::string &emoji);
     std::string recentEmojiPath() const;
+    /// 把引擎、上文、设置同步给会话（引擎是后台载入的，设置可能刚改过）。
+    void syncSession(WowtypeState *state);
+    /// 同步后交给会话处理一个按下的键，会话处理了返回 true。
+    bool sessionKey(WowtypeState *state, const fcitx::Key &key);
+    /// 候选由会话算，外壳抄一份（选词还在外壳）。
     void refreshCandidates(WowtypeState *state);
     /// 展开的候选面板（下键展开）：处理了这个键返回 true。
     bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
-    std::string segmentedRemaining(WowtypeState *state) const;
-    /// 上屏：已选的词 + tail 一起提交，记录选词、更新上下文，清空状态。
-    void commitAll(fcitx::InputContext *ic, WowtypeState *state,
-                   const std::string &tail, const std::string &tailPinyin);
+    std::string segmentedRemaining(WowtypeState *state);
+    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；learned 时攒着存用户词库。
+    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
+                      bool learned);
+    /// 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。
+    void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
     void commitPlain(fcitx::InputContext *ic, const std::string &text);
     /// 选中光标所在的候选；没有候选时上屏原始输入。

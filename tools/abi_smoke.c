@@ -148,6 +148,92 @@ int main(int argc, char **argv) {
         check(p && strcmp(p, "，") == 0, "punct: comma -> ，");
     }
 
+    /* 输入会话（ABI 1.3）：字母进编辑区、退格、切换输入法时上屏。
+     * 不带引擎（词库还没载入好时就是这样）：编辑区是原始输入 */
+    {
+        WowtypeSession *s = wowtype_session_new(NULL, NULL);
+        check(s != NULL, "session_new");
+        const WowtypeFrame *f = NULL;
+        const char *keys = "nihaoma";
+        int letters_ok = 1;
+        for (const char *k = keys; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            f = wowtype_session_key(s, &key);
+            letters_ok = letters_ok && f && f->handled && f->size == sizeof(WowtypeFrame);
+            WowtypeKey up = key;
+            up.release = 1;
+            letters_ok = letters_ok && !wowtype_session_key(s, &up)->handled;
+        }
+        check(letters_ok, "session: letters handled, releases not, frame size matches header");
+        /* f 指向会话自己的 frame：上面的松开键已经覆盖了它，这里看的是松开后的编辑区 */
+        check(f && strcmp(f->preedit, "nihaoma") == 0 && f->commit == NULL, "session: preedit nihaoma");
+        f = wowtype_session_choose(s, 0);
+        check(f && !f->handled && f->commit == NULL, "session: choose without engine");
+        WowtypeKey bs = {sizeof(WowtypeKey), 0xff08, 0, 0, 0};
+        f = wowtype_session_key(s, &bs);
+        check(f && f->handled && strcmp(f->preedit, "nihaom") == 0, "session: backspace");
+        WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0};
+        check(!wowtype_session_key(s, &space)->handled, "session: space still the shell's");
+        f = wowtype_session_reset(s, 1);
+        check(f && f->commit && strcmp(f->commit, "nihaom") == 0 && f->preedit[0] == 0,
+              "session: reset commits raw input");
+        wowtype_session_free(s);
+    }
+
+    /* 输入会话带引擎（ABI 1.4）：候选列表和分音节 */
+    {
+        WowtypeSessionConfig config = {sizeof(WowtypeSessionConfig), 9, 1, 0, 0};
+        WowtypeSession *s = wowtype_session_new(NULL, &config);
+        for (const char *k = "nihaozhongguo"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        check(wowtype_session_candidate_total(s) == 0, "session: no engine, no candidates");
+        wowtype_session_set_engine(s, e);
+        wowtype_session_set_context(s, "");
+        const WowtypeFrame *f = wowtype_session_frame(s);
+        check(f && !f->handled && strcmp(f->preedit, "ni'hao'zhong'guo") == 0,
+              "session: preedit segmented");
+        check(wowtype_session_candidate_total(s) > 0, "session: candidates with engine");
+        WowtypeCandidateInfo info;
+        memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "你好中国") == 0 &&
+                  strcmp(info.pinyin, "ni hao zhong guo") == 0 && info.consumed == 13 &&
+                  info.kind == WOWTYPE_CAND_WORD && strcmp(info.commit, "你好中国") == 0 &&
+                  info.emoji[0] == 0 && info.size == sizeof info,
+              "session: candidate info");
+        check(wowtype_session_candidate_info(s, wowtype_session_candidate_total(s), &info) == -1,
+              "session: candidate info out of range");
+        /* ABI 1.5：选句首词进已选栈，剩下的接着选；选完整句上屏 */
+        size_t nihao = wowtype_session_candidate_total(s);
+        for (size_t i = 0; i < wowtype_session_candidate_total(s); ++i) {
+            if (wowtype_session_candidate_info(s, i, &info) == 0 && strcmp(info.text, "你好") == 0) {
+                nihao = i;
+                break;
+            }
+        }
+        check(nihao < wowtype_session_candidate_total(s) && info.consumed == 5, "session: 你好 candidate");
+        f = wowtype_session_choose(s, nihao);
+        check(f && f->handled && f->commit == NULL && strcmp(f->preedit, "你好zhong'guo") == 0,
+              "session: choose sentence-start word");
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "中国") == 0 &&
+                  info.consumed == 8,
+              "session: candidates follow selection");
+        f = wowtype_session_choose(s, 0);
+        check(f && f->handled && f->commit && strcmp(f->commit, "你好中国") == 0 && f->preedit[0] == 0,
+              "session: choose commits whole sentence");
+        for (const char *k = "nihaozh"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        f = wowtype_session_commit_input(s);
+        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0, "session: commit_input raw letters");
+        wowtype_session_set_engine(s, NULL);
+        check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
+        wowtype_session_free(s);
+    }
+
     if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {
         fprintf(stderr, "ABI 主版本不一致：库 %d，头文件 %d\n", wowtype_abi_version(),
                 WOWTYPE_ABI_VERSION_MAJOR);

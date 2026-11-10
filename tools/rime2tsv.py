@@ -4,6 +4,7 @@
 用法：
     python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
     python3 tools/rime2tsv.py --min-weight 0 rime_ice.dict.yaml > lexicon.tsv
+    python3 tools/rime2tsv.py --extra-chars cn_dicts/41448.dict.yaml rime_ice.dict.yaml > lexicon.tsv
 
 输出格式（core/src/lexicon.rs 读取）：
     拼音<TAB>词<TAB>频次
@@ -11,6 +12,9 @@
 
 会顺着 import_tables 递归合并被引用的词库——rime-ice 的主词库本身几乎不含词条，
 条目都在 rime_ice.base / rime_ice.8105 等被引用的文件里，不处理 import 会漏掉大部分。
+
+--extra-chars 补一张大字表（rime-ice 的 cn_dicts/41448，默认没引入）：只加词库里还没有的
+单字读音，频次记 0.7~0.9（小于 1）：引擎不拿它们组句，只排在翻页的最后。输入法翻到最后时字要列全。
 """
 
 import argparse
@@ -161,28 +165,59 @@ def load_entries(path, seen, use_imports=True, skip=()):
     return merged
 
 
-def convert(path, min_weight, out, use_imports=True, skip=(), scale_total=0.0):
+def rare_char_freq(text):
+    """大字表补进来的字的频次：都小于 1（引擎据此把它们只放在翻页的长尾，不参与组句），
+    常用字区（基本区、兼容区）0.9 > 扩展 A 区 0.8 > 其余（扩展 B 区以后，很多字体显示不了）0.7。"""
+    cp = ord(text)
+    if 0x4E00 <= cp <= 0x9FFF or 0xF900 <= cp <= 0xFAFF:
+        return 0.9
+    if 0x3400 <= cp <= 0x4DBF:
+        return 0.8
+    return 0.7
+
+
+def add_extra_chars(entries, path):
+    """把大字表里还没有的单字读音补进 entries（频次见 rare_char_freq），返回补了几条。"""
+    added = 0
+    for (code, text), _ in load_entries(path, set(), False).items():
+        if len(text) != 1 or " " in code:
+            continue
+        key = (code, text)
+        if key not in entries:
+            entries[key] = rare_char_freq(text)
+            added += 1
+    return added
+
+
+def convert(path, min_weight, out, use_imports=True, skip=(), scale_total=0.0, extra_chars=()):
     entries = load_entries(path, set(), use_imports, skip)
+    if scale_total > 0:
+        # 核心里有几个按绝对词频定的值（自定义词 500 万、热词 3 万、精确匹配保护 1000），
+        # 是照雾凇的词频定的；别的词库先整体缩放到同样的总词频，这些值才是一个意思。
+        # 在补大字表之前缩放：大字表的频次要保持小于 1
+        total = sum(entries.values())
+        if total > 0:
+            factor = scale_total / total
+            entries = {key: max(1.0, weight * factor) for key, weight in entries.items()}
+            print("词频整体乘 %.4f（总词频 %.0f -> %.0f）" % (factor, total, scale_total),
+                  file=sys.stderr)
+    for extra in extra_chars:
+        added = add_extra_chars(entries, extra)
+        print("大字表 %s：补 %d 个单字读音" % (extra, added), file=sys.stderr)
     items = [
         (key, weight)
         for key, weight in entries.items()
         if weight >= min_weight
     ]
-    if scale_total > 0:
-        # 核心里有几个按绝对词频定的值（自定义词 500 万、热词 3 万、精确匹配保护 1000），
-        # 是照雾凇的词频定的；别的词库先整体缩放到同样的总词频，这些值才是一个意思
-        total = sum(weight for _key, weight in items)
-        if total > 0:
-            factor = scale_total / total
-            items = [(key, max(1.0, weight * factor)) for key, weight in items]
-            print("词频整体乘 %.4f（总词频 %.0f -> %.0f）" % (factor, total, scale_total),
-                  file=sys.stderr)
     items.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
 
     out.write("# 由 tools/rime2tsv.py 生成，来源：%s\n" % path)
     out.write("# 拼音<TAB>词<TAB>频次\n")
     for (code, text), weight in items:
-        out.write("%s\t%s\t%d\n" % (code, text, int(round(weight))))
+        if weight < 1:
+            out.write("%s\t%s\t%.1f\n" % (code, text, weight))
+        else:
+            out.write("%s\t%s\t%d\n" % (code, text, int(round(weight))))
 
     print(
         "合并 %d 条（import=%s）" % (len(items), "on" if use_imports else "off"),
@@ -262,7 +297,25 @@ def selftest():
         assert not any("秘鲁" in l for l in scaled), scaled
         assert "de\t的\t240000" in scaled, scaled
         assert "ni hao\t你好\t200000" in scaled, scaled
-        print("selftest ok: %d 条（含 import、带声调、跳过、缩放）" % len(lines))
+
+        big = os.path.join(tmp, "big.dict.yaml")
+        with open(big, "w", encoding="utf-8") as f:
+            f.write("---\nname: big\n...\n的\tde\n是\tshi\n㕈\thou\n後\thou\n𠯜\thou\n你好\tni hao\n")
+        buf = io.StringIO()
+        convert(main, 0, buf, extra_chars=[big])
+        lines2 = [l for l in buf.getvalue().splitlines() if not l.startswith("#")]
+        assert "de\t的\t120000" in lines2, "已有的字不改频次"
+        assert "hou\t㕈\t0.8" in lines2, lines2
+        assert "hou\t後\t0.9" in lines2, lines2
+        assert "hou\t𠯜\t0.7" in lines2, lines2
+        assert len(lines2) == len(lines) + 3, "只补缺的单字"
+
+        buf = io.StringIO()
+        convert(main, 0, buf, skip=("sample_skipped",), scale_total=2 * 293800, extra_chars=[big])
+        lines3 = [l for l in buf.getvalue().splitlines() if not l.startswith("#")]
+        assert "de\t的\t240000" in lines3, lines3
+        assert "hou\t㕈\t0.8" in lines3, "缩放不动大字表的频次"
+        print("selftest ok: %d 条（含 import、带声调、跳过、缩放、大字表）" % len(lines))
 
 
 def main():
@@ -274,6 +327,12 @@ def main():
                     help="不合并这个被引用词库（import_tables 里的名字），可以写多次")
     ap.add_argument("--scale-total", type=float, default=0.0, metavar="N",
                     help="把词频整体缩放到总和为 N（0 不缩放）")
+    ap.add_argument(
+        "--extra-chars",
+        action="append",
+        default=[],
+        help="补一张大字表（只加缺的单字读音，频次小于 1），可以给多次",
+    )
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -283,7 +342,7 @@ def main():
     if not args.path:
         ap.error("需要 rime .dict.yaml 路径")
     convert(args.path, args.min_weight, sys.stdout, not args.no_import,
-            tuple(args.skip_import), args.scale_total)
+            tuple(args.skip_import), args.scale_total, args.extra_chars)
 
 
 if __name__ == "__main__":
