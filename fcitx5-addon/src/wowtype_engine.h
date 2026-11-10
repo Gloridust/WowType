@@ -46,6 +46,37 @@ struct WowtypeLayoutAnnotation {
     }
 };
 
+enum class WowtypeShuangpinScheme { Ziranma, Xiaohe, Microsoft, Sogou, ABC, Ziguang, PinyinJiajia };
+FCITX_CONFIG_ENUM_NAME(WowtypeShuangpinScheme, "Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC",
+                       "Ziguang", "PinyinJiajia");
+
+struct WowtypeShuangpinAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        const char *names[] = {"自然码", "小鹤双拼", "微软双拼", "搜狗双拼",
+                               "智能 ABC", "紫光双拼", "拼音加加"};
+        for (int i = 0; i < 7; ++i) {
+            config.setValueByPath("EnumI18n/" + std::to_string(i), names[i]);
+        }
+    }
+};
+
+/// 单按哪个 Shift 切换中英文。
+enum class WowtypeShiftToggle { Both, Left, Right, Off };
+FCITX_CONFIG_ENUM_NAME(WowtypeShiftToggle, "Both", "Left", "Right", "Off");
+
+struct WowtypeShiftAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "左右 Shift 都行");
+        config.setValueByPath("EnumI18n/1", "左 Shift");
+        config.setValueByPath("EnumI18n/2", "右 Shift");
+        config.setValueByPath("EnumI18n/3", "不用 Shift 切换");
+    }
+};
+
 /// ~/.config/fcitx5/conf/wowtype.conf。fcitx5 配置工具和 wowtype-config 都改这个文件；
 /// 同名环境变量（WOWTYPE_FUZZY 等）设了的话优先，方便测试。
 FCITX_CONFIGURATION(
@@ -58,7 +89,13 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> fuzzy{this, "Fuzzy",
                               "模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）", false};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
-    fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼（自然码）", false};
+    fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
+    fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
+                  fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
+        shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
+    fcitx::Option<WowtypeShiftToggle, fcitx::NoConstrain<WowtypeShiftToggle>,
+                  fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
+        shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
     fcitx::Option<bool> traditional{this, "Traditional", "输出繁体字", false};
     fcitx::Option<bool> voice{this, "Voice", "语音输入", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> voiceKey{
@@ -85,6 +122,11 @@ public:
                     fcitx::InputContextEvent &event) override;
     void reset(const fcitx::InputMethodEntry &entry,
                fcitx::InputContextEvent &event) override;
+    /// 英文模式时状态栏、切换提示里显示「英」。
+    std::string subMode(const fcitx::InputMethodEntry &entry,
+                        fcitx::InputContext &ic) override;
+    std::string subModeLabelImpl(const fcitx::InputMethodEntry &entry,
+                                 fcitx::InputContext &ic) override;
 
     const fcitx::Configuration *getConfig() const override { return &config_; }
     void setConfig(const fcitx::RawConfig &config) override;
@@ -112,6 +154,12 @@ private:
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
+    /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
+    bool handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
+                           fcitx::KeyEvent &event);
+    void toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// 双拼方案用分号当键（微软、搜狗、紫光的 ing），且现在正等第二个键。
+    bool semicolonIsKey(WowtypeState *state) const;
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
@@ -177,6 +225,15 @@ private:
     bool fuzzy_ = false;
     bool typo_ = true;
     bool shuangpin_ = false;
+    /// 配置文件里的双拼方案名（传给核心）。
+    std::string shuangpinScheme_ = "Ziranma";
+    bool shuangpinSemicolon_ = false;
+    WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
+    /// 英文模式：按键原样交给应用（中英文切换全局生效，切到别的窗口也保持）。
+    bool asciiMode_ = false;
+    /// 按下还没松开的 Shift（单按才切换，中间按了别的键就作废）和按下的时刻。
+    fcitx::KeySym shiftDown_ = FcitxKey_None;
+    uint64_t shiftDownAt_ = 0;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
     bool emojiSuggest_ = true;

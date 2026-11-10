@@ -223,7 +223,9 @@ GNOME 的绿色候选框扩展在包的 `share/gnome-shell/extensions/` 里，Ni
 | `WOWTYPE_S2T` | 简繁表 | `/usr/share/wowtype/s2t.tsv` |
 | `WOWTYPE_USER_DICT` | 用户词库 | `$XDG_DATA_HOME/wowtype/user.tsv` |
 | `WOWTYPE_FUZZY=1` | 模糊音 | 关 |
-| `WOWTYPE_SHUANGPIN=1` | 双拼（自然码） | 关 |
+| `WOWTYPE_SHUANGPIN=1` | 双拼 | 关 |
+| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`ziranma`、`xiaohe`、`microsoft`、`sogou`、`abc`、`ziguang`、`pinyinjiajia`），设了就打开双拼 | `ziranma` |
+| `WOWTYPE_SHIFT_TOGGLE` | 单按哪个 Shift 切英文：`both`、`left`、`right`、`off` | `both` |
 | `WOWTYPE_TRADITIONAL=1` | 繁体输出 | 关 |
 | `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
 | `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |

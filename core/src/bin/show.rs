@@ -58,7 +58,8 @@ fn main() {
         ..EngineConfig::default()
     };
     let lm: Arc<dyn wowtype_core::lm::LanguageModel> = if !lm_path.is_empty() {
-        wowtype_core::lm::load_lm(&lm_path).unwrap_or_else(|e| fail(&format!("语言模型载入失败: {e:#}")))
+        wowtype_core::lm::load_lm(&lm_path)
+            .unwrap_or_else(|e| fail(&format!("语言模型载入失败: {e:#}")))
     } else {
         Arc::new(BigramLm::default())
     };

@@ -19,6 +19,8 @@
 #include <fcitx/inputmethodentry.h>
 #include <fcitx/inputmethodmanager.h>
 #include <fcitx/event.h>
+#include <fcitx/globalconfig.h>
+#include <fcitx-config/rawconfig.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
@@ -512,6 +514,82 @@ void runCases(Instance &instance) {
     check(panelList && panelList->layoutHint() == CandidateLayoutHint::Horizontal &&
               page(ic.get()).size() == 9 && page(ic.get())[0] == "你好",
           "恢复默认：横排、9 个、你好第一：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
+    const auto tapShift = [&](KeySym sym) {
+        KeyEvent press(ic.get(), Key(sym), false);
+        ic->keyEvent(press);
+        KeyEvent release(ic.get(), Key(sym, KeyState::Shift), true);
+        return ic->keyEvent(release);
+    };
+    check(tapShift(FcitxKey_Shift_R), "单按右 Shift 被接住");
+    type(ic.get(), "nihao,");
+    check(ic->committed.empty() && ic->passed == "nihao," && preedit(ic.get()).empty(),
+          "英文模式字母、标点原样交给应用，实际 passed=" + ic->passed);
+    tapShift(FcitxKey_Shift_R);
+    fresh(ic.get());
+    type(ic.get(), "nihao<sp>");
+    check(ic->committed == "你好", "再按一次回到中文：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "nih");
+    tapShift(FcitxKey_Shift_R);
+    check(ic->committed == "nih" && preedit(ic.get()).empty(), "打到一半切英文，字母原样上屏：" + ic->committed);
+    tapShift(FcitxKey_Shift_R);
+    fresh(ic.get());
+    {
+        // Shift 按着打了别的键（大写字母）就不算单按
+        KeyEvent press(ic.get(), Key(FcitxKey_Shift_R), false);
+        ic->keyEvent(press);
+        send(ic.get(), Key(FcitxKey_A, KeyState::Shift));
+        KeyEvent release(ic.get(), Key(FcitxKey_Shift_R, KeyState::Shift), true);
+        check(!ic->keyEvent(release), "Shift+字母后松开 Shift 不切换");
+        type(ic.get(), "<esc>nihao<sp>");
+        check(ic->committed == "你好", "仍是中文：" + ic->committed);
+    }
+    fresh(ic.get());
+
+    // fcitx5 全局翻页热键（#27）：设成 , . 后打字途中按它们翻页，不上屏标点
+    {
+        RawConfig raw;
+        raw.setValueByPath("Hotkey/PrevPage/0", "comma");
+        raw.setValueByPath("Hotkey/NextPage/0", "period");
+        instance.globalConfig().load(raw, true);
+    }
+    type(ic.get(), "shi");
+    const auto shiPage = page(ic.get());
+    type(ic.get(), ".");
+    check(ic->committed.empty() && page(ic.get()) != shiPage, "全局翻页键 . 翻到下一页");
+    type(ic.get(), ",");
+    check(ic->committed.empty() && page(ic.get()) == shiPage, "全局翻页键 , 翻回上一页");
+    type(ic.get(), ",");
+    check(ic->committed.empty(), "第一页再按 , 也不上屏标点");
+    {
+        RawConfig raw;
+        raw.setValueByPath("Hotkey/PrevPage/0", "Up");
+        raw.setValueByPath("Hotkey/NextPage/0", "Down");
+        instance.globalConfig().load(raw, true);
+    }
+    fresh(ic.get());
+
+    // 双拼方案：微软双拼（分号是 ing）
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "Shuangpin=True\nShuangpinScheme=Microsoft\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "vsgo");
+    check(preedit(ic.get()).find("zhong") != std::string::npos, "双拼编辑区显示全拼：" + preedit(ic.get()));
+    type(ic.get(), "<sp>");
+    check(ic->committed == "中国", "微软双拼 vsgo -> 中国：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "x;");
+    check(preedit(ic.get()).find("xing") != std::string::npos && ic->committed.empty(),
+          "微软双拼分号当 ing：x; -> " + preedit(ic.get()));
+    fresh(ic.get());
+    type(ic.get(), "ni;");
+    check(ic->committed.find("；") != std::string::npos, "成对之后的分号还是标点：" + ic->committed);
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
     fresh(ic.get());
 
     ic.reset();

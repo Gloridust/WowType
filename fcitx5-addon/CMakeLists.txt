@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(wowtype-fcitx5 VERSION 0.3.6 LANGUAGES CXX)
+project(wowtype-fcitx5 VERSION 0.3.7 LANGUAGES CXX)
 
 # fcitx5 5.1 的头文件用到了 std::span、std::source_location
 set(CMAKE_CXX_STANDARD 20)
@@ -38,6 +38,10 @@ endif()
 add_library(wowtype MODULE
     src/wowtype_engine.cpp
 )
+# fcitx5 5.1.11 起才有 showCustomInputMethodInformation（切中英文时的小提示）
+if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL 5.1.11)
+    target_compile_definitions(wowtype PRIVATE WOWTYPE_HAVE_CUSTOM_IM_INFO=1)
+endif()
 
 target_include_directories(wowtype PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../core/include"

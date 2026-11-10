@@ -207,8 +207,9 @@ fn main() {
         );
     }
 
-    match wowtype_core::shuangpin::encode("zhong") {
-        Some([a, b]) => report.ok("双拼", &format!("zhong -> {}{}", a as char, b as char)),
+    match wowtype_core::shuangpin::encode(wowtype_core::shuangpin::Scheme::Ziranma, "zhong").first()
+    {
+        Some([a, b]) => report.ok("双拼", &format!("zhong -> {}{}", *a as char, *b as char)),
         None => report.fail("双拼", "zhong 无法编码"),
     }
 

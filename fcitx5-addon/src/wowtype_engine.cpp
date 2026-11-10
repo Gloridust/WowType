@@ -473,6 +473,24 @@ void WowtypeEngine::applyConfig() {
     fuzzy_ = envOr("WOWTYPE_FUZZY", *config_.fuzzy);
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
+    shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
+    if (const char *env = std::getenv("WOWTYPE_SHUANGPIN_SCHEME"); env && *env) {
+        // 环境变量设了方案就当作打开双拼（方便测试）
+        shuangpinScheme_ = env;
+        shuangpin_ = true;
+    }
+    shuangpinSemicolon_ = wowtype_shuangpin_uses_semicolon(shuangpinScheme_.c_str()) == 1;
+    shiftToggle_ = *config_.shiftToggle;
+    if (const char *env = std::getenv("WOWTYPE_SHIFT_TOGGLE"); env && *env) {
+        const std::string name = env;
+        shiftToggle_ = name == "left"    ? WowtypeShiftToggle::Left
+                       : name == "right" ? WowtypeShiftToggle::Right
+                       : name == "off" || name == "0" ? WowtypeShiftToggle::Off
+                                                      : WowtypeShiftToggle::Both;
+    }
+    if (shiftToggle_ == WowtypeShiftToggle::Off) {
+        asciiMode_ = false;
+    }
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
     emojiKey_ = *config_.emojiKey;
@@ -501,6 +519,7 @@ void WowtypeEngine::applyConfig() {
     }
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
              << " 模糊音=" << fuzzy_ << " 纠错=" << typo_ << " 双拼=" << shuangpin_
+             << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
              << " 检查更新=" << *config_.checkUpdate;
@@ -515,6 +534,11 @@ void WowtypeEngine::applyCoreSettings() {
     wowtype_engine_set_max_candidates(core_, kMaxCandidates);
     wowtype_engine_set_fuzzy(core_, fuzzy_ ? 1 : 0);
     wowtype_engine_set_shuangpin(core_, shuangpin_ ? 1 : 0);
+    if (wowtype_engine_set_shuangpin_scheme(core_, shuangpinScheme_.c_str()) != 0) {
+        WLOG_W() << "WowType: 不认识双拼方案 " << shuangpinScheme_ << "，用自然码";
+        wowtype_engine_set_shuangpin_scheme(core_, "ziranma");
+        shuangpinSemicolon_ = false;
+    }
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
     if (traditional_ && !conversionLoaded_) {
         const std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
@@ -911,6 +935,14 @@ void WowtypeEngine::commitEmoji(fcitx::InputContext *ic, WowtypeState *state,
 /// 显示的还是用户打的字母；英文、双拼等切不了的原样显示。
 std::string WowtypeEngine::segmentedRemaining(WowtypeState *state) const {
     const std::string input = state->remaining();
+    if (shuangpin_ && core_) {
+        // 双拼显示成全拼（vsgo -> zhong'guo），和微信输入法一样
+        if (const char *shown = wowtype_engine_shuangpin_display(core_, input.c_str());
+            shown && *shown) {
+            return shown;
+        }
+        return input;
+    }
     for (const auto &candidate : state->candidates_) {
         if (candidate.consumed >= input.size()) {
             if (const char *shown =
@@ -1183,8 +1215,11 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 中英文切换交给 fcitx 自己的「临时切换输入法」热键（默认左 Shift），
-    // 切走时 deactivate 会把打了一半的字母原样上屏。
+    // 单按 Shift 切中英文（WowType 自己的英文模式）。fcitx 的「临时切换输入法」热键
+    // （默认左 Shift）生效时 fcitx 会先把 Shift 吃掉，这里就收不到，两者不会重复切换。
+    if (handleShiftToggle(ic, state, event)) {
+        return;
+    }
     if (event.isRelease()) {
         return;
     }
@@ -1202,6 +1237,11 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         if (handleEmojiPanelKey(ic, state, key)) {
             event.filterAndAccept();
         }
+        return;
+    }
+
+    // 英文模式：按键原样交给应用（字母、半角标点都直接上屏）
+    if (asciiMode_ && !state->composing()) {
         return;
     }
 
@@ -1259,6 +1299,52 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             }
             event.filterAndAccept();
             return;
+        }
+
+        // 微软、搜狗、紫光双拼用分号当 ing：等第二个键时分号进编辑区，不当标点
+        if (sym == FcitxKey_semicolon && semicolonIsKey(state)) {
+            state->buffer_.push_back(';');
+            refreshCandidates(state);
+            updateInputPanel(ic, state);
+            event.filterAndAccept();
+            return;
+        }
+
+        // fcitx5 全局设置里的翻页、移动候选热键（[Hotkey/PrevPage] 等，比如 , . 翻页）。
+        // 按了就算翻不动也吃掉，不让它变成标点把字上屏。方向键（fcitx 默认上下翻页）
+        // 照横排/竖排走下面自己的规则（横排下键展开候选面板）。
+        const bool arrow = sym == FcitxKey_Up || sym == FcitxKey_Down ||
+                           sym == FcitxKey_Left || sym == FcitxKey_Right;
+        if (auto list = ic->inputPanel().candidateList();
+            !arrow && list && list->size() > 0) {
+            const auto &global = instance_->globalConfig();
+            auto *pageable = list->toPageable();
+            auto *movable = list->toCursorMovable();
+            bool matched = true;
+            if (key.checkKeyList(global.defaultPrevPage())) {
+                if (pageable && pageable->hasPrev()) {
+                    pageable->prev();
+                }
+            } else if (key.checkKeyList(global.defaultNextPage())) {
+                if (pageable && pageable->hasNext()) {
+                    pageable->next();
+                }
+            } else if (key.checkKeyList(global.defaultPrevCandidate())) {
+                if (movable) {
+                    movable->prevCandidate();
+                }
+            } else if (key.checkKeyList(global.defaultNextCandidate())) {
+                if (movable) {
+                    movable->nextCandidate();
+                }
+            } else {
+                matched = false;
+            }
+            if (matched) {
+                event.filterAndAccept();
+                ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+                return;
+            }
         }
 
         // 候选翻页/移动。fcitx5 的 CandidateList 没有 keyEvent，
@@ -1424,6 +1510,84 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     ic->inputPanel().reset();
     ic->updatePreedit();
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
+                                   fcitx::InputContext & /*ic*/) {
+    return asciiMode_ ? "英文" : "";
+}
+
+std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
+                                            fcitx::InputContext & /*ic*/) {
+    return asciiMode_ ? "英" : "";
+}
+
+bool WowtypeEngine::semicolonIsKey(WowtypeState *state) const {
+    if (!shuangpin_ || !shuangpinSemicolon_ || !state->composing()) {
+        return false;
+    }
+    std::size_t keys = 0;
+    for (const char c : state->remaining()) {
+        if (c != '\'') {
+            ++keys;
+        }
+    }
+    return keys % 2 == 1;
+}
+
+/// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
+bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
+                                      fcitx::KeyEvent &event) {
+    const auto sym = event.key().sym();
+    const bool isShift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
+    const bool wanted =
+        isShift && (shiftToggle_ == WowtypeShiftToggle::Both ||
+                    (shiftToggle_ == WowtypeShiftToggle::Left && sym == FcitxKey_Shift_L) ||
+                    (shiftToggle_ == WowtypeShiftToggle::Right && sym == FcitxKey_Shift_R));
+    if (!event.isRelease()) {
+        const auto states = event.key().states();
+        const bool otherModifier = states.test(fcitx::KeyState::Ctrl) ||
+                                   states.test(fcitx::KeyState::Alt) ||
+                                   states.test(fcitx::KeyState::Super);
+        if (wanted && !otherModifier && !state->emojiPanel_) {
+            shiftDown_ = sym;
+            shiftDownAt_ = fcitx::now(CLOCK_MONOTONIC);
+        } else {
+            shiftDown_ = FcitxKey_None;
+        }
+        return false;
+    }
+    if (!wanted || sym != shiftDown_) {
+        if (!isShift) {
+            shiftDown_ = FcitxKey_None;
+        }
+        return false;
+    }
+    shiftDown_ = FcitxKey_None;
+    // 按住 Shift 超过 0.5 秒多半是想打大写或者犹豫了，不切
+    if (fcitx::now(CLOCK_MONOTONIC) - shiftDownAt_ > 500000) {
+        return false;
+    }
+    toggleAsciiMode(ic, state);
+    event.filterAndAccept();
+    return true;
+}
+
+void WowtypeEngine::toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state) {
+    asciiMode_ = !asciiMode_;
+    if (asciiMode_ && state->composing()) {
+        // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
+        commitAll(ic, state, state->remaining(), {});
+        state->clear();
+        updateInputPanel(ic, state);
+    }
+    WLOG_I() << "WowType: 切到" << (asciiMode_ ? "英文" : "中文");
+#ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
+    instance_->showCustomInputMethodInformation(ic, asciiMode_ ? "英" : "中");
+#else
+    instance_->showInputMethodInformation(ic);
+#endif
+    ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
 }
 
 bool WowtypeEngine::handleVoiceKey(fcitx::InputContext *ic, WowtypeState *state,
