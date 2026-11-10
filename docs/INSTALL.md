@@ -10,15 +10,15 @@ WowType 是 Fcitx 5 的输入法插件。安装时需要让插件、Fcitx 5 和�
 
 | 系统 | 方式 | 说明 |
 |---|---|---|
-| Arch Linux | 一键安装或本机 `makepkg` | 预编译包为 x86_64；依赖不满足时先 `sudo pacman -Syu` |
+| Arch Linux | 一键安装或本机 `makepkg` | 预编译包只有 x86_64；依赖不满足时先 `sudo pacman -Syu` |
 | EndeavourOS / Garuda / CachyOS | Arch 安装路径或本机打包 | 系统必须与所用 Arch 动态库兼容；加载失败时本机重编译 |
 | Manjaro | 本机 `makepkg` | 使用自己的软件源，脚本不会自动套用 Arch 包 |
-| Ubuntu 24.04 / 26.04 | 对应版本 deb | 不跨 Ubuntu 版本混装 |
-| Debian 13 / 13.x | Debian 13 deb | Ubuntu 22.04、Debian 12 默认依赖不满足本项目基线 |
+| Ubuntu 24.04 / 26.04 | 对应版本 deb | amd64、arm64；不跨 Ubuntu 版本混装 |
+| Debian 13 / 13.x | Debian 13 deb | amd64、arm64；Ubuntu 22.04、Debian 12 默认依赖不满足本项目基线 |
 | Mint / Pop!_OS 等衍生版 | 明确声明兼容基线时使用 deb | `noble → ubuntu24.04`、`resolute → ubuntu26.04`、`trixie → debian13` |
-| Fedora 43 / 44 / 45 | 对应 `.fc<版本>` RPM | 一键安装只匹配当前系统版本 |
+| Fedora 43 / 44 / 45 | 对应 `.fc<版本>` RPM | x86_64、aarch64；一键安装只匹配当前系统版本 |
 | openSUSE Tumbleweed | 本机源码安装 | 独立的 zypper 依赖和 Fcitx 插件路径 |
-| NixOS / Home Manager | flake | 与系统共用 nixpkgs，注册到 Fcitx 插件列表 |
+| NixOS / Home Manager | flake | x86_64、aarch64；与系统共用 nixpkgs，注册到 Fcitx 插件列表 |
 | Fedora Atomic | 宿主 `rpm-ostree` 分层 | 普通 dnf 安装脚本会给出手动说明 |
 
 [Releases](https://github.com/Gloridust/WowType/releases) 中存在对应资产后才能使用二进制安装。
@@ -34,7 +34,7 @@ openSUSE Leap、RHEL / Rocky / AlmaLinux 也需要先核对 Fcitx 5 和 libadwai
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 ```
 
-下载目标来自当前仓库，按系统选择 `.deb`、`.pkg.tar.zst` 或 `.rpm`，每个文件都校验 SHA256。
+下载目标来自当前仓库，按系统和 CPU 架构选择 `.deb`、`.pkg.tar.zst` 或 `.rpm`，每个文件都校验 SHA256。
 缺少匹配包、校验记录重复、哈希不符或下载失败时，脚本在安装前停止。
 Arch 不会替你升级整个系统；提示依赖不满足时，先运行 `sudo pacman -Syu` 再重新安装。
 
@@ -253,7 +253,7 @@ nix flake check github:Gloridust/WowType
 ```nix
 # flake.nix 的 inputs
 wowtype = {
-  url = "github:Gloridust/WowType";
+  url = "github:Gloridust/WowType/release";
   inputs.nixpkgs.follows = "nixpkgs";
 };
 
@@ -271,7 +271,26 @@ i18n.inputMethod = {
 插件作为系统 Fcitx 的 addon 注册；单独把包放进 Nix profile 不会自动完成插件注册。
 词库使用 `nix/package.nix` 中固定 URL 和哈希的上游数据资产。
 
+flake 输入选哪个：
+
+| 写法 | 拿到的是 |
+|---|---|
+| `github:Gloridust/WowType/release` | 最新正式版（推荐）；每次发版时 CI 把 `release` 分支移到新版本的标签 |
+| `github:Gloridust/WowType/v0.3.10` | 锁定这一版，升级时手动改版本号 |
+| `github:Gloridust/WowType` | main 分支最新提交，可能包含还没发布的改动 |
+
 更新时先在自己的 flake 中执行 `nix flake update wowtype`，再重建系统或 Home Manager 配置。
+CI 在 nixos-unstable（x86_64、aarch64）和当前稳定版 nixos-26.05（x86_64）上构建并自检，
+发布要等这些检查都通过。设置界面的更新提醒在 NixOS 上只提示新版本，不会去调用其他包管理器。
+
+### 维护：发版时的 Nix 相关步骤
+
+- `release` 分支由发布 job 自动更新。`GITHUB_TOKEN` 不能把分支移到改过 `.github/workflows` 的提交上，
+  两次发版之间改过 CI 时会失败并在 Actions 里留下提醒，此时在本机运行
+  `git push --force origin v<版本>^{commit}:refs/heads/release`。
+  想全自动，在仓库 Secrets 里加 `RELEASE_BRANCH_TOKEN`：细粒度 PAT，只给本仓库，权限 Contents 和 Workflows 读写。
+- 词库换了版本（rime-ice 更新，或 `scripts/make-data.sh` 的 REV 加一）时，新词库包要等发版后才有下载地址，
+  发布 job 会自动开一个 issue，写好 `nix/package.nix` 里 `dataVersion`、`url`、`hash` 要改成什么。
 
 ## Fedora Atomic
 

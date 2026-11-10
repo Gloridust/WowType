@@ -85,7 +85,7 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
 ### 系统要求
 
-- Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
+- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.1 或更新**。Arch 的安装包只有 x86_64
 - 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
@@ -133,17 +133,18 @@ im-config -n fcitx5
 ##### 方式一：安装包
 
 到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
-`wowtype_<版本>_<发行版>_amd64.deb`（`ubuntu24.04`、`ubuntu26.04`、`debian13`），词库已经包含在里面。
-不知道自己是哪个发行版：
+`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu24.04`、`ubuntu26.04`、`debian13`，架构是 `amd64` 或 `arm64`），词库已经包含在里面。
+不知道自己是哪个发行版、哪种架构：
 
 ```bash
 . /etc/os-release && echo "$ID$VERSION_ID"     # 例如 ubuntu24.04
+dpkg --print-architecture                      # amd64 或 arm64
 ```
 
 在下载目录里安装：
 
 ```bash
-sudo apt install ./wowtype_*_amd64.deb
+sudo apt install ./wowtype_*.deb
 ```
 
 `apt` 会顺带装上设置界面要用的 GTK 4 和 libadwaita（`python3-gi`、`gir1.2-gtk-4.0`、`gir1.2-adw-1`）。
@@ -153,7 +154,7 @@ sudo apt install ./wowtype_*_amd64.deb
 
 ###### Fedora
 
-到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.x86_64.rpm`（词库已经在包里），然后：
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.<架构>.rpm`（架构是 `x86_64` 或 `aarch64`，词库已经在包里），然后：
 
 ```bash
 sudo dnf install ./wowtype-*.rpm
@@ -170,8 +171,8 @@ wowtype-config --add-to-group      # 把 WowType 加进 fcitx5 的输入法列�
 ```nix
 # flake.nix
 inputs.wowtype = {
-  url = "github:Gloridust/WowType";
-  inputs.nixpkgs.follows = "nixpkgs";   # 和系统用同一份 fcitx5
+  url = "github:Gloridust/WowType/release";   # 跟正式版；想锁某一版写 github:Gloridust/WowType/v0.3.10
+  inputs.nixpkgs.follows = "nixpkgs";         # 和系统用同一份 fcitx5
 };
 
 # configuration.nix（通过 specialArgs 把 inputs 传进来）
@@ -185,6 +186,7 @@ i18n.inputMethod = {
 `nixos-rebuild switch` 后重新登录，运行 `wowtype-config --add-to-group`（或在 Fcitx 5 配置里添加 WowType）。
 也提供了 overlay：`nixpkgs.overlays = [ inputs.wowtype.overlays.default ];` 之后用 `pkgs.wowtype`。
 home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
+支持 x86_64 和 aarch64；升级：`nix flake update wowtype` 后再 `nixos-rebuild switch`。
 
 ##### 方式二：从源码构建
 

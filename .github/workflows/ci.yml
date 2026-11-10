@@ -76,6 +76,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: scripts/make-data.sh "" dist/data
+      - name: Nix 包的词库版本
+        # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
+        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会开 issue 写好要改的内容。
+        run: |
+          built=$(<dist/data/VERSION)
+          pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
+          if [ "$built" != "$pinned" ]; then
+            echo "::warning title=Nix 词库版本落后::这次构建的词库是 $built，nix/package.nix 还固定在 $pinned。发版后按自动开的 issue 更新。"
+          fi
       - run: scripts/package-deb.sh data dist/data dist/pkg
       - uses: actions/upload-artifact@v4
         with:
@@ -88,13 +97,15 @@ jobs:
           path: dist/pkg
 
   addon:
-    name: 插件 · ${{ matrix.distro }}
+    name: 插件 · ${{ matrix.distro }} · ${{ matrix.arch }}
     needs: data
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ${{ matrix.image }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [amd64, arm64]
+        distro: [ubuntu24.04, ubuntu26.04, debian13]
         include:
           - { distro: ubuntu24.04, image: "ubuntu:24.04" }
           - { distro: ubuntu26.04, image: "ubuntu:26.04" }
@@ -118,7 +129,7 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.distro }}
+          key: ${{ matrix.distro }}-${{ matrix.arch }}
       - uses: actions/download-artifact@v4
         with:
           name: data
@@ -158,7 +169,7 @@ jobs:
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
       - uses: actions/upload-artifact@v4
         with:
-          name: pkg-${{ matrix.distro }}
+          name: pkg-${{ matrix.distro }}-${{ matrix.arch }}
           path: dist/pkg
 
   arch:
@@ -232,14 +243,15 @@ jobs:
           if-no-files-found: error
 
   fedora:
-    name: 插件 · fedora${{ matrix.version }}
+    name: 插件 · fedora${{ matrix.version }} · ${{ matrix.arch }}
     needs: data
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: fedora:${{ matrix.version }}
     strategy:
       fail-fast: false
       matrix:
         version: [43, 44, 45]
+        arch: [x86_64, aarch64]
     defaults:
       run:
         shell: bash
@@ -304,7 +316,7 @@ jobs:
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
       - uses: actions/upload-artifact@v4
         with:
-          name: pkg-fedora${{ matrix.version }}
+          name: pkg-fedora${{ matrix.version }}-${{ matrix.arch }}
           path: dist/pkg/*.rpm
           if-no-files-found: error
 
@@ -351,23 +363,41 @@ jobs:
           wowtype-config --self-test
 
   nix:
-    name: Nix flake
-    runs-on: ubuntu-24.04
+    # flake.lock 固定的是 nixos-unstable；用户一般用 inputs.nixpkgs.follows 跟自己系统的 nixpkgs，
+    # 所以稳定版也要能编。新稳定版出来（每年 5 月、11 月）时把 nixos-26.05 换成新的。
+    name: Nix · ${{ matrix.nixpkgs }} · ${{ matrix.system }}
+    runs-on: ${{ matrix.system == 'aarch64-linux' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { nixpkgs: nixos-unstable, system: x86_64-linux }
+          - { nixpkgs: nixos-unstable, system: aarch64-linux }
+          - { nixpkgs: nixos-26.05, system: x86_64-linux }
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
       # 构建插件（词库按 flake 里固定的哈希从发布页下载），再跑 checks：
       # 自检工具用装好的词库打出「你好」、设置界面自测
-      - run: nix build .#default -L
-      - run: nix flake check -L
+      - name: 构建并检查
+        env:
+          NIXPKGS: ${{ matrix.nixpkgs }}
+        run: |
+          override=()
+          if [ "$NIXPKGS" != nixos-unstable ]; then
+            override=(--override-input nixpkgs "github:NixOS/nixpkgs/$NIXPKGS")
+          fi
+          nix build .#default -L "${override[@]}"
+          nix flake check -L "${override[@]}"
 
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [installer, core, data, addon, arch, fedora]
+    needs: [installer, core, data, addon, arch, fedora, nix]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -382,7 +412,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## 安装（Ubuntu / Debian、Arch Linux、Fedora）
+          ## 安装（Ubuntu / Debian、Arch Linux、Fedora、NixOS）
 
           一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：
 
@@ -390,11 +420,12 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
           \`\`\`
 
-          或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
+          或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_<架构>.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*.deb\`。
+          deb 和 Fedora RPM 有 x86_64（amd64）和 arm64（aarch64）两种，一键脚本按本机架构选；Arch 包只有 x86_64。
           Arch Linux / EndeavourOS / Garuda / CachyOS：一键脚本用 pacman 安装对应包，不替你整机升级；依赖装不上时按提示先运行 \`sudo pacman -Syu\`。
           Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 24.04 / 26.04 及明确声明兼容基线的衍生版使用对应 deb。
           Manjaro：按安装说明在本机用 makepkg 打包；openSUSE Tumbleweed：按安装说明从源码构建。
-          NixOS：用仓库里的 flake，把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md)。
+          NixOS（x86_64、aarch64）：flake 输入写 \`github:${GITHUB_REPOSITORY}/release\`（跟正式版）或 \`github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`（锁这一版），把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md#nixos--nix)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
@@ -404,3 +435,57 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "WowType $GITHUB_REF_NAME" \
             --notes-file notes.md --generate-notes
+      - name: 更新 release 分支（NixOS 用户跟这个分支拿正式版）
+        # GITHUB_TOKEN 不能把分支移到改过 .github/workflows 的提交上；两次发版之间改过 CI，就要
+        # RELEASE_BRANCH_TOKEN（细粒度 PAT：Contents、Workflows 读写）。没配置或失败只提醒，不算发版失败。
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BRANCH_TOKEN || github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" -q .tag_name)
+          if [ "$latest" != "$GITHUB_REF_NAME" ]; then
+            echo "$GITHUB_REF_NAME 不是最新版（最新是 $latest），release 分支不动"
+            exit 0
+          fi
+          sha=$(git rev-parse HEAD)
+          if gh api "repos/$GITHUB_REPOSITORY/git/refs/heads/release" > /dev/null 2>&1; then
+            ok=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/heads/release" -f sha="$sha" -F force=true -q .object.sha || true)
+          else
+            ok=$(gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/heads/release -f sha="$sha" -q .object.sha || true)
+          fi
+          if [ "$ok" != "$sha" ]; then
+            echo "::warning title=release 分支没更新::在本机运行 git push --force origin $GITHUB_REF_NAME^{commit}:refs/heads/release，或配置 RELEASE_BRANCH_TOKEN（见 docs/INSTALL.md）"
+            exit 1
+          fi
+          echo "release 分支 → $GITHUB_REF_NAME（$sha）"
+      - name: Nix 词库跟上这一版
+        # nix/package.nix 固定用某次发布页上的词库包；这一版换了词库，就开 issue 写好要改的三行
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tarball=$(cd dist && ls wowtype-data-rime-ice-*.tar.gz)
+          built=${tarball#wowtype-data-rime-ice-}
+          built=${built%.tar.gz}
+          pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
+          if [ "$built" = "$pinned" ]; then
+            echo "Nix 包的词库已经是 $built"
+            exit 0
+          fi
+          hex=$(sha256sum "dist/$tarball" | cut -d' ' -f1)
+          sri=$(python3 -c 'import base64, sys; print("sha256-" + base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' "$hex")
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$tarball"
+          cat > issue.md <<EOF
+          $GITHUB_REF_NAME 的词库是 \`$built\`，nix/package.nix 还固定在 \`$pinned\`，NixOS 用户拿到的是旧词库。
+
+          把 nix/package.nix 里这三处改成：
+
+          \`\`\`nix
+          dataVersion = "$built";
+          url = "$url";
+          hash = "$sri";
+          \`\`\`
+
+          合进 main 后，跟 release 分支的 NixOS 用户在下一次发版时拿到新词库。
+          EOF
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "Nix 包的词库更新到 $built" --body-file issue.md
