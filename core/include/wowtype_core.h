@@ -15,7 +15,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 1
+#define WOWTYPE_ABI_VERSION_MINOR 2
 
 #ifdef __cplusplus
 extern "C" {
