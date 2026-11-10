@@ -18,15 +18,15 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 不会出现"打到一半没有候选"。
 
 支持**模糊音**（默认关闭）：`--fuzzy`（插件里在设置界面打开，或 `WOWTYPE_FUZZY=1`）开启后，
-`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 9 组，可以分别开关
+`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 12 组，可以分别开关
 （`Engine::set_fuzzy_groups` / `wowtype_engine_set_fuzzy_groups`，位掩码见 `syllable::fuzzy`）：
-z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang（含 ian=iang、uan=uang）、en=eng、in=ing，默认开平翘舌和前后鼻音这 6 组。
+z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong，默认开平翘舌和前后鼻音这 8 组（un=ong 默认关）。
 模糊索引只建一份：按「全部分组都打开」归并声母、韵母（`syllable::fuzzy_key`），查到以后再用
 `fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了（n 和 r 都归到 l，但 n/r 本身不算一组，会被过滤掉）。
 改开关不用重建 55 万词的索引。
 
 支持**日期时间**、**计算器**（`core/src/datetime.rs`、`core/src/calc.rs`）：
-- `wowtype_datetime_candidates(key, 年, 月, 日, 时, 分, 秒, 星期)`：key 是 `riqi`、`shijian`、`xingqi`、`date`、`time`
+- `wowtype_datetime_candidates(key, 年, 月, 日, 时, 分, 秒, 星期)`：key 是 `riqi`、`rq`、`shijian`、`sj`、`xingqi`、`date`、`time`
   （不认 `rq`、`sj` 这类简拼）时给出几种写法；当前时间由插件按本地时区传进来。插件把它们插在首选后面，
   选中时原样上屏、不学习。双拼下用首选的拼音判断。
 - `wowtype_calc_candidates(算式)`：`+ - * / % ^`、括号、小数；算得出来给「结果」「算式=结果」，没写完只给算式。

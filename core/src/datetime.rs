@@ -36,7 +36,7 @@ pub fn candidates(key: &str, now: &LocalTime) -> Vec<String> {
     } = *now;
     let week = WEEKDAYS[(weekday % 7) as usize];
     match key.as_str() {
-        "riqi" | "date" => vec![
+        "riqi" | "rq" | "date" => vec![
             format!("{y}年{mo}月{d}日"),
             format!("{y}-{mo:02}-{d:02}"),
             format!("{y}/{mo:02}/{d:02}"),
@@ -45,7 +45,7 @@ pub fn candidates(key: &str, now: &LocalTime) -> Vec<String> {
             format!("{mo}月{d}日"),
             format!("{y}年{mo}月{d}日 星期{week}"),
         ],
-        "shijian" | "time" => vec![
+        "shijian" | "sj" | "time" => vec![
             format!("{h:02}:{mi:02}"),
             format!("{h:02}:{mi:02}:{s:02}"),
             format!("{y}-{mo:02}-{d:02} {h:02}:{mi:02}"),
@@ -109,7 +109,9 @@ mod tests {
 
     #[test]
     fn abbreviations_do_not_trigger() {
-        for key in ["rq", "sj", "xq", "riq", "shij", "dat", ""] {
+        assert_eq!(candidates("rq", &now()), candidates("riqi", &now()));
+        assert_eq!(candidates("sj", &now()), candidates("shijian", &now()));
+        for key in ["xq", "riq", "shij", "dat", ""] {
             assert!(candidates(key, &now()).is_empty(), "{key} 不该出日期时间");
         }
     }

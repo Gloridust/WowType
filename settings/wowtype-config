@@ -84,6 +84,9 @@ DEFAULTS = {
     "FuzzyAn": "True",
     "FuzzyEn": "True",
     "FuzzyIn": "True",
+    "FuzzyIan": "True",
+    "FuzzyUan": "True",
+    "FuzzyUn": "False",
     "TypoCorrection": "True",
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
@@ -154,9 +157,12 @@ FUZZY_GROUPS = [
     ("FuzzyNL", "n = l"),
     ("FuzzyFH", "f = h"),
     ("FuzzyRL", "r = l"),
-    ("FuzzyAn", "an = ang（ian = iang、uan = uang）"),
+    ("FuzzyAn", "an = ang"),
+    ("FuzzyIan", "ian = iang"),
+    ("FuzzyUan", "uan = uang"),
     ("FuzzyEn", "en = eng"),
     ("FuzzyIn", "in = ing"),
+    ("FuzzyUn", "un = ong"),
 ]
 
 SELECT_KEYS = [

@@ -141,9 +141,12 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> fuzzyNL{this, "FuzzyNL", "模糊音：n = l", false};
     fcitx::Option<bool> fuzzyFH{this, "FuzzyFH", "模糊音：f = h", false};
     fcitx::Option<bool> fuzzyRL{this, "FuzzyRL", "模糊音：r = l", false};
-    fcitx::Option<bool> fuzzyAn{this, "FuzzyAn", "模糊音：an = ang（ian = iang、uan = uang）", true};
+    fcitx::Option<bool> fuzzyAn{this, "FuzzyAn", "模糊音：an = ang", true};
     fcitx::Option<bool> fuzzyEn{this, "FuzzyEn", "模糊音：en = eng", true};
     fcitx::Option<bool> fuzzyIn{this, "FuzzyIn", "模糊音：in = ing", true};
+    fcitx::Option<bool> fuzzyIan{this, "FuzzyIan", "模糊音：ian = iang", true};
+    fcitx::Option<bool> fuzzyUan{this, "FuzzyUan", "模糊音：uan = uang", true};
+    fcitx::Option<bool> fuzzyUn{this, "FuzzyUn", "模糊音：un = ong", false};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
     fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
