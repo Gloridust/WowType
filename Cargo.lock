@@ -1048,7 +1048,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-core"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -1057,7 +1057,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-voice"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "cpal",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "wowtype-voiced"
-version = "0.3.9"
+version = "0.3.10"
 dependencies = [
  "anyhow",
  "wowtype-voice",

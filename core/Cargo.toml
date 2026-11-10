@@ -1,6 +1,6 @@
 [package]
 name = "wowtype-core"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2021"
 rust-version = "1.70"
 description = "WeType 风格拼音输入法引擎骨架（音节图 + 束搜索 + 排序）"
