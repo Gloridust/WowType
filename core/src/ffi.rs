@@ -37,7 +37,7 @@ unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
 
 /// 引擎句柄。
 pub struct WowtypeEngineHandle {
-    engine: Engine,
+    pub(crate) engine: Engine,
 }
 
 /// 一次输入产生的候选集合（预测结果也用这个结构承载）。

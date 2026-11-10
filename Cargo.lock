@@ -1051,6 +1051,7 @@ name = "wowtype-core"
 version = "0.3.10"
 dependencies = [
  "anyhow",
+ "libc",
  "serde_json",
  "wowtype-voice",
 ]
