@@ -678,6 +678,16 @@ pub unsafe extern "C" fn wowtype_symbol_search(
     Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
 }
 
+/// 候选正好是数字字（零到十）时对应的按键 emoji（「八」-> 8️⃣），别的返回 NULL。
+/// 返回的是静态字符串，不用释放。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_emoji_keycap(text: *const c_char) -> *const c_char {
+    match unsafe { cstr_to_str(text) }.and_then(crate::emoji::keycap_c) {
+        Some(emoji) => emoji.as_ptr(),
+        None => ptr::null(),
+    }
+}
+
 /// 打字时的 emoji 推荐：text 是首选候选的文字。结果的 text 是显示文字，
 /// 上屏文字用 wowtype_candidates_commit 取（整个词对上时只有 emoji，句尾对上时是整句 + emoji）。
 #[no_mangle]

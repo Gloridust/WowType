@@ -294,14 +294,15 @@ void runCases(Instance &instance) {
     check(firstPage.size() > 2 && ic->committed == firstPage[2],
           "展开后右移两格空格选第三个，实际 " + ic->committed);
     // 选过词后排序会变（学习、上文），每次按之前重新取当前这一页
+    // （用 zhi：shi 的第七个是「十」后面跟的 🔟，选了会进表情面板的「最近用过」）
     fresh(ic.get());
-    type(ic.get(), "shi");
+    type(ic.get(), "zhi");
     auto now = page(ic.get());
     type(ic.get(), "<down><down><sp>");
     check(now.size() > 6 && ic->committed == now[6],
           "展开后下移一行空格选第七个，实际 " + ic->committed);
     fresh(ic.get());
-    type(ic.get(), "shi");
+    type(ic.get(), "zhi");
     now = page(ic.get());
     type(ic.get(), "<down><down>2");
     check(now.size() > 7 && ic->committed == now[7],
@@ -418,7 +419,7 @@ void runCases(Instance &instance) {
     {
         bool emoji = false;
         for (const auto &t : page(ic.get())) emoji = emoji || t == "✅";
-        check(!emoji, "单字不推荐 emoji：" + join(page(ic.get())));
+        check(!emoji, "单字不推荐 emoji（数字后面的按键 emoji 除外）：" + join(page(ic.get())));
     }
 
     // 表情面板：Super+. 打开，空搜索列全部，空格选第一个，Esc 关闭
@@ -470,6 +471,43 @@ void runCases(Instance &instance) {
     send(ic.get(), emojiKey);
     type(ic.get(), "a<bs><bs>");
     check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(), "退格删空再退格关闭");
+
+    // 数字字后面跟按键 emoji：ba -> 吧 八 8️⃣ 把
+    // （放在表情面板后面：选过的 8️⃣ 会进「最近用过」）
+    fresh(ic.get());
+    type(ic.get(), "ba");
+    {
+        const auto ba = page(ic.get());
+        int at = -1;
+        for (std::size_t i = 0; i < ba.size(); ++i) {
+            if (ba[i] == "8️⃣") at = static_cast<int>(i);
+        }
+        check(at > 0 && ba[at - 1] == "八", "ba：八 后面是 8️⃣：" + join(ba));
+        if (at >= 0) {
+            type(ic.get(), std::string(1, static_cast<char>('1' + at)));
+            check(ic->committed == "8️⃣", "选 8️⃣ 只上屏 8️⃣，实际 " + ic->committed);
+        }
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto shi = page(ic.get());
+        // 词库不同时「十」不一定在第一页：在的话后面跟 🔟，不在就不出 🔟
+        bool ten = false, after = false, keycap = false;
+        for (std::size_t i = 0; i < shi.size(); ++i) {
+            ten = ten || shi[i] == "十";
+            keycap = keycap || shi[i] == "🔟";
+            after = after || (i > 0 && shi[i] == "🔟" && shi[i - 1] == "十");
+        }
+        check(ten ? after : !keycap, "shi：十 后面是 🔟：" + join(shi));
+    }
+    fresh(ic.get());
+    type(ic.get(), "bage");
+    {
+        bool keycap = false;
+        for (const auto &t : page(ic.get())) keycap = keycap || t == "8️⃣";
+        check(!keycap, "bage：拼音没打完的「八」不跟 8️⃣：" + join(page(ic.get())));
+    }
 
     // 设置：改配置文件和自定义词，reloadConfig 后立刻生效（设置界面走的就是这条路）
     fresh(ic.get());

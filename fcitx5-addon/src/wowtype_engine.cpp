@@ -903,6 +903,7 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     wowtype_candidates_free(raw);
     if (emojiSuggest_) {
         addEmojiSuggestions(state, input);
+        addKeycapSuggestion(state, input);
     }
     if (dateTime_ && state->selections_.empty()) {
         addDateTimeCandidates(state, input);
@@ -991,6 +992,27 @@ void WowtypeEngine::addEmojiSuggestions(WowtypeState *state, const std::string &
     wowtype_candidates_free(raw);
     const std::size_t at = std::min(kEmojiSlot, all.size());
     all.insert(all.begin() + static_cast<std::ptrdiff_t>(at), emoji.begin(), emoji.end());
+}
+
+void WowtypeEngine::addKeycapSuggestion(WowtypeState *state, const std::string &input) {
+    auto &all = state->candidates_;
+    // 第一页里有数字字就在它后面跟按键 emoji：打 ba 是「吧 八 8️⃣ 把」，和手机输入法一样
+    const std::size_t window = std::min(all.size(), pageSize_);
+    for (std::size_t i = 0; i < window; ++i) {
+        if (all[i].emoji || all[i].consumed < input.size()) {
+            continue;
+        }
+        const char *keycap = wowtype_emoji_keycap(all[i].text.c_str());
+        if (!keycap) {
+            continue;
+        }
+        WowtypeCandidate candidate{keycap, "", input.size()};
+        candidate.emoji = true;
+        candidate.commit = keycap;
+        candidate.emojiText = keycap;
+        all.insert(all.begin() + static_cast<std::ptrdiff_t>(i + 1), std::move(candidate));
+        return;
+    }
 }
 
 std::string WowtypeEngine::recentEmojiPath() const {

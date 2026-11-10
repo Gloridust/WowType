@@ -266,6 +266,7 @@ private:
                              const fcitx::Key &key);
     /// 首选候选对得上 emoji 时，插到候选列表里。
     void addEmojiSuggestions(WowtypeState *state, const std::string &input);
+    void addKeycapSuggestion(WowtypeState *state, const std::string &input);
     /// 上屏选中的 emoji 候选（打字推荐的或面板里的）。
     void commitEmoji(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
     void rememberEmoji(const std::string &emoji);

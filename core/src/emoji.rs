@@ -114,6 +114,36 @@ fn specific(word: &str) -> Vec<&'static str> {
     }
 }
 
+/// 数字字和按键 emoji：打 ba 时「八」后面跟一个 8️⃣（手机输入法都这样）。
+const KEYCAPS: [(&str, &std::ffi::CStr); 12] = [
+    ("零", c"0️⃣"),
+    ("〇", c"0️⃣"),
+    ("一", c"1️⃣"),
+    ("二", c"2️⃣"),
+    ("三", c"3️⃣"),
+    ("四", c"4️⃣"),
+    ("五", c"5️⃣"),
+    ("六", c"6️⃣"),
+    ("七", c"7️⃣"),
+    ("八", c"8️⃣"),
+    ("九", c"9️⃣"),
+    ("十", c"🔟"),
+];
+
+/// 候选正好是一个数字字（零到十）时对应的按键 emoji，别的给 None。
+pub fn keycap_c(text: &str) -> Option<&'static std::ffi::CStr> {
+    let text = text.trim();
+    KEYCAPS
+        .iter()
+        .find(|(word, _)| *word == text)
+        .map(|(_, emoji)| *emoji)
+}
+
+/// 同 [`keycap_c`]，给 Rust 用。
+pub fn keycap(text: &str) -> Option<&'static str> {
+    keycap_c(text).and_then(|emoji| emoji.to_str().ok())
+}
+
 /// 根据首选候选的文本推荐 emoji，最多 limit 个。
 pub fn recommend(text: &str, limit: usize) -> Vec<Suggestion> {
     let text = text.trim();
@@ -249,6 +279,22 @@ pub fn search_english(query: &str, limit: usize) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keycaps() {
+        assert_eq!(keycap("八"), Some("8️⃣"));
+        assert_eq!(keycap("零"), Some("0️⃣"));
+        assert_eq!(keycap("〇"), Some("0️⃣"));
+        assert_eq!(keycap("十"), Some("🔟"));
+        assert_eq!(keycap("吧"), None);
+        assert_eq!(keycap("八十"), None);
+        assert_eq!(keycap(""), None);
+        // 每个都在 emoji 表里
+        let all = all();
+        for (_, emoji) in KEYCAPS {
+            assert!(all.contains(&emoji.to_str().unwrap()), "{emoji:?}");
+        }
+    }
 
     #[test]
     fn table_loads() {
