@@ -1,6 +1,8 @@
 #ifndef WOWTYPE_FCITX5_ENGINE_H
 #define WOWTYPE_FCITX5_ENGINE_H
 
+#include <cstdint>
+#include <utility>
 #include <cstddef>
 #include <future>
 #include <memory>
@@ -382,6 +384,8 @@ private:
     /// core_ / loading_ 用的词库文件，和配置要的词库文件（不一样就该换了）。
     std::string lexicon_;
     std::string wantedLexicon_;
+    /// lexicon_ 载入时的 (大小, 修改时间)：同一个路径的文件被换掉（更新了词库包）也要重载。
+    std::pair<std::uintmax_t, long long> lexiconStamp_{0, 0};
     fcitx::FactoryFor<WowtypeState> factory_;
     /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字节，按字符边界截）。
     std::string recent_;

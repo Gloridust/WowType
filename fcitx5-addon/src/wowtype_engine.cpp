@@ -220,6 +220,20 @@ std::string resolveLexicon(const std::string &configured) {
     return defaultLexicon();
 }
 
+/// 文件的 (大小, 修改时间)，拿不到是 (0, 0)。
+std::pair<std::uintmax_t, long long> fileStamp(const std::string &path) {
+    std::error_code ec;
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec) {
+        return {0, 0};
+    }
+    const auto time = std::filesystem::last_write_time(path, ec);
+    if (ec) {
+        return {0, 0};
+    }
+    return {size, static_cast<long long>(time.time_since_epoch().count())};
+}
+
 /// 用这个词库建核心；语言模型坏了（版本不对、文件不完整）不该让输入法整个用不了，
 /// 不带它再试一次（这时 lm 清空）。
 WowtypeEngineHandle *openCore(const std::string &lexicon, std::string &lm) {
@@ -566,6 +580,7 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     fcitx::readAsIni(config_, kConfigFile);
     // 全量词库载入要几百毫秒，放后台，别卡住 fcitx 启动
     lexicon_ = wantedLexicon_ = resolveLexicon(*config_.lexicon);
+    lexiconStamp_ = fileStamp(lexicon_);
     loading_ = std::async(std::launch::async, loadCore, userDictPath(), lexicon_);
     applyConfig();
     setupVoiceOverlay();
@@ -641,7 +656,7 @@ void WowtypeEngine::reloadConfig() {
 }
 
 void WowtypeEngine::maybeSwitchLexicon() {
-    if (wantedLexicon_ == lexicon_) {
+    if (wantedLexicon_ == lexicon_ && fileStamp(lexicon_) == lexiconStamp_) {
         return;
     }
     if (loading_.valid()) {
@@ -667,8 +682,13 @@ void WowtypeEngine::maybeSwitchLexicon() {
         wowtype_engine_free(core_);
         core_ = nullptr;
     }
-    WLOG_I() << "WowType: 换词库 " << lexicon_ << " -> " << wantedLexicon_;
+    if (lexicon_ == wantedLexicon_) {
+        WLOG_I() << "WowType: 词库文件换了，重新载入 " << lexicon_;
+    } else {
+        WLOG_I() << "WowType: 换词库 " << lexicon_ << " -> " << wantedLexicon_;
+    }
     lexicon_ = wantedLexicon_;
+    lexiconStamp_ = fileStamp(lexicon_);
     loading_ = std::async(std::launch::async, loadCore, userDictPath(), lexicon_);
 }
 
@@ -918,7 +938,7 @@ bool WowtypeEngine::coreReady() {
     if (loading_.valid() &&
         loading_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         core_ = loading_.get();
-        if (wantedLexicon_ != lexicon_) {
+        if (wantedLexicon_ != lexicon_ || fileStamp(lexicon_) != lexiconStamp_) {
             // 载入途中配置换了词库：这个不用了，换新的
             maybeSwitchLexicon();
             return false;

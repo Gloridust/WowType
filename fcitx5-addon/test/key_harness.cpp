@@ -1040,6 +1040,12 @@ void runCases(Instance &instance) {
         fresh(ic.get());
         type(ic.get(), "ceshiciku<sp>");
         check(ic->committed == "测试词库", "只改别的设置时词库不动，实际 " + ic->committed);
+        // 词库文件被换掉（更新了词库包），路径没变：reloadConfig 时也重新载入
+        std::ofstream(dictFile) << "ping guo\t平锅\t1000000\nce shi ci ku\t测试词库\t100\n"
+                                   "geng xin le\t更新了\t100\n";
+        addon->reloadConfig();
+        const bool reloaded = waitFor("gengxinle", "更新了");
+        check(reloaded, "词库文件更新后重新载入：" + join(page(ic.get())));
         // 换回来
         std::filesystem::remove(configDir + "/wowtype.conf");
         if (!savedLexicon.empty()) {
