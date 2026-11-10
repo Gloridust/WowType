@@ -244,7 +244,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 「zhongdi 出重点」这类问题根本看不出来。
 
 漏按最难：少一个字母时可能正好是另一个合法拼音，很多时候没法判断。
-逐键延迟 p99 约 10–13 ms（全量词库，含纠错和句首词）。纠错可以在设置界面关掉（或 `WOWTYPE_TYPO=0`）。
+逐键延迟 p99 约 10–13 ms（全量词库，含纠错和句首词；当时的测量，条件见下面[性能](#性能)一节的逐键表）。纠错可以在设置界面关掉（或 `WOWTYPE_TYPO=0`）。
 
 简拼的质量单测：`--jianpin` 生成只取首字母的用例，300 例 **top1 95.3%**。
 
@@ -335,6 +335,17 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 每个候选标出是整句、词、句首候选还是原始串。
 
 ## 性能
+
+逐键延迟（`wowtype-bench --typing`，#43 的 4 条用例共 50 次按键；i5-13490F、Linux、release、rime-ice 891,526 词，2026-11）：
+
+| `--max`（候选上限，输入法里是 300） | words.lm | 均值 | p95 | p99 |
+|---|---|---|---|---|
+| 18 | 不带 | 2.70 ms | 6.08 ms | 6.11 ms |
+| 300 | 不带 | 2.81 ms | 5.91 ms | 6.34 ms |
+| 18 | 带 | 2.95 ms | 6.37 ms | 7.21 ms |
+| 300 | 带 | 3.36 ms | 7.30 ms | 7.53 ms |
+
+有人在 M2（macOS，不带 words.lm）上测到 300 比 18 慢两倍多、长句单键 25–45 ms（#43），原因还在查。
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
 
