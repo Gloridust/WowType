@@ -435,6 +435,19 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "WowType $GITHUB_REF_NAME" \
             --notes-file notes.md --generate-notes
+      - name: 通知 Telegram 群
+        # GITHUB_TOKEN 发的 release 不会触发 telegram-notify.yml，所以在这里直接发。
+        # 没配置 TELEGRAM_CHAT_ID 就跳过；发送失败也不算发版失败。
+        if: vars.TELEGRAM_CHAT_ID != ''
+        continue-on-error: true
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ vars.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: release
+          R_TAG: ${{ github.ref_name }}
+        run: node .github/scripts/tg-notify.mjs
       - name: 更新 release 分支（NixOS 用户跟这个分支拿正式版）
         # GITHUB_TOKEN 不能把分支移到改过 .github/workflows 的提交上；两次发版之间改过 CI，就要
         # RELEASE_BRANCH_TOKEN（细粒度 PAT：Contents、Workflows 读写）。没配置或失败只提醒，不算发版失败。
