@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -105,6 +106,10 @@ DEFAULTS = {
     "TranslateBaseUrl": "",
     "TranslateModel": "",
     "TranslateFormal": "False",
+    "TranslateLocal": "False",
+    "TranslateLocalModel": "",
+    "TranslateLlamaServer": "",
+    "TranslateIdleMinutes": "5",
     "CheckUpdate": "True",
 }
 
@@ -1383,6 +1388,190 @@ def background_check():
 # ---------------------------------------------------------------- 互译
 
 
+# 本地翻译模型：腾讯混元 HY-MT 1.5 1.8B（GGUF，Q4_K_M）。不随 WowType 分发，用户确认许可后下载
+LOCAL_MODEL_FILE = "HY-MT1.5-1.8B-Q4_K_M.gguf"
+LOCAL_MODEL_URL = os.environ.get("WOWTYPE_LOCAL_MODEL_URL") or (
+    "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/" + LOCAL_MODEL_FILE)
+LOCAL_MODEL_SHA256 = os.environ.get("WOWTYPE_LOCAL_MODEL_SHA256") or (
+    "4383ac0c3c8e476de98ff979c2a3f069f8c4fb385e7860cf2d28da896cc477c7")
+LOCAL_MODEL_SIZE = 1133080512
+LOCAL_MODEL_PAGE = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF"
+LOCAL_MODEL_LICENSE = LOCAL_MODEL_PAGE + "/blob/main/License.txt"
+LOCAL_MODEL_TERMS = ("HY-MT 用的是《腾讯混元社区许可协议》：不适用于欧盟、英国和韩国境内，"
+                     "月活超过 1 亿的产品要另外向腾讯申请。模型文件从 Hugging Face 下载，"
+                     "WowType 不分发它。")
+MODELS_DIR = os.path.join(DATA_DIR, "models")
+
+
+def local_model_path(values):
+    custom = values.get("TranslateLocalModel", "").strip()
+    return os.path.expanduser(custom) if custom else os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
+
+
+def find_llama_server(setting=""):
+    """llama-server 在哪：写了路径就看路径，只写名字（或空着）就在 PATH 里找。找不到返回 None。"""
+    name = setting.strip() or "llama-server"
+    if "/" in name:
+        path = os.path.expanduser(name)
+        return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+    return shutil.which(name)
+
+
+class DownloadCancelled(Exception):
+    pass
+
+
+def _sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            digest.update(chunk)
+    return digest
+
+
+def download_model(dest, url=None, sha256=None, progress=None, cancelled=None, timeout=30):
+    """下载到 dest（先写 dest.part，断了能接着下），校验 SHA256 后改名。
+
+    progress(已下载, 总大小) 时不时调一下；cancelled() 返回 True 时停下（.part 留着下次续）。
+    校验不过就删掉 .part 抛 ValueError；网络出错抛 OSError。"""
+    url = url or LOCAL_MODEL_URL
+    sha256 = (sha256 or LOCAL_MODEL_SHA256).lower()
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    part = dest + ".part"
+    have = os.path.getsize(part) if os.path.exists(part) else 0
+    request = urllib.request.Request(url, headers={"User-Agent": f"WowType/{current_version()}"})
+    if have:
+        request.add_header("Range", f"bytes={have}-")
+    try:
+        response = urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        if e.code != 416 or not have:
+            raise
+        response = None  # .part 已经下完整了，只差校验
+    done = have
+    if response is None:
+        digest = _sha256_of(part)
+    else:
+        with response:
+            if have and response.status != 206:
+                have = done = 0  # 服务不支持续传：从头来
+            length = int(response.headers.get("Content-Length") or 0)
+            total = have + length if length else 0
+            digest = _sha256_of(part) if have else hashlib.sha256()
+            last = 0.0
+            with open(part, "ab" if have else "wb") as out:
+                while chunk := response.read(1 << 16):
+                    if cancelled and cancelled():
+                        raise DownloadCancelled()
+                    out.write(chunk)
+                    digest.update(chunk)
+                    done += len(chunk)
+                    now = time.monotonic()
+                    if progress and now - last > 0.2:
+                        last = now
+                        progress(done, total)
+    if digest.hexdigest() != sha256:
+        os.unlink(part)
+        raise ValueError("下载的文件校验不对（SHA256 不一致），已删除，请重试")
+    os.replace(part, dest)
+    if progress:
+        progress(done, done)
+    return dest
+
+
+def download_model_cli(accepted):
+    """命令行下载本地翻译模型；要先同意许可（--accept-license）。"""
+    print(LOCAL_MODEL_TERMS)
+    print(f"协议全文：{LOCAL_MODEL_LICENSE}\n")
+    if not accepted:
+        if not sys.stdin.isatty():
+            print("加 --accept-license 表示接受上面的许可")
+            return 2
+        if input("接受这份许可并下载？[y/N] ").strip().lower() not in ("y", "yes"):
+            return 1
+    dest = os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
+    if os.path.isfile(dest):
+        print(f"已经有了：{dest}")
+        return 0
+
+    def progress(done, total):
+        text = f"{human_size(done)} / {human_size(total)}" if total else human_size(done)
+        print(f"\r下载中 {text}   ", end="", flush=True)
+    try:
+        download_model(dest, progress=progress)
+    except (OSError, ValueError) as e:
+        print(f"\n没下完：{e}（再跑一次会接着下）")
+        return 1
+    except KeyboardInterrupt:
+        print("\n已暂停，再跑一次会接着下")
+        return 130
+    print(f"\n好了：{dest}")
+    return 0
+
+
+def download_self_test():
+    """用本机临时 HTTP 服务测 download_model：整个下、续传、校验失败、取消。"""
+    import http.server
+    import tempfile
+    blob = os.urandom(300_000)
+    good = hashlib.sha256(blob).hexdigest()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_GET(self):
+            start = 0
+            if rng := self.headers.get("Range"):
+                start = int(rng.split("=")[1].split("-")[0])
+                if start >= len(blob):
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                self.send_response(206)
+            else:
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(blob) - start))
+            self.end_headers()
+            self.wfile.write(blob[start:])
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/m.gguf"
+    with tempfile.TemporaryDirectory() as tmp:
+        dest = os.path.join(tmp, "models", "m.gguf")
+        assert download_model(dest, url, good) == dest
+        assert open(dest, "rb").read() == blob and not os.path.exists(dest + ".part")
+        os.unlink(dest)
+        with open(dest + ".part", "wb") as f:  # 续传
+            f.write(blob[:123_456])
+        download_model(dest, url, good)
+        assert open(dest, "rb").read() == blob
+        os.unlink(dest)
+        with open(dest + ".part", "wb") as f:  # .part 已完整：服务回 416
+            f.write(blob)
+        download_model(dest, url, good)
+        assert open(dest, "rb").read() == blob
+        os.unlink(dest)
+        try:
+            download_model(dest, url, "0" * 64)
+            raise AssertionError("校验不对应该报错")
+        except ValueError:
+            assert not os.path.exists(dest) and not os.path.exists(dest + ".part")
+        try:
+            download_model(dest, url, good, cancelled=lambda: True)
+            raise AssertionError("取消应该报 DownloadCancelled")
+        except DownloadCancelled:
+            assert not os.path.exists(dest) and os.path.exists(dest + ".part")
+        assert local_model_path({"TranslateLocalModel": ""}).endswith(LOCAL_MODEL_FILE)
+        assert local_model_path({"TranslateLocalModel": "~/x.gguf"}) == os.path.expanduser("~/x.gguf")
+    server.shutdown()
+
+
+def human_size(n):
+    return f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+
+
 def read_translate_key(path=None):
     try:
         with open(path or TRANSLATE_KEY_FILE, encoding="utf-8") as f:
@@ -2163,18 +2352,171 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.test_button.connect("clicked", self.on_test_translate)
         self.test_row.add_suffix(self.test_button)
         service.add(self.test_row)
+        self.service_group = service
+        page.add(self.build_local_translate())
         page.add(service)
 
         privacy = Adw.PreferencesGroup(title="隐私")
         privacy.add(Adw.ActionRow(
             title="打的字会发给你填的服务",
-            subtitle="只在切到「译」时发送，密码框里不翻译。WowType 自己不经手、不收集这些内容。"))
+            subtitle="只在切到「译」时发送，密码框里不翻译。WowType 自己不经手、不收集这些内容。"
+                     "用本地模型时不出这台电脑。"))
         privacy.add(Adw.ActionRow(
             title="Key 只存在本机",
             subtitle=GLib.markup_escape_text(f"{_home(TRANSLATE_KEY_FILE)}，只有你自己能读")))
         page.add(privacy)
         self.refresh_translate_status()
         return page
+
+    def build_local_translate(self):
+        group = Adw.PreferencesGroup(
+            title="本地模型（离线）",
+            description="用腾讯混元的翻译模型 HY-MT 1.5 1.8B，在这台电脑上翻译，不联网、不用 Key。"
+                        f"模型 {human_size(LOCAL_MODEL_SIZE)}，翻译时占 1.5 GB 左右内存，一句话要等 1–3 秒；"
+                        "闲置一会儿就释放。需要装 llama.cpp 的 llama-server。")
+        self.local_row = self.make_switch("TranslateLocal", "用本地模型翻译",
+                                          "打开后不用下面的翻译服务")
+        self.local_row.connect("notify::active", lambda *_a: self.refresh_local_translate())
+        group.add(self.local_row)
+
+        self.local_model_row = Adw.ActionRow(title="模型文件")
+        self.local_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
+        self.local_download.add_css_class("suggested-action")
+        self.local_download.connect("clicked", self.on_local_download)
+        self.local_model_row.add_suffix(self.local_download)
+        self.local_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                                       tooltip_text="删掉模型文件")
+        self.local_delete.add_css_class("flat")
+        self.local_delete.connect("clicked", self.on_local_delete)
+        self.local_model_row.add_suffix(self.local_delete)
+        group.add(self.local_model_row)
+        self.local_cancel = None
+
+        self.llama_row = Adw.EntryRow(title="llama-server（留空在 PATH 里找）", show_apply_button=False)
+        self.llama_row.set_text(self.values["TranslateLlamaServer"])
+        self.llama_row.connect("changed", lambda row: (
+            self.set_value("TranslateLlamaServer", row.get_text().strip()),
+            self.refresh_local_translate()))
+        group.add(self.llama_row)
+        self.llama_status = Adw.ActionRow(title="llama-server")
+        group.add(self.llama_status)
+
+        idle = Adw.SpinRow.new_with_range(0, 240, 1)
+        idle.set_title("闲置几分钟后释放内存")
+        idle.set_subtitle("0 表示一直留着（关掉互译或退出输入法时才释放）")
+        try:
+            idle.set_value(int(self.values["TranslateIdleMinutes"]))
+        except ValueError:
+            idle.set_value(5)
+        idle.connect("notify::value", lambda row, _p: self.set_value(
+            "TranslateIdleMinutes", str(int(row.get_value()))))
+        group.add(idle)
+
+        terms = Adw.ActionRow(title="许可", subtitle=GLib.markup_escape_text(LOCAL_MODEL_TERMS))
+        link = Gtk.LinkButton(uri=LOCAL_MODEL_LICENSE, label="协议全文", valign=Gtk.Align.CENTER)
+        terms.add_suffix(link)
+        group.add(terms)
+        self.refresh_local_translate()
+        return group
+
+    def local_ready(self):
+        return os.path.isfile(local_model_path(self.values)) and bool(
+            find_llama_server(self.values["TranslateLlamaServer"]))
+
+    def refresh_local_translate(self):
+        if not hasattr(self, "llama_status"):
+            return
+        path = local_model_path(self.values)
+        downloading = self.local_cancel is not None
+        if downloading:
+            pass  # 进度由下载线程更新
+        elif os.path.isfile(path):
+            self.local_model_row.set_subtitle(GLib.markup_escape_text(
+                f"已下载：{_home(path)}（{human_size(os.path.getsize(path))}）"))
+        else:
+            self.local_model_row.set_subtitle(GLib.markup_escape_text(
+                f"还没下载（{human_size(LOCAL_MODEL_SIZE)}，来自 Hugging Face）"))
+        exists = os.path.isfile(path)
+        self.local_download.set_label("取消" if downloading else "下载")
+        self.local_download.set_visible(downloading or not exists)
+        self.local_delete.set_visible(exists and not downloading
+                                      and not self.values["TranslateLocalModel"])
+        server = find_llama_server(self.values["TranslateLlamaServer"])
+        if server:
+            self.llama_status.set_subtitle(GLib.markup_escape_text(f"找到了：{server}"))
+        else:
+            self.llama_status.set_subtitle(GLib.markup_escape_text(
+                "没找到。Debian / Ubuntu：sudo apt install llama.cpp；其他发行版装 llama.cpp 包，"
+                "或者从 github.com/ggml-org/llama.cpp 的发布页下载，在上面填 llama-server 的路径"))
+        if hasattr(self, "service_group"):
+            self.service_group.set_sensitive(not self.local_row.get_active())
+        self.refresh_translate_status()
+
+    def on_local_download(self, _button):
+        if self.local_cancel is not None:
+            self.local_cancel.set()
+            return
+        dialog = Adw.AlertDialog(
+            heading="下载 HY-MT 翻译模型？",
+            body=f"{LOCAL_MODEL_TERMS}\n\n文件 {human_size(LOCAL_MODEL_SIZE)}，下载完会校验 SHA256。"
+                 "点「同意并下载」表示你接受这份许可。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("accept", "同意并下载")
+        dialog.set_response_appearance("accept", Adw.ResponseAppearance.SUGGESTED)
+
+        def answered(_dialog, response):
+            if response == "accept":
+                self.start_local_download()
+        dialog.connect("response", answered)
+        dialog.present(self)
+
+    def start_local_download(self):
+        dest = os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
+        cancel = threading.Event()
+        self.local_cancel = cancel
+        self.local_model_row.set_subtitle("正在连接…")
+        self.refresh_local_translate()
+        log(f"开始下载本地翻译模型到 {_home(dest)}")
+
+        def progress(done, total):
+            text = (f"正在下载：{human_size(done)} / {human_size(total)}（{done * 100 // total}%）"
+                    if total else f"正在下载：{human_size(done)}")
+            GLib.idle_add(self.local_model_row.set_subtitle, text)
+
+        def work():
+            error = None
+            try:
+                download_model(dest, progress=progress, cancelled=cancel.is_set)
+            except DownloadCancelled:
+                error = "已暂停，再点下载会接着下"
+            except ValueError as e:
+                error = str(e)
+            except OSError as e:
+                error = f"下载失败：{getattr(e, 'reason', None) or e}"
+            GLib.idle_add(self.local_download_done, error)
+        threading.Thread(target=work, daemon=True).start()
+
+    def local_download_done(self, error):
+        self.local_cancel = None
+        if error:
+            log(f"本地翻译模型没下完：{error}")
+            self.toast(error)
+        else:
+            log("本地翻译模型下载完成，校验通过")
+            self.toast("模型下载好了")
+            self.fcitx.reload()
+        self.refresh_local_translate()
+
+    def on_local_delete(self, _button):
+        path = local_model_path(self.values)
+        try:
+            os.unlink(path)
+        except OSError as e:
+            self.toast(f"删不掉：{e.strerror}")
+        else:
+            self.toast(f"已删除，空出 {human_size(LOCAL_MODEL_SIZE)}")
+            self.fcitx.reload()
+        self.refresh_local_translate()
 
     def build_model_popover(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
@@ -2300,6 +2642,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast("单按 Shift 两下切到「译」")
 
     def translate_ready(self):
+        if self.values.get("TranslateLocal") == "True":
+            return self.local_ready()
         return bool(self.url_row.get_text().strip() and self.tmodel_row.get_text().strip())
 
     def refresh_translate_status(self):
@@ -2310,7 +2654,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         usable = [SHIFT_NAMES[s] for s in SHIFT_SIDES.get(toggle, ())
                   if s not in {bare_shift(k) for _o, k in conflicts}]
         if not self.translate_ready():
-            self.translate_row.set_subtitle("先填好下面的翻译服务，Shift 才切得到「译」")
+            self.translate_row.set_subtitle(
+                "先下载本地模型、装好 llama-server，Shift 才切得到「译」"
+                if self.values.get("TranslateLocal") == "True"
+                else "先填好下面的翻译服务，Shift 才切得到「译」")
         elif toggle == "Off":
             self.translate_row.set_subtitle("「输入」页里关掉了 Shift 切换，切不到「译」")
         elif conflicts:
@@ -2775,7 +3122,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         def answered(_dialog, response):
             if response != "reset":
                 return
-            keep = {key: self.values[key] for key in ("TranslateBaseUrl", "TranslateModel")}
+            keep = {key: self.values[key] for key in (
+                "TranslateBaseUrl", "TranslateModel", "TranslateLocal", "TranslateLocalModel",
+                "TranslateLlamaServer", "TranslateIdleMinutes")}
             self.values = {**DEFAULTS, **keep}
             self.save_config()
             self.layout_row.set_selected(0)
@@ -2882,7 +3231,10 @@ if __name__ == "__main__":
         else:
             print(f"已保存到 {export_diagnostics(os.path.abspath(target))}")
         sys.exit(0)
+    if "--download-model" in sys.argv:
+        sys.exit(download_model_cli("--accept-license" in sys.argv))
     if "--self-test" in sys.argv:
+        download_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」
         hotkey = {"TriggerKeys": {"0": "Control+space", "1": "Zenkaku_Hankaku"},
                   "AltTriggerKeys": {"0": "Shift_L"}}

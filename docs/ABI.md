@@ -10,6 +10,13 @@
 - 删函数、改参数或返回值的含义、改结构体已有字段：主版本加一，CHANGELOG 里写清楚。
 - `scripts/abi-smoke.sh` 用 C 编译器直接链库跑一遍，Linux 和 macOS 的 CI 都跑。
 
+### 版本记录
+
+| 版本 | WowType | 变化 |
+|---|---|---|
+| 1.0 | 0.3.11 | 第一版带版本号的接口 |
+| 1.1 | 0.3.11 | 加 `wowtype_translate_configure_local`、`wowtype_translate_local_running`（本地翻译模型） |
+
 ## 所有权和生命周期
 
 - `wowtype_engine_new` 返回的句柄用 `wowtype_engine_free` 释放；`wowtype_voice_new`、`wowtype_translate_new` 同理各配各的 `_free`。

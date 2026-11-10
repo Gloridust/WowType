@@ -13,6 +13,7 @@ pub mod ffi;
 pub mod graph;
 pub mod learn;
 pub mod lexicon;
+pub mod llama;
 pub mod lm;
 pub mod nnlm;
 pub mod preedit;

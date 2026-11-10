@@ -15,7 +15,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 0
+#define WOWTYPE_ABI_VERSION_MINOR 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -251,7 +251,14 @@ void wowtype_translate_free(WowtypeTranslator *translator);
 void wowtype_translate_configure(WowtypeTranslator *translator, const char *base_url,
                                  const char *model, const char *target, int formal,
                                  const char *key_file);
-/* 填了地址和模型时返回 1。 */
+/* 用本地模型（ABI 1.1 起）：model 是 GGUF 文件；server 是 llama-server 的路径或名字（NULL/空串
+ * 表示在 PATH 里找）；闲置 idle_secs 秒后停掉（0 表示不停）。model 为 NULL/空串时改回用上面配的
+ * 接口，并马上停掉本地服务。llama-server 第一次翻译时才启动，只监听 127.0.0.1。 */
+void wowtype_translate_configure_local(WowtypeTranslator *translator, const char *model,
+                                       const char *server, unsigned int idle_secs);
+/* 本地模型的 llama-server 正在跑时返回 1（ABI 1.1 起）。 */
+int wowtype_translate_local_running(const WowtypeTranslator *translator);
+/* 能翻译时返回 1：填了地址和模型，或者用本地模型且模型文件在。 */
 int wowtype_translate_ready(const WowtypeTranslator *translator);
 /* 开始翻译 text，取消别的请求；正在译或已经译好同一句话时什么也不做。 */
 void wowtype_translate_start(WowtypeTranslator *translator, const char *text);
