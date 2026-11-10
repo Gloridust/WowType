@@ -201,6 +201,7 @@ STYLE_ACCENT = """
 @define-color accent_bg_color #0EAF76;
 @define-color accent_color %s;
 @define-color accent_fg_color #ffffff;
+.wt-warning .subtitle { color: @warning_color; }
 """
 STYLE_ACCENT_VARS = """
 :root { --accent-bg-color: #0EAF76; --accent-fg-color: #ffffff; --accent-color: %s; }
@@ -541,6 +542,90 @@ class Fcitx:
         items = list(items) + [("wowtype", "")]
         self.call("SetInputMethodGroupInfo", GLib.Variant("(ssa(ss))", (group, layout, items)),
                   done=lambda value: done(value is not None))
+
+    def set_hotkeys(self, lists, done=None):
+        """改 fcitx5 全局快捷键里的几个按键列表 {选项: [按键…]}，别的不动，立即生效。"""
+        raw = GLib.Variant("a{sv}", {"Hotkey": GLib.Variant(
+            "a{sv}", {option: key_list_variant(keys) for option, keys in lists.items()})})
+        self.call("SetConfig", GLib.Variant("(sv)", (GLOBAL_URI, raw)),
+                  done=lambda value: done and done(value is not None))
+
+
+# ---------------------------------------------------------------- 和 fcitx5 抢 Shift
+#
+# fcitx5 默认把左 Shift 设成「临时切换输入法」（在当前输入法和排第一的键盘之间来回切），
+# 它先拿到这一下，WowType 就收不到，单按左 Shift 切不了中英文和「译」。
+
+GLOBAL_URI = "fcitx://config/global"
+FCITX_SHIFT_OPTIONS = ("AltTriggerKeys", "TriggerKeys")
+FCITX_OPTION_NAMES = {"AltTriggerKeys": "临时切换输入法", "TriggerKeys": "切换输入法"}
+SHIFT_SIDES = {"Both": ("Shift_L", "Shift_R"), "Left": ("Shift_L",), "Right": ("Shift_R",),
+               "Off": ()}
+SHIFT_NAMES = {"Shift_L": "左 Shift", "Shift_R": "右 Shift"}
+
+
+def key_list(value):
+    """fcitx5 的按键列表（{"0": "Shift_L", …}；空列表读出来是空串）→ [按键…]。"""
+    if not isinstance(value, dict):
+        return []
+    order = sorted(value, key=lambda k: int(k) if k.isdigit() else 1 << 30)
+    return [value[k] for k in order if isinstance(value[k], str) and value[k]]
+
+
+def key_list_variant(keys):
+    return GLib.Variant("a{sv}", {str(i): GLib.Variant("s", k) for i, k in enumerate(keys)})
+
+
+def bare_shift(key):
+    """单按的那个 Shift（Shift_L、Shift+Shift_L 这种），不是就返回 None。"""
+    *mods, name = key.split("+")
+    if name in SHIFT_NAMES and all(m == "Shift" for m in mods):
+        return name
+    return None
+
+
+def shift_conflicts(hotkey, toggle):
+    """fcitx5 快捷键里占着 WowType 要用的 Shift 的：[(选项, 按键)…]。"""
+    sides = SHIFT_SIDES.get(toggle, SHIFT_SIDES["Both"])
+    found = []
+    for option in FCITX_SHIFT_OPTIONS:
+        for key in key_list((hotkey or {}).get(option)):
+            if bare_shift(key) in sides:
+                found.append((option, key))
+    return found
+
+
+def without_shift(hotkey, toggle):
+    """去掉 WowType 要用的 Shift：返回要写回的 {选项: [按键…]} 和去掉了的 [(选项, 按键)…]。"""
+    conflicts = shift_conflicts(hotkey, toggle)
+    lists = {}
+    for option, key in conflicts:
+        lists.setdefault(option, key_list(hotkey.get(option))).remove(key)
+    return lists, conflicts
+
+
+def with_keys(hotkey, keys):
+    """把让出去的按键 [(选项, 按键)…] 加回 fcitx5：返回要写回的 {选项: [按键…]}。"""
+    lists = {}
+    for option, key in keys:
+        current = lists.setdefault(option, key_list((hotkey or {}).get(option)))
+        if key not in current:
+            current.append(key)
+    return lists
+
+
+def shift_side_names(conflicts):
+    """[(选项, 按键)…] → 「左 Shift」「左右 Shift」这类说法。"""
+    sides = {bare_shift(key) for _option, key in conflicts}
+    if sides >= {"Shift_L", "Shift_R"}:
+        return "左右 Shift"
+    return "、".join(SHIFT_NAMES[s] for s in ("Shift_L", "Shift_R") if s in sides)
+
+
+def key_label(key):
+    """fcitx5 的按键名 → 给人看的（Control+space → Ctrl+空格）。"""
+    names = {"Control": "Ctrl", "space": "空格", "Super": "Super", "Alt": "Alt"}
+    return "+".join(names.get(part, part) for part in key.split("+"))
 
 
 
@@ -1447,6 +1532,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         self.refresh_status()
         self.refresh_theme()
+        self.refresh_shift_conflict()
         self.release = None
         self.update_files = []
         self.on_check_update()
@@ -1468,6 +1554,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.nav.select_row(row)
         self.page_title.set_label(self.stack.get_page(self.stack.get_visible_child()).get_title()
                                   if self.stack.get_visible_child() else "")
+        # fcitx5 的快捷键可能在别处改过，切到这两页时重新看一眼
+        if name in ("input", "translate") and hasattr(self, "shift_free_row"):
+            self.refresh_shift_conflict()
 
     # ---------------- 常规
 
@@ -1580,9 +1669,13 @@ class SettingsWindow(Adw.ApplicationWindow):
         current = self.values.get("ShiftToggle", "Both")
         self.shift_row.set_selected(
             self.shift_names.index(current) if current in self.shift_names else 0)
-        self.shift_row.connect("notify::selected", lambda row, _p: self.set_value(
-            "ShiftToggle", self.shift_names[row.get_selected()]))
+        self.shift_row.connect("notify::selected", self.on_shift_toggle_changed)
         switch.add(self.shift_row)
+        # fcitx5 自己也用 Shift 切输入法时提示，并能一键让给 WowType（再一键还回去）
+        self.shift_free_row = Adw.SwitchRow(title="Shift 只给 WowType 用", visible=False)
+        self.shift_free_handler = self.shift_free_row.connect(
+            "notify::active", self.on_shift_free_toggled)
+        switch.add(self.shift_free_row)
         page.add(switch)
 
         pinyin = Adw.PreferencesGroup(title="拼音")
@@ -1712,6 +1805,78 @@ class SettingsWindow(Adw.ApplicationWindow):
         if message is None:
             message = "已换成 WowType 主题" if on else "已换回 fcitx5 默认主题"
         self.toast(message)
+
+    def on_shift_toggle_changed(self, row, _param):
+        self.set_value("ShiftToggle", self.shift_names[row.get_selected()])
+        self.refresh_shift_conflict()
+
+    def refresh_shift_conflict(self):
+        """看 fcitx5 有没有用 WowType 要的 Shift 切输入法，更新「输入」「翻译」两页的提示。"""
+        toggle = self.values.get("ShiftToggle", "Both")
+
+        def done(config):
+            hotkey = None if config is None else config.get("Hotkey")
+            self.fcitx_hotkey = hotkey if isinstance(hotkey, dict) else None
+            conflicts = [] if self.fcitx_hotkey is None else shift_conflicts(self.fcitx_hotkey, toggle)
+            freed = [tuple(x) for x in read_state().get("fcitx_shift_freed", [])]
+            self.shift_conflicts = conflicts
+            row = self.shift_free_row
+            row.set_visible(self.fcitx_hotkey is not None and toggle != "Off"
+                            and bool(conflicts or freed))
+            row.handler_block(self.shift_free_handler)
+            row.set_active(not conflicts)
+            row.handler_unblock(self.shift_free_handler)
+            if conflicts:
+                option = FCITX_OPTION_NAMES[conflicts[0][0]]
+                side = shift_side_names(conflicts)
+                row.set_subtitle(
+                    f"{side} 现在被 fcitx5 用来「{option}」（比如切到 en 键盘），WowType 收不到，"
+                    f"单按{side} 切不到英文和「译」。打开就让给 WowType")
+                row.add_css_class("wt-warning")
+            else:
+                trigger = key_list(self.fcitx_hotkey.get("TriggerKeys")) if self.fcitx_hotkey else []
+                switch_hint = (f"切到别的输入法按 {key_label(trigger[0])}" if trigger
+                               else "切到别的输入法要在 fcitx5 配置里设快捷键")
+                row.set_subtitle(f"fcitx5 不再用 Shift 切输入法；{switch_hint}。关掉就还给 fcitx5")
+                row.remove_css_class("wt-warning")
+            self.refresh_translate_status()
+        self.fcitx.get_config(GLOBAL_URI, done)
+
+    def on_shift_free_toggled(self, row, _param):
+        hotkey = self.fcitx_hotkey
+        if hotkey is None:
+            self.refresh_shift_conflict()
+            return
+        freed = [tuple(x) for x in read_state().get("fcitx_shift_freed", [])]
+        if row.get_active():
+            lists, taken = without_shift(hotkey, self.values.get("ShiftToggle", "Both"))
+            if not taken:
+                self.refresh_shift_conflict()
+                return
+            keep = freed + [k for k in taken if k not in freed]
+
+            def done(ok):
+                if ok:
+                    update_state(fcitx_shift_freed=[list(k) for k in keep])
+                    log(f"把 fcitx5 的 {', '.join(f'{o}={k}' for o, k in taken)} 让给 WowType")
+                    self.toast(f"{shift_side_names(taken)} 已经让给 WowType")
+                else:
+                    self.toast("没改成：fcitx5 没响应")
+                self.refresh_shift_conflict()
+        else:
+            # 还回去：还的是当初让出来的；没有记录（比如手动改过）就还 fcitx5 默认的左 Shift
+            back = freed or [("AltTriggerKeys", "Shift_L")]
+            lists = with_keys(hotkey, back)
+
+            def done(ok):
+                if ok:
+                    update_state(fcitx_shift_freed=[])
+                    log(f"把 {', '.join(f'{o}={k}' for o, k in back)} 还给 fcitx5")
+                    self.toast(f"已还给 fcitx5：{shift_side_names(back)} 又用来切换输入法")
+                else:
+                    self.toast("没改成：fcitx5 没响应")
+                self.refresh_shift_conflict()
+        self.fcitx.set_hotkeys(lists, done)
 
     def make_switch(self, key, title, subtitle):
         row = Adw.SwitchRow(title=title)
@@ -2002,8 +2167,19 @@ class SettingsWindow(Adw.ApplicationWindow):
     def refresh_translate_status(self):
         if not hasattr(self, "test_row"):
             return
+        conflicts = getattr(self, "shift_conflicts", [])
+        toggle = self.values.get("ShiftToggle", "Both")
+        usable = [SHIFT_NAMES[s] for s in SHIFT_SIDES.get(toggle, ())
+                  if s not in {bare_shift(k) for _o, k in conflicts}]
         if not self.translate_ready():
             self.translate_row.set_subtitle("先填好下面的翻译服务，Shift 才切得到「译」")
+        elif toggle == "Off":
+            self.translate_row.set_subtitle("「输入」页里关掉了 Shift 切换，切不到「译」")
+        elif conflicts:
+            taken = shift_side_names(conflicts)
+            self.translate_row.set_subtitle(
+                f"{taken} 被 fcitx5 占着；" + (f"用{'、'.join(usable)}，" if usable else "")
+                + "或到「输入」页把它让给 WowType")
         else:
             self.translate_row.set_subtitle("单按 Shift：中 → 英 → 译 → 中")
 
@@ -2549,6 +2725,27 @@ if __name__ == "__main__":
             print(f"已保存到 {export_diagnostics(os.path.abspath(target))}")
         sys.exit(0)
     if "--self-test" in sys.argv:
+        # fcitx5 默认配置：左 Shift 是「临时切换输入法」
+        hotkey = {"TriggerKeys": {"0": "Control+space", "1": "Zenkaku_Hankaku"},
+                  "AltTriggerKeys": {"0": "Shift_L"}}
+        assert shift_conflicts(hotkey, "Both") == [("AltTriggerKeys", "Shift_L")]
+        assert shift_conflicts(hotkey, "Left") == [("AltTriggerKeys", "Shift_L")]
+        assert shift_conflicts(hotkey, "Right") == [] and shift_conflicts(hotkey, "Off") == []
+        lists, taken = without_shift(hotkey, "Both")
+        assert lists == {"AltTriggerKeys": []} and taken == [("AltTriggerKeys", "Shift_L")]
+        cleared = {**hotkey, "AltTriggerKeys": ""}  # 清空后 fcitx5 读出来是空串
+        assert shift_conflicts(cleared, "Both") == []
+        assert with_keys(cleared, taken) == {"AltTriggerKeys": ["Shift_L"]}
+        both = {"TriggerKeys": {"0": "Shift+Shift_R", "1": "Control+space"},
+                "AltTriggerKeys": {"0": "Shift_L", "1": "Control+Shift_L"}}
+        assert shift_conflicts(both, "Both") == [("AltTriggerKeys", "Shift_L"),
+                                                 ("TriggerKeys", "Shift+Shift_R")]
+        assert without_shift(both, "Both")[0] == {"AltTriggerKeys": ["Control+Shift_L"],
+                                                  "TriggerKeys": ["Control+space"]}
+        assert shift_side_names(shift_conflicts(both, "Both")) == "左右 Shift"
+        assert shift_side_names(taken) == "左 Shift"
+        assert key_label("Control+space") == "Ctrl+空格"
+        assert key_list({"1": "b", "0": "a", "x": ""}) == ["a", "b"]
         assert normalize_pinyin("Ni Hǎo") == "ni hao"
         assert normalize_pinyin("nihao") == "ni hao"
         assert normalize_pinyin("xi'an") == "xi an"
