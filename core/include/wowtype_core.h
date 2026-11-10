@@ -11,9 +11,18 @@
 
 #include <stddef.h>
 
+/* 接口版本（不是 WowType 的版本）。同一个主版本里只加函数、只在结构体末尾加字段；
+ * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
+ * 规则见 docs/ABI.md。 */
+#define WOWTYPE_ABI_VERSION_MAJOR 1
+#define WOWTYPE_ABI_VERSION_MINOR 0
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* 编进库里的接口版本：主版本 * 1000 + 次版本。 */
+int wowtype_abi_version(void);
 
 typedef struct WowtypeEngineHandle WowtypeEngineHandle;
 typedef struct WowtypeCandidates WowtypeCandidates;
