@@ -175,7 +175,7 @@ pub fn build_request(config: &TranslateConfig, source: &str) -> Value {
     json!({
         "model": config.model.trim(),
         "stream": true,
-        "temperature": 0.3,
+        // 不带 temperature：推理模型（o 系列、gpt-5 等）只接受默认值，带了直接报错
         "messages": [
             { "role": "system", "content": system },
             { "role": "user", "content": source },
@@ -623,6 +623,7 @@ fn run_job(
     let mut other = String::new();
     let mut streamed = false;
     let mut stream_error: Option<String> = None;
+    let mut enough = false;
     if let Some(stdout) = stdout {
         let mut reader = BufReader::new(stdout);
         let mut buf = Vec::new();
@@ -670,6 +671,15 @@ fn run_job(
                 return;
             }
             inner.job.raw.push_str(delta);
+            // 要的几种都写完了就断开，不等模型说完（有的模型写完译文还要往下说）
+            let n = inner.job.variants;
+            if split_variants(&source, &inner.job.raw, false, n).1 >= n {
+                enough = true;
+                if let Some(child) = inner.job.child.as_mut() {
+                    let _ = child.kill();
+                }
+                break;
+            }
         }
     }
     let mut err_text = String::new();
@@ -685,10 +695,11 @@ fn run_job(
     drop(inner);
     let code = exit.and_then(|s| s.code());
 
-    if let Some(message) = stream_error {
+    if enough {
+        // 主动断开的：curl 是被杀掉的，不算出错
+    } else if let Some(message) = stream_error {
         return fail(format!("翻译失败：{message}"));
-    }
-    if status >= 400 {
+    } else if status >= 400 {
         let detail =
             error_message(&other).unwrap_or_else(|| other.trim().chars().take(120).collect());
         return fail(if detail.is_empty() {
@@ -696,8 +707,7 @@ fn run_job(
         } else {
             format!("翻译失败（{status}）：{detail}")
         });
-    }
-    if status == 0 && code != Some(0) {
+    } else if status == 0 && code != Some(0) {
         return fail(curl_error(code, &err_text));
     }
     let mut inner = shared.lock().unwrap();
@@ -938,8 +948,10 @@ mod tests {
                 let head = format!("HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n");
                 stream.write_all(head.as_bytes()).unwrap();
                 for chunk in &chunks {
-                    stream.write_all(chunk.as_bytes()).unwrap();
-                    stream.flush().unwrap();
+                    // 客户端可能提前断开（取消、写够了），写失败就停
+                    if stream.write_all(chunk.as_bytes()).is_err() || stream.flush().is_err() {
+                        break;
+                    }
                     thread::sleep(Duration::from_millis(30));
                 }
             }
@@ -1009,6 +1021,34 @@ mod tests {
         t.start("明天见");
         assert_eq!(t.poll().state, JobState::Done);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stops_once_enough_variants() {
+        if !have_curl() {
+            return;
+        }
+        // 模型写完三种还接着往下说（小模型常见），写够了就该收尾，不等它说完
+        let seen = Arc::new(Mutex::new(String::new()));
+        let mut chunks = vec![sse("Hello\nHi\nHey\n")];
+        chunks.extend((0..100).map(|i| sse(&format!("Note {i}: "))));
+        let base = mock_server(chunks, "200 OK", seen);
+        let t = Translator::new();
+        t.configure(TranslateConfig {
+            variants: 3,
+            ..config(&base)
+        });
+        let started = Instant::now();
+        t.start("你好");
+        let snap = wait_done(&t);
+        assert_eq!(snap.state, JobState::Done, "{snap:?}");
+        assert_eq!(snap.variants, vec!["Hello", "Hi", "Hey"]);
+        assert_eq!(snap.complete, 3);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
