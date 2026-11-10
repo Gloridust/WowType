@@ -148,6 +148,12 @@ int main(int argc, char **argv) {
         check(p && strcmp(p, "，") == 0, "punct: comma -> ，");
     }
 
+    if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {
+        fprintf(stderr, "ABI 主版本不一致：库 %d，头文件 %d\n", wowtype_abi_version(),
+                WOWTYPE_ABI_VERSION_MAJOR);
+        return 1;
+    }
+    printf("abi=%d ", wowtype_abi_version());
     printf("version=%s", wowtype_version());
     putchar(10);
     wowtype_engine_free(e);

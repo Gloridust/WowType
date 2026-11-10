@@ -962,7 +962,17 @@ pub extern "C" fn wowtype_last_error() -> *const c_char {
     LAST_ERROR.with(|slot| slot.borrow().as_ptr())
 }
 
-/// 版本号。
+/// C 接口版本：主版本 * 1000 + 次版本。
+#[no_mangle]
+pub extern "C" fn wowtype_abi_version() -> c_int {
+    ABI_VERSION_MAJOR * 1000 + ABI_VERSION_MINOR
+}
+
+/// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
+pub const ABI_VERSION_MAJOR: c_int = 1;
+pub const ABI_VERSION_MINOR: c_int = 0;
+
+/// WowType 版本号字符串。
 #[no_mangle]
 pub extern "C" fn wowtype_version() -> *const c_char {
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
@@ -1003,5 +1013,20 @@ mod tests {
 
         let version = wowtype_version();
         assert!(!version.is_null());
+    }
+
+    #[test]
+    fn abi_version_matches_header() {
+        let header = include_str!("../include/wowtype_core.h");
+        let read = |name: &str| -> c_int {
+            header
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("#define {name} ")))
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(-1)
+        };
+        assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
+        assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
+        assert_eq!(wowtype_abi_version(), 1000);
     }
 }
