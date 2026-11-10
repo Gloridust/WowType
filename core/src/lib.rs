@@ -714,7 +714,7 @@ impl Engine {
         if self.config.prefix_candidates > 0 {
             let leading = raw.len() - raw.trim_start().len();
             let mut prefix = self.prefix_candidates(&normalized)?;
-            prefix_on_syllable_boundaries(&result, &normalized, &mut prefix);
+            let _ = prefix_on_syllable_boundaries(&result, &normalized, &mut prefix);
             for candidate in &mut prefix {
                 candidate.consumed = leading + letters_to_bytes(display, candidate.consumed);
                 if self.config.traditional {
@@ -892,7 +892,7 @@ impl Engine {
             }
         }
         // 句首词只留在音节边界上的（不把一个音节拆开）
-        prefix_on_syllable_boundaries(result, normalized, &mut heads);
+        let other_splits = prefix_on_syllable_boundaries(result, normalized, &mut heads);
         let leading = raw.len() - raw.trim_start().len();
         let mut seen: HashMap<String, ()> = result.iter().map(|c| (c.text.clone(), ())).collect();
         let converter = if self.config.traditional {
@@ -900,7 +900,15 @@ impl Engine {
         } else {
             None
         };
-        for mut candidate in whole.into_iter().chain(heads) {
+        // 词在前、单字在后；换一种切法才对得上的句首词（houxuanci 的「后续」）夹在中间
+        let (chars, words): (Vec<_>, Vec<_>) =
+            heads.into_iter().partition(|c| c.text.chars().count() == 1);
+        for mut candidate in whole
+            .into_iter()
+            .chain(words)
+            .chain(other_splits)
+            .chain(chars)
+        {
             if result.len() >= max {
                 break;
             }
@@ -1571,19 +1579,22 @@ fn promote_picked(candidates: &mut Vec<Candidate>) {
 /// 那是把一个打完的音节拆开了，只会把第一页塞满没用的字。
 /// 第一个整句候选是精确全拼时，句首词必须正好用完它的前几个音节；
 /// 是简拼或纠错结果时没法对齐字母，只要求它至少两个音节。
+///
+/// 返回被筛掉、但换一种切法也说得通的词：词本身是完整全拼，剩下的字母也能整个切成
+/// 音节（houxuanci 里的「后续」= hou xu | an ci）。它们不该挤进前几页，长尾最后补上。
 fn prefix_on_syllable_boundaries(
     result: &[Candidate],
     normalized: &str,
     prefix: &mut Vec<Candidate>,
-) {
+) -> Vec<Candidate> {
     let Some(top) = result.iter().find(|c| !is_raw_candidate(c)) else {
         prefix.clear();
-        return;
+        return Vec::new();
     };
     let syllables: Vec<&str> = top.pinyin.split_whitespace().collect();
     if syllables.len() < 2 {
         prefix.clear();
-        return;
+        return Vec::new();
     }
     let letters: String = normalized
         .chars()
@@ -1591,7 +1602,7 @@ fn prefix_on_syllable_boundaries(
         .collect();
     if top.features.full_jianpin > 0.0 || syllables.concat().len() > letters.len() + 2 {
         // 简拼（zgrm）字母和音节对不上，不按边界筛
-        return;
+        return Vec::new();
     }
     // 从头对齐：补全和纠错只改动对不上的那一段，前面对得上的音节边界照样可信
     let mut boundaries = Vec::new();
@@ -1604,6 +1615,7 @@ fn prefix_on_syllable_boundaries(
         boundaries.push(at);
     }
     let exact = top.features.typo_count == 0.0;
+    let mut other_splits = Vec::new();
     // consumed 此时还是字母数（隔音符也算一个字符）
     prefix.retain(|p| {
         let used = normalized
@@ -1611,11 +1623,42 @@ fn prefix_on_syllable_boundaries(
             .take(p.consumed)
             .filter(|c| c.is_ascii_alphabetic())
             .count();
-        boundaries.contains(&used) && (!exact || p.features.typo_count == 0.0)
+        if exact && p.features.typo_count > 0.0 {
+            return false;
+        }
+        if boundaries.contains(&used) {
+            return true;
+        }
+        if exact
+            && used < letters.len()
+            && p.pinyin.split_whitespace().collect::<String>() == letters[..used]
+            && splits_into_syllables(&letters[used..])
+        {
+            other_splits.push(p.clone());
+        }
+        false
     });
     // 整句候选本身的开头（你好中国 -> 你好）最可能是对的，越长越省事，排最前
     let head = |p: &Candidate| top.text.starts_with(&p.text);
     prefix.sort_by_key(|p| std::cmp::Reverse(if head(p) { p.text.chars().count() } else { 0 }));
+    // 长的在前（同样长的保持束搜索给的顺序）
+    other_splits.sort_by_key(|p| std::cmp::Reverse(p.text.chars().count()));
+    other_splits
+}
+
+/// 这串字母能不能整个切成合法的全拼音节（an ci、ci）。
+fn splits_into_syllables(letters: &str) -> bool {
+    let mut ok = vec![false; letters.len() + 1];
+    ok[0] = true;
+    for end in 1..=letters.len() {
+        for len in 1..=6.min(end) {
+            if ok[end - len] && is_valid(&letters[end - len..end]) {
+                ok[end] = true;
+                break;
+            }
+        }
+    }
+    ok[letters.len()]
 }
 
 /// 全拼对不上时用的简拼图；走不通时返回 None。
@@ -2003,6 +2046,88 @@ mod tests {
         assert!(fresh.load_history(&path).unwrap() >= 1);
         assert_eq!(fresh.input("shi")[0].text, "事");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rare_chars_listed_last_and_never_in_sentences() {
+        // 频次小于 1 的单字是大字表补进来的（tools/rime2tsv.py --extra-chars）：
+        // 一个音节的字要全列出来，但只排在最后，也不拿来组句
+        let mut e = engine(concat!(
+            "shi\t是\t9000\nshi\t十\t8000\nshi\t时\t7000\n",
+            "shi shi\t事实\t5000\n",
+            "shi\t𬤊\t0.7\nshi\t䊓\t0.8\nshi\t戠\t0.9\n",
+        ));
+        e.set_max_candidates(1000);
+        let list = e.input("shi");
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts.first(), Some(&"是"), "{texts:?}");
+        let at = |t: &str| texts.iter().position(|x| *x == t);
+        for ch in ["是", "十", "时", "戠", "䊓", "𬤊"] {
+            assert!(at(ch).is_some(), "{ch} 要列出来：{texts:?}");
+        }
+        assert!(at("时") < at("戠"), "常用字在前：{texts:?}");
+        assert!(
+            at("戠") < at("䊓") && at("䊓") < at("𬤊"),
+            "基本区、扩展 A、扩展 B：{texts:?}"
+        );
+
+        let list = e.input("shishi");
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts.first(), Some(&"事实"), "{texts:?}");
+        let rare = ['𬤊', '䊓', '戠'];
+        for c in &list {
+            if c.text.chars().count() > 1 {
+                assert!(
+                    !c.text.chars().any(|ch| rare.contains(&ch)),
+                    "整句不用生僻字：{texts:?}"
+                );
+            }
+        }
+        assert!(texts.contains(&"𬤊"), "第一个音节的字也要列全：{texts:?}");
+
+        // 简拼不带生僻字
+        let texts: Vec<String> = e.input("sh").into_iter().map(|c| c.text).collect();
+        assert!(!texts.iter().any(|t| t == "𬤊"), "{texts:?}");
+    }
+
+    #[test]
+    fn lookup_common_drops_rare_chars() {
+        let lex = MemoryLexicon::from_tsv_str("shi\t是\t9000\nshi\t𬤊\t0.7\nshi shi\t事实\t0.5\n")
+            .unwrap();
+        let shi = crate::syllable::id_of("shi").unwrap();
+        let q = [SyllableQuery::Full {
+            id: shi,
+            erhua: false,
+        }];
+        let all: Vec<String> = lex.lookup(&q).into_iter().map(|e| e.word).collect();
+        let common: Vec<String> = lex.lookup_common(&q).into_iter().map(|e| e.word).collect();
+        assert_eq!(all, ["是", "𬤊"]);
+        assert_eq!(common, ["是"]);
+        // 只看单字：低频的词照样能组句
+        let two: Vec<String> = lex
+            .lookup_common(&[q[0], q[0]])
+            .into_iter()
+            .map(|e| e.word)
+            .collect();
+        assert_eq!(two, ["事实"]);
+    }
+
+    #[test]
+    fn other_split_heads_come_before_chars() {
+        // houxuanci 也能切成 hou xu | an ci：「后续」排在单字前面
+        let mut e = engine(concat!(
+            "hou xuan ci\t候选词\t3000\nhou xuan\t候选\t4000\n",
+            "hou xu\t后续\t3000\nan\t按\t5000\n",
+            "hou\t后\t9000\nhou\t侯\t300\nhou\t㕈\t0.8\n",
+            "xuan\t选\t8000\nci\t此\t90000\nci\t词\t70000\n",
+        ));
+        e.set_max_candidates(1000);
+        let list = e.input("houxuanci");
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        let at = |t: &str| texts.iter().position(|x| *x == t);
+        assert!(at("后续").is_some(), "{texts:?}");
+        assert!(at("后续") < at("㕈"), "{texts:?}");
+        assert!(at("候选") < at("后续"), "正常切分的词在前：{texts:?}");
     }
 
     #[test]
