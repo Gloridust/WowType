@@ -1,6 +1,6 @@
 # 移植到 macOS：一套代码，两个外壳
 
-> 状态：设计稿（2026-11），还没开始写 macOS 代码。讨论在 [#42](https://github.com/Gloridust/WowType/issues/42)。
+> 状态（2026-11）：第 2 步进行中；第 3 步的最小 macOS 外壳在 `macos/`，CI 能编译、打包、自检，还没在真机上试过。讨论在 [#42](https://github.com/Gloridust/WowType/issues/42)。
 
 ## 结论
 
@@ -138,5 +138,7 @@ macos/           macOS 外壳：IMK 输入法 + 设置窗口 + 打包脚本
 5. **语音**：cpal 采集 + 小窗浮条。
 
 进度：第 1 步做完了（ABI 1.0）。第 2 步的第一块（ABI 1.3）：`core/src/session.rs` 和 `wowtype_session_*` 建好了，编辑区的原始输入、已选词栈、字母 / 隔音符 / 退格 / Esc 挪进了会话，fcitx5 外壳改成调会话，对应按键测试在 `core/tests/session_keys.rs`。第二块（ABI 1.4）：候选列表（含计算器、emoji 推荐、数字按键 emoji、日期时间）和编辑区分音节挪进了会话，fcitx5 外壳先把候选整个抄过去。第三块（ABI 1.5）：选词、整句上屏和学习挪进了会话（`wowtype_session_choose`、`_commit_input`），外壳只管把按键翻成序号、上屏以后记上文和存用户词库。接下来按这个顺序挪：翻页、选词键（空格、回车、数字、分号引号）、展开面板 → 标点和小数点 → 中 / 英 / 译 和单按 Shift → 互译 → 语音键 → 表情面板和工具栏。
+
+第 3 步（`macos/`）：IMK 输入控制器、自绘候选框、打包（`macos/build.sh`，arm64 + x86_64 通用，核心不带语音）、安装（`macos/install.sh`，装到 `~/Library/Input Methods`）。组字逻辑在 `macos/Sources/Shared`，不依赖 AppKit，按键测试 `macos/test.sh` 在 Linux（docker 里的 swift）和 macOS 上都能跑；会话还没接过去的空格、数字、回车、翻页、标点，这里和 fcitx5 外壳一样先自己处理。CI 的「macOS 输入法」任务打包后用安装包里的词库自检。还没在真机上验证：系统能否认出输入法、编辑区显示、候选框位置。
 
 第 1 步可以马上做；第 3 步可以在第 2 步挪完「编辑区 + 选词 + 翻页」这几块之后就开始，不用等全部挪完。
