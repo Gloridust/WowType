@@ -306,8 +306,6 @@ private:
     int selectKeyIndex(fcitx::KeySym sym) const;
     /// V 模式计算器：编辑区是 v + 算式（或刚打了 v）。
     bool calcActive(WowtypeState *state) const;
-    /// 上屏不学习的候选（日期时间、计算结果、自定义编码等）。
-    void commitPlainCandidate(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
@@ -342,9 +340,11 @@ private:
     bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
-    /// 上屏：已选的词 + tail 一起提交，记录选词、更新上下文，清空状态。
-    void commitAll(fcitx::InputContext *ic, WowtypeState *state,
-                   const std::string &tail, const std::string &tailPinyin);
+    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；learned 时攒着存用户词库。
+    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
+                      bool learned);
+    /// 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。
+    void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
     void commitPlain(fcitx::InputContext *ic, const std::string &text);
     /// 选中光标所在的候选；没有候选时上屏原始输入。
