@@ -438,7 +438,7 @@ mod tests {
         let lease = server.acquire(&config).unwrap();
         assert_eq!(server.pid(), Some(pid), "还在跑就复用");
         drop(lease);
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while server.is_running() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(100));
         }

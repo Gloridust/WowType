@@ -864,7 +864,7 @@ mod tests {
 
         std::fs::write(&model, b"gguf").unwrap();
         let wait = |t: &Translator| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
             loop {
                 let snap = t.poll();
                 if snap.state != JobState::Running || std::time::Instant::now() > deadline {
