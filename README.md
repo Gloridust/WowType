@@ -192,7 +192,7 @@ home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
 
 #### 第 3 步：把 WowType 加进输入法列表
 
-1. 重启 fcitx5：`fcitx5 -r -d`（或者注销再登录）
+1. 重启 fcitx5：`wowtype-config --restart-fcitx`（或者注销再登录）。KDE Plasma Wayland 下不要用 `fcitx5 -r -d`：新起来的 fcitx5 拿不到 KWin 给的输入法连接，之后新打开的程序里打不了字
 2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
 3. 在右边「可用输入法」里**取消勾选「仅显示当前语言」**，搜索 `WowType`，点 ← 加到左边
 4. 关掉配置窗口，按 `Ctrl+Space` 切换到 WowType，打 `nihao` 试试
@@ -381,7 +381,8 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 
 | 现象 | 处理 |
 |---|---|
-| 输入法列表里找不到 WowType | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`fcitx5 -r -d` 重启 |
+| 输入法列表里找不到 WowType | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`wowtype-config --restart-fcitx` 重启 |
+| KDE Wayland 下已经开着的程序能打字，新打开的程序打不了 | fcitx5 是用 `fcitx5 -r` 或托盘「重新启动」重启的，没经过 KWin。运行 `wowtype-config --restart-fcitx`，或注销再登录 |
 | 某个程序里打不了中文，别的程序可以 | 重启 fcitx5 以后 Chrome / Electron 程序要彻底退出再打开 |
 | 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。用安装包装的话重装一遍（安装包自带词库）；从源码装的把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |

@@ -323,7 +323,7 @@ main() {
     warn "设置界面用不了（缺 PyGObject / GTK 4 / libadwaita？），请在「Fcitx 5 配置」里手动添加 WowType"
   elif command -v pgrep >/dev/null && pgrep -x fcitx5 >/dev/null; then
     if [[ -n "${WOWTYPE_NO_RESTART:-}" ]] || ! confirm "fcitx5 正在运行，重启它并把 WowType 加进输入法列表吗？"; then
-      warn "没重启 fcitx5。之后重启它（fcitx5 -r -d）或注销再登录，再在「WowType 设置」第一页点「添加」"
+      warn "没重启 fcitx5。之后重启它（wowtype-config --restart-fcitx）或注销再登录，再在「WowType 设置」第一页点「添加」"
     elif wowtype-config --add-to-group --restart; then
       restarted=1
     else
