@@ -68,6 +68,10 @@ LEXICON_CANDIDATES = [
 DEFAULTS = {
     "CandidateLayout": "Horizontal",
     "PageSize": "9",
+    "PageKeysMinusEqual": "True",
+    "PageKeysBracket": "False",
+    "PageKeysCommaPeriod": "False",
+    "PageKeysTab": "False",
     "Fuzzy": "False",
     "FuzzyZh": "True",
     "FuzzyCh": "True",
@@ -1596,6 +1600,16 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.page_row.connect("notify::value", lambda row, _p: self.set_value(
             "PageSize", str(int(row.get_value()))))
         cands.add(self.page_row)
+        page_keys = Adw.ExpanderRow(
+            title="翻页键", subtitle="Page Up / Page Down 和方向键一直能翻页；下面的可以另外打开")
+        for key, title, subtitle in (
+            ("PageKeysMinusEqual", "- 和 =", None),
+            ("PageKeysBracket", "[ 和 ]", "打开后打字途中 [ ] 不再出【】"),
+            ("PageKeysCommaPeriod", ", 和 .", "打开后打字途中逗号句号用来翻页，要先选词再打标点"),
+            ("PageKeysTab", "Shift+Tab 和 Tab", None),
+        ):
+            page_keys.add_row(self.make_switch(key, title, subtitle))
+        cands.add(page_keys)
         page.add(cands)
 
         look = Adw.PreferencesGroup(title="外观")

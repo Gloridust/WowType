@@ -93,6 +93,11 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "left") sym = FcitxKey_Left;
             else if (name == "up") sym = FcitxKey_Up;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
+            else if (name == "tab") sym = FcitxKey_Tab;
+            if (name == "stab") {
+                send(ic, Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
+                continue;
+            }
             send(ic, Key(sym));
             continue;
         }
@@ -709,6 +714,29 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "(.)");
     check(ic->committed.empty() && ic->passed == "(.)", "半角：没在打字时标点原样交给应用，实际 " + ic->passed);
+    fresh(ic.get());
+
+    // 翻页键可选（#36）：打开 , . 和 Tab，关掉 - =
+    {
+        std::ofstream(configDir + "/wowtype.conf")
+            << "PageKeysMinusEqual=False\nPageKeysCommaPeriod=True\nPageKeysTab=True\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), ",");
+        check(ic->committed.empty() && page(ic.get()) == p1, "第一页按 , 不上屏也不翻页");
+        type(ic.get(), ".");
+        const auto p2 = page(ic.get());
+        check(ic->committed.empty() && !p2.empty() && p2 != p1, ". 翻到下一页：" + join(p2));
+        type(ic.get(), "<stab>");
+        check(page(ic.get()) == p1, "Shift+Tab 翻回第一页：" + join(page(ic.get())));
+        type(ic.get(), "<tab>");
+        check(page(ic.get()) == p2, "Tab 翻到下一页：" + join(page(ic.get())));
+        type(ic.get(), "=");
+        check(!ic->committed.empty(), "关掉 - = 后按 = 先上屏候选：" + ic->committed);
+    }
     fresh(ic.get());
 
     // 自定义词：非拼音编码、\n 换行
