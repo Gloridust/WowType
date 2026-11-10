@@ -184,7 +184,15 @@ pub fn beam_search(
         let states = prune(std::mem::take(&mut buckets[pos]), beam_size, |node| {
             node.word.map(|(f, i)| spans[f][i].word.text.as_str())
         });
-        spans[pos] = collect_spans(graph, lexicon, pos, max_word_syllables, per_span, config);
+        spans[pos] = collect_spans(
+            graph,
+            lexicon,
+            pos,
+            max_word_syllables,
+            per_span,
+            config,
+            false,
+        );
 
         for state in states {
             let parent = arena.len();
@@ -297,6 +305,7 @@ pub fn first_words(
         return Vec::new();
     }
     let per_span = config.max_expansions_per_state.max(1);
+    const RARE: bool = false;
     let mut words: Vec<(BeamWord, f64)> = collect_spans(
         graph,
         lexicon,
@@ -304,6 +313,7 @@ pub fn first_words(
         config.max_word_syllables.max(1),
         per_span,
         config,
+        RARE,
     )
     .into_iter()
     .filter(|s| s.word.known && s.word.end < n)
@@ -346,6 +356,8 @@ pub fn all_first_words(
     if graph.len() == 0 || per_span == 0 {
         return Vec::new();
     }
+    // 生僻字只在这里（翻页的长尾）出现，见 [`crate::lexicon::LexEntry::is_rare`]
+    const RARE: bool = true;
     let mut words: Vec<(BeamWord, f64)> = collect_spans(
         graph,
         lexicon,
@@ -353,6 +365,7 @@ pub fn all_first_words(
         config.max_word_syllables.max(1),
         per_span,
         config,
+        RARE,
     )
     .into_iter()
     .filter(|s| s.word.known)
@@ -382,6 +395,7 @@ fn collect_spans(
     max_syllables: usize,
     per_span: usize,
     config: &BeamConfig,
+    rare: bool,
 ) -> Vec<Span> {
     let mut found: Vec<Span> = Vec::new();
     let mut keys: Vec<SyllableQuery> = Vec::new();
@@ -395,6 +409,7 @@ fn collect_spans(
         &mut keys,
         &mut found,
         config,
+        rare,
     );
 
     // 同一个结束位置内按「词典代价 + 纠错代价」排序截断。
@@ -449,6 +464,7 @@ fn collect_dfs(
     keys: &mut Vec<SyllableQuery>,
     out: &mut Vec<Span>,
     config: &BeamConfig,
+    rare: bool,
 ) {
     for edge in graph.edges_from(pos) {
         let edge_typos = typos + usize::from(edge.typo);
@@ -463,12 +479,22 @@ fn collect_dfs(
         }
         let abbrev = keys.iter().filter(|q| q.is_jianpin()).count();
         let jianpin = abbrev > 0;
-        for entry in lexicon.lookup(keys) {
+        let entries = if rare {
+            lexicon.lookup(keys)
+        } else {
+            lexicon.lookup_common(keys)
+        };
+        let pinyin = if entries.is_empty() {
+            String::new()
+        } else {
+            pinyin_of(keys)
+        };
+        for entry in entries {
             let lexical = config.lexicon_weight * lexicon.cost(&entry);
             out.push(Span {
                 word: BeamWord {
-                    text: entry.word.clone(),
-                    pinyin: pinyin_of(keys),
+                    text: entry.word,
+                    pinyin: pinyin.clone(),
                     freq: entry.freq,
                     known: true,
                     syllable_count: keys.len(),
@@ -494,6 +520,7 @@ fn collect_dfs(
                 keys,
                 out,
                 config,
+                rare,
             );
         }
         keys.truncate(before);
