@@ -239,12 +239,12 @@ void runCases(Instance &instance) {
         type(ic.get(), std::string(1, static_cast<char>('1' + prefix)));
         check(ic->committed.empty(), "选句首词不上屏，实际 " + ic->committed);
         check(preedit(ic.get()) == "你好zhong'guo", "编辑区 = 已选 + 剩余拼音（分好音节），实际 " + preedit(ic.get()));
-        // 删掉剩余拼音，再退格撤销选词
-        type(ic.get(), "<bs><bs><bs><bs><bs><bs><bs><bs>");
-        check(preedit(ic.get()) == "你好", "删完剩余拼音，实际 " + preedit(ic.get()));
+        // 退格先撤销选词（#49），剩余拼音不动；没有选词了才删字母
         type(ic.get(), "<bs>");
-        check(preedit(ic.get()) == "ni'hao", "再退格撤销选词，实际 " + preedit(ic.get()));
-        type(ic.get(), "zhongguo");
+        check(preedit(ic.get()) == "ni'hao'zhong'guo", "退格先撤销选词，实际 " + preedit(ic.get()));
+        type(ic.get(), "<bs>");
+        check(preedit(ic.get()) == "ni'hao'zhong'gu", "没有选词了退格删字母，实际 " + preedit(ic.get()));
+        type(ic.get(), "o");
         cands = page(ic.get());
         for (std::size_t i = 0; i < cands.size(); ++i) {
             if (cands[i] == "你好") {

@@ -1524,8 +1524,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             return;
         }
         if (sym == FcitxKey_BackSpace) {
-            if (state->remaining().empty() && !state->selections_.empty()) {
-                // 撤销最后一次选词，拼音回到编辑区
+            if (!state->selections_.empty()) {
+                // 选过词先撤销最后一次选词，拼音回到编辑区（后面还没选的拼音不动），
+                // 和微信输入法一样；没有选词了才删字母
                 state->selections_.pop_back();
             } else {
                 popUtf8(state->buffer_);
