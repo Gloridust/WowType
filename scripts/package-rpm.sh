@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用 rpmbuild 从当前源码打 Fedora 安装包（.rpm）。
 #   scripts/package-rpm.sh <版本> [输出目录]
-# 需要 rpm-build rust cargo cmake extra-cmake-modules gcc-c++ fcitx5-devel alsa-lib-devel；
+# 需要 rpm-build rust cargo cmake extra-cmake-modules gcc-c++ pkgconf-pkg-config fcitx5-devel alsa-lib-devel；
 # 词库用 scripts/make-data.sh 的产物，默认 dist/data（WOWTYPE_DATA_DIR=<目录> 可以改）。
 #
 # 版本号可以带 ~（0.3.6~git20261110.abc1234），RPM 把 ~ 排在正式版之前。
@@ -16,6 +16,12 @@ VERSION=${1:?用法: package-rpm.sh <版本> [输出目录]}
   exit 1
 }
 command -v rpmbuild >/dev/null || { echo "需要 rpmbuild（dnf install rpm-build）" >&2; exit 1; }
+FCITX_VERSION=$(pkg-config --modversion Fcitx5Core) || {
+  echo "找不到 Fcitx5Core.pc，请安装 fcitx5-devel 和 pkgconf-pkg-config" >&2; exit 1;
+}
+[[ "$FCITX_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || {
+  echo "无效的 Fcitx5Core 版本：$FCITX_VERSION" >&2; exit 1;
+}
 OUT=$(realpath -m "${2:-dist}")
 DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
@@ -70,6 +76,7 @@ rm -rf "$src"
 
 {
   printf '%%global wt_version %s\n' "$VERSION"
+  printf '%%global wt_fcitx_version %s\n' "$FCITX_VERSION"
   cat <<'SPEC'
 # 插件静态链接 Rust 核心，不单独出 debuginfo 包
 %global debug_package %{nil}
@@ -88,9 +95,11 @@ BuildRequires:  rust
 BuildRequires:  cmake
 BuildRequires:  extra-cmake-modules
 BuildRequires:  gcc-c++
-BuildRequires:  fcitx5-devel
+BuildRequires:  pkgconf-pkg-config
+BuildRequires:  fcitx5-devel >= %{wt_fcitx_version}
 BuildRequires:  alsa-lib-devel
-Requires:       fcitx5
+# 自动 SONAME 依赖不表达新增加的 C++ API 符号，需要明确版本下限。
+Requires:       fcitx5 >= %{wt_fcitx_version}
 # 设置界面要 PyGObject + GTK 4 + libadwaita；不装也不影响打字
 Recommends:     python3-gobject
 Recommends:     gtk4

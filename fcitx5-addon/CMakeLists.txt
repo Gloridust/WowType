@@ -9,9 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
 
-find_package(Fcitx5Core REQUIRED)
-find_package(Fcitx5Config REQUIRED)
-find_package(Fcitx5Utils REQUIRED)
+find_package(Fcitx5Core 5.1 REQUIRED)
+find_package(Fcitx5Config 5.1 REQUIRED)
+find_package(Fcitx5Utils 5.1 REQUIRED)
 
 # Rust 核心产物。先执行：cargo build --release -p wowtype-core（产物在 workspace 根 target/）
 #
@@ -83,13 +83,15 @@ else()
 endif()
 
 install(TARGETS wowtype
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/fcitx5"
+    # Fcitx5Utils 同前缀时复用宿主的 lib/lib64/multiarch 路径；
+    # 不同前缀（包括 Nix store）时按本包的 GNUInstallDirs 计算。
+    LIBRARY DESTINATION "${FCITX_INSTALL_ADDONDIR}"
 )
 
 # 动态链接时才需要把 Rust cdylib 一起装上
 if(NOT WOWTYPE_CORE_STATIC)
     install(FILES "${WOWTYPE_CORE_LIB}"
-        DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        DESTINATION "${FCITX_INSTALL_LIBDIR}"
     )
 endif()
 install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/../core/include/wowtype_core.h"

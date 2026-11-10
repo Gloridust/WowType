@@ -1,244 +1,264 @@
-# 从源码构建：每一步怎么验证
+# Linux 安装与更新
 
-普通用户用 [README](../README.md#安装) 里的安装包就行。这里是从源码一步步构建、每步都能验证的版本，
-方便出问题时定位到哪一层。需要 fcitx5 5.1 或更新（Ubuntu 24.04 / Debian 13 起）。
+WowType 是 Fcitx 5 的输入法插件。安装时需要让插件、Fcitx 5 和系统动态库使用兼容的版本；
+安装包因此按发行版构建。源码构建会使用本机的 Fcitx 5 开发文件。
 
-## 快速构建（4 步）
+最低要求：Fcitx 5.1、C++20 编译器、CMake 3.16。构建使用当前稳定版 Rust 和仓库的 `Cargo.lock`。
+默认启用的语音功能需要 ALSA。设置界面需要 Python 3、PyGObject、GTK 4、**libadwaita 1.5+**。
 
-适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
-（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git；
-设置界面另外要 PyGObject、GTK 4 和 libadwaita 1.4+）。
+## 选择安装方式
+
+| 系统 | 方式 | 说明 |
+|---|---|---|
+| Arch Linux | 一键安装或本机 `makepkg` | 先完整升级，预编译包为 x86_64 |
+| EndeavourOS / Garuda / CachyOS | Arch 安装路径或本机打包 | 系统必须与所用 Arch 动态库兼容；加载失败时本机重编译 |
+| Manjaro | 本机 `makepkg` | 使用自己的软件源，脚本不会自动套用 Arch 包 |
+| Ubuntu 24.04 / 26.04 | 对应版本 deb | 不跨 Ubuntu 版本混装 |
+| Debian 13 / 13.x | Debian 13 deb | Ubuntu 22.04、Debian 12 默认依赖不满足本项目基线 |
+| Mint / Pop!_OS 等衍生版 | 明确声明兼容基线时使用 deb | `noble → ubuntu24.04`、`resolute → ubuntu26.04`、`trixie → debian13` |
+| Fedora 43 / 44 / 45 | 对应 `.fc<版本>` RPM | 一键安装只匹配当前系统版本 |
+| openSUSE Tumbleweed | 本机源码安装 | 独立的 zypper 依赖和 Fcitx 插件路径 |
+| NixOS / Home Manager | flake | 与系统共用 nixpkgs，注册到 Fcitx 插件列表 |
+| Fedora Atomic | 宿主 `rpm-ostree` 分层 | 普通 dnf 安装脚本会给出手动说明 |
+
+[Releases](https://github.com/Gloridust/WowType/releases) 中存在对应资产后才能使用二进制安装。
+没有发布包、其他 CPU 架构或其他发行版，先使用下面的源码构建方法。
+Alpine 使用 musl，需要单独完成构建与运行验证；这里不把 glibc 安装包用于 Alpine。
+openSUSE Leap、RHEL / Rocky / AlmaLinux 也需要先核对 Fcitx 5 和 libadwaita 的可用版本。
+
+## 一键安装与升级
+
+用普通用户运行；脚本会在安装软件包时调用 sudo：
 
 ```bash
-# 1. 依赖
-sudo apt install build-essential pkg-config cmake extra-cmake-modules \
-  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev git python3 curl
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1    # 设置界面用，不装也能打字
-curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
-
-# 2. 代码
-git clone https://github.com/Gloridust/WowType.git
-cd WowType
-
-# 3. 编译并安装插件和设置界面（Rust 核心静态链接进插件，不用另装 .so）
-cargo build --release -p wowtype-core
-cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build -j"$(nproc)"
-sudo cmake --install build
-
-# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice 和语言模型）
-scripts/make-data.sh "" dist/data
-mkdir -p ~/.local/share/wowtype
-cp dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm ~/.local/share/wowtype/
+curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 ```
 
-> 不想装设置界面，cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`。
->
-> Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
-> 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
->
-> 不想自己生成词库，也可以下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
+下载目标来自当前仓库，按系统选择 `.deb`、`.pkg.tar.zst` 或 `.rpm`，每个文件都校验 SHA256。
+缺少匹配包、校验记录重复、哈希不符或下载失败时，脚本在安装前停止。
+Arch 会先执行完整 `pacman -Syu`，请先保存工作并查看升级提示。
 
-下面是从零开始、每一步都能验证的版本，出问题时用它定位到哪一层。
+查看安装目标、固定版本或保留当前桌面设置：
 
-## 0. 依赖
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh -o install.sh
+bash install.sh --help
+bash install.sh --print-plan
+WOWTYPE_VERSION=v0.3.8 bash install.sh
+WOWTYPE_NO_IM_CONFIG=1 WOWTYPE_NO_RESTART=1 bash install.sh
+```
+
+`--print-plan` 不查询网络、不安装软件、不修改配置。`WOWTYPE_YES=1` 可用于非交互安装。
+`WOWTYPE_REPO=owner/repo` 可选择其他发布仓库；系统和版本的匹配规则仍然生效。
+对应发行版的 Release 资产不存在时，请从本仓库源码构建。
+
+## 从源码构建
+
+### 1. 安装本发行版的依赖
+
+#### Debian 13 / Ubuntu 24.04、26.04 / 兼容衍生版
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
-  libasound2-dev libx11-dev libxkbcommon-dev \
-  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
-  fcitx5 fcitx5-frontend-gtk3 fcitx5-frontend-qt5 \
-  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+sudo apt install build-essential pkg-config cmake extra-cmake-modules git curl xz-utils \
+  libasound2-dev libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
+  fcitx5 fcitx5-frontend-all fcitx5-config-qt im-config \
+  python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 ```
 
-只有语音需要 `libasound2-dev` 和 `libx11-dev`；只想用文字输入可以省掉。
-`python3-gi gir1.2-gtk-4.0 gir1.2-adw-1` 是设置界面 `wowtype-config` 运行时要的（libadwaita 1.4+），不影响编译。
-
-Fedora：
+已有可用的 Rust 工具链可以直接使用；未安装时按 [Rust 官方说明](https://www.rust-lang.org/tools/install)安装：
 
 ```bash
-sudo dnf install -y rust cargo cmake extra-cmake-modules gcc-c++ pkgconf-pkg-config \
-  fcitx5 fcitx5-devel alsa-lib-devel python3-gobject gtk4 libadwaita gobject-introspection
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal
+. "$HOME/.cargo/env"
 ```
 
-Fedora 的 fcitx5 插件目录是 `/usr/lib64/fcitx5`，第 4 步的 CMake 会自己选 `lib64`。
-想打成 rpm：`scripts/package-rpm.sh <版本> dist/pkg`（另外要 `rpm-build`，词库先用第 2 步放到 `dist/data`）。
+#### Arch / EndeavourOS / Garuda / CachyOS / Manjaro
 
-## 1. 构建核心并验证
+```bash
+sudo pacman -Syu --needed base-devel rust cmake extra-cmake-modules pkgconf git curl xz \
+  fcitx5 fcitx5-gtk fcitx5-qt fcitx5-configtool alsa-lib \
+  python python-gobject gtk4 libadwaita
+```
+
+Arch 的 `fcitx5` 包已经包含头文件和 CMake 配置，不需要另找 `fcitx5-devel`。
+使用 rustup 管理工具链的用户保留现有 rustup 安装，不要再安装与它冲突的 `rust` 包。
+Manjaro 在自己的仓库内完整升级后，本机编译下面的安装包。
+
+#### Fedora
+
+```bash
+sudo dnf install rust cargo gcc-c++ make cmake extra-cmake-modules pkgconf-pkg-config git curl xz \
+  fcitx5 fcitx5-devel alsa-lib-devel \
+  fcitx5-configtool fcitx5-gtk3 fcitx5-gtk4 fcitx5-qt5 fcitx5-qt6 \
+  python3 python3-gobject gtk4 libadwaita gobject-introspection
+```
+
+GTK 和 Qt 前端显式安装各自的版本子包，适用于禁用弱依赖的系统。
+需要制作本机 RPM 时，再安装 `rpm-build`。
+
+#### openSUSE Tumbleweed
+
+```bash
+sudo zypper refresh
+sudo zypper install rust cargo gcc-c++ make cmake extra-cmake-modules pkgconf-pkg-config git curl xz \
+  fcitx5 fcitx5-devel fcitx5-configtool fcitx5-gtk3 fcitx5-gtk4 alsa-devel \
+  python3 python3-gobject python3-gobject-Gdk \
+  typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1
+```
+
+Qt 应用还需要与应用 Qt 版本对应的 Fcitx 前端，可用 `zypper search fcitx5-qt` 查看仓库提供的子包。
+Python 的实际版本包名会随 Tumbleweed 更新；上面的通用名字采用 [PyGObject 官方安装说明](https://pygobject.gnome.org/getting_started.html#opensuse)。
+
+### 2. 获取源码与词库
 
 ```bash
 git clone https://github.com/Gloridust/WowType.git
 cd WowType
-cargo build --release -p wowtype-core
-cargo test --workspace                      # 142 项
-./scripts/abi-smoke.sh                      # C ABI 22 项，插件依赖的就是它
+scripts/make-data.sh "" dist/data
 ```
 
-三条都绿再往下走。`abi-smoke` 失败说明核心有问题，装插件也没用。
+词库脚本下载并转换 rime-ice，合并项目热词，下载经过固定 SHA256 校验的语言模型。
+输出包含 `lexicon.tsv`、`english.txt`、`words.lm` 和许可证、来源信息。
+已有 rime-ice checkout 时可传入其路径，避免重复下载。
 
-## 2. 准备词库
+### 3. Arch / Manjaro：制作原生安装包
 
-词库是唯一必须自己准备的数据。用雾凇拼音（开源、覆盖好）：
+安装好第 1 节依赖并准备数据后，用普通用户执行：
 
 ```bash
-sudo apt install -y git python3
-git clone --depth 1 https://github.com/iDvel/rime-ice.git /tmp/rime-ice
-python3 tools/rime2tsv.py /tmp/rime-ice/rime_ice.dict.yaml > /tmp/lexicon.tsv
-wc -l /tmp/lexicon.tsv        # 约 55 万行
-sudo mkdir -p /usr/share/wowtype
-sudo cp /tmp/lexicon.tsv /usr/share/wowtype/lexicon.tsv
+version=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml)
+scripts/package-arch.sh "$version" dist/pkg
+sudo pacman -U "dist/pkg/wowtype-$version-1-$(uname -m).pkg.tar.zst"
 ```
 
-`rime2tsv.py` 会顺着 `import_tables` 递归合并被引用的词库——rime-ice 的条目几乎都在
-`cn_dicts/base` 里，只转主文件会只剩不到一万条。缺 `cn_dicts/ext` 之类的警告可以忽略。
+`makepkg` 会在独立目录编译并把插件、设置界面、自检工具和完整词库一起打包。
+之后可用 `pacman -Q wowtype` 查询安装版本、`pacman -Qkk wowtype` 检查已安装文件。
+无需继续执行通用源码安装步骤，直接进入“启用 Fcitx 5”。
 
-### 语言模型（可选）
+### 4. 通用源码编译与安装
 
-有 ARPA 或 bigram TSV 就设置 `WOWTYPE_LM`。**没有真实语料就别用**
-`tools/make_bigram.py` 生成的那种，实测会掉点（见 [ENGINE.md](ENGINE.md)）。
-
-## 3. 自检
+其他发行版或不需要原生安装包时，在仓库根目录执行：
 
 ```bash
-cargo run -p wowtype-core --bin wowtype-check -- \
-  --lexicon /usr/share/wowtype/lexicon.tsv \
-  --s2t core/data/s2t.tsv
-```
-
-预期：`[ok] 词库: 552087 条词 ... 跳过 27 行`，以及符号表/双拼/模糊音三项 ok。
-
-首次加载会在词库旁边生成 `lexicon.tsv.wcache`（约 18MB）。`/usr/share` 只读时
-快照会落到 `~/.cache/wowtype/`，第二次启动就从 1.4s 降到 0.35s。删除快照没有副作用，
-下次自动重建。
-词库缺失时退出码为 1。
-
-顺手试一下真实输入：
-
-```bash
-cargo run --release -p wowtype-core --bin wowtype-demo -- \
-  --lexicon /usr/share/wowtype/lexicon.tsv nihao
-# 1. 你好
-```
-
-## 4. 构建并安装 fcitx5 插件
-
-```bash
+cargo build --release --locked -p wowtype-core
+cargo test --locked -p wowtype-core
+./scripts/abi-smoke.sh
 cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build -j$(nproc)
+cmake --build build -j"$(nproc)"
 sudo cmake --install build
+sudo install -m755 target/release/wowtype-check target/release/wowtype-show /usr/bin/
+install -Dm644 -t "${XDG_DATA_HOME:-$HOME/.local/share}/wowtype" \
+  dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm
 ```
 
-安装后会看到：
+CMake 使用 Fcitx 5 导出的安装路径：Debian / Ubuntu 通常为 `/usr/lib/<multiarch>/fcitx5`，
+Arch 为 `/usr/lib/fcitx5`，Fedora / openSUSE 为 `/usr/lib64/fcitx5`。
+可用 `pkg-config --variable=libdir Fcitx5Core` 查看本机库目录。
+设置界面、输入法注册文件和简繁映射表由 CMake 一起安装；真实词库放入当前用户的数据目录。
 
-```
-/usr/bin/wowtype-config
-/usr/share/applications/io.github.Gloridust.WowType.Config.desktop
-/usr/lib/x86_64-linux-gnu/fcitx5/libwowtype.so
-/usr/include/wowtype/wowtype_core.h
-/usr/share/fcitx5/addon/wowtype.conf
-/usr/share/fcitx5/inputmethod/wowtype.conf
-/usr/share/wowtype/demo_lexicon.tsv
-/usr/share/wowtype/s2t.tsv
-```
+需要可由包管理器卸载的包时，Debian / Ubuntu 可用
+`scripts/package-deb.sh engine "$version" dist/pkg`，Fedora 可用
+`scripts/package-rpm.sh "$version" dist/pkg`，其中 `version` 按上一节从 `core/Cargo.toml` 读取。
+Debian 打包还需要 `dpkg-dev`，Fedora 打包需要 `rpm-build`；两者都需要第 2 节的数据。
 
-缺词库时代码会退到 `demo_lexicon.tsv`（17 个词），能验证链路但没法日常用。
-
-插件去 `<安装前缀>/share/wowtype/` 找系统词库（`-DCMAKE_INSTALL_PREFIX=/usr` 时就是 `/usr/share/wowtype/`），
-要改的话 cmake 时加 `-DWOWTYPE_SYSTEM_DATA_DIR=<目录>`。用户目录 `~/.local/share/wowtype/` 总是优先。
-
-不想装设置界面：cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`，就没有前两个文件。
-设置界面自己能跑一遍单元测试（不开窗口）：`python3 settings/wowtype-config --self-test`。
-
-## 5. 启用
+只保留文字输入时，Rust 和 CMake 两侧一起关闭语音：
 
 ```bash
-fcitx5 -rd                      # 重启
-fcitx5-configtool               # 或在托盘里「配置」
+cargo build --release --locked -p wowtype-core --no-default-features
+cmake -S fcitx5-addon -B build-text -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr -DWOWTYPE_VOICE=OFF
+cmake --build build-text -j"$(nproc)"
+sudo cmake --install build-text
 ```
 
-在「输入法」页把 **WowType** 加进列表，然后切过去试打 `nihao`。
-也可以运行 `wowtype-config`，「常规」页会检查 WowType 在不在列表里，不在就点「添加」。
+这条构建路径不需要 ALSA 开发包；后续仍按通用步骤安装词库和自检工具。
+如果不需要设置界面，再添加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`，使用 `fcitx5-configtool` 添加输入法。
+维护开发环境时可用 `scripts/build-linux.sh --addon` 统一构建与测试。
+真实词库存在时会运行按键测试，测试失败会直接返回非零状态。
 
-如果托盘里根本没有 fcitx5，先确认输入法框架是它：
+## 启用 Fcitx 5
+
+先让桌面启动 Fcitx 5，再添加 WowType。修改会话配置后注销并重新登录。
+
+| 桌面 / 系统 | 设置 |
+|---|---|
+| Debian / Ubuntu | `im-config -n fcitx5`，然后重新登录 |
+| KDE Plasma Wayland | 系统设置 → 虚拟键盘 → Fcitx 5，由 KWin 启动输入法 |
+| Fedora 的其他桌面 | 可安装 `fcitx5-autostart`，或使用 `im-chooser` 选择 Fcitx 5 |
+| Arch / openSUSE 的 X11 桌面 | 在桌面自启动项中启用 Fcitx 5，并按下面设置 X11 环境变量 |
+| GNOME / 其他 Wayland 合成器 | 按合成器的启动方式配置 Fcitx 5；GNOME 可安装 Input Method Panel 扩展 |
+
+X11 会话通常需要在桌面读取的登录配置文件中设置：
 
 ```bash
-im-config -n fcitx5             # 然后重新登录
+export XMODIFIERS=@im=fcitx
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
 ```
 
-## 6. 出问题怎么查
+Wayland 的客户端支持不同：KDE / KWin 的原生 Qt 通道通常应让 `QT_IM_MODULE` 保持未设置，
+支持 text-input-v3 的 GTK 应用也可使用原生通道。按 [Fcitx 官方 Wayland 指南](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland/en)
+配置自己的桌面，不要把上面的 X11 变量统一写入所有 Wayland 会话。
+需要自启动文件的 XDG 桌面可将 `/usr/share/applications/org.fcitx.Fcitx5.desktop` 复制到 `~/.config/autostart/`；
+KDE Wayland 使用其虚拟键盘设置，避免重复启动。
 
-| 现象 | 原因 | 处理 |
-|---|---|---|
-| `find_package(Fcitx5Core)` 失败 | 缺 `libfcitx5core-dev` | 按第 0 节装依赖 |
-| CMake 报找不到 `libwowtype_core.a` | 没先 `cargo build --release -p wowtype-core` | 先构建，或用 `-DWOWTYPE_CORE_LIB=` 指定 |
-| 插件编过但输入法列表里没有 | 配置没装对 | 检查 `/usr/share/fcitx5/addon/wowtype.conf` 是否存在 |
-| 加载失败 | 看日志里 wowtype 那几行 | `fcitx5 -r --verbose=*=5 2>&1 \| grep -i wowtype` |
-| 打得出来但全是英文 | 词库没加载 | 设 `WOWTYPE_LEXICON` 指到词库，重启 fcitx5 |
-| `wowtype-config` 报 `Namespace Adw not available` | 缺 libadwaita 的 GI 绑定 | `sudo apt install gir1.2-adw-1` |
-| 设置里改了没效果 | 设了同名环境变量，它优先 | `env \| grep WOWTYPE`，去掉它 |
-| 候选为空 | 同上 | 跑第 3 步的自检 |
-
-看日志：
+添加输入法：
 
 ```bash
-fcitx5 -rd --verbose 2>&1 | grep -i wowtype
-fcitx5-diagnose | head -50
+wowtype-config --add-to-group --restart
 ```
 
-## 7. 语音（可选）
+或打开 `fcitx5-configtool`，取消“仅显示当前语言”，搜索并添加 WowType。
+按 `Ctrl+Space` 切换，输入 `nihao`。重启 Fcitx 5 后，Chromium / Electron 程序可能需要退出后重新打开。
 
-离线识别（微信离线模型，纯本地，不需要任何外部程序）：
+## 检查与排错
 
 ```bash
-sudo apt install -y curl unzip
-wowtype-voiced --asr wtlocal      # 首次会从 CDN 下载约 100MB 并校验 MD5
+wowtype-config --self-test
+# 安装包自带的系统词库：
+wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv
+wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao
+# 源码安装到当前用户目录的词库：
+wowtype-check --lexicon "${XDG_DATA_HOME:-$HOME/.local/share}/wowtype/lexicon.tsv"
+fcitx5-diagnose
 ```
 
-或者先单独验证引擎能否识别一段 16kHz 单声道 WAV：
+| 现象 | 检查方式 |
+|---|---|
+| CMake 找不到 Fcitx5Core 或版本过旧 | `pkg-config --modversion Fcitx5Core`；安装第 1 节的开发包 |
+| 找不到 `libwowtype_core.a` | 先构建 Rust 核心；自定义 target 目录时用 `-DWOWTYPE_CORE_LIB=/绝对路径/libwowtype_core.a` |
+| 输入法列表没有 WowType | 检查 `/usr/share/fcitx5/addon/wowtype.conf`、`/usr/share/fcitx5/inputmethod/wowtype.conf` 和插件库目录 |
+| 插件报 undefined symbol | 按本机发行版安装匹配包；Arch 完整升级，Manjaro 本机重编译 |
+| 设置界面缺 `gi` / `Gtk` / `Adw` | 按第 1 节补齐当前发行版的 Python GI / GTK / libadwaita 包 |
+| 只有少量候选 | 真实词库未加载，程序退回演示词典；检查 `lexicon.tsv` 路径 |
+| 只在部分应用里无法输入 | 检查应用所用 GTK / Qt 前端、X11 / Wayland 配置，并重启应用 |
+| emoji 显示方框 | Debian / Ubuntu 安装 `fonts-noto-color-emoji`；Arch 安装 `noto-fonts-emoji`；Fedora 安装 `google-noto-color-emoji-fonts` |
 
-```bash
-cargo run --release -p wowtype-voice --bin wowtype-asr -- --download 测试.wav
-```
-
-```bash
-cargo build --release -p wowtype-voiced
-# X11 下：默认 Alt+A 触发（可 --hotkey 改）
-./target/release/wowtype-voiced \
-  --asr-cmd 'sherpa-onnx-offline --tokens=tokens.txt --paraformer=model.onnx --wav={wav}'
-```
-
-上屏默认走剪贴板（`wl-copy` + Ctrl+V 或 `xclip` + Ctrl+V），因为 `ydotool type`
-**发不出汉字**。按环境装其一：
-
-```bash
-sudo apt install -y wl-clipboard          # Wayland
-sudo apt install -y xclip xdotool         # X11
-```
-
-Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成给本进程发信号。
+用户数据优先于系统词库；环境变量优先于设置界面配置。完整变量说明见 [CONFIG.md](CONFIG.md)，语音说明见 [VOICE.md](VOICE.md)。
+[CI](../.github/workflows/ci.yml) 定义了安装与更新回归、Debian / Ubuntu / Arch / Fedora 打包安装、openSUSE 源码安装和 Nix 检查。
+桌面候选框、真实麦克风和具体应用兼容性需要在对应桌面会话中确认。
 
 ## NixOS / Nix
 
-仓库根目录的 `flake.nix` 提供 `packages.<system>.default`（也叫 `wowtype`）和 `overlays.default`。
-包里有插件、设置界面、`wowtype-check` / `wowtype-show` 和词库（词库按哈希固定，从 Releases 的
-`wowtype-data-rime-ice-*.tar.gz` 下载），插件去包自己的 `share/wowtype/` 找词库。
+构建或检查 flake：
 
 ```bash
-nix build github:Gloridust/WowType          # 只构建
-nix flake check github:Gloridust/WowType    # 构建并用真实词库打一次「你好」、跑设置界面自测
+nix build github:Gloridust/WowType
+nix flake check github:Gloridust/WowType
 ```
 
-NixOS 配置：
+系统 flake 配置：
 
 ```nix
 # flake.nix 的 inputs
 wowtype = {
   url = "github:Gloridust/WowType";
-  inputs.nixpkgs.follows = "nixpkgs";   # 插件要和系统的 fcitx5 用同一份 nixpkgs 编
+  inputs.nixpkgs.follows = "nixpkgs";
 };
 
-# configuration.nix（inputs 通过 specialArgs 传进来）
+# configuration.nix，inputs 通过 specialArgs 传入
+# 与系统使用同一份 Fcitx 5，避免插件 ABI 不匹配。
 i18n.inputMethod = {
   enable = true;
   type = "fcitx5";
@@ -246,51 +266,57 @@ i18n.inputMethod = {
 };
 ```
 
-`nixos-rebuild switch` 后重新登录，用 `wowtype-config --add-to-group` 或 Fcitx 5 配置把 WowType 加进输入法列表。
-GNOME 的绿色候选框扩展在包的 `share/gnome-shell/extensions/` 里，NixOS 不会自动启用它。
+运行 `sudo nixos-rebuild switch` 后重新登录。Home Manager 将同一个包加入自己的 `i18n.inputMethod.fcitx5.addons`。
+也可以使用 `nixpkgs.overlays = [ inputs.wowtype.overlays.default ];` 后引用 `pkgs.wowtype`。
+插件作为系统 Fcitx 的 addon 注册；单独把包放进 Nix profile 不会自动完成插件注册。
+词库使用 `nix/package.nix` 中固定 URL 和哈希的上游数据资产。
 
-## 环境变量
+更新时先在自己的 flake 中执行 `nix flake update wowtype`，再重建系统或 Home Manager 配置。
 
-平时的设置用 `wowtype-config`（存在 `~/.config/fcitx5/conf/wowtype.conf`，键名见 [CONFIG.md](CONFIG.md#配置文件和环境变量)）。
-下面的环境变量主要用来调试和测试，设了就**优先于**配置文件。
+## Fedora Atomic
 
-| 变量 | 作用 | 默认 |
-|---|---|---|
-| `WOWTYPE_LEXICON` | 词库路径 | `/usr/share/wowtype/lexicon.tsv` |
-| `WOWTYPE_LM` | bigram TSV | 无 |
-| `WOWTYPE_S2T` | 简繁表 | `/usr/share/wowtype/s2t.tsv` |
-| `WOWTYPE_USER_DICT` | 用户词库 | `$XDG_DATA_HOME/wowtype/user.tsv` |
-| `WOWTYPE_FUZZY=1` | 模糊音 | 关 |
-| `WOWTYPE_SHUANGPIN=1` | 双拼 | 关 |
-| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`ziranma`、`xiaohe`、`microsoft`、`sogou`、`abc`、`ziguang`、`pinyinjiajia`），设了就打开双拼 | `ziranma` |
-| `WOWTYPE_SHIFT_TOGGLE` | 单按哪个 Shift 切英文：`both`、`left`、`right`、`off` | `both` |
-| `WOWTYPE_TRADITIONAL=1` | 繁体输出 | 关 |
-| `WOWTYPE_TYPO=0` | 关掉按错键纠错 | 开 |
-| `WOWTYPE_VERTICAL=1` | 候选竖排 | 横排 |
-| `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉 | `Alt_R` |
-| `WOWTYPE_VOICE_OVERLAY=0` | GNOME 上不用语音浮条，用候选框里的文字提示 | 用浮条 |
-| `WOWTYPE_CUSTOM` | 自定义词文件 | `$XDG_DATA_HOME/wowtype/custom.tsv` |
-| `WOWTYPE_NO_UPDATE_CHECK` | 设了就不自动检查更新 | 不设 |
-| `WOWTYPE_SINK` | 语音上屏后端 | `clipboard` |
-
-## 已知限制
-
-- 词库必须自己准备（WeType 原库解不出来，见 `docs/DATA.md`）
-- 简繁转换是字符级的，不处理「发/髮」这类词组歧义
-- 语音的采集与全局热键**没有在 Linux 上实机验证过**（见 `docs/VOICE.md`）
-- fcitx5 插件是本项目唯一没有经过编译验证的代码（API 已逐项核对）
-
-## 卸载
+Silverblue / Kinoite 等桌面在宿主上使用匹配当前 Fedora 版本的 RPM。
+下载并按 Release 的 `SHA256SUMS` 核对后，使用宿主终端：
 
 ```bash
-# 安装包装的
-sudo apt remove wowtype
-
-# 源码装的（在仓库目录里）
-sudo xargs rm -v < build/install_manifest.txt
-
-# 学到的数据、自定义词、设置和缓存（可选）
-rm -rf ~/.local/share/wowtype ~/.local/state/wowtype ~/.cache/wowtype ~/.config/fcitx5/conf/wowtype.conf
+rpm-ostree install ./wowtype-*.rpm fcitx5 fcitx5-configtool \
+  fcitx5-gtk3 fcitx5-gtk4 fcitx5-qt5 fcitx5-qt6 \
+  python3-gobject gtk4 libadwaita gobject-introspection
+systemctl reboot
 ```
 
-卸载后到 Fcitx 5 配置里把 WowType 从输入法列表里删掉，再 `fcitx5 -r -d`。
+重启进入新部署后按桌面说明启用 Fcitx 5。Toolbox 内构建的插件需要打包并安装到宿主，
+只在容器里执行 `dnf install` 不会为宿主桌面注册输入法。
+
+## 更新与卸载
+
+deb、Arch 和 Fedora 原生安装包可使用设置界面的更新页；它只选择与本机匹配并通过校验的资产。
+源码安装运行 `git pull --ff-only` 后重复原有构建安装步骤。Manjaro 重做本机包，NixOS 更新自己的 flake。
+
+| 安装方式 | 卸载命令 |
+|---|---|
+| Debian / Ubuntu | `sudo apt remove wowtype` |
+| Arch / Manjaro | `sudo pacman -R wowtype` |
+| Fedora | `sudo dnf remove wowtype` |
+| Fedora Atomic | `rpm-ostree uninstall wowtype`，然后重启 |
+| NixOS / Home Manager | 从 `fcitx5.addons` 移除 WowType，再重建配置 |
+| 通用源码 | 在原仓库中检查 `build/install_manifest.txt` 后运行下方命令 |
+
+源码安装的卸载：
+
+```bash
+sudo xargs -d '\n' -r rm -v -- < build/install_manifest.txt
+sudo rm -f /usr/bin/wowtype-check /usr/bin/wowtype-show
+```
+
+如果使用 `build-text` 等其他构建目录，应使用对应的 `install_manifest.txt`。
+卸载保留用户词库、学习记录和配置。随后在 Fcitx 5 配置中移除 WowType，再重启输入法。
+
+## 官方参考
+
+- [Arch 的 Fcitx 5 包与开发文件](https://archlinux.org/packages/extra/x86_64/fcitx5/)
+- [Manjaro 软件源分支](https://wiki.manjaro.org/index.php/Switching_Branches)
+- [Fedora 的 Fcitx 5 开发包](https://packages.fedoraproject.org/pkgs/fcitx5/fcitx5-devel/)与 [GTK 前端](https://packages.fedoraproject.org/pkgs/fcitx5-gtk/fcitx5-gtk3/)
+- [PyGObject 各发行版安装方式](https://pygobject.gnome.org/getting_started.html)
+- libadwaita 1.5 起提供的 [AlertDialog](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/class.AlertDialog.html) 和 [AboutDialog](https://gnome.pages.gitlab.gnome.org/libadwaita/doc/main/class.AboutDialog.html)
+- [Fcitx 5 启动与会话设置](https://fcitx-im.org/wiki/Setup_Fcitx_5)和 [Wayland 配置](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland/en)
