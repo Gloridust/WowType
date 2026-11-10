@@ -183,8 +183,8 @@ SELECT_KEYS = [
 ]
 
 PUNCT_STYLES = [
-    ("全角（，。（）中文标点）", "Fullwidth"),
-    ("半角（,.() 英文标点）", "Halfwidth"),
+    ("全角 ，。", "Fullwidth"),
+    ("半角 , .", "Halfwidth"),
 ]
 
 SHIFT_TOGGLES = [
@@ -247,7 +247,7 @@ VOICE_KEYS = [
 ]
 
 EMOJI_KEYS = [
-    ("Super + .（Windows 键 + 句号）", "Super+period"),
+    ("Super + .", "Super+period"),
     ("Ctrl + ;", "Control+semicolon"),
     ("Ctrl + Shift + E", "Control+Shift+E"),
     ("不用快捷键", ""),
@@ -2048,7 +2048,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             pinyin.add(self.make_switch(key, title, subtitle))
         self.punct_names = [name for _, name in PUNCT_STYLES]
         self.punct_row = Adw.ComboRow(
-            title="标点样式", subtitle="中文状态下打的标点。全角时数字后面的句点仍是小数点（3.14）",
+            title="标点样式", subtitle="中文状态下打的标点：全角是中文标点，半角是英文标点。数字后面的句点仍是小数点（3.14）",
             model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
         current = self.values.get("PunctuationStyle", "Fullwidth")
         self.punct_row.set_selected(
@@ -2123,7 +2123,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         if current not in self.emoji_keys:
             labels.append(f"其他（{current}）")
             self.emoji_keys.append(current)
-        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", model=Gtk.StringList.new(labels))
+        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", subtitle="Super 就是 Windows 键",
+                                          model=Gtk.StringList.new(labels))
         self.emoji_key_row.set_selected(self.emoji_keys.index(current))
         self.emoji_key_row.connect("notify::selected", lambda row, _p: self.set_value(
             "EmojiKey", self.emoji_keys[row.get_selected()]))
