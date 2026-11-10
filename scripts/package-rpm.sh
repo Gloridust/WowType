@@ -99,6 +99,8 @@ Recommends:     libadwaita
 Recommends:     gobject-introspection
 # emoji 候选要彩色 emoji 字体才画得出来
 Recommends:     google-noto-color-emoji-fonts
+# 互译用 curl 发请求
+Recommends:     curl
 
 %description
 拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。

@@ -740,6 +740,242 @@ void runCases(Instance &instance) {
     ic.reset();
 }
 
+/// 互译：Shift 切到「译」，打的中文攒成原文，停一下就发给假的 OpenAI 服务（mock_openai.py），
+/// 回车上屏译文。异步：每 50ms 推进一步，每步做完动作后等条件成立（最多 5 秒）。
+struct TranslateStep {
+    std::string name;
+    std::function<void(HarnessInputContext *)> act;
+    std::function<bool(HarnessInputContext *)> until;
+};
+
+struct TranslateCase {
+    Instance &instance;
+    std::unique_ptr<HarnessInputContext> ic;
+    std::unique_ptr<EventSourceTime> timer;
+    std::vector<TranslateStep> steps;
+    std::size_t current = 0;
+    bool acted = false;
+    int waited = 0;
+    std::string configFile;
+};
+
+void tapKey(HarnessInputContext *ic, KeySym sym) {
+    KeyEvent press(ic, Key(sym), false);
+    ic->keyEvent(press);
+    KeyEvent release(ic, Key(sym, KeyState::Shift), true);
+    ic->keyEvent(release);
+}
+
+std::string aux(HarnessInputContext *ic) { return ic->inputPanel().auxUp().toString(); }
+std::string auxDown(HarnessInputContext *ic) { return ic->inputPanel().auxDown().toString(); }
+/// 应用输入框里的编辑区（互译时是译文）；候选框里的原文框用 preedit()。
+std::string inlineText(HarnessInputContext *ic) { return ic->inputPanel().clientPreedit().toString(); }
+
+void runTranslateCase(Instance &instance, std::function<void()> done) {
+    const char *url = std::getenv("WOWTYPE_HARNESS_TRANSLATE_URL");
+    if (!url || !*url) {
+        std::printf("skip 互译（没有 python3 或 curl）\n");
+        done();
+        return;
+    }
+    auto *c = new TranslateCase{instance, std::make_unique<HarnessInputContext>(instance.inputContextManager()),
+                                {}, {}};
+    const std::string configDir = std::string(std::getenv("XDG_CONFIG_HOME")) + "/fcitx5/conf";
+    std::filesystem::create_directories(configDir);
+    c->configFile = configDir + "/wowtype.conf";
+    std::ofstream(c->configFile) << "Translate=True\nTranslateBaseUrl=" << url
+                                 << "\nTranslateModel=mock\nTranslateTarget=en\n";
+    auto *addon = instance.addonManager().addon("wowtype");
+    addon->reloadConfig();
+    // 像大多数应用一样，编辑区画在应用自己的输入框里
+    c->ic->setCapabilityFlags(CapabilityFlag::Preedit);
+    c->ic->focusIn();
+    instance.setCurrentInputMethod(c->ic.get(), "wowtype", true);
+
+    auto expectCommit = [](const std::string &text) {
+        return [text](HarnessInputContext *ic) { return ic->committed == text; };
+    };
+    auto reset = [](HarnessInputContext *ic) {
+        type(ic, "<esc>");
+        ic->committed.clear();
+        ic->passed.clear();
+    };
+    // 测试不依赖词库给的首选是什么：原文以原文框里显示的为准
+    auto source = std::make_shared<std::string>();
+    auto &s = c->steps;
+    s.push_back({"右 Shift 两下切到「译」，nihao 空格不上屏、攒在原文框里",
+                 [](HarnessInputContext *ic) {
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic) == "你好" &&
+                            aux(ic).find("中→英") != std::string::npos;
+                 }});
+    s.push_back({"停一下译文就写在输入框里（只有一种，没有候选）", nullptr,
+                 [](HarnessInputContext *ic) {
+                     return inlineText(ic) == "EN:你好" && page(ic).empty() &&
+                            auxDown(ic).find("回车上屏") != std::string::npos;
+                 }});
+    s.push_back({"回车上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed == "EN:你好" && preedit(ic).empty() && inlineText(ic).empty();
+                 }});
+    s.push_back({"同一句话再打一遍：记住了，马上就有译文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return inlineText(ic) == "EN:你好"; }});
+    s.push_back({"接着打拼音：原文框里是原文 + 拼音，候选照常，输入框里还是译文",
+                 [](HarnessInputContext *ic) { type(ic, "shi"); },
+                 [](HarnessInputContext *ic) {
+                     return preedit(ic).rfind("你好", 0) == 0 && preedit(ic).find("shi") != std::string::npos &&
+                            !page(ic).empty() && inlineText(ic) == "EN:你好" && ic->committed.empty();
+                 }});
+    s.push_back({"选了词：新译文出来前先留着上一句，不闪",
+                 [source](HarnessInputContext *ic) {
+                     type(ic, "<sp>");
+                     *source = preedit(ic);
+                     check(inlineText(ic) == "EN:你好", "互译：选词后输入框里先留着上一句，实际「" +
+                                                           inlineText(ic) + "」");
+                 },
+                 [source](HarnessInputContext *ic) {
+                     return source->size() > std::string("你好").size() && inlineText(ic) == "EN:" + *source;
+                 }});
+    s.push_back({"没译好就按回车：等译好了自动上屏",
+                 [reset, source](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "zhongguo<sp>");
+                     *source = preedit(ic);
+                     type(ic, "<cr>");
+                     check(ic->committed.empty() && auxDown(ic).find("好了就上屏") != std::string::npos,
+                           "互译：先提示「好了就上屏」，实际 " + auxDown(ic));
+                 },
+                 [source](HarnessInputContext *ic) { return ic->committed == "EN:" + *source; }});
+    s.push_back({"Shift+回车上屏原文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao<sp>");
+                     send(ic, Key(FcitxKey_Return, KeyState::Shift));
+                 },
+                 expectCommit("你好")});
+    s.push_back({"Esc 清空原文，不上屏",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao<sp><esc>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic).empty() && inlineText(ic).empty() &&
+                            page(ic).empty();
+                 }});
+    s.push_back({"数字进原文；打拼音时原文框里带着前面的原文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "3dian");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && ic->passed.empty() && preedit(ic).rfind("3", 0) == 0 &&
+                            preedit(ic).find("dian") != std::string::npos;
+                 }});
+    s.push_back({"退格删原文最后一个字", [](HarnessInputContext *ic) { type(ic, "<sp><bs>"); },
+                 [](HarnessInputContext *ic) { return preedit(ic) == "3" && ic->committed.empty(); }});
+    s.push_back({"服务报错：显示原因，不上屏",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "cuowu<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return auxDown(ic).find("401") != std::string::npos && ic->committed.empty() &&
+                            inlineText(ic).empty();
+                 }});
+    s.push_back({"出错后回车是重试，还是不上屏", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
+                 [](HarnessInputContext *ic) {
+                     return auxDown(ic).find("401") != std::string::npos && ic->committed.empty() &&
+                            preedit(ic) == "错误";
+                 }});
+    s.push_back({"应用不让在输入框里画编辑区：译文写在候选框底下",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlags{});
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return preedit(ic) == "你好" && auxDown(ic) == "EN:你好" && inlineText(ic).empty();
+                 }});
+    s.push_back({"上面那种情况回车也上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
+                 expectCommit("EN:你好")});
+    s.push_back({"密码框里照常打中文，不翻译",
+                 [reset, &instance](HarnessInputContext *ic) {
+                     reset(ic);
+                     // fcitx5 默认在密码框里换成键盘布局，根本轮不到输入法；打开「密码框也用输入法」才测得到
+                     RawConfig raw;
+                     raw.setValueByPath("Behavior/AllowInputMethodForPassword", "True");
+                     instance.globalConfig().load(raw, true);
+                     ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::Password, CapabilityFlag::Preedit});
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"有原文时 Shift 切回中文：原文原样上屏",
+                 [reset, &instance](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                     RawConfig raw;
+                     raw.setValueByPath("Behavior/AllowInputMethodForPassword", "False");
+                     instance.globalConfig().load(raw, true);
+                     type(ic, "nihao<sp>");
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "shijie<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.rfind("你好", 0) == 0 && ic->committed.size() > std::string("你好").size() &&
+                            ic->committed.find("EN:") == std::string::npos;
+                 }});
+    s.push_back({"关掉互译后 Shift 只在中英之间切",
+                 [c, addon, reset](HarnessInputContext *ic) {
+                     std::filesystem::remove(c->configFile);
+                     addon->reloadConfig();
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+
+    c->timer = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 50000, 1000, [c, done](EventSourceTime *source, uint64_t) {
+            auto *ic = c->ic.get();
+            if (c->current < c->steps.size()) {
+                auto &step = c->steps[c->current];
+                if (!c->acted) {
+                    c->acted = true;
+                    c->waited = 0;
+                    if (step.act) {
+                        step.act(ic);
+                    }
+                }
+                const bool ok = step.until(ic);
+                if (ok || ++c->waited > 100) {
+                    check(ok, "互译：" + step.name +
+                                  (ok ? ""
+                                      : "（上屏「" + ic->committed + "」原文框「" + preedit(ic) + "」输入框「" +
+                                            inlineText(ic) + "」提示「" + aux(ic) + "｜" + auxDown(ic) +
+                                            "」候选 " + join(page(ic)) + "）"));
+                    ++c->current;
+                    c->acted = false;
+                }
+                source->setNextInterval(50000);
+                source->setOneShot();
+                return true;
+            }
+            c->ic.reset();
+            done();
+            dispatcher->schedule([c]() { delete c; });
+            return true;
+        });
+}
+
 /// 语音：按住右 Alt 说话（WOWTYPE_VOICE_WAV 代替麦克风），松开后等识别结果上屏。
 /// 要真模型，所以只在 addon-test.sh 带了 WOWTYPE_VOICE_WAV 时跑。异步：靠事件循环里的定时器推进。
 struct VoiceCase {
@@ -815,9 +1051,11 @@ int main(int argc, char **argv) {
     dispatcher = &mainDispatcher;
     mainDispatcher.schedule([&instance]() {
         runCases(instance);
-        runVoiceCase(instance, [&instance]() {
-            std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
-            instance.exit();
+        runTranslateCase(instance, [&instance]() {
+            runVoiceCase(instance, [&instance]() {
+                std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
+                instance.exit();
+            });
         });
     });
     instance.exec();

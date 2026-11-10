@@ -134,6 +134,32 @@ std::string voiceWave(const std::vector<int> &levels) {
     return out;
 }
 constexpr uint64_t kVoiceErrorUsec = 1500 * 1000;
+/// 互译：原文停下来这么久才发请求（句末标点立刻发），以及取结果的间隔。
+constexpr uint64_t kTranslateDelayUsec = 500 * 1000;
+// 定时器精度。fcitx5 底下是 sd-event，传 0 等于默认的 250ms，50ms 的轮询实际一秒只有 4 次
+constexpr uint64_t kTimerAccuracyUsec = 1000;
+constexpr uint64_t kTranslatePollUsec = 50 * 1000;
+
+std::string userConfigDir() {
+    if (const char *config = std::getenv("XDG_CONFIG_HOME"); config && *config) {
+        return std::string(config) + "/wowtype";
+    }
+    if (const char *home = std::getenv("HOME"); home && *home) {
+        return std::string(home) + "/.config/wowtype";
+    }
+    return {};
+}
+
+/// 这段文字以句末标点（或换行）结尾：一句话多半打完了，马上翻译。
+bool endsSentence(const std::string &text) {
+    for (const char *end : {"。", "！", "？", "…", ".", "!", "?", "\n"}) {
+        const std::string_view e(end);
+        if (text.size() >= e.size() && text.compare(text.size() - e.size(), e.size(), e) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
 // 语音浮条：WowType 的 GNOME 扩展注册这个名字，插件把语音状态发给它画。
 // 信号 State(u 状态, s 文字, i 音量 0–100, i x, i y, i w, i h, b 相对窗口, d 缩放)，
@@ -411,6 +437,12 @@ public:
     std::size_t panelCursor_ = 0;
     /// 表情面板开着：buffer_ 里是搜索词（可以为空）。
     bool emojiPanel_ = false;
+    /// 互译模式下攒着的原文（选好的字、标点）。上屏拼音后 clear() 不动它。
+    std::string tsource_;
+    /// 输入框里现在显示的译文（原文改了、新译文还没赶上时还是上一句的）。
+    std::string tshown_;
+    /// 按了回车但译文还没好：好了就上屏。
+    bool tpending_ = false;
 
     std::size_t selectedBytes() const {
         std::size_t total = 0;
@@ -568,6 +600,7 @@ void WowtypeEngine::applyConfig() {
     }
     if (shiftToggle_ == WowtypeShiftToggle::Off) {
         asciiMode_ = false;
+        translateMode_ = false;
     }
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
@@ -595,13 +628,41 @@ void WowtypeEngine::applyConfig() {
         const char *dir = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
         voice_ = wowtype_voice_new(dir);
     }
+    // 互译：环境变量 WOWTYPE_TRANSLATE_URL / _MODEL / _TARGET / _KEY_FILE 覆盖（测试用）
+    translateEnabled_ = envOr("WOWTYPE_TRANSLATE", *config_.translate);
+    std::string translateUrl = *config_.translateBaseUrl;
+    std::string translateModel = *config_.translateModel;
+    std::string translateTarget = WowtypeTranslateTargetToString(*config_.translateTarget);
+    if (const char *env = std::getenv("WOWTYPE_TRANSLATE_URL"); env && *env) {
+        translateUrl = env;
+    }
+    if (const char *env = std::getenv("WOWTYPE_TRANSLATE_MODEL"); env && *env) {
+        translateModel = env;
+    }
+    if (const char *env = std::getenv("WOWTYPE_TRANSLATE_TARGET"); env && *env) {
+        translateTarget = env;
+    }
+    if (translateEnabled_ && !translator_) {
+        translator_ = wowtype_translate_new();
+    }
+    if (translator_) {
+        wowtype_translate_configure(translator_, translateUrl.c_str(), translateModel.c_str(),
+                                    translateTarget.c_str(), *config_.translateFormal ? 1 : 0,
+                                    translateKeyFile().c_str());
+    }
+    if (translateMode_ && !translateAvailable()) {
+        translateMode_ = false;
+    }
+
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
              << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 双拼=" << shuangpin_
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
              << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
-             << " 计算器=" << calculator_
+             << " 计算器=" << calculator_ << " 互译=" << translateEnabled_ << "("
+             << (translateAvailable() ? translateModel + " → " + translateTarget : "未配置")
+             << ")"
              << " 检查更新=" << *config_.checkUpdate;
     if (core_) {
         applyCoreSettings();
@@ -683,6 +744,11 @@ WowtypeEngine::~WowtypeEngine() {
         wowtype_voice_free(voice_);
         voice_ = nullptr;
     }
+    translateTimer_.reset();
+    if (translator_) {
+        wowtype_translate_free(translator_);
+        translator_ = nullptr;
+    }
 }
 
 bool WowtypeEngine::coreReady() {
@@ -747,7 +813,7 @@ void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text
     if (!ic || text.empty()) {
         return;
     }
-    ic->commitString(text);
+    emit(ic, text);
     rememberContext(text);
 }
 
@@ -759,7 +825,7 @@ void WowtypeEngine::commitAll(fcitx::InputContext *ic, WowtypeState *state,
     }
     const std::string text = state->selectedText() + tail;
     if (!text.empty()) {
-        ic->commitString(text);
+        emit(ic, text);
     }
     if (core_ && !text.empty()) {
         // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
@@ -890,7 +956,7 @@ void WowtypeEngine::commitPlainCandidate(fcitx::InputContext *ic, WowtypeState *
     }
     const std::string text = state->selectedText() + state->candidates_[index].text;
     if (!text.empty()) {
-        ic->commitString(text);
+        emit(ic, text);
         rememberContext(text);
     }
     state->clear();
@@ -1099,7 +1165,7 @@ void WowtypeEngine::commitEmoji(fcitx::InputContext *ic, WowtypeState *state,
     const WowtypeCandidate chosen = state->candidates_[index];
     const std::string text = state->selectedText() + chosen.commit;
     if (!text.empty()) {
-        ic->commitString(text);
+        emit(ic, text);
         rememberContext(text);
     }
     rememberEmoji(chosen.emojiText);
@@ -1131,11 +1197,15 @@ std::string WowtypeEngine::segmentedRemaining(WowtypeState *state) const {
     return input;
 }
 
+bool WowtypeEngine::inlinePreedit(fcitx::InputContext *ic) const {
+    return instance_->globalConfig().preeditEnabledByDefault() &&
+           ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit);
+}
+
 void WowtypeEngine::sendPreedit(fcitx::InputContext *ic,
                                 const fcitx::Text &preedit) {
     auto &panel = ic->inputPanel();
-    if (instance_->globalConfig().preeditEnabledByDefault() &&
-        ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+    if (inlinePreedit(ic)) {
         panel.setClientPreedit(preedit);
     } else {
         panel.setPreedit(preedit);
@@ -1169,18 +1239,27 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         return;
     }
 
+    const bool translate = translating(ic) && translator_;
     if (!state->composing()) {
+        if (translate && !state->tsource_.empty()) {
+            fillTranslateView(ic, state, panel);
+        }
         ic->updatePreedit();
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
         return;
     }
 
-    // 编辑区：已选的词 + 还没选的拼音（带下划线）
-    fcitx::Text preedit;
-    preedit.append(state->selectedText());
-    preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
-    preedit.setCursor(static_cast<int>(preedit.textLength()));
-    sendPreedit(ic, preedit);
+    if (translate) {
+        // 原文和拼音在候选框里，输入框里是译文
+        fillTranslateView(ic, state, panel);
+    } else {
+        // 编辑区：已选的词 + 还没选的拼音（带下划线）
+        fcitx::Text preedit;
+        preedit.append(state->selectedText());
+        preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
+        preedit.setCursor(static_cast<int>(preedit.textLength()));
+        sendPreedit(ic, preedit);
+    }
 
     if (state->expanded_ && !state->candidates_.empty()) {
         fillGridPanel(panel, state);
@@ -1421,6 +1500,12 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
+    // 互译模式、没在打拼音：回车上屏译文、上下键选译法、数字进原文……
+    if (translating(ic) && !state->composing() && handleTranslateKey(ic, state, key)) {
+        event.filterAndAccept();
+        return;
+    }
+
     // 英文模式：按键原样交给应用（字母、半角标点都直接上屏）
     if (asciiMode_ && !state->composing()) {
         return;
@@ -1611,6 +1696,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
                 commitCurrent(ic, state);
             }
             commitPlain(ic, text);
+            if (translating(ic)) {
+                updateInputPanel(ic, state);
+            }
             event.filterAndAccept();
             return;
         }
@@ -1623,6 +1711,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
                 commitCurrent(ic, state);
             }
             commitPlain(ic, text);
+            if (translating(ic)) {
+                updateInputPanel(ic, state);
+            }
             event.filterAndAccept();
             return;
         }
@@ -1637,6 +1728,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         // 没收录的（/ " + 等）不处理，原样交给应用。
         if (const char *punct = wowtype_fullwidth_punct(static_cast<int>(sym))) {
             commitPlain(ic, punct);
+            if (translating(ic)) {
+                updateInputPanel(ic, state);
+            }
             event.filterAndAccept();
             return;
         }
@@ -1666,7 +1760,9 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     if (!ic) {
         return;
     }
-    ic->propertyFor(&factory_)->clear();
+    auto *state = ic->propertyFor(&factory_);
+    state->clear();
+    clearTranslation(state);
     coreReady();
     maybeCheckUpdate();
 }
@@ -1697,6 +1793,10 @@ void WowtypeEngine::deactivate(const fcitx::InputMethodEntry &entry,
         if (state->composing()) {
             commitAll(ic, state, state->remaining(), {});
         }
+        // 互译攒着的原文也原样上屏
+        if (!state->tsource_.empty()) {
+            commitTranslateSource(ic, state);
+        }
     }
     if (voiceActive() && voiceIc_.get() == event.inputContext()) {
         cancelVoice();
@@ -1711,7 +1811,11 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     if (!ic) {
         return;
     }
-    ic->propertyFor(&factory_)->clear();
+    // 原文和拼音一样只在输入法里：应用重置输入框（点了别处、失去焦点）就丢掉。
+    // 有的应用重置时会自己把预编辑的字上屏，留着会重复。
+    auto *state = ic->propertyFor(&factory_);
+    state->clear();
+    clearTranslation(state);
     ic->inputPanel().reset();
     ic->updatePreedit();
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
@@ -1719,12 +1823,12 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
 
 std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
                                    fcitx::InputContext & /*ic*/) {
-    return asciiMode_ ? "英文" : "";
+    return translateMode_ ? "互译" : asciiMode_ ? "英文" : "";
 }
 
 std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
                                             fcitx::InputContext & /*ic*/) {
-    return asciiMode_ ? "英" : "";
+    return translateMode_ ? "译" : asciiMode_ ? "英" : "";
 }
 
 int WowtypeEngine::selectKeyIndex(fcitx::KeySym sym) const {
@@ -1811,16 +1915,37 @@ bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *sta
 }
 
 void WowtypeEngine::toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state) {
-    asciiMode_ = !asciiMode_;
-    if (asciiMode_ && state->composing()) {
-        // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
-        commitAll(ic, state, state->remaining(), {});
-        state->clear();
+    if (translateMode_) {
+        // 译 → 中：攒着的原文原样上屏，正在打的拼音留着接着打
+        if (!state->tsource_.empty()) {
+            const std::string source = state->tsource_;
+            clearTranslation(state);
+            ic->commitString(source);
+        }
+        translateMode_ = false;
         updateInputPanel(ic, state);
+    } else if (asciiMode_) {
+        // 英 → 译（配置了翻译服务才有这一档）或 → 中
+        asciiMode_ = false;
+        translateMode_ = translateAvailable();
+    } else {
+        asciiMode_ = true;
+        if (state->composing()) {
+            // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
+            commitAll(ic, state, state->remaining(), {});
+            state->clear();
+            updateInputPanel(ic, state);
+        }
     }
-    WLOG_I() << "WowType: 切到" << (asciiMode_ ? "英文" : "中文");
+    const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
+    WLOG_I() << "WowType: 切到" << name;
 #ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
-    instance_->showCustomInputMethodInformation(ic, asciiMode_ ? "英" : "中");
+    std::string label = translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+    if (translateMode_ && translator_) {
+        label += " ";
+        label += wowtype_translate_tag(translator_, "");
+    }
+    instance_->showCustomInputMethodInformation(ic, label);
 #else
     instance_->showInputMethodInformation(ic);
 #endif
@@ -1863,7 +1988,7 @@ bool WowtypeEngine::handleVoiceKey(fcitx::InputContext *ic, WowtypeState *state,
         pollVoice();
         if (!voiceTimer_) {
             voiceTimer_ = instance_->eventLoop().addTimeEvent(
-                CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kVoicePollUsec, 0,
+                CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kVoicePollUsec, kTimerAccuracyUsec,
                 [this](fcitx::EventSourceTime *source, uint64_t) {
                     if (pollVoice()) {
                         source->setNextInterval(kVoicePollUsec);
@@ -1944,6 +2069,10 @@ bool WowtypeEngine::pollVoice() {
     case WOWTYPE_VOICE_RESULT:
         clearVoice(true);
         commitPlain(ic, text);
+        if (translating(ic)) {
+            // 互译模式：说的话进了原文
+            updateInputPanel(ic, ic->propertyFor(&factory_));
+        }
         return false;
     case WOWTYPE_VOICE_ERROR:
         WLOG_I() << "WowType: 语音 " << text;
@@ -1968,7 +2097,21 @@ void WowtypeEngine::showVoice(fcitx::InputContext *ic, const std::string &status
                               const std::string &partial) {
     auto &panel = ic->inputPanel();
     panel.reset();
-    if (!partial.empty()) {
+    if (translating(ic)) {
+        // 互译模式：说的话接在原文框里攒着的原文后面，输入框里留着译文
+        auto *state = ic->propertyFor(&factory_);
+        fcitx::Text box;
+        box.append(state->tsource_);
+        box.append(partial, fcitx::TextFormatFlag::Underline);
+        box.setCursor(static_cast<int>(box.textLength()));
+        panel.setPreedit(box);
+        if (inlinePreedit(ic) && !state->tshown_.empty()) {
+            fcitx::Text shown;
+            shown.append(state->tshown_, fcitx::TextFormatFlag::Underline);
+            shown.setCursor(static_cast<int>(shown.textLength()));
+            panel.setClientPreedit(shown);
+        }
+    } else if (!partial.empty()) {
         fcitx::Text preedit;
         preedit.append(partial, fcitx::TextFormatFlag::Underline);
         preedit.setCursor(static_cast<int>(preedit.textLength()));
@@ -1991,9 +2134,8 @@ void WowtypeEngine::clearVoice(bool done) {
     voiceFrame_ = 0;
     voiceErrorUntil_ = 0;
     if (auto *ic = voiceIc_.get()) {
-        ic->inputPanel().reset();
-        ic->updatePreedit();
-        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+        // 回到说话前的样子（互译模式下还有原文和译文）
+        updateInputPanel(ic, ic->propertyFor(&factory_));
     }
     voiceIc_.unwatch();
 }
@@ -2003,6 +2145,286 @@ void WowtypeEngine::cancelVoice() {
         wowtype_voice_cancel(voice_);
     }
     clearVoice();
+}
+
+// ---------------------------------------------------------------------------
+// 互译模式
+//
+// 照微信输入法的样子：打的字（选好的词、标点、语音识别结果）都经 emit() 攒进
+// state->tsource_，显示在候选框里（当原文框用），不交给应用；原文停下来 0.5 秒
+// （句末标点立刻）就发请求，译文边出边写在应用的输入框里（编辑区，带下划线）。
+// 回车 / 空格上屏译文，Shift+回车上屏原文，Esc 清空。
+
+bool WowtypeEngine::translateAvailable() const {
+    return translateEnabled_ && translator_ && wowtype_translate_ready(translator_) == 1;
+}
+
+bool WowtypeEngine::translating(fcitx::InputContext *ic) const {
+    if (!translateMode_ || !ic || !translator_) {
+        return false;
+    }
+    // 密码框之类：照常打中文，不往外发
+    const auto flags = ic->capabilityFlags();
+    return !flags.test(fcitx::CapabilityFlag::Password) &&
+           !flags.test(fcitx::CapabilityFlag::Sensitive);
+}
+
+std::string WowtypeEngine::translateKeyFile() const {
+    if (const char *env = std::getenv("WOWTYPE_TRANSLATE_KEY_FILE"); env && *env) {
+        return env;
+    }
+    const std::string dir = userConfigDir();
+    return dir.empty() ? std::string() : dir + "/translate.key";
+}
+
+void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
+    if (!ic || text.empty()) {
+        return;
+    }
+    if (!translating(ic)) {
+        ic->commitString(text);
+        return;
+    }
+    auto *state = ic->propertyFor(&factory_);
+    state->tsource_ += text;
+    translateSourceChanged(ic, state, endsSentence(text));
+}
+
+void WowtypeEngine::translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state,
+                                           bool now) {
+    state->tpending_ = false;
+    if (state->tsource_.empty()) {
+        clearTranslation(state);
+        return;
+    }
+    if (translateIc_.get() != ic) {
+        translateIc_ = ic->watch();
+    }
+    translateAt_ = fcitx::now(CLOCK_MONOTONIC) + (now ? 0 : kTranslateDelayUsec);
+    ensureTranslateTimer();
+}
+
+void WowtypeEngine::clearTranslation(WowtypeState *state) {
+    state->tsource_.clear();
+    state->tshown_.clear();
+    state->tpending_ = false;
+    auto *ic = translateIc_.get();
+    if (ic && ic->propertyFor(&factory_) == state) {
+        translateAt_ = 0;
+        translateDrawn_.clear();
+        if (translator_) {
+            wowtype_translate_cancel(translator_);
+        }
+        translateIc_.unwatch();
+    }
+}
+
+void WowtypeEngine::ensureTranslateTimer() {
+    if (!translateTimer_) {
+        translateTimer_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kTranslatePollUsec, kTimerAccuracyUsec,
+            [this](fcitx::EventSourceTime *source, uint64_t) {
+                if (pollTranslate()) {
+                    source->setNextInterval(kTranslatePollUsec);
+                    source->setOneShot();
+                }
+                return true;
+            });
+    } else {
+        translateTimer_->setNextInterval(kTranslatePollUsec);
+        translateTimer_->setOneShot();
+    }
+}
+
+bool WowtypeEngine::pollTranslate() {
+    auto *ic = translateIc_.get();
+    if (!ic || !translator_) {
+        translateAt_ = 0;
+        return false;
+    }
+    auto *state = ic->propertyFor(&factory_);
+    if (state->tsource_.empty()) {
+        translateAt_ = 0;
+        wowtype_translate_cancel(translator_);
+        return false;
+    }
+    if (translateAt_ && fcitx::now(CLOCK_MONOTONIC) >= translateAt_) {
+        translateAt_ = 0;
+        wowtype_translate_start(translator_, state->tsource_.c_str());
+    }
+    const int phase = wowtype_translate_poll(translator_);
+    const bool fresh = state->tsource_ == wowtype_translate_source(translator_);
+    if (fresh && phase == WOWTYPE_TRANSLATE_ERROR && state->tpending_) {
+        state->tpending_ = false;
+        WLOG_I() << "WowType: " << wowtype_translate_error(translator_);
+    }
+    if (state->tpending_ && fresh && phase == WOWTYPE_TRANSLATE_DONE) {
+        // 按过回车：译好了，上屏
+        commitTranslation(ic, state);
+        return false;
+    }
+
+    // 结果变了才重画（现在画的是什么由 fillTranslateView 记在 translateDrawn_ 里）。
+    // 只换编辑区和提示行：正在打拼音时候选列表（和翻到的页、光标）不动
+    if (translateSignature(state, phase, fresh) != translateDrawn_) {
+        fillTranslateView(ic, state, ic->inputPanel());
+        ic->updatePreedit();
+        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+    }
+    return translateAt_ != 0 || phase == WOWTYPE_TRANSLATE_RUNNING || state->tpending_;
+}
+
+std::string WowtypeEngine::translateSignature(WowtypeState *state, int phase, bool fresh) const {
+    std::string out = std::to_string(fresh ? phase : -1) + "|" + std::to_string(state->tpending_) +
+                      "|" + state->tsource_;
+    if (fresh) {
+        out += "|";
+        out += wowtype_translate_text(translator_);
+    }
+    if (fresh && phase == WOWTYPE_TRANSLATE_ERROR) {
+        out += "|";
+        out += wowtype_translate_error(translator_);
+    }
+    return out;
+}
+
+void WowtypeEngine::fillTranslateView(fcitx::InputContext *ic, WowtypeState *state,
+                                      fcitx::InputPanel &panel) {
+    const int phase = wowtype_translate_poll(translator_);
+    const bool fresh =
+        !state->tsource_.empty() && state->tsource_ == wowtype_translate_source(translator_);
+    const bool failed = fresh && phase == WOWTYPE_TRANSLATE_ERROR;
+    const bool done = fresh && phase == WOWTYPE_TRANSLATE_DONE;
+    const std::string text = fresh && !failed ? wowtype_translate_text(translator_) : "";
+    translateDrawn_ = translateSignature(state, phase, fresh);
+
+    // 输入框里的译文：原文改了、新译文还没写到上一句那么长时先留着上一句，免得一闪一闪
+    if (state->tsource_.empty() || failed) {
+        state->tshown_.clear();
+    } else if (done || text.size() >= state->tshown_.size()) {
+        state->tshown_ = text;
+    }
+
+    // 原文框：攒着的原文 + 已选的词 + 还没选的拼音
+    fcitx::Text box;
+    box.append(state->tsource_);
+    if (state->composing()) {
+        box.append(state->selectedText());
+        box.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
+    }
+    box.setCursor(static_cast<int>(box.textLength()));
+    panel.setPreedit(box);
+    panel.setAuxUp(fcitx::Text(std::string(wowtype_translate_tag(translator_, state->tsource_.c_str())) +
+                               " 互译："));
+
+    // 底下一行：状态，或者怎么上屏
+    std::string status;
+    if (failed) {
+        status = std::string(wowtype_translate_error(translator_)) + "（回车重试）";
+    } else if (state->tpending_) {
+        status = "翻译中…好了就上屏";
+    } else if (!state->tsource_.empty() && !done) {
+        status = "翻译中…";
+    } else if (!state->tsource_.empty() && !state->composing()) {
+        status = "回车上屏 · Shift+回车上屏原文 · Esc 清空";
+    }
+    if (inlinePreedit(ic)) {
+        fcitx::Text shown;
+        shown.append(state->tshown_, fcitx::TextFormatFlag::Underline);
+        shown.setCursor(static_cast<int>(shown.textLength()));
+        panel.setClientPreedit(shown);
+    } else if (!state->tshown_.empty() && !failed) {
+        // 应用不让把编辑区画在输入框里：译文写在候选框底下
+        status = state->tshown_ + (done ? "" : "…");
+    }
+    panel.setAuxDown(fcitx::Text(status));
+}
+
+bool WowtypeEngine::handleTranslateKey(fcitx::InputContext *ic, WowtypeState *state,
+                                       const fcitx::Key &key) {
+    const auto sym = key.sym();
+    const auto states = key.states();
+    if (states.test(fcitx::KeyState::Ctrl) || states.test(fcitx::KeyState::Alt) ||
+        states.test(fcitx::KeyState::Super)) {
+        return false;
+    }
+    if (!state->tsource_.empty()) {
+        switch (sym) {
+        case FcitxKey_Return:
+        case FcitxKey_KP_Enter:
+            if (states.test(fcitx::KeyState::Shift)) {
+                commitTranslateSource(ic, state);
+            } else {
+                commitTranslation(ic, state);
+            }
+            return true;
+        case FcitxKey_space:
+            commitTranslation(ic, state);
+            return true;
+        case FcitxKey_Escape:
+            clearTranslation(state);
+            updateInputPanel(ic, state);
+            return true;
+        case FcitxKey_BackSpace:
+            popUtf8(state->tsource_);
+            translateSourceChanged(ic, state, false);
+            updateInputPanel(ic, state);
+            return true;
+        default:
+            if (key.isCursorMove() || sym == FcitxKey_Delete || sym == FcitxKey_Page_Up ||
+                sym == FcitxKey_Page_Down || sym == FcitxKey_Tab || sym == FcitxKey_ISO_Left_Tab) {
+                return true; // 原文里没有光标，别让应用里的光标乱跑
+            }
+            break;
+        }
+    }
+    // 数字和没有中文写法的符号（/ + = 等）平时直接交给应用；互译时要进原文，免得插到前面
+    if (sym > FcitxKey_space && sym <= FcitxKey_asciitilde &&
+        !((sym >= FcitxKey_a && sym <= FcitxKey_z) || (sym >= FcitxKey_A && sym <= FcitxKey_Z)) &&
+        !wowtype_fullwidth_punct(static_cast<int>(sym))) {
+        const std::string text(1, static_cast<char>(sym));
+        emit(ic, text);
+        rememberContext(text);
+        updateInputPanel(ic, state);
+        return true;
+    }
+    return false;
+}
+
+void WowtypeEngine::commitTranslation(fcitx::InputContext *ic, WowtypeState *state) {
+    if (!ic || !translator_ || state->tsource_.empty()) {
+        return;
+    }
+    const int phase = wowtype_translate_poll(translator_);
+    const bool fresh = state->tsource_ == wowtype_translate_source(translator_);
+    if (fresh && phase == WOWTYPE_TRANSLATE_DONE) {
+        const std::string text = wowtype_translate_text(translator_);
+        clearTranslation(state);
+        ic->commitString(text);
+        updateInputPanel(ic, state);
+        return;
+    }
+    // 还没译好（或出错了，回车就是重试）：记下来，好了再上屏
+    state->tpending_ = true;
+    if (translateIc_.get() != ic) {
+        translateIc_ = ic->watch();
+    }
+    if (!fresh || phase == WOWTYPE_TRANSLATE_ERROR || phase == WOWTYPE_TRANSLATE_IDLE) {
+        wowtype_translate_start(translator_, state->tsource_.c_str());
+        translateAt_ = 0;
+    }
+    ensureTranslateTimer();
+    updateInputPanel(ic, state);
+}
+
+void WowtypeEngine::commitTranslateSource(fcitx::InputContext *ic, WowtypeState *state) {
+    if (!ic || state->tsource_.empty()) {
+        return;
+    }
+    const std::string source = state->tsource_;
+    clearTranslation(state);
+    ic->commitString(source);
+    updateInputPanel(ic, state);
 }
 
 class WowtypeFactory final : public fcitx::AddonFactory {
