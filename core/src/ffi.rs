@@ -515,7 +515,7 @@ pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
     0
 }
 
-/// 开关双拼（自然码）。返回 0 成功，-1 失败。
+/// 开关双拼（方案用 wowtype_engine_set_shuangpin_scheme 选）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_shuangpin(
     engine: *mut WowtypeEngineHandle,
@@ -527,6 +527,59 @@ pub unsafe extern "C" fn wowtype_engine_set_shuangpin(
     }
     unsafe { &mut *engine }.engine.set_shuangpin(on != 0);
     0
+}
+
+/// 选双拼方案：ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia（也认中文名）。
+/// 返回 0 成功，-1 失败（不认识的方案保持原样）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_shuangpin_scheme(
+    engine: *mut WowtypeEngineHandle,
+    name: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(scheme) = unsafe { cstr_to_str(name) }.and_then(crate::shuangpin::Scheme::from_name)
+    else {
+        set_last_error("unknown shuangpin scheme");
+        return -1;
+    };
+    unsafe { &mut *engine }.engine.set_shuangpin_scheme(scheme);
+    0
+}
+
+/// 这个双拼方案有没有用分号键（微软、搜狗、紫光的 ing）。不认识的方案返回 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_shuangpin_uses_semicolon(name: *const c_char) -> c_int {
+    unsafe { cstr_to_str(name) }
+        .and_then(crate::shuangpin::Scheme::from_name)
+        .is_some_and(|s| s.uses_semicolon())
+        .into()
+}
+
+/// 双拼时编辑区显示的全拼：vsgo -> zhong'guo。没开双拼返回 NULL。
+/// 返回的串在同一线程下一次调用 wowtype_segment_input 或本函数前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_shuangpin_display(
+    engine: *const WowtypeEngineHandle,
+    input: *const c_char,
+) -> *const c_char {
+    let (Some(engine), Some(input)) = (unsafe { engine.as_ref() }, unsafe { cstr_to_str(input) })
+    else {
+        return ptr::null();
+    };
+    match engine
+        .engine
+        .shuangpin_display(input)
+        .and_then(|s| CString::new(s).ok())
+    {
+        Some(text) => SEGMENTED.with(|slot| {
+            *slot.borrow_mut() = text;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
 }
 
 /// 开关繁体输出。返回 0 成功，-1 失败。

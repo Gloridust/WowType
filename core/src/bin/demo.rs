@@ -20,11 +20,16 @@ fn usage(program: &str) {
     println!();
     println!("选项:");
     println!("  --lexicon <file>  TSV 词典（拼音<TAB>词<TAB>频次）");
-    println!("  --lm <file>       bigram TSV（prev<TAB>cur<TAB>count），可选");
+    println!(
+        "  --lm <file>       语言模型：words.lm，或 bigram TSV（prev<TAB>cur<TAB>count），可选"
+    );
     println!("  --arpa <file>     ARPA 语言模型（与 --lm 二选一）");
     println!("  --beam <n>        beam size，默认 20");
     println!("  --fuzzy           开启模糊音（z/zh、an/ang 等）");
     println!("  --shuangpin       使用双拼（自然码）");
+    println!(
+        "  --scheme <name>   双拼方案：ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia"
+    );
     println!("  --english <file>  英文词表（每行一个词，或 rime 的 en.dict.yaml）");
     println!("  --traditional     候选输出繁体");
     println!("  --s2t <file>      简繁映射表（简体<TAB>繁体）");
@@ -48,6 +53,7 @@ fn main() {
     let mut beam: Option<usize> = None;
     let mut fuzzy = false;
     let mut shuangpin = false;
+    let mut scheme = wowtype_core::shuangpin::Scheme::default();
     let mut traditional = false;
     let mut s2t_path: Option<String> = None;
     let mut english_path: Option<String> = None;
@@ -89,6 +95,16 @@ fn main() {
             }
             "--fuzzy" => fuzzy = true,
             "--shuangpin" => shuangpin = true,
+            "--scheme" => {
+                i += 1;
+                match args.get(i).and_then(|v| wowtype_core::shuangpin::Scheme::from_name(v)) {
+                    Some(value) => {
+                        scheme = value;
+                        shuangpin = true;
+                    }
+                    None => fail("--scheme 需要方案名（ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia）"),
+                }
+            }
             "--traditional" => traditional = true,
             "--context" => {
                 i += 1;
@@ -132,8 +148,8 @@ fn main() {
         }
     } else {
         match &lm_path {
-            Some(path) => match BigramLm::from_bigram_tsv_path(path) {
-                Ok(lm) => Arc::new(lm),
+            Some(path) => match wowtype_core::lm::load_lm(path) {
+                Ok(lm) => lm,
                 Err(error) => fail(&format!("{error:#}")),
             },
             None => Arc::new(BigramLm::default()),
@@ -146,6 +162,7 @@ fn main() {
     }
     engine.set_fuzzy(fuzzy);
     engine.set_shuangpin(shuangpin);
+    engine.set_shuangpin_scheme(scheme);
     engine.set_traditional(traditional);
     if let Some(text) = &context_text {
         engine.set_context(text);
