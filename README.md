@@ -35,8 +35,8 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **Emoji**：打「开心」「点赞」「生日快乐」时，第三个候选就是对应的 emoji；按 `Super` + `.` 打开表情面板，打拼音或英文搜 emoji 和符号（`xiao` → 😂、`pizza` → 🍕、`youjiantou` → →）。
 - **互译**：单按 `Shift` 切到「译」，照常打中文，停一下就翻成英文（或日、韩、法等 13 种语言），回车上屏；打外文就翻成中文。翻译服务用你自己填的 OpenAI 格式接口（DeepSeek、通义千问、Ollama……），也可以下载腾讯混元的 HY-MT 翻译模型离线翻。
-- **日期时间、计算器**：打 `riqi`、`shijian`、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`。
-- **繁体、模糊音、双拼**：可切繁体输出；模糊音分 9 组单独开（z=zh、n=l、f=h、r=l、an=ang……）；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
+- **日期时间、计算器**：打 `riqi`（`rq`）、`shijian`（`sj`）、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`。
+- **繁体、模糊音、双拼**：可切繁体输出；模糊音分 12 组单独开（z=zh、n=l、f=h、r=l、an=ang、un=ong……）；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
 - **图形设置界面**：候选排列、模糊音、语音键都在「WowType 设置」里点一下就改，马上生效；还能加自定义词（人名、公司名、常用的长句、邮箱），加进去的词排第一，简拼也能打；编码可以是 `mail` 这类字母，词里能换行，可以导入导出。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次；互译要联网，只在切到「译」时把那句话发给你填的服务）。
 
@@ -84,12 +84,12 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 ### 系统要求
 
 - Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13 上，在终端里运行：
+Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
@@ -98,14 +98,14 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 它会：
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
-2. 用 `sudo apt-get install` 装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita
+2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
 3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
 4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
 装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
 以后再跑一遍同样的命令就是升级（设置界面里也会提醒有新版本）。
 
-> 想先看看脚本做了什么：[install.sh](install.sh)。
+> 想先看看脚本做了什么：[install.sh](install.sh)，或者 `bash install.sh --print-plan` 只看会装哪个包、不动系统。
 > 不想让它改输入法框架或重启 fcitx5，可以加环境变量，例如 `curl -fsSL … | WOWTYPE_NO_IM_CONFIG=1 WOWTYPE_NO_RESTART=1 bash`。
 >
 > GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
@@ -329,7 +329,7 @@ fcitx5 默认用左 Shift「临时切换输入法」（切到 en 键盘），这
 | 页面 | 能改什么 |
 |---|---|
 | 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
-| 输入 | 拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（9 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing）、按错键自动纠正、繁体字、日期时间、计算器、分号引号选第 2/3 个候选 |
+| 输入 | 拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（12 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong）、按错键自动纠正、繁体字、日期时间、计算器、分号引号选第 2/3 个候选 |
 | 表情 | 打字时推荐 emoji、表情面板快捷键 |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 翻译 | [互译](#互译)开关、翻成哪种语言、正式语气；本地模型（下载、llama-server、闲置释放）；翻译服务（服务商、地址、Key、模型，可以从服务里挑模型）、测试连接 |

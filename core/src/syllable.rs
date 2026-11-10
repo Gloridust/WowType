@@ -130,16 +130,22 @@ pub mod fuzzy {
     pub const FH: u32 = 1 << 4;
     /// r = l
     pub const RL: u32 = 1 << 5;
-    /// an = ang（含 ian = iang、uan = uang）
+    /// an = ang
     pub const AN: u32 = 1 << 6;
     /// en = eng
     pub const EN: u32 = 1 << 7;
     /// in = ing
     pub const IN: u32 = 1 << 8;
+    /// ian = iang
+    pub const IAN: u32 = 1 << 9;
+    /// uan = uang
+    pub const UAN: u32 = 1 << 10;
+    /// un = ong（dun = dong、hun = hong）
+    pub const UN: u32 = 1 << 11;
     /// 全部分组。
-    pub const ALL: u32 = (1 << 9) - 1;
+    pub const ALL: u32 = (1 << 12) - 1;
     /// 默认打开的分组：平翘舌和前后鼻音（和只有一个总开关时一样）。
-    pub const DEFAULT: u32 = ZH | CH | SH | AN | EN | IN;
+    pub const DEFAULT: u32 = ZH | CH | SH | AN | EN | IN | IAN | UAN;
 }
 
 fn fuzzy_initial(initial: &str) -> &str {
@@ -160,6 +166,7 @@ fn fuzzy_final(final_: &str) -> &str {
         "ang" => "an",
         "eng" => "en",
         "ing" => "in",
+        "ong" => "un",
         other => other,
     }
 }
@@ -215,7 +222,10 @@ pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
     if af != bf {
         let pair = if af < bf { (af, bf) } else { (bf, af) };
         need |= match pair {
-            ("an", "ang") | ("ian", "iang") | ("uan", "uang") => fuzzy::AN,
+            ("an", "ang") => fuzzy::AN,
+            ("ian", "iang") => fuzzy::IAN,
+            ("uan", "uang") => fuzzy::UAN,
+            ("ong", "un") => fuzzy::UN,
             ("en", "eng") => fuzzy::EN,
             ("in", "ing") => fuzzy::IN,
             _ => return None,

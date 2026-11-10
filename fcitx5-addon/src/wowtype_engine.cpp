@@ -584,7 +584,8 @@ void WowtypeEngine::applyConfig() {
                    (*config_.fuzzySh ? 4u : 0u) | (*config_.fuzzyNL ? 8u : 0u) |
                    (*config_.fuzzyFH ? 16u : 0u) | (*config_.fuzzyRL ? 32u : 0u) |
                    (*config_.fuzzyAn ? 64u : 0u) | (*config_.fuzzyEn ? 128u : 0u) |
-                   (*config_.fuzzyIn ? 256u : 0u);
+                   (*config_.fuzzyIn ? 256u : 0u) | (*config_.fuzzyIan ? 512u : 0u) |
+                   (*config_.fuzzyUan ? 1024u : 0u) | (*config_.fuzzyUn ? 2048u : 0u);
     if (const char *env = std::getenv("WOWTYPE_FUZZY_GROUPS"); env && *env) {
         fuzzyGroups_ = static_cast<unsigned>(std::strtoul(env, nullptr, 0));
     }
@@ -949,7 +950,7 @@ void WowtypeEngine::addDateTimeCandidates(WowtypeState *state, const std::string
     if (all.empty()) {
         return;
     }
-    // 全拼看打的字母（rq、sj 这类简拼不算）；双拼看首选的拼音
+    // 全拼看打的字母（riqi、rq、date 等）；双拼看首选的拼音
     std::string key;
     if (shuangpin_) {
         if (all.front().consumed < input.size()) {

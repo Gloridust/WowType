@@ -4,7 +4,7 @@
 改的是 fcitx5 读的同一个配置文件（~/.config/fcitx5/conf/wowtype.conf）和自定义词文件
 （~/.local/share/wowtype/custom.tsv），改完经 D-Bus 让 fcitx5 重新读，立刻生效。
 
-用系统的 python3（要 PyGObject、GTK 4、libadwaita 1.4+）：
+用系统的 python3（要 PyGObject、GTK 4、libadwaita 1.5+）：
   Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 """
 
@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 APP_ID = "io.github.Gloridust.WowType.Config"
 VERSION = "@VERSION@"
 HOMEPAGE = "https://github.com/Gloridust/WowType"
+INSTALL_GUIDE = f"{HOMEPAGE}/blob/main/docs/INSTALL.md"
 
 
 def _xdg(name, fallback):
@@ -55,7 +57,7 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 # 互译用的 API Key 单独存一个只有自己能读的文件（wowtype.conf 别的程序也能读），插件每次请求时现读
 TRANSLATE_KEY_FILE = os.environ.get("WOWTYPE_TRANSLATE_KEY_FILE") or os.path.join(
     _xdg("XDG_CONFIG_HOME", "~/.config"), "wowtype", "translate.key")
-ISSUES_URL = "https://github.com/Gloridust/WowType/issues/new"
+ISSUES_URL = f"{HOMEPAGE}/issues/new"
 # 界面上的中文标点要用简体中文字体画，见 SettingsApp.update_font_css；装了哪个用哪个
 CJK_SC_FONTS = ["Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN",
                 "WenQuanYi Micro Hei", "WenQuanYi Zen Hei", "Droid Sans Fallback"]
@@ -83,6 +85,9 @@ DEFAULTS = {
     "FuzzyAn": "True",
     "FuzzyEn": "True",
     "FuzzyIn": "True",
+    "FuzzyIan": "True",
+    "FuzzyUan": "True",
+    "FuzzyUn": "False",
     "TypoCorrection": "True",
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
@@ -157,9 +162,12 @@ FUZZY_GROUPS = [
     ("FuzzyNL", "n = l"),
     ("FuzzyFH", "f = h"),
     ("FuzzyRL", "r = l"),
-    ("FuzzyAn", "an = ang（ian = iang、uan = uang）"),
+    ("FuzzyAn", "an = ang"),
+    ("FuzzyIan", "ian = iang"),
+    ("FuzzyUan", "uan = uang"),
     ("FuzzyEn", "en = eng"),
     ("FuzzyIn", "in = ing"),
+    ("FuzzyUn", "un = ong"),
 ]
 
 SELECT_KEYS = [
@@ -940,7 +948,8 @@ def collect_diagnostics():
     add("")
     add("## 版本")
     add(f"设置界面：{current_version()}")
-    add(f"{ENGINE_PKG}：{dpkg_version(ENGINE_PKG) or '没用 deb 装'}")
+    manager, _distro, _arch, _reason = update_platform()
+    add(f"{ENGINE_PKG}：{package_version(manager) or '源码或系统配置管理的安装'}")
     if dpkg_version(DATA_PKG):  # 0.3.3 及以前词库是单独的包
         add(f"{DATA_PKG}：{dpkg_version(DATA_PKG)}")
     try:
@@ -1076,26 +1085,99 @@ def dpkg_version(package):
     return version if out.returncode == 0 and status.endswith(" installed") else None
 
 
-def distro_tag():
-    """和发布包文件名里的一样：ubuntu26.04、debian13。"""
+def read_os_release():
+    """读取发行版标识，不执行 os-release 中的内容。"""
     info = {}
-    try:
-        with open("/etc/os-release", encoding="utf-8") as f:
-            for line in f:
-                key, sep, value = line.strip().partition("=")
-                if sep:
-                    info[key] = value.strip('"')
-    except OSError:
-        return ""
-    return info.get("ID", "") + info.get("VERSION_ID", "")
+    for path in ("/etc/os-release", "/usr/lib/os-release"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    key, sep, value = line.strip().partition("=")
+                    if sep and re.fullmatch(r"[A-Z_][A-Z_0-9]*", key):
+                        try:
+                            words = shlex.split(value, comments=True)
+                            if len(words) == 1:
+                                info[key] = words[0]
+                        except ValueError:
+                            pass
+            break
+        except OSError:
+            continue
+    return info
 
 
-def deb_arch():
+def update_platform(info=None, machine=None, immutable=None):
+    """返回（包管理器、发布包发行版、架构、手动更新说明）。"""
+    info = read_os_release() if info is None else info
+    machine = os.uname().machine if machine is None else machine
+    immutable = os.path.exists("/run/ostree-booted") if immutable is None else immutable
+    distro = info.get("ID", "").lower()
+    version = info.get("VERSION_ID", "")
+    family = set(info.get("ID_LIKE", "").lower().split()) | {distro}
+    variant = info.get("VARIANT_ID", "").lower()
+    guide = f"安装说明：{INSTALL_GUIDE}"
+    if "nixos" in family:
+        return "", "", "", "NixOS 请更新 flake 输入后运行 nixos-rebuild switch；" + guide
+    if immutable or "atomic" in variant or variant in {
+            "silverblue", "kinoite", "sericea", "onyx", "coreos"}:
+        return "", "", "", "不可变系统请使用系统的分层或声明式配置更新（Fedora Atomic 用 rpm-ostree）；" + guide
+    if "manjaro" in family:
+        return "", "", "", "Manjaro 请用 scripts/package-arch.sh 在本机编包，避免混用 Arch 滚动库；" + guide
+    if machine not in ("x86_64", "amd64"):
+        return "", "", "", f"发布包目前面向 x86_64，{machine} 请从源码构建；{guide}"
+    if distro == "ubuntu" and version in ("24.04", "26.04"):
+        return "apt-get", "ubuntu" + version, "amd64", ""
+    if distro == "debian" and (version == "13" or version.startswith("13.")):
+        return "apt-get", "debian13", "amd64", ""
+    # 衍生发行版只有明确声明了兼容基底才套用对应 deb，绝不拿自己的版本号猜。
+    if distro not in ("ubuntu", "debian"):
+        codename = info.get("UBUNTU_CODENAME", "")
+        if not codename and "ubuntu" in family:
+            codename = info.get("VERSION_CODENAME", "")
+        ubuntu = {"noble": "24.04", "resolute": "26.04"}.get(codename)
+        if ubuntu:
+            return "apt-get", "ubuntu" + ubuntu, "amd64", ""
+        codename = info.get("DEBIAN_CODENAME", "")
+        if not codename and "debian" in family:
+            codename = info.get("VERSION_CODENAME", "")
+        if codename == "trixie":
+            return "apt-get", "debian13", "amd64", ""
+    if family & {"arch", "archlinux", "endeavouros", "garuda", "cachyos"}:
+        return "pacman", "archlinux", "x86_64", ""
+    if distro == "fedora" and re.fullmatch(r"[0-9]+", version):
+        return "dnf", "fc" + version, "x86_64", ""
+    return "", "", "", f"{distro or '这个发行版'} 请按发行版说明从源码更新；{guide}"
+
+
+def package_version(manager, package=ENGINE_PKG):
+    """查询对应包管理器，源码安装不会误走二进制更新。"""
+    if manager == "apt-get":
+        return dpkg_version(package)
+    commands = {"pacman": ["pacman", "-Q", package],
+                "dnf": ["rpm", "-q", "--qf", "%{VERSION}-%{RELEASE}", package]}
+    if manager not in commands:
+        return None
     try:
-        return subprocess.run(["dpkg", "--print-architecture"], capture_output=True,
-                              text=True, timeout=10).stdout.strip() or "amd64"
+        result = subprocess.run(commands[manager], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        return "amd64"
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return value.split(" ", 1)[-1] if value else None
+
+
+def install_commands(manager, paths):
+    """使用参数列表调用包管理器。Arch 只 -U，不替用户 -Syu（依赖不满足时 pacman 会报错）。"""
+    if not paths or any(not os.path.isabs(path) for path in paths):
+        raise ValueError("安装包必须是已校验的本地绝对路径")
+    if manager == "apt-get":
+        return [["pkexec", "apt-get", "install", "-y", *paths]]
+    if manager == "dnf":
+        return [["pkexec", "dnf", "install", "-y", *paths]]
+    if manager == "pacman":
+        return [["pkexec", "pacman", "-U", "--noconfirm", *paths]]
+    raise ValueError("这个系统请按安装说明手动更新")
 
 
 def http_open(url, timeout=30):
@@ -1184,27 +1266,53 @@ def is_newer(release):
 
 def plan_update(release):
     """要下载的包：[(文件名, 地址)]，和一段说明。装不了时列表为空，说明里写原因。"""
-    if dpkg_version(ENGINE_PKG) is None:
-        return [], "当前不是用 deb 包安装的（比如从源码装的），请到下载页手动更新"
-    distro = distro_tag()
-    name = f"wowtype_{release['version']}_{distro}_{deb_arch()}.deb"
+    manager, distro, arch, reason = update_platform()
+    if reason:
+        return [], reason
+    if package_version(manager) is None:
+        return [], f"当前未通过 {manager} 安装 WowType，请按安装说明更新源码或系统配置"
+    version = release["version"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+~^-]*", version):
+        return [], "发布版本号格式无效，请到下载页检查"
+    if manager == "apt-get":
+        name = f"wowtype_{version}_{distro}_{arch}.deb"
+    elif manager == "pacman":
+        name = f"wowtype-{version}-1-{arch}.pkg.tar.zst"
+    else:
+        name = f"wowtype-{version}-1.{distro}.{arch}.rpm"
     if name not in release["assets"]:
-        return [], f"这一版没有 {distro or '你的发行版'} 的安装包，请到下载页看看"
-    return [(name, release["assets"][name])], ""
+        return [], f"这一版没有 {distro} 的安装包，请按安装说明从源码构建，不混用其他发行版的包"
+    if "SHA256SUMS" not in release["assets"]:
+        return [], "发布页缺少 SHA256SUMS，暂不安装，请到下载页检查"
+    reason = "要是提示依赖不满足，先在终端运行 sudo pacman -Syu 升级系统" if manager == "pacman" else ""
+    return [(name, release["assets"][name])], reason
 
 
 def download_updates(release, files, progress):
     """下载并按 SHA256SUMS 校验，返回本地路径列表。progress(已下字节, 总字节)。"""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+~^-]*", release["tag"]):
+        raise RuntimeError("发布标签格式无效，不安装")
     folder = os.path.join(UPDATE_DIR, release["tag"])
     os.makedirs(folder, exist_ok=True)
     sums = {}
+    wanted = {name for name, _url in files}
     if "SHA256SUMS" in release["assets"]:
         with http_open(release["assets"]["SHA256SUMS"]) as response:
             for line in response.read().decode("utf-8", "replace").splitlines():
-                digest, _, name = line.strip().partition(" ")
-                sums[name.strip().lstrip("*")] = digest
+                fields = line.strip().split(maxsplit=1)
+                if len(fields) != 2:
+                    continue
+                digest, name = fields
+                name = name.removeprefix("*")
+                if name not in wanted:
+                    continue
+                if name in sums or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                    raise RuntimeError(f"SHA256SUMS 中 {name} 的校验值重复或无效，不安装")
+                sums[name] = digest.lower()
     paths = []
     for name, url in files:
+        if os.path.basename(name) != name or name in (".", ".."):
+            raise RuntimeError("发布包文件名无效，不安装")
         if name not in sums:
             raise RuntimeError(f"SHA256SUMS 里没有 {name}，不安装")
         path = os.path.join(folder, name)
@@ -2776,10 +2884,12 @@ class SettingsWindow(Adw.ApplicationWindow):
     def build_update(self):
         page = Adw.PreferencesPage()
         group = Adw.PreferencesGroup(title="版本")
-        installed = dpkg_version(ENGINE_PKG)
+        manager, _distro, _arch, reason = update_platform()
+        installed = package_version(manager)
         self.version_row = Adw.ActionRow(
             title=f"当前版本 {current_version()}",
-            subtitle="deb 包安装" if installed else "不是用 deb 包安装的，更新要手动装")
+            subtitle=GLib.markup_escape_text(
+                f"{manager} 管理的安装" if installed else reason or "源码安装，请按安装说明手动更新"))
         group.add(self.version_row)
 
         self.latest_row = Adw.ActionRow(title="正在检查更新…")
@@ -2794,7 +2904,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.install_button.connect("clicked", self.on_install_update)
         self.page_button = Gtk.Button(label="打开下载页", valign=Gtk.Align.CENTER)
         self.page_button.connect("clicked", lambda _b: Gtk.UriLauncher.new(
-            self.release["url"] if self.release else RELEASES_PAGE).launch(self, None, None))
+            self.release["url"] if self.release and self.update_files
+            else INSTALL_GUIDE).launch(self, None, None))
         self.install_row.add_suffix(self.page_button)
         self.install_row.add_suffix(self.install_button)
         group.add(self.install_row)
@@ -2851,6 +2962,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         if error:
             self.latest_row.set_title("检查更新失败")
             self.latest_row.set_subtitle(GLib.markup_escape_text(f"连不上 GitHub：{error}"))
+            self.install_row.set_visible(False)
             return GLib.SOURCE_REMOVE
         state = read_update_state()
         state["checked"] = time.time()
@@ -2865,6 +2977,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.install_row.set_subtitle(GLib.markup_escape_text(
                 reason or "要下载：" + "、".join(name for name, _ in files)))
             self.install_button.set_visible(bool(files))
+            self.page_button.set_label("打开下载页" if files else "打开安装说明")
             notes = release["notes"].strip()
             self.notes_group.set_visible(bool(notes))
             try:
@@ -2903,34 +3016,49 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.progress.set_text("等待授权，正在安装…")
         self.progress.pulse()
         try:
-            proc = Gio.Subprocess.new(
-                ["pkexec", "apt-get", "install", "-y", *paths],
-                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
-        except GLib.Error as e:
-            self.install_failed(f"启动安装失败：{e.message}")
+            commands = install_commands(update_platform()[0], paths)
+        except ValueError as e:
+            self.install_failed(str(e))
             return GLib.SOURCE_REMOVE
 
-        def finished(proc, result):
+        def launch(index):
             try:
-                _ok, out, _err = proc.communicate_utf8_finish(result)
+                proc = Gio.Subprocess.new(
+                    commands[index],
+                    Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_MERGE)
             except GLib.Error as e:
-                self.install_failed(f"安装失败：{e.message}")
+                self.install_failed(f"启动安装失败：{e.message}")
                 return
-            code = proc.get_exit_status()
-            if code == 0:
-                self.progress.set_visible(False)
-                self.install_row.set_visible(False)
-                self.restart_row.set_visible(True)
-                self.latest_row.set_title(f"已安装 {self.release['version']}")
-                self.updated = True
-                log(f"更新已安装：{self.release['version']}")
-                self.toast("更新已安装，重启输入法后生效")
-            elif code in (126, 127):  # pkexec：取消授权 / 没通过
-                self.install_failed("没有授权，已取消")
-            else:
-                tail = "\n".join((out or "").strip().splitlines()[-3:])
-                self.install_failed(f"安装失败：{tail or code}")
-        proc.communicate_utf8_async(None, None, finished)
+
+            def finished(proc, result):
+                try:
+                    _ok, out, _err = proc.communicate_utf8_finish(result)
+                except GLib.Error as e:
+                    self.install_failed(f"安装失败：{e.message}")
+                    return
+                if not proc.get_if_exited():
+                    self.install_failed("安装进程中断，请查看包管理器状态后重试")
+                    return
+                code = proc.get_exit_status()
+                if code == 0 and index + 1 < len(commands):
+                    self.progress.set_text("系统已更新，正在安装 WowType…")
+                    launch(index + 1)
+                elif code == 0:
+                    self.progress.set_visible(False)
+                    self.install_row.set_visible(False)
+                    self.restart_row.set_visible(True)
+                    self.latest_row.set_title(f"已安装 {self.release['version']}")
+                    self.updated = True
+                    log(f"更新已安装：{self.release['version']}")
+                    self.toast("更新已安装，重启输入法后生效")
+                elif code in (126, 127):  # pkexec：取消授权 / 没通过
+                    self.install_failed("没有授权，已取消")
+                else:
+                    tail = "\n".join((out or "").strip().splitlines()[-3:])
+                    self.install_failed(f"安装失败：{tail or code}")
+            proc.communicate_utf8_async(None, None, finished)
+
+        launch(0)
         return GLib.SOURCE_REMOVE
 
     def install_failed(self, text):

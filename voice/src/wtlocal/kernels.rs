@@ -213,6 +213,23 @@ mod avx {
         r
     }
 
+    /// acc += u8(a) × i8(b)，四个一组累加到 i32（AVX-VNNI 的 vpdpbusd）
+    ///
+    /// 用内联汇编而不是标准库的 intrinsic：有的发行版（如 Fedora 43）的 rustc
+    /// 链接系统 LLVM，那个 intrinsic 的签名和标准库对不上，整个模块编不过。
+    #[target_feature(enable = "avx2,avxvnni")]
+    #[inline]
+    unsafe fn dpbusd(mut acc: __m256i, a: __m256i, b: __m256i) -> __m256i {
+        std::arch::asm!(
+            "{{vex}} vpdpbusd {acc}, {a}, {b}",
+            acc = inout(ymm_reg) acc,
+            a = in(ymm_reg) a,
+            b = in(ymm_reg) b,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+        acc
+    }
+
     /// 同 [`dot2x4`]，乘加用 AVX-VNNI 的 vpdpbusd（u8×i8 直接累加到 i32）
     #[target_feature(enable = "avx2,avxvnni")]
     pub unsafe fn dot2x4_vnni(x: [*const i8; 2], w: [*const i8; 4], k: usize) -> [[i32; 4]; 2] {
@@ -224,8 +241,8 @@ mod avx {
             let (u0, u1) = (_mm256_sign_epi8(x0, x0), _mm256_sign_epi8(x1, x1));
             for b in 0..4 {
                 let wv = _mm256_loadu_si256(w[b].add(i) as *const __m256i);
-                a[b] = _mm256_dpbusd_avx_epi32(a[b], u0, _mm256_sign_epi8(wv, x0));
-                a[4 + b] = _mm256_dpbusd_avx_epi32(a[4 + b], u1, _mm256_sign_epi8(wv, x1));
+                a[b] = dpbusd(a[b], u0, _mm256_sign_epi8(wv, x0));
+                a[4 + b] = dpbusd(a[4 + b], u1, _mm256_sign_epi8(wv, x1));
             }
             i += 32;
         }
