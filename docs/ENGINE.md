@@ -50,8 +50,12 @@ ASCII 标点会自动转成中文标点（`,` → ，`?` → ？）；`/` 等没
     cat rime-ice/en_dicts/en.dict.yaml rime-ice/en_dicts/en_ext.dict.yaml \
         > ~/.local/share/wowtype/english.txt
 
-支持**双拼**（自然码，默认关闭）：`--shuangpin`（插件在设置界面打开，或 `WOWTYPE_SHUANGPIN=1`）。
-`vsgo` → 中国，`nihk` → 你好；自然码里少量重叠码（如 `jp`）会同时展开成多种全拼再合并候选。
+支持**双拼**（默认关闭）：自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加 7 种方案，
+键位和零声母规则按 rime 的方案文件逐个核对过（每种方案全部音节编码、解码往返一致）。
+`demo --scheme xiaohe`（插件在设置界面选，或 `WOWTYPE_SHUANGPIN_SCHEME=xiaohe`）。
+双拼先解码成带隔音符的全拼（`vsgo` → `zhong'guo`），再走全拼的整套流程：整句、句首词、分段选词、
+语言模型都一样，候选的 `consumed` 再换算回按键个数；末尾单个键当声母（`vsg` → 中国）。
+重叠码（如自然码的 `jp`）会展开成多种全拼，其余写法的整段候选排在后面。双拼下不做按错键纠正。
 
 语言模型支持三种来源：内置一元回退、bigram TSV（`--lm`）、ARPA（`--arpa`）。
 WeType 自己的 `lmcnmac.bin` 因为只存哈希、无法导出，见 [docs/DATA.md](DATA.md)。
