@@ -103,7 +103,8 @@ jobs:
           lipo "$bin" -verify_arch arm64 x86_64
           otool -L "$bin"
           # 只能链接系统自带的库
-          if otool -L "$bin" | tail -n +2 | grep -Ev '^\s+(/System/Library/|/usr/lib/)'; then
+          # 通用二进制每个架构有一行「…(architecture arm64):」标题，跳过
+          if otool -L "$bin" | grep -v ':$' | grep -Ev '^\s+(/System/Library/|/usr/lib/)'; then
             echo "链接了系统以外的库"; exit 1
           fi
           codesign --verify --strict "$app"

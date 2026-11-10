@@ -17,7 +17,7 @@ cargo build --release -q -p wowtype-core --no-default-features --target-dir "$TA
 LIBDIR=$TARGET_DIR/release
 
 if [[ "$(uname)" == Darwin ]]; then
-  LINK=("$LIBDIR/libwowtype_core.a" -framework Security -framework CoreFoundation -liconv)
+  LINK=("$LIBDIR/libwowtype_core.a" -liconv)
 else
   LINK=("$LIBDIR/libwowtype_core.a" -lgcc_s -lutil -lrt -lpthread -lm -ldl)
 fi

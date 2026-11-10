@@ -36,7 +36,7 @@ for arch in $ARCHS; do
   swiftc -O -target "$arch-apple-macos$MACOSX_DEPLOYMENT_TARGET" -module-name WowType -I macos/CWowtype \
     macos/Sources/Shared/*.swift macos/Sources/App/*.swift \
     "$TARGET_DIR/$rust/release/libwowtype_core.a" \
-    -framework Cocoa -framework InputMethodKit -framework Carbon -framework Security -framework CoreFoundation \
+    -framework Cocoa -framework InputMethodKit -framework Carbon \
     -liconv -o "$work/WowType-$arch"
   bins+=("$work/WowType-$arch")
 done
