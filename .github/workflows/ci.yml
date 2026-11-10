@@ -139,10 +139,54 @@ jobs:
           name: pkg-${{ matrix.distro }}
           path: dist/pkg
 
+  arch:
+    name: 插件 · archlinux
+    needs: data
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: 系统依赖
+        # archlinux 镜像里没有 sudo，也没有 Arch 的 base-devel；rust 包自带 cargo，
+        # fcitx5 包里就有 Fcitx5Core/Config/Utils 的 CMake 配置，不用另装 -dev
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed base-devel cmake extra-cmake-modules \
+            fcitx5 alsa-lib rust pkgconf python git zstd libarchive
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: 按键测试（私有 fcitx5 实例 + 真实词库和语言模型）
+        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - name: 版本号
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            base=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)
+            version="${base}~git$(date -u +%Y%m%d).$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: 打 pacman 包
+        run: scripts/package-arch.sh "$VERSION" dist/pkg
+      - name: 用 pacman 装上试一下
+        run: |
+          pacman -U --noconfirm dist/pkg/wowtype-*.pkg.tar.zst
+          test -f /usr/lib/fcitx5/libwowtype.so
+          cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
+          wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
+          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | grep -q '你好'
+          grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-archlinux
+          path: dist/pkg
+
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [core, data, addon]
+    needs: [core, data, addon, arch]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -169,6 +213,7 @@ jobs:
           \`\`\`
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
+          Arch Linux：下载 \`wowtype_<版本>-1-x86_64.pkg.tar.zst\`，然后 \`sudo pacman -U wowtype-*.pkg.tar.zst\`，装完 \`wowtype-config --add-to-group\`。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
