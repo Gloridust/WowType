@@ -84,12 +84,12 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 ### 系统要求
 
 - Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13 上，在终端里运行：
+Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
@@ -98,14 +98,14 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 它会：
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
-2. 用 `sudo apt-get install` 装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita
+2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
 3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
 4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
 装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
 以后再跑一遍同样的命令就是升级（设置界面里也会提醒有新版本）。
 
-> 想先看看脚本做了什么：[install.sh](install.sh)。
+> 想先看看脚本做了什么：[install.sh](install.sh)，或者 `bash install.sh --print-plan` 只看会装哪个包、不动系统。
 > 不想让它改输入法框架或重启 fcitx5，可以加环境变量，例如 `curl -fsSL … | WOWTYPE_NO_IM_CONFIG=1 WOWTYPE_NO_RESTART=1 bash`。
 >
 > GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
