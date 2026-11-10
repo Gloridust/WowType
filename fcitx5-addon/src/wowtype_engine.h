@@ -201,6 +201,16 @@ FCITX_CONFIGURATION(
     fcitx::Option<std::string> translateModel{this, "TranslateModel", "翻译用的模型", ""};
     fcitx::Option<bool> translateFormal{this, "TranslateFormal", "译文用正式语气（默认聊天口吻）",
                                         false};
+    // 本地模型（腾讯 HY-MT 1.5 1.8B）：第一次翻译时起 llama-server，闲置后停掉
+    fcitx::Option<bool> translateLocal{this, "TranslateLocal", "用本地模型翻译（HY-MT，离线）",
+                                       false};
+    fcitx::Option<std::string> translateLocalModel{
+        this, "TranslateLocalModel", "本地模型文件（留空用 WowType 设置下载的）", ""};
+    fcitx::Option<std::string> translateLlamaServer{
+        this, "TranslateLlamaServer", "llama-server 路径（留空在 PATH 里找）", ""};
+    fcitx::Option<int, fcitx::IntConstrain> translateIdleMinutes{
+        this, "TranslateIdleMinutes", "本地模型闲置几分钟后释放内存（0 不释放）", 5,
+        fcitx::IntConstrain(0, 240)};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
 class WowtypeEngine final : public fcitx::InputMethodEngineV2 {

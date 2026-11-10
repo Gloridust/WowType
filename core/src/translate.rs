@@ -9,6 +9,10 @@
 //!
 //! 方向由模型判断：原文主要是中文就译成用户选的语言，否则译成简体中文。
 //! 只要一种译法，边流式输出边显示（和微信输入法一样，译文直接出现在输入框里）。
+//!
+//! 也可以用本地模型（腾讯 HY-MT 1.5 1.8B）：[`TranslateConfig::local`] 有值时，第一次翻译
+//! 由 [`crate::llama::LocalServer`] 起一个只监听本机的 `llama-server`，闲置一段时间后停掉，
+//! 请求还是走同一套 OpenAI 格式的接口。
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -18,6 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use serde_json::{json, Value};
+
+use crate::llama::{LocalConfig, LocalServer};
 
 /// 用户可以选的互译语言：代码、给模型看的英文名、面板上的短名。
 pub const LANGUAGES: &[(&str, &str, &str)] = &[
@@ -52,6 +58,8 @@ pub struct TranslateConfig {
     pub formal: bool,
     /// 放 API Key 的文件（只有一行）；没有这个文件或为空就不带 Authorization 头（本地 Ollama 用）。
     pub key_file: Option<PathBuf>,
+    /// 用本地模型；有值时忽略 base_url、model 和 key_file。
+    pub local: Option<LocalConfig>,
 }
 
 impl Default for TranslateConfig {
@@ -62,6 +70,7 @@ impl Default for TranslateConfig {
             target: "en".to_string(),
             formal: false,
             key_file: None,
+            local: None,
         }
     }
 }
@@ -69,7 +78,10 @@ impl Default for TranslateConfig {
 impl TranslateConfig {
     /// 填了地址和模型才能用。Key 可以没有（本地模型）。
     pub fn is_ready(&self) -> bool {
-        !self.base_url.trim().is_empty() && !self.model.trim().is_empty()
+        match &self.local {
+            Some(local) => local.model_exists(),
+            None => !self.base_url.trim().is_empty() && !self.model.trim().is_empty(),
+        }
     }
 
     /// 完整的 chat/completions 地址。
@@ -91,13 +103,11 @@ impl TranslateConfig {
 
     /// 缓存键里区分配置：换了语言、语气或模型，同一句话要重新译。
     fn signature(&self) -> String {
-        format!(
-            "{}\u{1}{}\u{1}{}\u{1}{}",
-            self.endpoint(),
-            self.model,
-            self.language().0,
-            self.formal
-        )
+        let engine = match &self.local {
+            Some(local) => format!("local:{}", local.model.display()),
+            None => format!("{}\u{1}{}", self.endpoint(), self.model),
+        };
+        format!("{engine}\u{1}{}\u{1}{}", self.language().0, self.formal)
     }
 }
 
@@ -128,8 +138,52 @@ pub fn direction_tag(config: &TranslateConfig, text: &str) -> String {
     }
 }
 
+/// 本地模型（HY-MT）提示词里用的中文语言名。
+fn chinese_name(code: &str) -> &'static str {
+    match code {
+        "ja" => "日语",
+        "ko" => "韩语",
+        "fr" => "法语",
+        "de" => "德语",
+        "es" => "西班牙语",
+        "ru" => "俄语",
+        "pt" => "葡萄牙语",
+        "it" => "意大利语",
+        "vi" => "越南语",
+        "th" => "泰语",
+        "id" => "印尼语",
+        "ar" => "阿拉伯语",
+        _ => "英语",
+    }
+}
+
+/// 本地模型的请求体：HY-MT 没有系统提示词，用模型说明里给的模板和采样参数。
+fn build_local_request(config: &TranslateConfig, source: &str) -> Value {
+    let target = if is_mainly_chinese(source) {
+        chinese_name(config.language().0)
+    } else {
+        "中文"
+    };
+    let prompt =
+        format!("将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{source}");
+    json!({
+        "model": "hy-mt",
+        "stream": true,
+        "messages": [{ "role": "user", "content": prompt }],
+        "temperature": 0.7,
+        "top_k": 20,
+        "top_p": 0.6,
+        "repeat_penalty": 1.05,
+        // 译文不会比原文长太多；防止模型停不下来
+        "max_tokens": 64 + source.chars().count() * 4,
+    })
+}
+
 /// 请求体。
 pub fn build_request(config: &TranslateConfig, source: &str) -> Value {
+    if config.local.is_some() {
+        return build_local_request(config, source);
+    }
     let (_, language, _) = *config.language();
     let tone = if config.formal {
         "Use a polite, formal written tone."
@@ -386,6 +440,7 @@ pub struct Snapshot {
 /// 翻译器。插件线程持有，内部状态和后台线程共享。
 pub struct Translator {
     inner: Arc<Mutex<Inner>>,
+    local: Arc<LocalServer>,
 }
 
 impl Default for Translator {
@@ -411,15 +466,25 @@ impl Translator {
                 next_id: 1,
                 cache: HashMap::new(),
             })),
+            local: Arc::new(LocalServer::new()),
         }
     }
 
     pub fn configure(&self, config: TranslateConfig) {
         let mut inner = self.inner.lock().unwrap();
         if inner.config != config {
+            if inner.config.local != config.local {
+                // 不用本地模型了（或者换了模型）：马上停掉，不占内存和端口
+                self.local.shutdown();
+            }
             inner.config = config;
             inner.cache.clear();
         }
+    }
+
+    /// 本地模型的 llama-server 现在在不在跑。
+    pub fn local_running(&self) -> bool {
+        self.local.is_running()
     }
 
     pub fn config(&self) -> TranslateConfig {
@@ -460,16 +525,21 @@ impl Translator {
         }
         if !inner.config.is_ready() {
             inner.job.state = JobState::Error;
-            inner.job.error = "还没配置翻译服务（WowType 设置 → 翻译）".to_string();
+            inner.job.error = if inner.config.local.is_some() {
+                "还没下载本地翻译模型（WowType 设置 → 翻译）".to_string()
+            } else {
+                "还没配置翻译服务（WowType 设置 → 翻译）".to_string()
+            };
             return;
         }
         let config = inner.config.clone();
         let shared = Arc::clone(&self.inner);
+        let local = Arc::clone(&self.local);
         let source = source.to_string();
         drop(inner);
         thread::Builder::new()
             .name("wowtype-translate".into())
-            .spawn(move || run_job(shared, id, config, source, cache_key))
+            .spawn(move || run_local_or_remote(shared, local, id, config, source, cache_key))
             .ok();
     }
 
@@ -514,6 +584,60 @@ impl Drop for Translator {
         if let Ok(mut inner) = self.inner.lock() {
             inner.kill();
         }
+        self.local.shutdown();
+    }
+}
+
+/// 本地模型：先确保 llama-server 在跑（第一次要等模型载入），再按普通接口请求。
+/// 进程在请求中途没了（被 OOM 杀掉等）就重起一次再试。
+fn run_local_or_remote(
+    shared: Arc<Mutex<Inner>>,
+    server: Arc<LocalServer>,
+    id: u64,
+    config: TranslateConfig,
+    source: String,
+    cache_key: String,
+) {
+    let Some(local) = config.local.clone() else {
+        run_job(shared, id, config, source, cache_key);
+        return;
+    };
+    for attempt in 0..2 {
+        let lease = match server.acquire(&local) {
+            Ok(lease) => lease,
+            Err(message) => {
+                let mut inner = shared.lock().unwrap();
+                if inner.job.id == id {
+                    inner.job.state = JobState::Error;
+                    inner.job.error = message;
+                }
+                return;
+            }
+        };
+        if shared.lock().unwrap().job.id != id {
+            return; // 等模型载入的时候用户已经改了原文
+        }
+        let mut remote = config.clone();
+        remote.base_url = lease.base_url.clone();
+        remote.key_file = None;
+        run_job(
+            Arc::clone(&shared),
+            id,
+            remote,
+            source.clone(),
+            cache_key.clone(),
+        );
+        drop(lease);
+        let mut inner = shared.lock().unwrap();
+        let crashed = inner.job.id == id
+            && inner.job.state == JobState::Error
+            && inner.job.raw.is_empty()
+            && !server.is_running();
+        if !crashed || attempt == 1 {
+            return;
+        }
+        inner.job.state = JobState::Running;
+        inner.job.error.clear();
     }
 }
 
@@ -698,6 +822,102 @@ fn run_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_model_end_to_end() {
+        if !std::process::Command::new("python3")
+            .args(["-c", ""])
+            .status()
+            .is_ok_and(|s| s.success())
+            || !std::process::Command::new("curl")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("wowtype-local-mt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let server = crate::llama::test_support::fake_server(&dir);
+        let model = dir.join("model.gguf");
+        let translator = Translator::new();
+        let local = LocalConfig {
+            model: model.clone(),
+            server: server.to_string_lossy().into_owned(),
+            idle_secs: 0,
+        };
+        translator.configure(TranslateConfig {
+            local: Some(local.clone()),
+            ..TranslateConfig::default()
+        });
+        // 没下载模型：不起进程，直接报原因
+        translator.start("你好");
+        let snap = translator.poll();
+        assert_eq!(snap.state, JobState::Error);
+        assert!(
+            snap.error.contains("还没下载本地翻译模型"),
+            "{}",
+            snap.error
+        );
+        assert!(!translator.local_running());
+
+        std::fs::write(&model, b"gguf").unwrap();
+        let wait = |t: &Translator| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            loop {
+                let snap = t.poll();
+                if snap.state != JobState::Running || std::time::Instant::now() > deadline {
+                    return snap;
+                }
+                thread::sleep(std::time::Duration::from_millis(50));
+            }
+        };
+        translator.start("我们下午三点开会");
+        let snap = wait(&translator);
+        assert_eq!(
+            (snap.state, snap.text.as_str()),
+            (JobState::Done, "Hello"),
+            "{}",
+            snap.error
+        );
+        assert!(translator.local_running());
+        // 外文译成中文
+        translator.start("See you tomorrow");
+        assert_eq!(wait(&translator).text, "你好");
+        // 关掉本地模型：马上停掉进程
+        translator.configure(TranslateConfig::default());
+        assert!(!translator.local_running());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_request_uses_hy_mt_template() {
+        let config = TranslateConfig {
+            target: "ja".into(),
+            local: Some(LocalConfig {
+                model: "m.gguf".into(),
+                server: String::new(),
+                idle_secs: 0,
+            }),
+            ..TranslateConfig::default()
+        };
+        let body = build_request(&config, "你好");
+        let prompt = body["messages"][0]["content"].as_str().unwrap();
+        assert_eq!(
+            body["messages"].as_array().unwrap().len(),
+            1,
+            "HY-MT 没有系统提示词"
+        );
+        assert!(prompt.starts_with("将以下文本翻译为日语，"), "{prompt}");
+        assert!(prompt.ends_with("\n\n你好"));
+        assert_eq!(body["top_k"], 20);
+        let prompt = build_request(&config, "good morning")["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(prompt.starts_with("将以下文本翻译为中文，"), "{prompt}");
+    }
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
 
