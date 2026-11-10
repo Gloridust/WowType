@@ -17,6 +17,16 @@ sudo apt install -y build-essential pkg-config cmake extra-cmake-modules \
 只有语音需要 `libasound2-dev` 和 `libx11-dev`；只想用文字输入可以省掉。
 `python3-gi gir1.2-gtk-4.0 gir1.2-adw-1` 是设置界面 `wowtype-config` 运行时要的（libadwaita 1.4+），不影响编译。
 
+Fedora：
+
+```bash
+sudo dnf install -y rust cargo cmake extra-cmake-modules gcc-c++ pkgconf-pkg-config \
+  fcitx5 fcitx5-devel alsa-lib-devel python3-gobject gtk4 libadwaita gobject-introspection
+```
+
+Fedora 的 fcitx5 插件目录是 `/usr/lib64/fcitx5`，第 4 步的 CMake 会自己选 `lib64`。
+想打成 rpm：`scripts/package-rpm.sh <版本> dist/pkg`（另外要 `rpm-build`，词库先用第 2 步放到 `dist/data`）。
+
 ## 1. 构建核心并验证
 
 ```bash
@@ -96,6 +106,9 @@ sudo cmake --install build
 
 缺词库时代码会退到 `demo_lexicon.tsv`（17 个词），能验证链路但没法日常用。
 
+插件去 `<安装前缀>/share/wowtype/` 找系统词库（`-DCMAKE_INSTALL_PREFIX=/usr` 时就是 `/usr/share/wowtype/`），
+要改的话 cmake 时加 `-DWOWTYPE_SYSTEM_DATA_DIR=<目录>`。用户目录 `~/.local/share/wowtype/` 总是优先。
+
 不想装设置界面：cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`，就没有前两个文件。
 设置界面自己能跑一遍单元测试（不开窗口）：`python3 settings/wowtype-config --self-test`。
 
@@ -166,6 +179,37 @@ sudo apt install -y xclip xdotool         # X11
 ```
 
 Wayland 下没有全局热键 API，需要 `keyd` / `kanata` 把按键映射成给本进程发信号。
+
+## NixOS / Nix
+
+仓库根目录的 `flake.nix` 提供 `packages.<system>.default`（也叫 `wowtype`）和 `overlays.default`。
+包里有插件、设置界面、`wowtype-check` / `wowtype-show` 和词库（词库按哈希固定，从 Releases 的
+`wowtype-data-rime-ice-*.tar.gz` 下载），插件去包自己的 `share/wowtype/` 找词库。
+
+```bash
+nix build github:Gloridust/WowType          # 只构建
+nix flake check github:Gloridust/WowType    # 构建并用真实词库打一次「你好」、跑设置界面自测
+```
+
+NixOS 配置：
+
+```nix
+# flake.nix 的 inputs
+wowtype = {
+  url = "github:Gloridust/WowType";
+  inputs.nixpkgs.follows = "nixpkgs";   # 插件要和系统的 fcitx5 用同一份 nixpkgs 编
+};
+
+# configuration.nix（inputs 通过 specialArgs 传进来）
+i18n.inputMethod = {
+  enable = true;
+  type = "fcitx5";
+  fcitx5.addons = [ inputs.wowtype.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+};
+```
+
+`nixos-rebuild switch` 后重新登录，用 `wowtype-config --add-to-group` 或 Fcitx 5 配置把 WowType 加进输入法列表。
+GNOME 的绿色候选框扩展在包的 `share/gnome-shell/extensions/` 里，NixOS 不会自动启用它。
 
 ## 环境变量
 

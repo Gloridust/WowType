@@ -48,8 +48,12 @@ target_include_directories(wowtype PRIVATE
 )
 # 设置界面装在哪：插件在后台用它打开默认主题、检查更新（wowtype-config --startup）
 set(WOWTYPE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version shown in the settings app and the log")
+# 系统词库目录（lexicon.tsv、words.lm、demo_lexicon.tsv 等装在这里），跟着安装前缀走
+set(WOWTYPE_SYSTEM_DATA_DIR "${CMAKE_INSTALL_FULL_DATADIR}/wowtype"
+    CACHE PATH "Directory the addon reads the system lexicon and language model from")
 target_compile_definitions(wowtype PRIVATE
     WOWTYPE_CONFIG_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/wowtype-config"
+    WOWTYPE_SYSTEM_DATA_DIR="${WOWTYPE_SYSTEM_DATA_DIR}"
     WOWTYPE_ADDON_VERSION="${WOWTYPE_VERSION}")
 target_link_libraries(wowtype PRIVATE
     Fcitx5::Core

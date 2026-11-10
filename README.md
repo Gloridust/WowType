@@ -80,7 +80,7 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 ### 系统要求
 
 - Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**。其他发行版（Arch、Fedora……）请[从源码构建](#方式二从源码构建)
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](#方式二从源码构建)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
 ### 一行命令安装（推荐）
@@ -144,6 +144,41 @@ sudo apt install ./wowtype_*_amd64.deb
 加了 `--no-install-recommends` 的话不会装，打字不受影响，只是打不开设置界面。
 
 > 0.3.3 及以前的版本，词库是单独的 `wowtype-data-rime-ice` 包。装新版时 apt 会自动把它删掉（文件由新包接管），不用管它。
+
+###### Fedora
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.x86_64.rpm`（词库已经在包里），然后：
+
+```bash
+sudo dnf install ./wowtype-*.rpm
+wowtype-config --add-to-group      # 把 WowType 加进 fcitx5 的输入法列表
+```
+
+`dnf` 会顺带装上 fcitx5 和设置界面要用的 PyGObject、GTK 4、libadwaita。
+还没在用 fcitx5 的话，先 `sudo dnf install fcitx5 fcitx5-configtool fcitx5-gtk fcitx5-qt fcitx5-autostart` 并重新登录。
+
+###### NixOS / Nix
+
+仓库根目录有 `flake.nix`。在 NixOS 的 flake 配置里加上输入，再把 WowType 加进 fcitx5 的插件：
+
+```nix
+# flake.nix
+inputs.wowtype = {
+  url = "github:Gloridust/WowType";
+  inputs.nixpkgs.follows = "nixpkgs";   # 和系统用同一份 fcitx5
+};
+
+# configuration.nix（通过 specialArgs 把 inputs 传进来）
+i18n.inputMethod = {
+  enable = true;
+  type = "fcitx5";
+  fcitx5.addons = [ inputs.wowtype.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+};
+```
+
+`nixos-rebuild switch` 后重新登录，运行 `wowtype-config --add-to-group`（或在 Fcitx 5 配置里添加 WowType）。
+也提供了 overlay：`nixpkgs.overlays = [ inputs.wowtype.overlays.default ];` 之后用 `pkgs.wowtype`。
+home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
 
 ##### 方式二：从源码构建
 
