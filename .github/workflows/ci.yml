@@ -208,10 +208,93 @@ jobs:
           path: dist/pkg/*.pkg.tar.zst
           if-no-files-found: error
 
+  fedora:
+    name: 插件 · fedora
+    needs: data
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 系统依赖
+        # fcitx5-devel 带 CMake 配置；fcitx5 带按键测试用的 testim 插件。
+        # 设置界面也在安装后测试，故装好 GTK / PyGObject（包本身把它们列为推荐依赖）。
+        run: |
+          dnf install -y --setopt=install_weak_deps=False \
+            rust cargo cmake extra-cmake-modules gcc-c++ pkgconf-pkg-config \
+            fcitx5 fcitx5-devel alsa-lib-devel rpm-build \
+            python3 python3-gobject gtk4 libadwaita gobject-introspection \
+            git ca-certificates findutils file which
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: 按键测试（私有 fcitx5 实例 + 真实词库和语言模型）
+        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - name: 版本号
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            version=${GITHUB_REF_NAME#v}
+          else
+            base=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)
+            version="${base}~git$(date -u +%Y%m%d).$(echo "$GITHUB_SHA" | cut -c1-7)"
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: 用 rpmbuild 打 rpm 包（从源码重建）
+        run: scripts/package-rpm.sh "$VERSION" dist/pkg
+      - name: 用 dnf 装上试一下
+        run: |
+          # fedora 容器的 dnf 默认 tsflags=nodocs，去掉免得 rpm -V 把没装的文档当成缺失
+          sed -i '/^tsflags=nodocs/d' /etc/dnf/dnf.conf
+          dnf install -y ./dist/pkg/wowtype-*.rpm
+          rpm -qip dist/pkg/wowtype-*.rpm
+          rpm -V wowtype
+          # Fedora 的 fcitx5 插件目录是 /usr/lib64/fcitx5
+          test "$(pkg-config --variable=libdir Fcitx5Core)/fcitx5" = /usr/lib64/fcitx5
+          test -f /usr/lib64/fcitx5/libwowtype.so
+          ldd /usr/lib64/fcitx5/libwowtype.so | tee dist/ldd.txt
+          if grep -q 'not found' dist/ldd.txt; then
+            echo '插件有未解析的动态库依赖' >&2
+            exit 1
+          fi
+          test -s /usr/share/wowtype/words.lm
+          test -s /usr/share/wowtype/english.txt
+          cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
+          cmp /usr/share/wowtype/words.lm dist/data/words.lm
+          wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
+          # 不用 grep -q 直接接在管道后面，避免 pipefail 把上游 SIGPIPE 当成测试失败。
+          wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee dist/show.txt
+          grep -q '1\.你好' dist/show.txt
+          wowtype-config --self-test
+          # fcitx5 没在跑：直接把 WowType 写进 fcitx5 的输入法列表
+          wowtype-config --add-to-group
+          grep -qx 'Name=wowtype' "$HOME/.config/fcitx5/profile"
+          test -f /usr/share/icons/hicolor/scalable/apps/wowtype.svg
+          test -f /usr/share/icons/hicolor/22x22/apps/wowtype.png
+          grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-fedora
+          path: dist/pkg/*.rpm
+          if-no-files-found: error
+
+  nix:
+    name: Nix flake
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      # 构建插件（词库按 flake 里固定的哈希从发布页下载），再跑 checks：
+      # 自检工具用装好的词库打出「你好」、设置界面自测
+      - run: nix build .#default -L
+      - run: nix flake check -L
+
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [core, data, addon, arch]
+    needs: [core, data, addon, arch, fedora]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -239,6 +322,8 @@ jobs:
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_amd64.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*_amd64.deb\`。
           Arch Linux：下载 \`wowtype-<版本>-1-x86_64.pkg.tar.zst\`，然后 \`sudo pacman -U wowtype-*.pkg.tar.zst\`，装完 \`wowtype-config --add-to-group\`。
+          Fedora：下载 \`wowtype-<版本>-1.fc<版本>.x86_64.rpm\`，然后 \`sudo dnf install ./wowtype-*.rpm\`，装完 \`wowtype-config --add-to-group\`。
+          NixOS：用仓库里的 flake，把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
