@@ -10,10 +10,13 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <fcitx/addoninstance.h>
+#include <fcitx/addonfactory.h>
+#include <fcitx/addonloader.h>
 #include <unistd.h>
 #include <iterator>
 
@@ -36,9 +39,32 @@
 #include <fcitx-utils/keysym.h>
 #include <fcitx-utils/utf8.h>
 
+// 假的 fcitx5 clipboard 插件（scripts/addon-test.sh 写了它的 addon 配置）：插件从它拿最新一条剪贴板
+FCITX_ADDON_DECLARE_FUNCTION(Clipboard, clipboard, std::string(const fcitx::InputContext *ic));
+
 using namespace fcitx;
 
 namespace {
+
+class Clipboard final : public AddonInstance {
+public:
+    std::string clipboard(const InputContext * /*ic*/) { return text; }
+    std::string text;
+
+private:
+    FCITX_ADDON_EXPORT_FUNCTION(Clipboard, clipboard);
+};
+
+Clipboard *fakeClipboard = nullptr;
+
+class FakeClipboardFactory final : public AddonFactory {
+public:
+    AddonInstance *create(AddonManager * /*manager*/) override {
+        fakeClipboard = new Clipboard;
+        return fakeClipboard;
+    }
+};
+
 
 class HarnessInputContext : public InputContext {
 public:
@@ -138,6 +164,13 @@ std::string join(const std::vector<std::string> &items) {
 }
 
 /// 每个用例前清空上屏记录和编辑区。
+void setClipboard(const std::string &text) {
+    check(fakeClipboard != nullptr, "假的 clipboard 插件载入了");
+    if (fakeClipboard) {
+        fakeClipboard->text = text;
+    }
+}
+
 void fresh(HarnessInputContext *ic) {
     type(ic, "<esc>");
     ic->committed.clear();
@@ -571,6 +604,72 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "kaixin");
     check(join(page(ic.get())).find("😊") == std::string::npos, "关掉 emoji 推荐后没有 😊：" + join(page(ic.get())));
+
+    // V 模式工具栏：v + 空格打开，菜单里选剪贴板、常用语、符号、表情
+    fresh(ic.get());
+    type(ic.get(), "v<sp>");
+    check(page(ic.get()).size() == 4 && page(ic.get())[0] == "剪贴板" && ic->committed.empty(),
+          "v + 空格打开工具栏：" + join(page(ic.get())));
+    type(ic.get(), "a");
+    check(ic->passed.empty() && page(ic.get()).size() == 4, "工具栏里别的键吃掉、不收起");
+    type(ic.get(), "2");
+    check(page(ic.get()).size() == 2 && page(ic.get())[0] == "ni hao　妮好" &&
+              page(ic.get())[1] == "wo de you xiang　我的邮箱",
+          "常用语按文件顺序：" + join(page(ic.get())));
+    type(ic.get(), "2");
+    check(ic->committed == "我的邮箱" && page(ic.get()).empty(), "数字键选常用语：" + ic->committed);
+    // 剪贴板：插件从 fcitx5 的 clipboard 插件取最新一条记下来，最新的在前；
+    // 换行显示成 ⏎、上屏时是真的换行
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1");
+    check(ic->inputPanel().auxUp().toString().find("还没有记录") != std::string::npos,
+          "空剪贴板提示：" + ic->inputPanel().auxUp().toString());
+    type(ic.get(), "<cr>");
+    check(ic->inputPanel().auxUp().empty() && ic->committed.empty(), "空列表回车关闭");
+    setClipboard("第一条");
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).size() == 1 && page(ic.get())[0] == "第一条",
+          "打开剪贴板时记下最新一条：" + join(page(ic.get())));
+    fresh(ic.get());
+    setClipboard("line1\nline2");
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).size() == 2 && page(ic.get())[0] == "line1\u23CEline2",
+          "剪贴板历史最新的在前：" + join(page(ic.get())));
+    type(ic.get(), "<down><sp>");
+    check(ic->committed == "第一条", "下键再空格选第二条：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1<cr>");
+    check(ic->committed == "line1\nline2", "回车选第一条，换行原样：" + ic->committed);
+    // 退格返回菜单，菜单里再退格关闭
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1<bs>");
+    check(page(ic.get()).size() == 4, "退格回到菜单：" + join(page(ic.get())));
+    type(ic.get(), "<bs>");
+    check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(), "菜单里退格关闭");
+    // 组合键（Ctrl+C）收起工具栏，交给应用
+    type(ic.get(), "v<sp>");
+    check(!send(ic.get(), Key(FcitxKey_c, KeyState::Ctrl)) && page(ic.get()).empty(),
+          "Ctrl+C 收起工具栏、交给应用");
+    // 符号：列全部内置符号，空格选第一个
+    fresh(ic.get());
+    type(ic.get(), "v<sp>3");
+    check(ic->inputPanel().auxUp().toString().find("符号") != std::string::npos &&
+              !page(ic.get()).empty(),
+          "工具栏打开符号面板：" + ic->inputPanel().auxUp().toString());
+    type(ic.get(), "<sp>");
+    check(ic->committed == "，", "符号面板空格选第一个（，）：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "v<sp>4");
+    check(ic->inputPanel().auxUp().toString().find("表情") != std::string::npos,
+          "工具栏打开表情面板：" + ic->inputPanel().auxUp().toString());
+    fresh(ic.get());
+    // vim 照常打字，v1+2 照常算
+    type(ic.get(), "vim");
+    check(preedit(ic.get()) != "" && ic->inputPanel().auxUp().empty(), "vim 不打开工具栏：" + preedit(ic.get()));
+    fresh(ic.get());
+    type(ic.get(), "v1+2<sp>");
+    check(ic->committed == "3", "v1+2 空格仍上屏结果：" + ic->committed);
+    fresh(ic.get());
 
     // 删掉文件再 reload：回到默认
     std::filesystem::remove(configDir + "/wowtype.conf");
@@ -1215,10 +1314,12 @@ int main(int argc, char **argv) {
     (void)argv;
     char arg0[] = "wowtype-key-harness";
     char arg1[] = "--disable=all";
-    char arg2[] = "--enable=wowtype,testim";
+    char arg2[] = "--enable=wowtype,testim,clipboard";
     char *args[] = {arg0, arg1, arg2};
     Instance instance(3, args);
-    instance.addonManager().registerDefaultLoader(nullptr);
+    FakeClipboardFactory clipboardFactory;
+    StaticAddonRegistry registry{{"clipboard", &clipboardFactory}};
+    instance.addonManager().registerDefaultLoader(&registry);
     EventDispatcher mainDispatcher;
     mainDispatcher.attach(&instance.eventLoop());
     dispatcher = &mainDispatcher;

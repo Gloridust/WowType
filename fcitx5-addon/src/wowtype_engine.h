@@ -33,6 +33,9 @@ class KeyEvent;
 
 class WowtypeState;
 
+/// v + 空格打开的工具栏里现在是哪一页（符号、表情直接用表情面板）。
+enum class WowtypeTool { None, Menu, Clipboard, Phrases };
+
 enum class WowtypeLayout { Horizontal, Vertical };
 FCITX_CONFIG_ENUM_NAME(WowtypeLayout, "Horizontal", "Vertical");
 
@@ -166,6 +169,11 @@ FCITX_CONFIGURATION(
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
                                    true};
+    fcitx::Option<bool> toolbar{this, "Toolbar",
+                                "v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）",
+                                true};
+    fcitx::Option<bool> clipboardHistory{this, "ClipboardHistory",
+                                         "记录剪贴板历史（只在内存里，最多 20 条）", true};
     fcitx::Option<bool> autoSpace{this, "AutoSpace", "汉字和英文、数字之间自动加空格", false};
     fcitx::Option<bool> autoSpaceLetters{this, "AutoSpaceLetters", "汉字和英文字母之间", true};
     fcitx::Option<bool> autoSpaceDigits{this, "AutoSpaceDigits", "汉字和数字之间", true};
@@ -292,6 +300,18 @@ private:
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
+    /// 打开表情面板，但空搜索词时列全部符号（工具栏的「符号」）。
+    void openSymbolPanel(fcitx::InputContext *ic, WowtypeState *state);
+    void openTool(fcitx::InputContext *ic, WowtypeState *state, WowtypeTool tool);
+    bool handleToolKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
+    void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
+    /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
+    void sampleClipboard(fcitx::InputContext *ic);
+
+public:
+    void selectTool(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
+
+private:
     void closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
     void refreshEmojiPanel(WowtypeState *state);
     /// 面板开着时的按键，处理了返回 true。
@@ -359,6 +379,8 @@ private:
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool dateTime_ = true;
     bool calculator_ = true;
+    bool toolbar_ = true;
+    bool clipboardHistory_ = true;
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;

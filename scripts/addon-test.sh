@@ -43,6 +43,15 @@ Library=libtestim
 Type=SharedLibrary
 OnDemand=False
 ADDON
+# 假的 clipboard 插件（测试程序里注册的静态插件），盖掉系统的那个
+cat > "$ROOT/data/fcitx5/addon/clipboard.conf" <<'ADDON'
+[Addon]
+Name=clipboard
+Category=Module
+Library=clipboard
+Type=StaticLibrary
+OnDemand=False
+ADDON
 cat > "$ROOT/config/fcitx5/profile" <<'PROFILE'
 [Groups/0]
 Name=Default
