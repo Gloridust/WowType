@@ -9,9 +9,11 @@
 //! - 候选列表（引擎的候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间），
 //!   编辑区的分音节显示（`nihao` 显示成 `ni hao`，双拼显示成全拼）。
 //!
+//! - 选词（句首词进已选栈，整句上屏）和学习（选词记录、分几次选出来的整句也记一次）。
+//!
 //! 还没挪的键 [`Session::key`] 返回 `handled = false`，外壳接着用自己的旧逻辑处理。
-//! 选词、上屏和学习这一轮还在外壳里，外壳用 [`Session::push_selection`]、
-//! [`Session::append`] 这些过渡函数改编辑区，挪完以后会删掉。
+//! 空格、数字这些选词键还在外壳里，外壳按全局序号调 [`Session::choose`]；
+//! 计算器、双拼分号、表情面板往编辑区加字用 [`Session::append`]。这些过渡用法挪完以后会删掉。
 
 use crate::datetime::LocalTime;
 use crate::Engine;
@@ -323,19 +325,14 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时）。
+    /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
+    /// 和 [`Session::commit_input`] 一样也记一次选词。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
-        let commit = if commit_pending && self.composing() {
-            Some(self.selected_text() + self.remaining())
-        } else {
-            None
-        };
-        self.clear();
-        Frame {
-            handled: true,
-            commit,
-            ..self.frame(true)
+        if commit_pending && self.composing() {
+            return self.commit_input();
         }
+        self.clear();
+        self.frame(true)
     }
 
     /// 现在的编辑区（不处理按键）。
@@ -512,7 +509,91 @@ impl<'e> Session<'e> {
         &self.selections
     }
 
-    /// 过渡：外壳选了句首词，压进已选栈（选词还在外壳里）。
+    /// 选第 index 个候选（全部候选里的序号，不分页）。
+    ///
+    /// - emoji：上屏已选的词 + emoji（推荐在句尾对上时是整句 + emoji），不学习；
+    /// - 计算结果、日期时间这类用完输入的：已选的词 + 它原样上屏，不学习；
+    /// - 句首词（没用完输入）：进已选栈，记一次选词，剩下的接着选；
+    /// - 其余：已选的词 + 它上屏，记选词（分几次选出来的整句也记一次，下次能一次打出来）。
+    ///
+    /// 序号不对时什么也不做（handled = false）。过渡：选词键挪进来以后外壳改用按页的 select。
+    pub fn choose(&mut self, index: usize) -> Frame {
+        let Some(chosen) = self.candidates().get(index).cloned() else {
+            return self.frame(false);
+        };
+        let remaining = self.remaining().len();
+        match chosen.kind {
+            CandidateKind::Emoji => {
+                let text = self.selected_text() + &chosen.commit;
+                self.finish(text)
+            }
+            CandidateKind::Plain if chosen.consumed >= remaining => {
+                let text = self.selected_text() + &chosen.text;
+                self.finish(text)
+            }
+            _ if chosen.consumed < remaining => {
+                // 句首词：先放进已选栈，剩下的拼音继续选
+                self.learn(&chosen.text, &chosen.pinyin);
+                self.push_selection(Selection {
+                    text: chosen.text,
+                    pinyin: chosen.pinyin,
+                    bytes: chosen.consumed,
+                });
+                self.frame(true)
+            }
+            _ => self.commit_with(&chosen.text, &chosen.pinyin),
+        }
+    }
+
+    /// 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。
+    /// 过渡：回车、标点挪进来以后由 key 处理。
+    pub fn commit_input(&mut self) -> Frame {
+        let tail = self.remaining().to_owned();
+        self.commit_with(&tail, "")
+    }
+
+    /// 已选的词 + tail 上屏，记选词，清空。
+    fn commit_with(&mut self, tail: &str, tail_pinyin: &str) -> Frame {
+        let text = self.selected_text() + tail;
+        if self.engine.is_some() && !text.is_empty() {
+            if !tail.is_empty() {
+                // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
+                self.learn(tail, tail_pinyin);
+            }
+            if !self.selections.is_empty() && !tail.is_empty() && !tail_pinyin.is_empty() {
+                // 分几次选出来的整句也记一次，下次能一次打出来
+                let mut pinyin = String::new();
+                for selection in &self.selections {
+                    pinyin.push_str(&selection.pinyin);
+                    pinyin.push(' ');
+                }
+                pinyin.push_str(tail_pinyin);
+                self.learn(&text, &pinyin);
+            }
+        }
+        self.finish(text)
+    }
+
+    /// 记一次选词。上文和算候选时一样（已上屏的字 + 已选的词）。
+    fn learn(&self, word: &str, pinyin: &str) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        let context = self.context.clone() + &self.selected_text();
+        engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
+        engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
+    }
+
+    /// 上屏 text（空的不上屏），清空编辑区。
+    fn finish(&mut self, text: String) -> Frame {
+        self.clear();
+        Frame {
+            commit: (!text.is_empty()).then_some(text),
+            ..self.frame(true)
+        }
+    }
+
+    /// 选了句首词，压进已选栈（测试里不带引擎时用）。
     pub fn push_selection(&mut self, selection: Selection) {
         self.selections.push(selection);
         self.fresh = false;

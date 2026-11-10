@@ -2,8 +2,9 @@
 //! 用纯 Rust 驱动 [`wowtype_core::session::Session`]，macOS 的 CI 也跑。
 //!
 //! 只搬已经挪进会话的行为：编辑区、已选词栈、退格、Esc，候选列表（引擎候选、计算器、
-//! emoji 推荐、数字按键 emoji、日期时间）和编辑区分音节。选词还在 fcitx5 外壳里，
-//! 这里选句首词用 `push_selection` 代替（外壳选词时就是这么调的）。
+//! emoji 推荐、数字按键 emoji、日期时间）、编辑区分音节，选词、整句上屏和学习。
+//! 空格、回车、数字键这些选词键还在 fcitx5 外壳里，这里直接调 `choose` / `commit_input`
+//! （外壳按了这些键就是这么调的）；不带引擎的用例没有候选，用 `push_selection` 造已选词。
 //! 以后每挪一块，就把 key_harness 里对应的用例搬过来。
 //!
 //! 前面的用例不带引擎（词库在后台载入好之前就是这样），编辑区是原始输入；
@@ -232,6 +233,16 @@ fn with(engine: &'static Engine) -> Session<'static> {
     session
 }
 
+/// 选文字是 text 的那个候选（外壳按数字键、点鼠标都是这样）。
+fn choose_text(session: &mut Session, text: &str) -> Frame {
+    let index = session
+        .candidates()
+        .iter()
+        .position(|c| c.text == text)
+        .unwrap_or_else(|| panic!("没有候选 {text}"));
+    session.choose(index)
+}
+
 fn texts(session: &mut Session) -> Vec<String> {
     session
         .candidates()
@@ -251,8 +262,7 @@ fn preedit_is_segmented() {
         type_keys(&mut session, "nihaozhongguo").preedit,
         "ni'hao'zhong'guo"
     );
-    select_prefix(&mut session, "你好", "ni hao", 5);
-    assert_eq!(session.frame(false).preedit, "你好zhong'guo");
+    assert_eq!(choose_text(&mut session, "你好").preedit, "你好zhong'guo");
     assert_eq!(
         type_keys(&mut session, "<bs>").preedit,
         "ni'hao'zhong'guo",
@@ -352,7 +362,7 @@ fn date_time_after_first() {
     // 选过词以后不出
     let mut session = with(engine());
     type_keys(&mut session, "nihaoriqi");
-    select_prefix(&mut session, "你好", "ni hao", 5);
+    choose_text(&mut session, "你好");
     assert!(!texts(&mut session).iter().any(|t| t.contains('年')));
 
     // 关掉不出
@@ -453,4 +463,143 @@ fn cache_follows_edits() {
     assert_eq!(texts(&mut session)[0], "是");
     type_keys(&mut session, "<esc>");
     assert!(session.candidates().is_empty());
+}
+
+// ---- 选词、整句上屏、学习 ----
+
+#[test]
+fn choose_sentence_start_then_the_rest() {
+    // key_harness：「句首词选完接着选剩下的」「整句上屏」
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaozhongguo");
+    let frame = choose_text(&mut session, "你好");
+    assert!(frame.handled);
+    assert_eq!(frame.commit, None, "句首词先进已选栈");
+    assert_eq!(session.remaining(), "zhongguo");
+    assert_eq!(texts(&mut session)[0], "中国");
+    let frame = session.choose(0);
+    assert!(frame.handled);
+    assert_eq!(frame.commit.as_deref(), Some("你好中国"));
+    assert!(frame.preedit.is_empty());
+    assert!(!session.composing());
+}
+
+#[test]
+fn bad_index_is_not_handled() {
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    let total = session.candidates().len();
+    let frame = session.choose(total);
+    assert!(!frame.handled);
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, "ni'hao", "选错序号什么也不改");
+
+    // 没有引擎就没有候选
+    let mut session = fresh();
+    type_keys(&mut session, "nihao");
+    assert!(!session.choose(0).handled);
+}
+
+#[test]
+fn whole_sentence_is_learned() {
+    // 分几次选出来的整句也记一次选词；选够 3 次（auto_learn_threshold）就收进用户词库
+    let engine = engine();
+    for round in 0..3 {
+        let mut session = with(engine);
+        type_keys(&mut session, "nihaozhongguo");
+        choose_text(&mut session, "你好");
+        assert_eq!(
+            choose_text(&mut session, "中国").commit.as_deref(),
+            Some("你好中国"),
+            "第 {round} 次"
+        );
+    }
+    let learned = engine.user_words();
+    assert!(
+        learned
+            .iter()
+            .any(|(pinyin, word, _)| word == "你好中国" && pinyin == "ni hao zhong guo"),
+        "整句带拼音收进用户词库：{learned:?}"
+    );
+}
+
+#[test]
+fn single_word_is_learned_with_pinyin() {
+    let engine = engine();
+    for _ in 0..3 {
+        let mut session = with(engine);
+        type_keys(&mut session, "kaixin");
+        assert_eq!(
+            choose_text(&mut session, "开新").commit.as_deref(),
+            Some("开新")
+        );
+    }
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(pinyin, word, _)| word == "开新" && pinyin == "kai xin"));
+}
+
+#[test]
+fn emoji_and_plain_commit_without_learning() {
+    // emoji 推荐、日期时间：带上已选的词一起上屏，不进用户词库
+    let engine = engine();
+    for _ in 0..3 {
+        let mut session = with(engine);
+        type_keys(&mut session, "nihaokaixin");
+        choose_text(&mut session, "你好");
+        assert_eq!(
+            choose_text(&mut session, "😊").commit.as_deref(),
+            Some("你好😊")
+        );
+
+        let mut session = with(engine);
+        type_keys(&mut session, "riqi");
+        assert_eq!(
+            choose_text(&mut session, "2026-11-11").commit.as_deref(),
+            Some("2026-11-11")
+        );
+        assert!(!session.composing());
+    }
+    assert!(engine
+        .user_words()
+        .iter()
+        .all(|(_, word, _)| !word.contains('😊') && !word.contains("2026")));
+}
+
+#[test]
+fn keycap_and_calculator_commit() {
+    let mut session = with(engine());
+    type_keys(&mut session, "ba");
+    assert_eq!(
+        choose_text(&mut session, "8️⃣").commit.as_deref(),
+        Some("8️⃣")
+    );
+
+    let mut session = with(engine());
+    type_keys(&mut session, "v");
+    session.append("1+2*3");
+    assert_eq!(session.choose(1).commit.as_deref(), Some("1+2*3=7"));
+    assert!(!session.composing());
+}
+
+#[test]
+fn commit_input_commits_selected_and_raw() {
+    // key_harness：「回车：已选的词 + 原始字母上屏」
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaokaixin");
+    choose_text(&mut session, "你好");
+    let frame = session.commit_input();
+    assert!(frame.handled);
+    assert_eq!(frame.commit.as_deref(), Some("你好kaixin"));
+    assert!(!session.composing());
+
+    // 什么也没打：没有上屏
+    let mut session = with(engine());
+    assert_eq!(session.commit_input().commit, None);
+
+    // 不带引擎也能上屏原始输入
+    let mut session = fresh();
+    type_keys(&mut session, "abc");
+    assert_eq!(session.commit_input().commit.as_deref(), Some("abc"));
 }
