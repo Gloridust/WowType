@@ -562,6 +562,18 @@ void WowtypeEngine::applyConfig() {
     };
     horizontal_ = !envOr("WOWTYPE_VERTICAL", *config_.layout == WowtypeLayout::Vertical);
     pageSize_ = static_cast<std::size_t>(std::clamp(*config_.pageSize, 3, 9));
+    pageMinus_ = *config_.pageKeysMinus;
+    pageBracket_ = *config_.pageKeysBracket;
+    pageComma_ = *config_.pageKeysComma;
+    pageTab_ = *config_.pageKeysTab;
+    if (const char *env = std::getenv("WOWTYPE_PAGE_KEYS"); env && *env) {
+        // 逗号分隔：minus,bracket,comma,tab
+        const std::string keys = std::string(",") + env + ",";
+        pageMinus_ = keys.find(",minus,") != std::string::npos;
+        pageBracket_ = keys.find(",bracket,") != std::string::npos;
+        pageComma_ = keys.find(",comma,") != std::string::npos;
+        pageTab_ = keys.find(",tab,") != std::string::npos;
+    }
     fuzzy_ = envOr("WOWTYPE_FUZZY", *config_.fuzzy);
     // 位掩码，和核心的 syllable::fuzzy 一致
     fuzzyGroups_ = (*config_.fuzzyZh ? 1u : 0u) | (*config_.fuzzyCh ? 2u : 0u) |
@@ -1667,18 +1679,30 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             } else if (movable && sym == nextKey) {
                 movable->nextCandidate();
                 handled = true;
-            } else if (pageable &&
-                       (sym == FcitxKey_Page_Up || sym == FcitxKey_minus ||
-                        sym == prevPageKey) &&
-                       pageable->hasPrev()) {
-                pageable->prev();
-                handled = true;
-            } else if (pageable &&
-                       (sym == FcitxKey_Page_Down || sym == FcitxKey_equal ||
-                        sym == nextPageKey) &&
-                       pageable->hasNext()) {
-                pageable->next();
-                handled = true;
+            } else if (pageable) {
+                // 设置里能选的翻页键（- =、[ ]、, .、Shift+Tab Tab）
+                const bool shift = key.states().test(fcitx::KeyState::Shift);
+                const bool tabPrev =
+                    pageTab_ && (sym == FcitxKey_ISO_Left_Tab || (sym == FcitxKey_Tab && shift));
+                const bool tabNext = pageTab_ && sym == FcitxKey_Tab && !shift;
+                const bool charPrev = (pageMinus_ && sym == FcitxKey_minus) ||
+                                      (pageBracket_ && sym == FcitxKey_bracketleft) ||
+                                      (pageComma_ && sym == FcitxKey_comma) || tabPrev;
+                const bool charNext = (pageMinus_ && sym == FcitxKey_equal) ||
+                                      (pageBracket_ && sym == FcitxKey_bracketright) ||
+                                      (pageComma_ && sym == FcitxKey_period) || tabNext;
+                if ((sym == FcitxKey_Page_Up || sym == prevPageKey || charPrev) &&
+                    pageable->hasPrev()) {
+                    pageable->prev();
+                    handled = true;
+                } else if ((sym == FcitxKey_Page_Down || sym == nextPageKey || charNext) &&
+                           pageable->hasNext()) {
+                    pageable->next();
+                    handled = true;
+                } else if ((charPrev || charNext) && (pageable->hasPrev() || pageable->hasNext())) {
+                    // 已经在第一页/最后一页：吃掉，不当标点上屏（只有一页时照常当标点）
+                    handled = true;
+                }
             }
             if (handled) {
                 event.filterAndAccept();

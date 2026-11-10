@@ -117,6 +117,10 @@ FCITX_CONFIGURATION(
         layout{this, "CandidateLayout", "候选排列", WowtypeLayout::Horizontal};
     fcitx::Option<int, fcitx::IntConstrain> pageSize{
         this, "PageSize", "每页候选个数", 9, fcitx::IntConstrain(3, 9)};
+    fcitx::Option<bool> pageKeysMinus{this, "PageKeysMinusEqual", "翻页键：- =", true};
+    fcitx::Option<bool> pageKeysBracket{this, "PageKeysBracket", "翻页键：[ ]", false};
+    fcitx::Option<bool> pageKeysComma{this, "PageKeysCommaPeriod", "翻页键：, .", false};
+    fcitx::Option<bool> pageKeysTab{this, "PageKeysTab", "翻页键：Shift+Tab Tab", false};
     fcitx::Option<bool> fuzzy{this, "Fuzzy", "模糊音（下面几组分别开关）", false};
     fcitx::Option<bool> fuzzyZh{this, "FuzzyZh", "模糊音：z = zh", true};
     fcitx::Option<bool> fuzzyCh{this, "FuzzyCh", "模糊音：c = ch", true};
@@ -331,6 +335,11 @@ private:
     std::string shuangpinScheme_ = "Ziranma";
     bool shuangpinSemicolon_ = false;
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
+    /// 打开的翻页键组（Page Up/Down、方向键、fcitx 全局翻页键一直可用）
+    bool pageMinus_ = true;
+    bool pageBracket_ = false;
+    bool pageComma_ = false;
+    bool pageTab_ = false;
     /// 英文模式：按键原样交给应用（中英文切换全局生效，切到别的窗口也保持）。
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。
