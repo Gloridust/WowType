@@ -479,7 +479,9 @@ fn collect_dfs(
         }
         let abbrev = keys.iter().filter(|q| q.is_jianpin()).count();
         let jianpin = abbrev > 0;
-        let entries = if rare {
+        // 生僻字只给打全了、没纠错的全拼（shi 列全 shi 的字）；sh、s 这种简拼和补全不带它们，
+        // 不然每打一个声母都要排几千个字
+        let entries = if rare && !jianpin && edge.completion == 0 && edge_typos == 0 {
             lexicon.lookup(keys)
         } else {
             lexicon.lookup_common(keys)

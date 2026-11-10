@@ -2084,6 +2084,32 @@ mod tests {
             }
         }
         assert!(texts.contains(&"𬤊"), "第一个音节的字也要列全：{texts:?}");
+
+        // 简拼不带生僻字
+        let texts: Vec<String> = e.input("sh").into_iter().map(|c| c.text).collect();
+        assert!(!texts.iter().any(|t| t == "𬤊"), "{texts:?}");
+    }
+
+    #[test]
+    fn lookup_common_drops_rare_chars() {
+        let lex = MemoryLexicon::from_tsv_str("shi\t是\t9000\nshi\t𬤊\t0.7\nshi shi\t事实\t0.5\n")
+            .unwrap();
+        let shi = crate::syllable::id_of("shi").unwrap();
+        let q = [SyllableQuery::Full {
+            id: shi,
+            erhua: false,
+        }];
+        let all: Vec<String> = lex.lookup(&q).into_iter().map(|e| e.word).collect();
+        let common: Vec<String> = lex.lookup_common(&q).into_iter().map(|e| e.word).collect();
+        assert_eq!(all, ["是", "𬤊"]);
+        assert_eq!(common, ["是"]);
+        // 只看单字：低频的词照样能组句
+        let two: Vec<String> = lex
+            .lookup_common(&[q[0], q[0]])
+            .into_iter()
+            .map(|e| e.word)
+            .collect();
+        assert_eq!(two, ["事实"]);
     }
 
     #[test]

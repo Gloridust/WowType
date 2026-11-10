@@ -217,11 +217,21 @@ impl MemoryLexicon {
             keys: keys.clone(),
             initials: initials.clone(),
         });
-        self.full_index.entry(keys.clone()).or_default().push(idx);
-        self.jianpin_index
-            .entry(initials.clone())
-            .or_default()
-            .push(idx);
+        let rare = self.entries[idx].is_rare();
+        let entries = &self.entries;
+        // 每组里生僻字（LexEntry::is_rare）排在最后，lookup_common 读到它们就停
+        let push = |list: &mut Vec<usize>| {
+            list.push(idx);
+            if !rare {
+                let mut at = list.len() - 1;
+                while at > 0 && entries[list[at - 1]].is_rare() {
+                    list.swap(at - 1, at);
+                    at -= 1;
+                }
+            }
+        };
+        push(self.full_index.entry(keys.clone()).or_default());
+        push(self.jianpin_index.entry(initials.clone()).or_default());
         let mut hash = KEY_HASH_SEED;
         for key in keys.iter().take(keys.len().saturating_sub(1)) {
             hash = key_hash_step(hash, *key);
@@ -486,11 +496,17 @@ impl MemoryLexicon {
 }
 
 impl MemoryLexicon {
+    /// 索引里每组的生僻字都排在最后（见 add_entry），不要它们时只取前面那段。
+    fn without_rare<'a>(&self, idxs: &'a [usize], skip_rare: bool) -> &'a [usize] {
+        if skip_rare {
+            &idxs[..idxs.partition_point(|&i| !self.entries[i].is_rare())]
+        } else {
+            idxs
+        }
+    }
+
     fn lookup_impl(&self, query: &[SyllableQuery], skip_rare: bool) -> Vec<LexEntry> {
-        let take = |&i: &usize| {
-            let entry = &self.entries[i];
-            (!skip_rare || !entry.is_rare()).then(|| entry.clone())
-        };
+        let take = |&i: &usize| self.entries[i].clone();
         if query.is_empty() {
             return Vec::new();
         }
@@ -513,7 +529,12 @@ impl MemoryLexicon {
             return self
                 .full_index
                 .get(&key)
-                .map(|idxs| idxs.iter().filter_map(take).collect())
+                .map(|idxs| {
+                    self.without_rare(idxs, skip_rare)
+                        .iter()
+                        .map(take)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -528,7 +549,12 @@ impl MemoryLexicon {
             return self
                 .jianpin_index
                 .get(&key)
-                .map(|idxs| idxs.iter().filter_map(take).collect())
+                .map(|idxs| {
+                    self.without_rare(idxs, skip_rare)
+                        .iter()
+                        .map(take)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -539,9 +565,10 @@ impl MemoryLexicon {
         self.jianpin_index
             .get(&initials)
             .map(|idxs| {
-                idxs.iter()
+                self.without_rare(idxs, skip_rare)
+                    .iter()
                     .filter(|&&i| entry_matches(&self.entries[i], query))
-                    .filter_map(take)
+                    .map(take)
                     .collect()
             })
             .unwrap_or_default()
