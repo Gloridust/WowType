@@ -365,7 +365,8 @@ void wowtype_session_configure(WowtypeSession *session, const WowtypeSessionConf
 const WowtypeFrame *wowtype_session_frame(WowtypeSession *session);
 /* 处理一次按键（按下和松开都给）。session 或 key 为 NULL 时返回 NULL。 */
 const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKey *key);
-/* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时）。 */
+/* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时），
+ * 和 wowtype_session_commit_input 一样也记一次选词。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
 
 /* 过渡：选词键、标点等还在外壳时，外壳用这些读写编辑区、选词。返回的字符串在同一会话下一次调用前有效。 */

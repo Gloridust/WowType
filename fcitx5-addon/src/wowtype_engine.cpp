@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <cstdint>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -946,7 +947,7 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
         return;
     }
     // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）由会话算，
-    // 选词还在外壳，先整个抄过来
+    // 翻页和选词键还在外壳，先整个抄过来；选词按这份拷贝的序号调会话
     syncSession(state);
     const std::size_t total = wowtype_session_candidate_total(state->session_);
     state->candidates_.reserve(total);
@@ -1623,6 +1624,22 @@ void WowtypeEngine::selectGridRow(fcitx::InputContext *ic, WowtypeState *state,
     commitCandidate(ic, state, std::min(index, state->candidates_.size() - 1));
 }
 
+namespace {
+
+/// 会话第 index 个候选还是不是外壳显示的那个。
+bool sameCandidate(WowtypeState *state, std::size_t index, const WowtypeCandidate &shown) {
+    WowtypeCandidateInfo info{};
+    info.size = sizeof(info);
+    if (wowtype_session_candidate_info(state->session_, index, &info) != 0) {
+        return false;
+    }
+    return shown.text == info.text && shown.pinyin == info.pinyin &&
+           shown.consumed == info.consumed && shown.plain == (info.kind == WOWTYPE_CAND_PLAIN) &&
+           shown.emoji == (info.kind == WOWTYPE_CAND_EMOJI);
+}
+
+} // namespace
+
 void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
                                     WowtypeState *state, std::size_t index) {
     if (!ic || !state || index >= state->candidates_.size()) {
@@ -1635,6 +1652,22 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     }
     // 选词、上屏、学习由会话做；外壳的候选是会话候选的一份拷贝，序号一样
     const WowtypeCandidate chosen = state->candidates_[index];
+    if (!sameCandidate(state, index, chosen)) {
+        // 会话的候选在显示以后变了（上文、设置、引擎变了又没刷新）：选同一个词，找不到就只刷新显示
+        index = SIZE_MAX;
+        const std::size_t total = wowtype_session_candidate_total(state->session_);
+        for (std::size_t i = 0; i < total; ++i) {
+            if (sameCandidate(state, i, chosen)) {
+                index = i;
+                break;
+            }
+        }
+        if (index == SIZE_MAX) {
+            refreshCandidates(state);
+            updateInputPanel(ic, state);
+            return;
+        }
+    }
     const WowtypeFrame *frame = wowtype_session_choose(state->session_, index);
     if (!frame || !frame->handled) {
         return;

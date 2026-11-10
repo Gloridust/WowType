@@ -325,19 +325,14 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时）。
+    /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
+    /// 和 [`Session::commit_input`] 一样也记一次选词。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
-        let commit = if commit_pending && self.composing() {
-            Some(self.selected_text() + self.remaining())
-        } else {
-            None
-        };
-        self.clear();
-        Frame {
-            handled: true,
-            commit,
-            ..self.frame(true)
+        if commit_pending && self.composing() {
+            return self.commit_input();
         }
+        self.clear();
+        self.frame(true)
     }
 
     /// 现在的编辑区（不处理按键）。
