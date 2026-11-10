@@ -64,11 +64,23 @@ DEFAULTS = {
     "CandidateLayout": "Horizontal",
     "PageSize": "9",
     "Fuzzy": "False",
+    "FuzzyZh": "True",
+    "FuzzyCh": "True",
+    "FuzzySh": "True",
+    "FuzzyNL": "False",
+    "FuzzyFH": "False",
+    "FuzzyRL": "False",
+    "FuzzyAn": "True",
+    "FuzzyEn": "True",
+    "FuzzyIn": "True",
     "TypoCorrection": "True",
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
     "ShiftToggle": "Both",
     "Traditional": "False",
+    "SelectKeys": "Off",
+    "DateTime": "True",
+    "Calculator": "True",
     "Voice": "True",
     "VoiceKey": "Alt_R",
     "EmojiSuggest": "True",
@@ -85,6 +97,25 @@ SHUANGPIN_SCHEMES = [
     ("智能 ABC", "ABC"),
     ("紫光双拼", "Ziguang"),
     ("拼音加加", "PinyinJiajia"),
+]
+
+# 模糊音分组（键名和插件的 WowtypeConfig 一致）
+FUZZY_GROUPS = [
+    ("FuzzyZh", "z = zh"),
+    ("FuzzyCh", "c = ch"),
+    ("FuzzySh", "s = sh"),
+    ("FuzzyNL", "n = l"),
+    ("FuzzyFH", "f = h"),
+    ("FuzzyRL", "r = l"),
+    ("FuzzyAn", "an = ang（ian = iang、uan = uang）"),
+    ("FuzzyEn", "en = eng"),
+    ("FuzzyIn", "in = ing"),
+]
+
+SELECT_KEYS = [
+    ("不用", "Off"),
+    ("分号选第 2 个", "Semicolon"),
+    ("分号选第 2 个、引号选第 3 个", "SemicolonQuote"),
 ]
 
 SHIFT_TOGGLES = [
@@ -259,10 +290,43 @@ def read_custom_words():
     return words
 
 
-def write_custom_words(words):
-    out = ["# WowType 自定义词：拼音<TAB>词。由 WowType 设置维护，也可以手动编辑。"]
+def parse_custom_words(text):
+    """自定义词文件的内容 -> [(编码, 词)]。编码是拼音（空格分音节）或 mail 这类字母编码。"""
+    words = []
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if not line.strip() or line.startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) < 2 or not cols[1].strip():
+            continue
+        code = normalize_code(cols[0])
+        if code is not None:
+            words.append((code, cols[1].strip()))
+    return words
+
+
+def merge_custom_words(words, incoming):
+    """把 incoming 合进 words：同一个词用新的编码，返回 (合并后的列表, 新增数, 更新数)。"""
+    merged = list(words)
+    added = updated = 0
+    for code, word in incoming:
+        old = [(c, w) for c, w in merged if w == word]
+        if old == [(code, word)]:
+            continue
+        if old:
+            updated += 1
+        else:
+            added += 1
+        merged = [(c, w) for c, w in merged if w != word] + [(code, word)]
+    return merged, added, updated
+
+
+def write_custom_words(words, path=None):
+    out = ["# WowType 自定义词：编码<TAB>词。编码是拼音（空格分开音节），也可以是 mail 这类字母；",
+           "# 词里写 \\n 表示换行。由 WowType 设置维护，也可以手动编辑。"]
     out += [f"{pinyin}\t{word}" for pinyin, word in words]
-    write_atomic(CUSTOM_FILE, "\n".join(out) + "\n")
+    write_atomic(path or CUSTOM_FILE, "\n".join(out) + "\n")
 
 
 # ---------------------------------------------------------------- 拼音
@@ -287,6 +351,16 @@ def split_syllables(text):
         parts.append(text[i:i + length])
         i += length
     return parts
+
+
+def normalize_code(text):
+    """自定义词的编码：拼音整理成空格分隔的音节；不是拼音但全是字母的（mail）原样小写。
+    都不是返回 None。"""
+    pinyin = normalize_pinyin(text)
+    if pinyin is not None:
+        return pinyin
+    code = text.strip().lower().replace("'", "")
+    return code if code and code.isascii() and code.isalpha() else None
 
 
 def normalize_pinyin(text):
@@ -1309,18 +1383,48 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(switch)
 
         pinyin = Adw.PreferencesGroup(title="拼音")
+        self.fuzzy_row = Adw.ExpanderRow(
+            title="模糊音", subtitle="打开后选哪几组音不分，比如 n 和 l 分不清就打开 n = l",
+            show_enable_switch=True)
+        self.fuzzy_row.set_enable_expansion(self.values["Fuzzy"] == "True")
+        self.fuzzy_row.connect("notify::enable-expansion", lambda r, _p: self.set_value(
+            "Fuzzy", "True" if r.get_enable_expansion() else "False"))
+        for key, title in FUZZY_GROUPS:
+            self.fuzzy_row.add_row(self.make_switch(key, title, None))
+        pinyin.add(self.fuzzy_row)
         for key, title, subtitle in (
-            ("Fuzzy", "模糊音", "z 和 zh、c 和 ch、s 和 sh，an 和 ang、en 和 eng、in 和 ing 不分"),
             ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」（全拼时）"),
             ("Traditional", "繁体字", "候选词转成繁体"),
         ):
             pinyin.add(self.make_switch(key, title, subtitle))
         page.add(pinyin)
+
+        extras = Adw.PreferencesGroup(title="快捷输入")
+        extras.add(self.make_switch(
+            "DateTime", "日期和时间",
+            "打 riqi、shijian、xingqi（或 date、time），首选后面给出当前日期、时间的几种写法"))
+        self.calc_row = self.make_switch(
+            "Calculator", "计算器", "v 开头打算式，比如 v1+2*3 得 7，按空格或 = 上屏（双拼时不可用）")
+        self.calc_row.set_sensitive(self.values["Shuangpin"] != "True")
+        extras.add(self.calc_row)
+        self.select_names = [name for _, name in SELECT_KEYS]
+        self.select_row = Adw.ComboRow(
+            title="分号、引号选词",
+            subtitle="打开引号选词后，引号不再当隔音符；用分号当韵母的双拼方案里分号不选词",
+            model=Gtk.StringList.new([label for label, _ in SELECT_KEYS]))
+        current = self.values.get("SelectKeys", "Off")
+        self.select_row.set_selected(
+            self.select_names.index(current) if current in self.select_names else 0)
+        self.select_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "SelectKeys", self.select_names[row.get_selected()]))
+        extras.add(self.select_row)
+        page.add(extras)
         return page
 
     def on_shuangpin_toggled(self, check):
         on = check.get_active()
         self.scheme_row.set_sensitive(on)
+        self.calc_row.set_sensitive(not on)
         self.set_value("Shuangpin", "True" if on else "False")
 
     # ---------------- 表情
@@ -1407,7 +1511,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.toast(message)
 
     def make_switch(self, key, title, subtitle):
-        row = Adw.SwitchRow(title=title, subtitle=subtitle)
+        row = Adw.SwitchRow(title=title)
+        if subtitle:
+            row.set_subtitle(subtitle)
         row.set_active(self.values[key] == "True")
         row.connect("notify::active", lambda r, _p: self.set_value(
             key, "True" if r.get_active() else "False"))
@@ -1492,12 +1598,13 @@ class SettingsWindow(Adw.ApplicationWindow):
         page = Adw.PreferencesPage()
         add = Adw.PreferencesGroup(
             title="添加自定义词",
-            description="人名、公司名、常用的长句都可以加。加进来的词总是排在候选第一个，"
-                        "简拼也能打出来。")
+            description="人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总是排在候选第一个，"
+                        "简拼也能打出来。编码也可以是 mail、addr 这类字母，正好打这几个字母时出现。"
+                        "词里写 \\n 表示换行，比如「四川省\\n宜宾市」。")
         self.word_entry = Adw.EntryRow(title="词")
         self.word_entry.connect("changed", self.on_word_changed)
         self.word_entry.connect("entry-activated", self.on_add_word)
-        self.pinyin_entry = Adw.EntryRow(title="拼音（自动填好，多音字请检查）")
+        self.pinyin_entry = Adw.EntryRow(title="编码：拼音（自动填好，多音字请检查）或字母")
         self.pinyin_entry.connect("changed", self.on_pinyin_changed)
         self.pinyin_entry.connect("entry-activated", self.on_add_word)
         self.add_button = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="添加",
@@ -1512,7 +1619,17 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.list_group = Adw.PreferencesGroup()
         self.search = Gtk.SearchEntry(placeholder_text="搜索", valign=Gtk.Align.CENTER)
         self.search.connect("search-changed", lambda _e: self.rebuild_word_list())
-        self.list_group.set_header_suffix(self.search)
+        header = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        header.append(self.search)
+        for icon, tip, handler in (
+            ("document-open-symbolic", "从文件导入", self.on_import_words),
+            ("document-save-symbolic", "导出到文件", self.on_export_words),
+        ):
+            button = Gtk.Button(icon_name=icon, tooltip_text=tip, valign=Gtk.Align.CENTER)
+            button.add_css_class("flat")
+            button.connect("clicked", handler)
+            header.append(button)
+        self.list_group.set_header_suffix(header)
         self.word_box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.word_box.add_css_class("boxed-list")
         self.list_group.add(self.word_box)
@@ -1544,7 +1661,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def update_add_button(self):
         word = self.word_entry.get_text().strip()
-        pinyin = normalize_pinyin(self.pinyin_entry.get_text())
+        pinyin = normalize_code(self.pinyin_entry.get_text())
         ok = bool(word) and pinyin is not None and "\t" not in word
         self.add_button.set_sensitive(ok)
         if self.pinyin_entry.get_text().strip() and pinyin is None:
@@ -1557,10 +1674,10 @@ class SettingsWindow(Adw.ApplicationWindow):
             GLib.source_remove(self.guess_source)
             self.fill_pinyin()
         word = self.word_entry.get_text().strip()
-        pinyin = normalize_pinyin(self.pinyin_entry.get_text())
+        pinyin = normalize_code(self.pinyin_entry.get_text())
         if not word or pinyin is None:
             if word:
-                self.toast("拼音不对：用空格隔开音节，比如 zhang san")
+                self.toast("编码不对：拼音用空格隔开音节（zhang san），或者只用字母（mail）")
             return
         replaced = any(w == word for _, w in self.words)
         self.words = [(p, w) for p, w in self.words if w != word] + [(pinyin, word)]
@@ -1608,13 +1725,51 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.word_box.append(empty)
             return
         for pinyin, word in shown[:500]:
-            row = Adw.ActionRow(title=GLib.markup_escape_text(word), subtitle=pinyin)
+            row = Adw.ActionRow(title=GLib.markup_escape_text(word.replace("\\n", "⏎")),
+                                subtitle=pinyin)
             button = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="删除",
                                 valign=Gtk.Align.CENTER)
             button.add_css_class("flat")
             button.connect("clicked", lambda _b, w=word: self.remove_word(w))
             row.add_suffix(button)
             self.word_box.append(row)
+
+    def on_import_words(self, *_args):
+        dialog = Gtk.FileDialog(title="导入自定义词")
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.open_finish(result).get_path()
+                with open(path, encoding="utf-8-sig") as f:
+                    incoming = parse_custom_words(f.read())
+            except GLib.Error:
+                return  # 取消
+            except (OSError, UnicodeDecodeError) as e:
+                self.toast(f"读不了这个文件：{e}")
+                return
+            if not incoming:
+                self.toast("文件里没有能用的词（每行：编码<TAB>词）")
+                return
+            self.words, added, updated = merge_custom_words(self.words, incoming)
+            self.save_words()
+            self.toast(f"导入了 {added} 个新词" + (f"，更新 {updated} 个" if updated else ""))
+        dialog.open(self, None, chosen)
+
+    def on_export_words(self, *_args):
+        dialog = Gtk.FileDialog(title="导出自定义词", initial_name="wowtype-custom-words.tsv")
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.save_finish(result).get_path()
+            except GLib.Error:
+                return
+            try:
+                write_custom_words(self.words, path)
+            except OSError as e:
+                self.toast(f"导出失败：{e.strerror}")
+                return
+            self.toast(f"已导出 {len(self.words)} 个词到 {_home(path)}")
+        dialog.save(self, None, chosen)
 
     # ---------------- 更新
 
@@ -1847,6 +2002,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.full_pinyin_check.set_active(True)
             self.scheme_row.set_selected(0)
             self.shift_row.set_selected(0)
+            self.fuzzy_row.set_enable_expansion(False)
+            self.select_row.set_selected(0)
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
             self.toast("已恢复默认设置")
@@ -1948,6 +2105,13 @@ if __name__ == "__main__":
         assert normalize_pinyin("lǜ") == "lv"
         assert normalize_pinyin("hua r") == "hua r"
         assert normalize_pinyin("github") is None
+        assert normalize_code("github") == "github" and normalize_code("Ni Hao") == "ni hao"
+        assert normalize_code("a-b") is None and normalize_code("") is None
+        parsed = parse_custom_words("# x\nmail\tme@x.com\nnihao\t妮好\nbad 1\t不收\n\t空\n")
+        assert parsed == [("mail", "me@x.com"), ("ni hao", "妮好")], parsed
+        merged, added, updated = merge_custom_words([("ni hao", "妮好")],
+                                                    [("ni hao", "妮好"), ("mail", "me@x.com")])
+        assert (added, updated) == (1, 0) and merged[-1] == ("mail", "me@x.com")
         assert len(SYLLABLES) == 432
         assert parse_version("v0.2.10") > parse_version("0.2.9")
         assert parse_version("0.2.1-1~ubuntu26.04") == (0, 2, 1)

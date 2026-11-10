@@ -592,6 +592,113 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     fresh(ic.get());
 
+    // 日期时间候选（#36）：只认全拼 riqi / shijian / xingqi，格式从第二个开始
+    type(ic.get(), "riqi");
+    {
+        const auto items = page(ic.get());
+        check(items.size() > 2 && items[0] == "日期" && items[1].find("年") != std::string::npos &&
+                  items[2].find('-') != std::string::npos,
+              "riqi：日期 + 当前日期：" + join(items));
+        type(ic.get(), "2");
+        check(ic->committed == items[1], "选第二个上屏日期：" + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shijian");
+    check(page(ic.get()).size() > 1 && page(ic.get())[0] == "时间" &&
+              page(ic.get())[1].find(':') != std::string::npos,
+          "shijian：时间 + 当前时间：" + join(page(ic.get())));
+    fresh(ic.get());
+    type(ic.get(), "xingqi");
+    check(page(ic.get()).size() > 1 && page(ic.get())[1].rfind("星期", 0) == 0,
+          "xingqi：星期几：" + join(page(ic.get())));
+    fresh(ic.get());
+    type(ic.get(), "sj");
+    check(join(page(ic.get())).find(':') == std::string::npos, "简拼 sj 不出时间：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // V 模式计算器
+    type(ic.get(), "v1+2*3");
+    check(preedit(ic.get()) == "v1+2*3" && !page(ic.get()).empty() && page(ic.get())[0] == "7",
+          "v1+2*3 -> 7：" + preedit(ic.get()) + " | " + join(page(ic.get())));
+    type(ic.get(), "<sp>");
+    check(ic->committed == "7", "空格上屏结果：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "v(1.5-0.5)/4");
+    check(ic->committed.empty() && preedit(ic.get()) == "v(1.5-0.5)/4", "算式里的 . - 不翻页也不上屏：" + preedit(ic.get()));
+    check(!page(ic.get()).empty() && page(ic.get())[0] == "0.25", "v(1.5-0.5)/4 -> 0.25：" + join(page(ic.get())));
+    type(ic.get(), "=");
+    check(ic->committed == "0.25", "按 = 上屏结果：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "very");
+    check(join(page(ic.get())).find("very") != std::string::npos, "v 开头的英文照常打：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // 模糊音分组：n=l 默认关，打开后 liunai 能出牛奶
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "Fuzzy=True\nTypoCorrection=False\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "liunai");
+    check(join(page(ic.get())).find("牛奶") == std::string::npos, "n=l 默认不开：" + join(page(ic.get())));
+    fresh(ic.get());
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "Fuzzy=True\nFuzzyNL=True\nTypoCorrection=False\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "liunai");
+    check(join(page(ic.get())).find("牛奶") != std::string::npos, "打开 n=l 后 liunai 出牛奶：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // 自定义词：非拼音编码、\n 换行
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "EmojiSuggest=False\n";
+        std::ofstream(customFile) << "mail\tme@example.com\ndi zhi\t四川省\\n宜宾市\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "mail");
+    check(!page(ic.get()).empty() && page(ic.get())[0] == "me@example.com", "自定义编码 mail：" + join(page(ic.get())));
+    type(ic.get(), "<sp>");
+    check(ic->committed == "me@example.com", "上屏自定义编码的词：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "dizhi");
+    check(!page(ic.get()).empty() && page(ic.get())[0] == "四川省⏎宜宾市", "候选里换行画成 ⏎：" + join(page(ic.get())));
+    type(ic.get(), "<sp>");
+    check(ic->committed == "四川省\n宜宾市", "上屏真的换行：" + ic->committed);
+    std::filesystem::remove(customFile);
+    fresh(ic.get());
+
+    // 分号、引号选词（默认关）
+    type(ic.get(), "ni;");
+    check(ic->committed == "你；", "默认分号还是标点：" + ic->committed);
+    fresh(ic.get());
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "SelectKeys=Semicolon\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "shi");
+    {
+        const auto items = page(ic.get());
+        type(ic.get(), ";");
+        check(items.size() > 1 && ic->committed == items[1], "分号选第二个：" + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "xi'an");
+    check(preedit(ic.get()).find("xi'an") != std::string::npos, "只开分号时引号仍是隔音符：" + preedit(ic.get()));
+    fresh(ic.get());
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "SelectKeys=SemicolonQuote\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "shi");
+    {
+        const auto items = page(ic.get());
+        type(ic.get(), "'");
+        check(items.size() > 2 && ic->committed == items[2], "引号选第三个：" + ic->committed);
+    }
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    fresh(ic.get());
+
     ic.reset();
 }
 

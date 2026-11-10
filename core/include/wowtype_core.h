@@ -44,6 +44,9 @@ int wowtype_engine_load_nnlm(WowtypeEngineHandle *engine, const char *path);
 
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
+/* 打开的模糊音分组（位掩码）：1 z/zh，2 c/ch，4 s/sh，8 n/l，16 f/h，32 r/l，
+ * 64 an/ang（含 ian/iang、uan/uang），128 en/eng，256 in/ing。默认 1|2|4|64|128|256。 */
+int wowtype_engine_set_fuzzy_groups(WowtypeEngineHandle *engine, unsigned int groups);
 
 /* 开关双拼。返回 0 成功。 */
 int wowtype_engine_set_shuangpin(WowtypeEngineHandle *engine, int on);
@@ -74,6 +77,15 @@ WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
 /* 打字时的 emoji 推荐。text 是首选候选的文字；结果的 text 是显示文字，
  * 上屏用 wowtype_candidates_commit（整个词对上时只有 emoji，句尾对上时是整句 + emoji）。 */
 WowtypeCandidates *wowtype_emoji_recommend(const char *text, size_t limit);
+
+/* 日期、时间候选：key 是 riqi / shijian / xingqi / date / time（可带隔音符）；时间按本地时区，
+ * weekday 0 = 星期日。不是触发词时返回空列表。 */
+WowtypeCandidates *wowtype_datetime_candidates(const char *key, int year, int month, int day,
+                                               int hour, int minute, int second, int weekday);
+
+/* V 模式计算器：expr 是 v 后面的算式（1+2*3）。算得出来时给「结果」「算式=结果」，
+ * 没写完时只给算式本身。 */
+WowtypeCandidates *wowtype_calc_candidates(const char *expr);
 
 /* 表情面板搜索。query 为空给全部 emoji；否则按拼音（经引擎转成中文词）、英文、
  * 符号名一起找。engine 可为 NULL。 */

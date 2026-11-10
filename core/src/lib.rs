@@ -5,7 +5,9 @@
 //! LTR / 神经重排 / MixRank 只在接口上预留，尚未接入真实模型。
 
 pub mod beam;
+pub mod calc;
 pub mod convert;
+pub mod datetime;
 pub mod emoji;
 pub mod ffi;
 pub mod graph;
@@ -78,8 +80,10 @@ pub struct EngineConfig {
     pub max_candidates: usize,
     /// 全拼走不通时是否尝试简拼（zg -> 中国）。
     pub jianpin_fallback: bool,
-    /// 是否启用模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。
+    /// 是否启用模糊音（总开关）。
     pub fuzzy: bool,
+    /// 打开的模糊音分组（`syllable::fuzzy::*` 位掩码），默认平翘舌 + 前后鼻音。
+    pub fuzzy_groups: u32,
     /// 模糊候选的分数惩罚（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
     /// 是否使用双拼。
@@ -112,6 +116,7 @@ impl Default for EngineConfig {
             max_candidates: 10,
             jianpin_fallback: true,
             fuzzy: false,
+            fuzzy_groups: crate::syllable::fuzzy::DEFAULT,
             fuzzy_penalty: 2.5,
             shuangpin: false,
             shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
@@ -366,6 +371,11 @@ impl Engine {
         self.config.fuzzy = on;
     }
 
+    /// 设置打开的模糊音分组（`syllable::fuzzy::*` 位掩码）。不用重建索引。
+    pub fn set_fuzzy_groups(&mut self, groups: u32) {
+        self.config.fuzzy_groups = groups & crate::syllable::fuzzy::ALL;
+    }
+
     pub fn set_typo_correction(&mut self, on: bool) {
         self.config.typo_correction = on;
     }
@@ -571,11 +581,12 @@ impl Engine {
     }
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        let result = if self.config.shuangpin {
+        let mut result = if self.config.shuangpin {
             self.shuangpin_candidates(raw, at_ms)?
         } else {
             self.pinyin_candidates(raw, None, at_ms)?
         };
+        self.prepend_custom_codes(raw, &mut result);
         if let Ok(mut last) = self.last_words.write() {
             last.clear();
             for c in &result {
@@ -587,7 +598,36 @@ impl Engine {
                 }
             }
         }
+        // 自定义词里的 \n、\t 到这里才换成真的换行、制表符（词库是一行一条的 TSV）
+        for c in &mut result {
+            if c.text.contains('\\') {
+                c.text = unescape_custom(&c.text);
+            }
+        }
         Ok(result)
+    }
+
+    /// 输入正好是某个自定义编码（mail、wdyx）时，把对应的词放在最前面。
+    fn prepend_custom_codes(&self, raw: &str, result: &mut Vec<Candidate>) {
+        let words = self.lexicon.custom_code_words(raw.trim());
+        if words.is_empty() {
+            return;
+        }
+        result.retain(|c| !words.contains(&c.text));
+        let front = words.into_iter().map(|text| Candidate {
+            pinyin: String::new(),
+            score: 0.0,
+            features: Feature::default(),
+            words: vec![CandidateWord {
+                text: text.clone(),
+                pinyin: String::new(),
+                freq: crate::lexicon::CUSTOM_WORD_FREQ,
+                known: true,
+            }],
+            consumed: raw.len(),
+            text,
+        });
+        result.splice(0..0, front);
     }
 
     /// 双拼：先把键翻成全拼（`vsgo` -> `zhong'guo`），再走全拼那一套，
@@ -728,7 +768,7 @@ impl Engine {
         };
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if self.config.fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -800,7 +840,7 @@ impl Engine {
         };
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if self.config.fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -1108,7 +1148,7 @@ impl Engine {
         // fuzzy 时用包装视图：精确查不到再退到模糊音。
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref());
+            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -1450,6 +1490,29 @@ impl Engine {
             candidates.sort_by_key(|c| !custom(c));
         }
     }
+}
+
+/// 自定义词的转义：`\n` 换行、`\t` 制表符、`\\` 反斜杠，其余原样。
+pub fn unescape_custom(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('\\') => out.push('\\'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    out
 }
 
 fn promote_picked(candidates: &mut Vec<Candidate>) {
@@ -2094,6 +2157,70 @@ mod tests {
             e.input("sangdian").iter().any(|c| c.text == "商店"),
             "sang dian 应当匹配 shang dian"
         );
+    }
+
+    #[test]
+    fn custom_codes_and_newlines() {
+        let e = default_engine();
+        e.lexicon().set_custom_tsv(
+            "mail\tme@example.com\nwdyx\t我的邮箱\ndi zhi\t四川省\\n宜宾市\nbad1\t不收\n",
+        );
+        let c = e.input("mail");
+        assert_eq!(c[0].text, "me@example.com");
+        assert_eq!(c[0].consumed, 4);
+        assert_eq!(e.input("wdyx")[0].text, "我的邮箱");
+        assert_eq!(
+            e.input("dizhi")[0].text,
+            "四川省\n宜宾市",
+            "\\n 换成真的换行"
+        );
+        assert!(
+            !e.input("mai").iter().any(|c| c.text == "me@example.com"),
+            "要整个编码对上"
+        );
+        assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
+    }
+
+    #[test]
+    fn fuzzy_groups_filter() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "nan ren\t男人\t5000\nfu jian\t福建\t5000\nzhi dao\t知道\t5000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        let has =
+            |e: &Engine, input: &str, word: &str| e.input(input).iter().any(|c| c.text == word);
+        // 默认只开平翘舌和前后鼻音
+        assert!(has(&e, "zidao", "知道"));
+        assert!(!has(&e, "lanren", "男人"), "n/l 默认不开");
+        assert!(!has(&e, "hujian", "福建"), "f/h 默认不开");
+        e.set_fuzzy_groups(crate::syllable::fuzzy::NL | crate::syllable::fuzzy::FH);
+        assert!(has(&e, "lanren", "男人"));
+        assert!(has(&e, "hujian", "福建"));
+        assert!(!has(&e, "zidao", "知道"), "关掉平翘舌后 zi 不再等于 zhi");
+        // n 和 r 都归到 l，但 n/r 本身不是一组
+        e.set_fuzzy_groups(crate::syllable::fuzzy::ALL);
+        assert!(!has(&e, "ranren", "男人"), "n 和 r 不该互相模糊");
+        // 几个分组一起用：lan（n/l）+ leng（r/l、en/eng）
+        assert!(has(&e, "lanleng", "男人"));
+    }
+
+    #[test]
+    fn fuzzy_groups_between_pairs() {
+        use crate::syllable::{fuzzy, fuzzy_groups_between, id_of};
+        let g = |a: &str, b: &str| fuzzy_groups_between(id_of(a).unwrap(), id_of(b).unwrap());
+        assert_eq!(g("zhang", "zan"), Some(fuzzy::ZH | fuzzy::AN));
+        assert_eq!(g("niang", "lian"), Some(fuzzy::NL | fuzzy::AN));
+        assert_eq!(g("huang", "fang"), None, "uang 和 ang 不是一组");
+        assert_eq!(g("ren", "leng"), Some(fuzzy::RL | fuzzy::EN));
+        assert_eq!(g("nu", "ru"), None);
+        assert_eq!(g("ying", "yin"), Some(fuzzy::IN));
+        assert_eq!(g("shi", "shi"), Some(0));
     }
 
     #[test]

@@ -62,6 +62,20 @@ struct WowtypeShuangpinAnnotation {
     }
 };
 
+/// 分号、引号选第 2、3 个候选。
+enum class WowtypeSelectKeys { Off, Semicolon, SemicolonQuote };
+FCITX_CONFIG_ENUM_NAME(WowtypeSelectKeys, "Off", "Semicolon", "SemicolonQuote");
+
+struct WowtypeSelectKeysAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "不用");
+        config.setValueByPath("EnumI18n/1", "分号选第 2 个");
+        config.setValueByPath("EnumI18n/2", "分号选第 2 个、引号选第 3 个（引号不再当隔音符）");
+    }
+};
+
 /// 单按哪个 Shift 切换中英文。
 enum class WowtypeShiftToggle { Both, Left, Right, Off };
 FCITX_CONFIG_ENUM_NAME(WowtypeShiftToggle, "Both", "Left", "Right", "Off");
@@ -86,8 +100,16 @@ FCITX_CONFIGURATION(
         layout{this, "CandidateLayout", "候选排列", WowtypeLayout::Horizontal};
     fcitx::Option<int, fcitx::IntConstrain> pageSize{
         this, "PageSize", "每页候选个数", 9, fcitx::IntConstrain(3, 9)};
-    fcitx::Option<bool> fuzzy{this, "Fuzzy",
-                              "模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）", false};
+    fcitx::Option<bool> fuzzy{this, "Fuzzy", "模糊音（下面几组分别开关）", false};
+    fcitx::Option<bool> fuzzyZh{this, "FuzzyZh", "模糊音：z = zh", true};
+    fcitx::Option<bool> fuzzyCh{this, "FuzzyCh", "模糊音：c = ch", true};
+    fcitx::Option<bool> fuzzySh{this, "FuzzySh", "模糊音：s = sh", true};
+    fcitx::Option<bool> fuzzyNL{this, "FuzzyNL", "模糊音：n = l", false};
+    fcitx::Option<bool> fuzzyFH{this, "FuzzyFH", "模糊音：f = h", false};
+    fcitx::Option<bool> fuzzyRL{this, "FuzzyRL", "模糊音：r = l", false};
+    fcitx::Option<bool> fuzzyAn{this, "FuzzyAn", "模糊音：an = ang（ian = iang、uan = uang）", true};
+    fcitx::Option<bool> fuzzyEn{this, "FuzzyEn", "模糊音：en = eng", true};
+    fcitx::Option<bool> fuzzyIn{this, "FuzzyIn", "模糊音：in = ing", true};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
     fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
@@ -97,6 +119,13 @@ FCITX_CONFIGURATION(
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
     fcitx::Option<bool> traditional{this, "Traditional", "输出繁体字", false};
+    fcitx::Option<WowtypeSelectKeys, fcitx::NoConstrain<WowtypeSelectKeys>,
+                  fcitx::DefaultMarshaller<WowtypeSelectKeys>, WowtypeSelectKeysAnnotation>
+        selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
+    fcitx::Option<bool> dateTime{this, "DateTime",
+                                 "打 riqi、shijian、xingqi 时给出当前日期时间", true};
+    fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
+                                   true};
     fcitx::Option<bool> voice{this, "Voice", "语音输入", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> voiceKey{
         this, "VoiceKey", "语音输入键（按住说话，或点一下开始）", fcitx::Key(FcitxKey_Alt_R),
@@ -160,6 +189,14 @@ private:
     void toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state);
     /// 双拼方案用分号当键（微软、搜狗、紫光的 ing），且现在正等第二个键。
     bool semicolonIsKey(WowtypeState *state) const;
+    /// 分号/引号选词：这个键要选第几个候选（1 起），不选返回 0。
+    int selectKeyIndex(fcitx::KeySym sym) const;
+    /// V 模式计算器：编辑区是 v + 算式（或刚打了 v）。
+    bool calcActive(WowtypeState *state) const;
+    /// 打 riqi / shijian 等时，把当前日期时间插到首选后面。
+    void addDateTimeCandidates(WowtypeState *state, const std::string &input);
+    /// 上屏不学习的候选（日期时间、计算结果、自定义编码等）。
+    void commitPlainCandidate(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
@@ -223,7 +260,12 @@ private:
     bool horizontal_ = true;
     std::size_t pageSize_ = 9;
     bool fuzzy_ = false;
+    /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
+    unsigned fuzzyGroups_ = 0;
     bool typo_ = true;
+    WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
+    bool dateTime_ = true;
+    bool calculator_ = true;
     bool shuangpin_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";

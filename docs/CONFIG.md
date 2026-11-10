@@ -7,12 +7,19 @@
 自定义词存在 `~/.local/share/wowtype/custom.tsv`，一行一个，也可以手动编辑：
 
 ```
-# 拼音<TAB>词[<TAB>频次]
+# 编码<TAB>词[<TAB>频次]
 zi jie tiao dong	字节跳动
 zhangwei	张伟
+mail	hello@example.com
+di zhi	四川省\n宜宾市
 ```
 
-拼音可以用空格隔开音节，也可以连着写（`zhangwei`）。在设置界面里加的词马上能用；手动改了文件，要让 fcitx5 重新读一下：
+- 编码一般是拼音，可以用空格隔开音节，也可以连着写（`zhangwei`）。
+- 编码也可以不是拼音，只要全是字母（`mail`、`addr`）：正好打这几个字母时，这个词排第一。
+- 词里写 `\n` 表示换行、`\t` 表示制表符，上屏时换成真的；候选窗里画成 `⏎`。带换行的词不记进自动学习。
+- 设置界面「自定义词」页右上角能**导入**、**导出**这种文件。导入时同一个词用文件里的编码，别的词保留。
+
+在设置界面里加的词马上能用；手动改了文件，要让 fcitx5 重新读一下：
 
 ```bash
 dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
@@ -29,11 +36,23 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 CandidateLayout=Horizontal
 PageSize=9
 Fuzzy=False
+FuzzyZh=True
+FuzzyCh=True
+FuzzySh=True
+FuzzyNL=False
+FuzzyFH=False
+FuzzyRL=False
+FuzzyAn=True
+FuzzyEn=True
+FuzzyIn=True
 TypoCorrection=True
 Shuangpin=False
 ShuangpinScheme=Ziranma
 ShiftToggle=Both
 Traditional=False
+SelectKeys=Off
+DateTime=True
+Calculator=True
 Voice=True
 VoiceKey=Alt_R
 EmojiSuggest=True
@@ -45,7 +64,9 @@ CheckUpdate=True
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`EmojiSuggest`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Voice`、`EmojiSuggest`、`CheckUpdate` | `True` / `False` |
+| `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing），`Fuzzy` 打开时才生效 |
+| `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
 | `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off` |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
@@ -57,7 +78,9 @@ CheckUpdate=True
 
 | 变量 | 作用 |
 |---|---|
-| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0` | 对应上面的开关 |
+| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0`、`WOWTYPE_DATETIME=0`、`WOWTYPE_CALC=0` | 对应上面的开关 |
+| `WOWTYPE_FUZZY_GROUPS` | 模糊音分组的位掩码（1 z/zh、2 c/ch、4 s/sh、8 n/l、16 f/h、32 r/l、64 an/ang、128 en/eng、256 in/ing） |
+| `WOWTYPE_SELECT_KEYS` | `off`、`semicolon`、`quote` |
 | `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼 |
 | `WOWTYPE_SHIFT_TOGGLE` | `both`、`left`、`right`、`off` |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |

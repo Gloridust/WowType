@@ -18,14 +18,28 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 不会出现"打到一半没有候选"。
 
 支持**模糊音**（默认关闭）：`--fuzzy`（插件里在设置界面打开，或 `WOWTYPE_FUZZY=1`）开启后，
-`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。覆盖平翘舌与前后鼻音。
+`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 9 组，可以分别开关
+（`Engine::set_fuzzy_groups` / `wowtype_engine_set_fuzzy_groups`，位掩码见 `syllable::fuzzy`）：
+z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang（含 ian=iang、uan=uang）、en=eng、in=ing，默认开平翘舌和前后鼻音这 6 组。
+模糊索引只建一份：按「全部分组都打开」归并声母、韵母（`syllable::fuzzy_key`），查到以后再用
+`fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了（n 和 r 都归到 l，但 n/r 本身不算一组，会被过滤掉）。
+改开关不用重建 55 万词的索引。
+
+支持**日期时间**、**计算器**（`core/src/datetime.rs`、`core/src/calc.rs`）：
+- `wowtype_datetime_candidates(key, 年, 月, 日, 时, 分, 秒, 星期)`：key 是 `riqi`、`shijian`、`xingqi`、`date`、`time`
+  （不认 `rq`、`sj` 这类简拼）时给出几种写法；当前时间由插件按本地时区传进来。插件把它们插在首选后面，
+  选中时原样上屏、不学习。双拼下用首选的拼音判断。
+- `wowtype_calc_candidates(算式)`：`+ - * / % ^`、括号、小数；算得出来给「结果」「算式=结果」，没写完只给算式。
+  插件里全拼时以 `v` 开头打（`v1+2*3`），`v` 之后的数字、运算符进编辑区，空格或 `=` 上屏结果。
 
 支持**自动学习**：同一个词选够 3 次（可配置）后自动收进用户词库，之后能直接打出来。
 词库已有的词也会被记录，相当于记住用户偏好。
 
-支持**自定义词**：用户在设置界面里加的词存在 `custom.tsv`（`拼音<TAB>词[<TAB>频次]`，拼音可以不分音节），
+支持**自定义词**：用户在设置界面里加的词存在 `custom.tsv`（`编码<TAB>词[<TAB>频次]`，拼音可以不分音节），
 插件经 `wowtype_engine_load_custom_words(engine, path)` 载入，每次载入整体替换上一次的，文件不存在就清空，
 不写回用户词库。自定义词全拼和简拼都排第一（加了「字节跳动」后 `zjtd` 第一个就是它）。
+编码不是拼音但全是字母的（`mail`）单独存一张表，整个输入正好等于它时放在最前面。
+词里的 `\n`、`\t` 在词库里保持转义（词库是一行一条的 TSV），`try_input` 最后才换成真的换行、制表符。
 
 支持 **emoji 和符号**（`core/src/emoji.rs`、`core/src/symbols.rs`）：
 - 打字时推荐：`wowtype_emoji_recommend(首选候选)`，整个词或句尾两个字以上的词对上 emoji 就给一个，

@@ -115,8 +115,9 @@ pub trait Lexicon: Send + Sync {
     /// 也能在运行时安全地增删用户词。命中数很小，克隆成本可接受。
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry>;
 
-    /// 模糊音查询（z/zh、an/ang 等）。默认不支持。
-    fn lookup_fuzzy(&self, _query: &[SyllableQuery]) -> Vec<LexEntry> {
+    /// 模糊音查询（z/zh、an/ang 等）。groups 是打开的分组（`syllable::fuzzy::*` 位掩码）。
+    /// 默认不支持。
+    fn lookup_fuzzy(&self, _query: &[SyllableQuery], _groups: u32) -> Vec<LexEntry> {
         Vec::new()
     }
 
@@ -148,11 +149,12 @@ pub struct MemoryLexicon {
     entries: Vec<LexEntry>,
     full_index: HashMap<Vec<SyllableKey>, Vec<usize>>,
     jianpin_index: HashMap<Vec<u8>, Vec<usize>>,
-    /// 模糊音索引：键是各音节的规范形式 ID。
+    /// 模糊音索引：键是各音节在全部分组都打开时的归并键（`syllable::fuzzy_key`），
+    /// 查到以后再按实际打开的分组过滤。
     ///
     /// 默认不构建——模糊音默认关闭，而 55 万词库下建这张表要占掉不少加载时间。
     /// 第一次模糊查询时再建。
-    fuzzy_index: OnceLock<HashMap<Vec<SyllableId>, Vec<usize>>>,
+    fuzzy_index: OnceLock<HashMap<Vec<u32>, Vec<usize>>>,
     /// 全拼词条所有「真前缀」的哈希，供 has_longer 剪枝（哈希碰撞只会少剪，不会错剪）。
     full_prefixes: HashSet<u64>,
     /// 同上，按声母：简拼和「全拼混简拼」（kyi、yongzwen）的查询用它剪枝。
@@ -435,13 +437,13 @@ impl MemoryLexicon {
         }
     }
 
-    fn build_fuzzy_index(&self) -> HashMap<Vec<SyllableId>, Vec<usize>> {
-        let mut map: HashMap<Vec<SyllableId>, Vec<usize>> = HashMap::new();
+    fn build_fuzzy_index(&self) -> HashMap<Vec<u32>, Vec<usize>> {
+        let mut map: HashMap<Vec<u32>, Vec<usize>> = HashMap::new();
         for (idx, entry) in self.entries.iter().enumerate() {
             if let Some(fuzzy) = entry
                 .keys
                 .iter()
-                .map(|k| crate::syllable::fuzzy_id(k.id))
+                .map(|k| crate::syllable::fuzzy_key(k.id))
                 .collect::<Option<Vec<_>>>()
             {
                 map.entry(fuzzy).or_default().push(idx);
@@ -544,10 +546,11 @@ impl Lexicon for MemoryLexicon {
         self.full_prefixes.contains(&hash)
     }
 
-    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
-        if query.is_empty() {
+    fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
+        if query.is_empty() || groups == 0 {
             return Vec::new();
         }
+        let mut ids = Vec::with_capacity(query.len());
         let mut key = Vec::with_capacity(query.len());
         for q in query {
             match q {
@@ -555,19 +558,31 @@ impl Lexicon for MemoryLexicon {
                     if *erhua {
                         return Vec::new();
                     }
-                    match crate::syllable::fuzzy_id(*id) {
+                    match crate::syllable::fuzzy_key(*id) {
                         Some(canon) => key.push(canon),
                         None => return Vec::new(),
                     }
+                    ids.push(*id);
                 }
                 SyllableQuery::Jianpin { .. } => return Vec::new(),
             }
         }
         let index = self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
-        index
-            .get(&key)
-            .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
-            .unwrap_or_default()
+        let Some(idxs) = index.get(&key) else {
+            return Vec::new();
+        };
+        // 索引按全部分组归并，这里只留下「用到的分组都打开了」的词
+        idxs.iter()
+            .map(|&i| &self.entries[i])
+            .filter(|entry| {
+                entry.keys.len() == ids.len()
+                    && entry.keys.iter().zip(&ids).all(|(k, &q)| {
+                        crate::syllable::fuzzy_groups_between(q, k.id)
+                            .is_some_and(|need| need & !groups == 0)
+                    })
+            })
+            .cloned()
+            .collect()
     }
 
     fn total_freq(&self) -> f64 {
@@ -582,11 +597,13 @@ impl Lexicon for MemoryLexicon {
 /// 给束搜索用的视图：精确查不到时回退到模糊音。
 pub struct FuzzyLexicon<'a> {
     inner: &'a dyn Lexicon,
+    groups: u32,
 }
 
 impl<'a> FuzzyLexicon<'a> {
-    pub fn new(inner: &'a dyn Lexicon) -> Self {
-        Self { inner }
+    /// groups：打开的模糊音分组（`syllable::fuzzy::*` 位掩码）。
+    pub fn new(inner: &'a dyn Lexicon, groups: u32) -> Self {
+        Self { inner, groups }
     }
 }
 
@@ -596,11 +613,11 @@ impl Lexicon for FuzzyLexicon<'_> {
         if !exact.is_empty() {
             return exact;
         }
-        self.inner.lookup_fuzzy(query)
+        self.inner.lookup_fuzzy(query, self.groups)
     }
 
-    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
-        self.inner.lookup_fuzzy(query)
+    fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
+        self.inner.lookup_fuzzy(query, groups)
     }
 
     fn total_freq(&self) -> f64 {
@@ -621,6 +638,8 @@ pub struct UserLexicon {
     words: RwLock<Vec<(String, String, f64)>>,
     /// 自定义词（设置里添加的，存在 custom.tsv）：只读，整份替换，不写回用户词库。
     custom: RwLock<Vec<(String, String, f64)>>,
+    /// 自定义词里编码不是拼音的（mail -> 邮箱地址）：只在整个输入正好等于编码时给出。
+    codes: RwLock<Vec<(String, String)>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
 
@@ -633,6 +652,7 @@ impl UserLexicon {
             base,
             words: RwLock::new(Vec::new()),
             custom: RwLock::new(Vec::new()),
+            codes: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -719,10 +739,14 @@ impl UserLexicon {
         Ok(added)
     }
 
-    /// 用一份自定义词整体替换现有的。格式 `拼音<TAB>词[<TAB>频次]`，
-    /// 拼音不合法的行跳过。返回收下的条数。
+    /// 用一份自定义词整体替换现有的。格式 `编码<TAB>词[<TAB>频次]`。
+    ///
+    /// 编码一般是拼音（可以不分音节）；不是拼音、但全是字母的（mail、wdyx）当成自定义编码，
+    /// 只在整个输入正好等于它时给出。词里可以写 `\n`（换行）、`\t`（制表符），上屏时才换成真的。
+    /// 其他行跳过。返回收下的条数。
     pub fn set_custom_tsv(&self, data: &str) -> usize {
         let mut custom = Vec::new();
+        let mut codes = Vec::new();
         for line in data.lines() {
             let line = line.trim_end_matches('\r');
             if line.trim().is_empty() || line.starts_with('#') {
@@ -734,16 +758,21 @@ impl UserLexicon {
             };
             let (pinyin, word) = (pinyin.trim().to_ascii_lowercase(), word.trim());
             // 手写的 custom.tsv 可能不分音节（nihao）：自己切开
+            if word.is_empty() {
+                continue;
+            }
+            let code = pinyin.clone();
             let Some(pinyin) = (if parse_pinyin_keys(&pinyin).is_ok() {
                 Some(pinyin)
             } else {
                 split_syllables(&pinyin)
             }) else {
+                let code: String = code.chars().filter(|c| *c != '\'').collect();
+                if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase()) {
+                    codes.push((code, word.to_string()));
+                }
                 continue;
             };
-            if word.is_empty() {
-                continue;
-            }
             let freq = cols
                 .next()
                 .and_then(|f| f.trim().parse::<f64>().ok())
@@ -751,9 +780,12 @@ impl UserLexicon {
                 .unwrap_or(CUSTOM_WORD_FREQ);
             custom.push((pinyin, word.to_string(), freq));
         }
-        let count = custom.len();
+        let count = custom.len() + codes.len();
         if let Ok(mut slot) = self.custom.write() {
             *slot = custom;
+        }
+        if let Ok(mut slot) = self.codes.write() {
+            *slot = codes;
         }
         self.rebuild();
         count
@@ -775,6 +807,25 @@ impl UserLexicon {
             .read()
             .map(|c| c.iter().any(|(_, w, _)| w == word))
             .unwrap_or(false)
+    }
+
+    /// 自定义编码对应的词（按文件里的顺序）。code 不分大小写、忽略隔音符。
+    pub fn custom_code_words(&self, code: &str) -> Vec<String> {
+        let code: String = code
+            .chars()
+            .filter(|c| *c != '\'')
+            .flat_map(char::to_lowercase)
+            .collect();
+        self.codes
+            .read()
+            .map(|codes| {
+                codes
+                    .iter()
+                    .filter(|(c, _)| *c == code)
+                    .map(|(_, w)| w.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn custom_words(&self) -> Vec<(String, String, f64)> {
@@ -814,10 +865,10 @@ impl Lexicon for UserLexicon {
                 .unwrap_or(true)
     }
 
-    fn lookup_fuzzy(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
-        let mut result = self.base.lookup_fuzzy(query);
+    fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
+        let mut result = self.base.lookup_fuzzy(query, groups);
         if let Ok(snapshot) = self.snapshot.read() {
-            result.extend(snapshot.lookup_fuzzy(query));
+            result.extend(snapshot.lookup_fuzzy(query, groups));
         }
         result
     }
