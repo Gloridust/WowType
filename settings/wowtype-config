@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""WowType 设置：候选排列、模糊音、语音输入键、自定义词、检查更新。
+"""WowType 设置：候选排列、模糊音、语音输入键、互译、自定义词、检查更新。
 
 改的是 fcitx5 读的同一个配置文件（~/.config/fcitx5/conf/wowtype.conf）和自定义词文件
 （~/.local/share/wowtype/custom.tsv），改完经 D-Bus 让 fcitx5 重新读，立刻生效。
@@ -17,6 +17,8 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
+import urllib.parse
 import urllib.request
 
 import gi
@@ -49,6 +51,9 @@ STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
 # 插件和设置界面共用的日志（插件那边见 fcitx5-addon/src/wowtype_log.h），不记打的字
 LOG_FILE = os.environ.get("WOWTYPE_LOG") or os.path.join(STATE_DIR, "wowtype.log")
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
+# 互译用的 API Key 单独存一个只有自己能读的文件（wowtype.conf 别的程序也能读），插件每次请求时现读
+TRANSLATE_KEY_FILE = os.environ.get("WOWTYPE_TRANSLATE_KEY_FILE") or os.path.join(
+    _xdg("XDG_CONFIG_HOME", "~/.config"), "wowtype", "translate.key")
 ISSUES_URL = "https://github.com/Gloridust/WowType/issues/new"
 # 界面上的中文标点要用简体中文字体画，见 SettingsApp.update_font_css；装了哪个用哪个
 CJK_SC_FONTS = ["Noto Sans CJK SC", "Source Han Sans SC", "Source Han Sans CN",
@@ -85,8 +90,44 @@ DEFAULTS = {
     "VoiceKey": "Alt_R",
     "EmojiSuggest": "True",
     "EmojiKey": "Super+period",
+    "Translate": "False",
+    "TranslateTarget": "en",
+    "TranslateBaseUrl": "",
+    "TranslateModel": "",
+    "TranslateFormal": "False",
+    "TranslateVariants": "3",
     "CheckUpdate": "True",
 }
+
+# 互译语言（存盘名和插件的 WowtypeTranslateTarget、core/src/translate.rs 的 LANGUAGES 一致）
+TRANSLATE_LANGUAGES = [
+    ("英语", "en", "English"),
+    ("日语", "ja", "Japanese"),
+    ("韩语", "ko", "Korean"),
+    ("法语", "fr", "French"),
+    ("德语", "de", "German"),
+    ("西班牙语", "es", "Spanish"),
+    ("俄语", "ru", "Russian"),
+    ("葡萄牙语", "pt", "Portuguese"),
+    ("意大利语", "it", "Italian"),
+    ("越南语", "vi", "Vietnamese"),
+    ("泰语", "th", "Thai"),
+    ("印尼语", "id", "Indonesian"),
+    ("阿拉伯语", "ar", "Arabic"),
+]
+
+# 常见的 OpenAI 格式服务：名字、接口地址、模型框空着时建议的模型（各家长期有效的别名）
+TRANSLATE_PROVIDERS = [
+    ("OpenAI", "https://api.openai.com/v1", ""),
+    ("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+    ("通义千问（阿里云百炼）", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+    ("Kimi（月之暗面）", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+    ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+    ("硅基流动", "https://api.siliconflow.cn/v1", ""),
+    ("OpenRouter", "https://openrouter.ai/api/v1", ""),
+    ("Ollama（本机）", "http://127.0.0.1:11434/v1", ""),
+    ("其他（自己填地址）", "", ""),
+]
 
 # 双拼方案（存盘名和插件的 WowtypeShuangpinScheme 一致）
 SHUANGPIN_SCHEMES = [
@@ -855,7 +896,9 @@ def collect_diagnostics():
 
     add("## WowType 设置（wowtype.conf）")
     values, _extra = read_config()
+    values["TranslateBaseUrl"] = mask_url(values["TranslateBaseUrl"])
     add(", ".join(f"{k}={v}" for k, v in values.items()))
+    add(f"互译 Key：{'已设置' if read_translate_key() else '没设置'}")
     add("")
 
     add("## 数据文件")
@@ -1135,6 +1178,162 @@ def background_check():
 # ---------------------------------------------------------------- 界面
 
 
+# ---------------------------------------------------------------- 互译
+
+
+def read_translate_key(path=None):
+    try:
+        with open(path or TRANSLATE_KEY_FILE, encoding="utf-8") as f:
+            return f.readline().strip()
+    except OSError:
+        return ""
+
+
+def write_translate_key(key, path=None):
+    """存 Key：文件只有自己能读写（0600），空串就删掉文件。"""
+    path = path or TRANSLATE_KEY_FILE
+    key = key.strip()
+    if not key:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        return
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        os.write(fd, (key + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
+def _api_base(base):
+    base = base.strip().rstrip("/")
+    if base.endswith("/chat/completions"):
+        base = base[: -len("/chat/completions")]
+    return base
+
+
+def chat_endpoint(base):
+    """和 core/src/translate.rs 的 TranslateConfig::endpoint 一样。"""
+    return _api_base(base) + "/chat/completions"
+
+
+def models_endpoint(base):
+    return _api_base(base) + "/models"
+
+
+def is_loopback_url(url):
+    host = urllib.parse.urlsplit(url.strip()).hostname or ""
+    return host in ("localhost", "::1") or host.startswith("127.") or host.endswith(".localhost")
+
+
+def provider_index(base):
+    """接口地址对应 TRANSLATE_PROVIDERS 里的第几个，对不上就是最后的「其他」。"""
+    base = _api_base(base)
+    for i, (_name, url, _model) in enumerate(TRANSLATE_PROVIDERS):
+        if url and _api_base(url) == base:
+            return i
+    return len(TRANSLATE_PROVIDERS) - 1
+
+
+def mask_url(url):
+    """诊断信息里只留协议和主机（有的代理把 Key 放在路径里）。"""
+    parts = urllib.parse.urlsplit(url.strip())
+    return f"{parts.scheme}://{parts.netloc.rpartition('@')[2]}/…" if parts.netloc else ""
+
+
+class TranslateError(Exception):
+    pass
+
+
+def api_request(url, key, body=None, timeout=20):
+    """调一次 OpenAI 格式的接口，返回解析好的 JSON；出错抛 TranslateError（给人看的话，抹掉了 Key）。"""
+    headers = {"User-Agent": f"WowType/{current_version()}", "Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers)
+    # 本机的服务（Ollama 等）不走代理
+    handlers = [urllib.request.ProxyHandler({})] if is_loopback_url(url) else []
+    opener = urllib.request.build_opener(*handlers)
+
+    def clean(text):
+        text = text.replace(key, "***") if key and len(key) >= 4 else text
+        return text if len(text) <= 160 else text[:160] + "…"
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            raw = response.read()
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            payload = json.loads(e.read().decode("utf-8", "replace"))
+            error = payload.get("error")
+            detail = (error.get("message") if isinstance(error, dict) else error) \
+                or payload.get("message") or payload.get("detail") or ""
+        except (ValueError, AttributeError, OSError):
+            pass
+        hint = {401: "Key 不对", 403: "没有权限", 404: "地址或模型不对", 429: "请求太多或额度用完了"}.get(e.code)
+        text = f"服务返回 {e.code}" + (f"（{hint}）" if hint else "")
+        raise TranslateError(clean(f"{text}：{detail}" if detail else text)) from None
+    except urllib.error.URLError as e:
+        reason = e.reason
+        if isinstance(reason, TimeoutError) or "timed out" in str(reason):
+            raise TranslateError("请求超时") from None
+        raise TranslateError(clean(f"连不上：{reason}")) from None
+    except TimeoutError:
+        raise TranslateError("请求超时") from None
+    except OSError as e:
+        raise TranslateError(clean(f"连不上：{e}")) from None
+    try:
+        return json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        raise TranslateError("看不懂服务的返回（是 OpenAI 格式的接口吗？）") from None
+
+
+def fetch_models(base, key):
+    data = api_request(models_endpoint(base), key, timeout=15)
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        items = data.get("models", []) if isinstance(data, dict) else []
+    ids = {item.get("id") or item.get("name") for item in items if isinstance(item, dict)}
+    return sorted((i for i in ids if isinstance(i, str) and i), key=str.lower)
+
+
+def strip_think(text):
+    return re.sub(r"<think>.*?(</think>|$)", "", text, flags=re.S).strip()
+
+
+def test_translate(base, key, model, target="en", text="你好"):
+    """用一句话试一下服务，返回 (译文, 秒数)。"""
+    language = next((en for _, code, en in TRANSLATE_LANGUAGES if code == target), "English")
+    body = {
+        "model": model.strip(),
+        "messages": [
+            {"role": "system", "content": f"Translate the user's text into {language}. "
+                                          "Output only the translation."},
+            {"role": "user", "content": text},
+        ],
+    }
+    start = time.monotonic()
+    data = api_request(chat_endpoint(base), key, body, timeout=45)
+    seconds = time.monotonic() - start
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        raise TranslateError("看不懂服务的返回（是 OpenAI 格式的接口吗？）") from None
+    result = strip_think(content or "")
+    if not result:
+        raise TranslateError("服务返回了空的译文")
+    return result.splitlines()[0], seconds
+
+
 def dir_size(path):
     total = 0
     for root, _dirs, files in os.walk(path):
@@ -1154,6 +1353,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.values, self.extra = read_config()
         self.words = read_custom_words()
         self.save_source = 0
+        self.key_source = 0
+        self.models = None
+        self.models_for = None
         self.guess_source = 0
         self.pinyin_edited = False
 
@@ -1166,6 +1368,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("input", "输入", "input-keyboard-symbolic", self.build_input),
             ("emoji", "表情", "face-smile-symbolic", self.build_emoji),
             ("voice", "语音", "audio-input-microphone-symbolic", self.build_voice),
+            ("translate", "翻译", "preferences-desktop-locale-symbolic", self.build_translate),
             ("words", "自定义词", "accessories-dictionary-symbolic", self.build_words),
             ("update", "更新", "software-update-available-symbolic", self.build_update),
         )
@@ -1315,6 +1518,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持"),
             ("长句分段选", "第一个候选不对时，先选开头的词，剩下的接着选"),
             ("符号", "表情面板里也能搜符号名：gou → ✓、youjiantou → →、juhao → 。"),
+            ("互译", "在「翻译」里填好服务后，单按 Shift 切到「译」，打中文出英文"),
         ):
             tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
         page.add(tips)
@@ -1591,6 +1795,249 @@ class SettingsWindow(Adw.ApplicationWindow):
         else:
             self.model_row.set_title("还没下载")
             self.model_row.set_subtitle("第一次按语音键时自动下载，约 130 MB，来自微信输入法的服务器")
+
+    # ---------------- 翻译
+
+    def build_translate(self):
+        page = Adw.PreferencesPage()
+        intro = Adw.PreferencesGroup(
+            title="互译",
+            description="单按 Shift 在「中 → 英 → 译」之间切换。切到「译」照常打中文，停一下就翻好；"
+                        "回车上屏译文，上下键挑别的译法，Shift+回车上屏原文，Esc 清空。"
+                        "打的是外文就翻成中文。")
+        self.translate_row = self.make_switch("Translate", "互译", None)
+        self.translate_row.connect("notify::active", self.on_translate_toggled)
+        intro.add(self.translate_row)
+        self.target_codes = [code for _, code, _ in TRANSLATE_LANGUAGES]
+        self.target_row = Adw.ComboRow(
+            title="翻译成", subtitle="中文翻成这种语言；这种语言（和别的外文）翻成中文",
+            model=Gtk.StringList.new([label for label, _, _ in TRANSLATE_LANGUAGES]))
+        current = self.values.get("TranslateTarget", "en")
+        self.target_row.set_selected(
+            self.target_codes.index(current) if current in self.target_codes else 0)
+        self.target_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "TranslateTarget", self.target_codes[row.get_selected()]))
+        intro.add(self.target_row)
+        intro.add(self.make_switch("TranslateFormal", "正式语气",
+                                   "写邮件、公文时打开；默认是聊天的口吻"))
+        self.variants_row = Adw.SpinRow.new_with_range(1, 3, 1)
+        self.variants_row.set_title("给几种译法")
+        self.variants_row.set_subtitle("多给几种可以挑；只要一种的话出得最快")
+        try:
+            self.variants_row.set_value(int(self.values["TranslateVariants"]))
+        except ValueError:
+            self.variants_row.set_value(3)
+        self.variants_row.connect("notify::value", lambda row, _p: self.set_value(
+            "TranslateVariants", str(int(row.get_value()))))
+        intro.add(self.variants_row)
+        page.add(intro)
+
+        service = Adw.PreferencesGroup(
+            title="翻译服务",
+            description="填任何 OpenAI 格式（chat/completions）的接口。打字时要等它翻译，"
+                        "挑又小又快的模型，比如各家的 mini、flash、turbo 版。")
+        self.provider_row = Adw.ComboRow(
+            title="服务商", model=Gtk.StringList.new([name for name, _, _ in TRANSLATE_PROVIDERS]))
+        self.provider_syncing = True
+        self.provider_row.set_selected(provider_index(self.values["TranslateBaseUrl"]))
+        self.provider_syncing = False
+        self.provider_row.connect("notify::selected", self.on_provider_selected)
+        service.add(self.provider_row)
+
+        self.url_row = Adw.EntryRow(title="接口地址", show_apply_button=False)
+        self.url_row.set_input_purpose(Gtk.InputPurpose.URL)
+        self.url_row.set_text(self.values["TranslateBaseUrl"])
+        self.url_row.connect("changed", self.on_url_changed)
+        service.add(self.url_row)
+
+        self.key_entry = Adw.PasswordEntryRow(title="API Key（本机服务可以不填）")
+        self.key_entry.set_text(read_translate_key())
+        self.key_entry.connect("changed", self.on_key_changed)
+        service.add(self.key_entry)
+
+        self.tmodel_row = Adw.EntryRow(title="模型")
+        self.tmodel_row.set_text(self.values["TranslateModel"])
+        self.tmodel_row.connect("changed", lambda row: (
+            self.set_value("TranslateModel", row.get_text().strip()), self.refresh_translate_status()))
+        self.model_button = Gtk.MenuButton(icon_name="view-list-symbolic", valign=Gtk.Align.CENTER,
+                                           tooltip_text="从服务里挑模型")
+        self.model_button.add_css_class("flat")
+        self.model_button.set_popover(self.build_model_popover())
+        self.tmodel_row.add_suffix(self.model_button)
+        service.add(self.tmodel_row)
+
+        self.test_row = Adw.ActionRow(title="测试连接", subtitle="用「你好」试一下，看要等多久")
+        self.test_button = Gtk.Button(label="测试", valign=Gtk.Align.CENTER)
+        self.test_button.connect("clicked", self.on_test_translate)
+        self.test_row.add_suffix(self.test_button)
+        service.add(self.test_row)
+        page.add(service)
+
+        privacy = Adw.PreferencesGroup(title="隐私")
+        privacy.add(Adw.ActionRow(
+            title="打的字会发给你填的服务",
+            subtitle="只在切到「译」时发送，密码框里不翻译。WowType 自己不经手、不收集这些内容。"))
+        privacy.add(Adw.ActionRow(
+            title="Key 只存在本机",
+            subtitle=GLib.markup_escape_text(f"{_home(TRANSLATE_KEY_FILE)}，只有你自己能读")))
+        page.add(privacy)
+        self.refresh_translate_status()
+        return page
+
+    def build_model_popover(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
+                      margin_top=6, margin_bottom=6, margin_start=6, margin_end=6)
+        self.model_search = Gtk.SearchEntry(placeholder_text="搜模型")
+        self.model_search.connect("search-changed", lambda _e: self.model_list.invalidate_filter())
+        box.append(self.model_search)
+        self.model_status = Gtk.Label(wrap=True, max_width_chars=36, xalign=0)
+        self.model_status.add_css_class("dim-label")
+        box.append(self.model_status)
+        self.model_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.model_list.add_css_class("navigation-sidebar")
+        self.model_list.set_filter_func(self.filter_model_row)
+        self.model_list.connect("row-activated", self.on_model_picked)
+        scroll = Gtk.ScrolledWindow(child=self.model_list, min_content_height=280,
+                                    min_content_width=320, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        box.append(scroll)
+        popover = Gtk.Popover(child=box)
+        popover.connect("show", lambda _p: self.load_models())
+        return popover
+
+    def filter_model_row(self, row):
+        query = self.model_search.get_text().strip().lower()
+        return not query or query in row.model_id.lower()
+
+    def load_models(self):
+        base = self.url_row.get_text().strip()
+        key = self.key_entry.get_text().strip()
+        self.model_search.set_text("")
+        if not base:
+            self.fill_models(None, "先填接口地址")
+            return
+        if self.models is not None and self.models_for == (base, key):
+            self.fill_models(self.models, None)
+            return
+        self.fill_models([], "正在获取模型列表…")
+        token = (base, key)
+        self.models_for = token
+
+        def work():
+            try:
+                result = (fetch_models(base, key), None)
+            except TranslateError as e:
+                result = (None, str(e))
+            GLib.idle_add(self.models_loaded, token, *result)
+        threading.Thread(target=work, daemon=True).start()
+
+    def models_loaded(self, token, models, error):
+        if token != self.models_for:
+            return
+        self.models = models
+        if models is None:
+            self.models_for = None
+            self.fill_models(None, f"获取失败：{error}。也可以直接在框里打模型名。")
+        elif not models:
+            self.fill_models([], "服务没有列出模型，直接在框里打模型名")
+        else:
+            self.fill_models(models, None)
+
+    def fill_models(self, models, status):
+        self.model_list.remove_all()
+        self.model_status.set_label(status or "")
+        self.model_status.set_visible(bool(status))
+        for model in models or []:
+            label = Gtk.Label(label=model, xalign=0, ellipsize=Pango.EllipsizeMode.MIDDLE)
+            row = Gtk.ListBoxRow(child=label)
+            row.model_id = model
+            self.model_list.append(row)
+
+    def on_model_picked(self, _list, row):
+        self.tmodel_row.set_text(row.model_id)
+        self.model_button.popdown()
+
+    def on_provider_selected(self, row, _param):
+        if self.provider_syncing:
+            return
+        _name, url, model = TRANSLATE_PROVIDERS[row.get_selected()]
+        if not url:  # 「其他」：留着现在的地址让用户改
+            self.url_row.grab_focus()
+            return
+        previous = self.tmodel_row.get_text().strip()
+        suggested = {m for _, _, m in TRANSLATE_PROVIDERS if m}
+        self.url_row.set_text(url)
+        # 模型框空着（或者还是别家建议的模型）时换成这家建议的
+        if not previous or previous in suggested:
+            self.tmodel_row.set_text(model)
+
+    def on_url_changed(self, row):
+        text = row.get_text().strip()
+        self.set_value("TranslateBaseUrl", text)
+        self.provider_syncing = True
+        self.provider_row.set_selected(provider_index(text))
+        self.provider_syncing = False
+        self.refresh_translate_status()
+
+    def on_key_changed(self, _row):
+        if self.key_source:
+            GLib.source_remove(self.key_source)
+        self.key_source = GLib.timeout_add(400, self.save_translate_key)
+
+    def save_translate_key(self):
+        self.key_source = 0
+        try:
+            write_translate_key(self.key_entry.get_text())
+        except OSError as e:
+            self.toast(f"Key 保存失败：{e.strerror}")
+        return GLib.SOURCE_REMOVE
+
+    def on_translate_toggled(self, row, _param):
+        self.refresh_translate_status()
+        if row.get_active() and self.translate_ready():
+            self.toast("单按 Shift 两下切到「译」")
+
+    def translate_ready(self):
+        return bool(self.url_row.get_text().strip() and self.tmodel_row.get_text().strip())
+
+    def refresh_translate_status(self):
+        if not hasattr(self, "test_row"):
+            return
+        if not self.translate_ready():
+            self.translate_row.set_subtitle("先填好下面的翻译服务，Shift 才切得到「译」")
+        else:
+            self.translate_row.set_subtitle("单按 Shift：中 → 英 → 译 → 中")
+
+    def on_test_translate(self, _button):
+        base = self.url_row.get_text().strip()
+        model = self.tmodel_row.get_text().strip()
+        key = self.key_entry.get_text().strip()
+        if not base or not model:
+            self.test_row.set_subtitle("先填接口地址和模型")
+            return
+        target = self.target_codes[self.target_row.get_selected()]
+        self.test_button.set_sensitive(False)
+        self.test_row.set_subtitle("正在连接…")
+
+        def work():
+            try:
+                text, seconds = test_translate(base, key, model, target)
+                result = (text, seconds, None)
+            except TranslateError as e:
+                result = (None, 0, str(e))
+            GLib.idle_add(self.test_finished, *result)
+        threading.Thread(target=work, daemon=True).start()
+
+    def test_finished(self, text, seconds, error):
+        self.test_button.set_sensitive(True)
+        if error:
+            self.test_row.set_subtitle(GLib.markup_escape_text(f"✗ {error}"))
+            log(f"测试翻译服务失败：{error}")
+            return
+        message = f"✓ 你好 → {text}（{seconds:.1f} 秒）"
+        if seconds > 2.5:
+            message += "。有点慢，打字时得等一会儿，可以换个小一点的模型"
+        self.test_row.set_subtitle(GLib.markup_escape_text(message))
+        log(f"测试翻译服务成功（{seconds:.1f} 秒）")
 
     # ---------------- 自定义词
 
@@ -1985,7 +2432,8 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def on_reset(self, *_args):
         dialog = Adw.AlertDialog(heading="恢复默认设置？",
-                                 body="排列方向、模糊音、语音键等回到默认值。自定义词不受影响。")
+                                 body="排列方向、模糊音、语音键等回到默认值。自定义词和翻译服务"
+                                      "（地址、模型、Key）不受影响。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("reset", "恢复默认")
         dialog.set_response_appearance("reset", Adw.ResponseAppearance.DESTRUCTIVE)
@@ -1993,7 +2441,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         def answered(_dialog, response):
             if response != "reset":
                 return
-            self.values = dict(DEFAULTS)
+            keep = {key: self.values[key] for key in ("TranslateBaseUrl", "TranslateModel")}
+            self.values = {**DEFAULTS, **keep}
             self.save_config()
             self.layout_row.set_selected(0)
             self.page_row.set_value(9)
@@ -2006,6 +2455,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.select_row.set_selected(0)
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
+            self.target_row.set_selected(0)
+            self.variants_row.set_value(int(DEFAULTS["TranslateVariants"]))
             self.toast("已恢复默认设置")
         dialog.connect("response", answered)
         dialog.present(self)
@@ -2032,7 +2483,7 @@ class SettingsApp(Adw.Application):
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.page = None
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
-                             "打开时显示的页面：general、input、emoji、voice、words、update", "页面")
+                             "打开时显示的页面：general、input、emoji、voice、translate、words、update", "页面")
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -2138,6 +2589,64 @@ if __name__ == "__main__":
                 assert f.read().endswith("[Groups/0/Items/2]\nName=wowtype\nLayout=\n")
             assert "已经在" in profile_add_wowtype(profile)
             assert os.path.exists(profile + ".bak-wowtype")
+        # 互译：Key 文件、地址、调用 OpenAI 格式接口（本机起一个假服务）
+        assert chat_endpoint("https://x/v1/") == "https://x/v1/chat/completions"
+        assert chat_endpoint("https://x/v1/chat/completions") == "https://x/v1/chat/completions"
+        assert models_endpoint("https://x/v1/chat/completions") == "https://x/v1/models"
+        assert provider_index("https://api.deepseek.com/v1/") == 1
+        assert provider_index("https://example.com/v1") == len(TRANSLATE_PROVIDERS) - 1
+        assert is_loopback_url("http://127.0.0.1:11434/v1") and is_loopback_url("http://localhost/v1")
+        assert not is_loopback_url("https://api.openai.com/v1")
+        assert mask_url("https://user:tok@proxy.example.com/abc/v1") == "https://proxy.example.com/…"
+        assert [code for _, code, _ in TRANSLATE_LANGUAGES][:3] == ["en", "ja", "ko"]
+        assert strip_think("<think>嗯</think>Hello") == "Hello"
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = os.path.join(tmp, "wowtype", "translate.key")
+            write_translate_key(" sk-test \n", key_file)
+            assert read_translate_key(key_file) == "sk-test"
+            assert os.stat(key_file).st_mode & 0o777 == 0o600
+            write_translate_key("", key_file)
+            assert not os.path.exists(key_file) and read_translate_key(key_file) == ""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Mock(BaseHTTPRequestHandler):
+            def reply(self, code, payload):
+                data = json.dumps(payload).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                self.reply(200, {"data": [{"id": "b-model"}, {"id": "A-model"}]})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.headers.get("Authorization") != "Bearer sk-ok":
+                    self.reply(401, {"error": {"message": "bad key sk-wrong"}})
+                    return
+                text = body["messages"][-1]["content"]
+                self.reply(200, {"choices": [{"message": {"content": f"<think>x</think>T:{text}"}}]})
+
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Mock)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}/v1"
+        assert fetch_models(base, "sk-ok") == ["A-model", "b-model"]
+        assert test_translate(base, "sk-ok", "m")[0] == "T:你好"
+        try:
+            test_translate(base, "sk-wrong", "m")
+            raise AssertionError("应该报 401")
+        except TranslateError as e:
+            assert "401" in str(e) and "Key 不对" in str(e) and "sk-wrong" not in str(e), e
+        server.shutdown()
+        try:
+            test_translate(base, "sk-ok", "m")
+            raise AssertionError("服务关了应该连不上")
+        except TranslateError as e:
+            assert "连不上" in str(e) or "超时" in str(e), e
         print("self-test ok")
         sys.exit(0)
     sys.exit(SettingsApp().run(sys.argv))

@@ -135,7 +135,7 @@ bigram 格式（可选）：
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
 `FuzzyZh` 等 9 组模糊音、`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
-`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -163,6 +163,8 @@ bigram 格式（可选）：
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉语音 |
 | `WOWTYPE_CUSTOM` | 自定义词文件路径 |
 | `WOWTYPE_NO_UPDATE_CHECK` | 设了就不在后台检查更新 |
+| `WOWTYPE_TRANSLATE` / `WOWTYPE_TRANSLATE_URL` / `WOWTYPE_TRANSLATE_MODEL` / `WOWTYPE_TRANSLATE_TARGET` | 互译开关、服务地址、模型、语言 |
+| `WOWTYPE_TRANSLATE_KEY_FILE` | 互译 Key 文件，默认 `$XDG_CONFIG_HOME/wowtype/translate.key` |
 
 ## 交互行为
 
@@ -190,6 +192,21 @@ bigram 格式（可选）：
 - `SelectKeys=Semicolon`：打字途中 `;` 选第 2 个候选（分号当韵母的双拼方案里不选）；`SemicolonQuote` 再加 `'` 选第 3 个（引号不再当隔音符）
 - 自定义词里的换行在候选窗画成 `⏎`，上屏时是真的换行
 - 编辑区里 `←→` `Tab` `Delete` 吃掉不处理，免得应用里的光标乱跑
+
+## 互译
+
+`Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）。
+核心在 `core/src/translate.rs`（C 接口 `wowtype_translate_*`，见 `wowtype_core.h`）：
+
+- 所有上屏都经 `WowtypeEngine::emit()`；互译时不上屏，攒进 `WowtypeState::tsource_`（编辑区带下划线显示，打拼音时排在拼音前面）
+- 原文停 0.5 秒（`kTranslateDelayUsec`，句末标点立刻）后 `wowtype_translate_start`：后台线程起系统 `curl`，
+  配置（含 `Authorization`）从标准输入给，不进命令行；请求 `stream:true`，按 SSE 边收边解析，服务不流式也认
+- 一次要 `TranslateVariants` 种译法（一行一种），竖排成候选，没写完的那种后面带「…」；同一句话缓存 64 句
+- `回车` / `空格` 上屏光标处的译法，没写完就记 `tpending_`，写完了自动上屏；`Shift+回车` 上屏原文；
+  `Esc` 清空；`退格` 删原文最后一个字；数字和 `/` `+` 等也进原文
+- 切回中文、切输入法时原文原样上屏；`reset`、失去焦点时丢掉原文（有的程序在 reset 时自己把编辑区上屏）
+- 密码框（`Password` / `Sensitive`）里照常打中文。Key 只从 Key 文件读，错误信息里出现的 Key 换成 `***`
+- 50ms 轮询一次结果（只在有请求时跑），定时器精度 1ms（sd-event 传 0 是 250ms）
 
 ## 选词学习
 
