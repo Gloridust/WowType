@@ -16,6 +16,7 @@
 #include <fcitx/addonfactory.h>
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
+#include <fcitx/globalconfig.h>
 #include <fcitx/inputcontext.h>
 #include <fcitx/inputcontextmanager.h>
 #include <fcitx/inputpanel.h>
@@ -918,6 +919,17 @@ std::string WowtypeEngine::segmentedRemaining(WowtypeState *state) const {
     return input;
 }
 
+void WowtypeEngine::sendPreedit(fcitx::InputContext *ic,
+                                const fcitx::Text &preedit) {
+    auto &panel = ic->inputPanel();
+    if (instance_->globalConfig().preeditEnabledByDefault() &&
+        ic->capabilityFlags().test(fcitx::CapabilityFlag::Preedit)) {
+        panel.setClientPreedit(preedit);
+    } else {
+        panel.setPreedit(preedit);
+    }
+}
+
 void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
                                      WowtypeState *state) {
     auto &panel = ic->inputPanel();
@@ -927,7 +939,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         fcitx::Text preedit;
         preedit.append(state->buffer_, fcitx::TextFormatFlag::Underline);
         preedit.setCursor(static_cast<int>(preedit.textLength()));
-        panel.setPreedit(preedit);
+        sendPreedit(ic, preedit);
         std::string aux = "表情";
         if (state->buffer_.empty()) {
             aux += "：打拼音或英文搜索，Esc 关闭";
@@ -956,7 +968,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
     preedit.append(state->selectedText());
     preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
     preedit.setCursor(static_cast<int>(preedit.textLength()));
-    panel.setPreedit(preedit);
+    sendPreedit(ic, preedit);
 
     if (state->expanded_ && !state->candidates_.empty()) {
         fillGridPanel(panel, state);
@@ -1555,7 +1567,7 @@ void WowtypeEngine::showVoice(fcitx::InputContext *ic, const std::string &status
         fcitx::Text preedit;
         preedit.append(partial, fcitx::TextFormatFlag::Underline);
         preedit.setCursor(static_cast<int>(preedit.textLength()));
-        panel.setPreedit(preedit);
+        sendPreedit(ic, preedit);
     }
     if (!status.empty()) {
         panel.setAuxUp(fcitx::Text(status));
