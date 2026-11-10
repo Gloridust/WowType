@@ -75,6 +75,8 @@ const WowtypeFrame *wowtype_session_reset(WowtypeSession *s, int commit_pending)
 void wowtype_session_free(WowtypeSession *s);
 ```
 
+> 已经落地的部分（ABI 1.3）以 `core/include/wowtype_core.h` 为准，和上面的草案有几处不同：`WowtypeKey`、`WowtypeSessionConfig` 也以 `size` 开头，`release` 是 `uint32_t`；`wowtype_session_new` 的 `engine` 现在可以传 NULL；`wowtype_session_select`（点候选）和 `wowtype_session_tick`（定时器）还没加，等候选和互译挪进来时再加；另有几个标了「过渡」的函数，挪完删。规则见 [ABI.md](ABI.md)「输入会话」。
+
 要点：
 
 - **按键测试跟着搬**。现在 `fcitx5-addon/test/key_harness.cpp` 里的 117 条按键检查（`nihao,` → 你好，、退格撤销选词、翻页、互译……）改写成 `core/tests/` 里对会话接口的测试。这样 macOS 外壳天然继承同一套行为，CI 在两个平台都跑。
