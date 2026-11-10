@@ -50,7 +50,12 @@ fn env_or(name: &str, default: &str) -> String {
 
 fn main() {
     let mut lexicon = env_or("WOWTYPE_LEXICON", "/usr/share/wowtype/lexicon.tsv");
-    let mut lm = env_or("WOWTYPE_LM", "");
+    let default_lm = if Path::new("/usr/share/wowtype/words.lm").exists() {
+        "/usr/share/wowtype/words.lm"
+    } else {
+        ""
+    };
+    let mut lm = env_or("WOWTYPE_LM", default_lm);
     let mut arpa = env_or("WOWTYPE_ARPA", "");
     let mut s2t = env_or("WOWTYPE_S2T", "/usr/share/wowtype/s2t.tsv");
     let mut user_dict = env_or("WOWTYPE_USER_DICT", "");
@@ -132,13 +137,13 @@ fn main() {
             }
         }
     } else if !lm.is_empty() {
-        match BigramLm::from_bigram_tsv_path(&lm) {
+        match wowtype_core::lm::load_lm(&lm) {
             Ok(v) => {
-                report.ok("bigram TSV", &format!("{lm}: {} 词", v.vocab()));
-                Arc::new(v)
+                report.ok("语言模型", &format!("{lm}"));
+                v
             }
             Err(e) => {
-                report.warn("bigram TSV", &format!("载入失败: {e:#}"));
+                report.warn("语言模型", &format!("载入失败: {e:#}"));
                 Arc::new(BigramLm::default())
             }
         }

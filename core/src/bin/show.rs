@@ -21,6 +21,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut lexicon_path = String::new();
     let mut english_path = String::new();
+    let mut lm_path = String::new();
     let mut context = String::new();
     let mut max_candidates = 18usize;
     let mut scores = false;
@@ -34,11 +35,12 @@ fn main() {
         match args[i].as_str() {
             "--lexicon" => lexicon_path = take(&mut i),
             "--english" => english_path = take(&mut i),
+            "--lm" => lm_path = take(&mut i),
             "--context" => context = take(&mut i),
             "--max" => max_candidates = take(&mut i).parse().unwrap_or(18),
             "--scores" => scores = true,
             "-h" | "--help" => {
-                println!("wowtype-show --lexicon <tsv> [--english <txt>] [--max n] [--context 文本] [--scores] 拼音...");
+                println!("wowtype-show --lexicon <tsv> [--lm <words.lm>] [--english <txt>] [--max n] [--context 文本] [--scores] 拼音...");
                 return;
             }
             other => inputs.push(other.to_string()),
@@ -55,7 +57,12 @@ fn main() {
         max_candidates,
         ..EngineConfig::default()
     };
-    let engine = Engine::new(lex, Arc::new(BigramLm::default())).with_config(config);
+    let lm: Arc<dyn wowtype_core::lm::LanguageModel> = if !lm_path.is_empty() {
+        wowtype_core::lm::load_lm(&lm_path).unwrap_or_else(|e| fail(&format!("语言模型载入失败: {e:#}")))
+    } else {
+        Arc::new(BigramLm::default())
+    };
+    let engine = Engine::new(lex, lm).with_config(config);
     if !english_path.is_empty() {
         engine
             .load_english(&english_path)
