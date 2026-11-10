@@ -1,12 +1,20 @@
 //! 输入会话的按键测试：从 fcitx5-addon/test/key_harness.cpp 搬过来的用例，
 //! 用纯 Rust 驱动 [`wowtype_core::session::Session`]，macOS 的 CI 也跑。
 //!
-//! 只搬已经挪进会话的行为（编辑区、已选词栈、退格、Esc）。候选还在 fcitx5 外壳里，
-//! 这里选句首词用 `push_selection` 代替（外壳选词时就是这么调的）；
-//! 编辑区分音节（`你好zhong'guo`）也还在外壳，这里看的是原始输入，分音节由 key_harness 断言。
+//! 只搬已经挪进会话的行为：编辑区、已选词栈、退格、Esc，候选列表（引擎候选、计算器、
+//! emoji 推荐、数字按键 emoji、日期时间）和编辑区分音节。选词还在 fcitx5 外壳里，
+//! 这里选句首词用 `push_selection` 代替（外壳选词时就是这么调的）。
 //! 以后每挪一块，就把 key_harness 里对应的用例搬过来。
+//!
+//! 前面的用例不带引擎（词库在后台载入好之前就是这样），编辑区是原始输入；
+//! 后面的用例用一个小词库建引擎，看候选和分音节。
 
-use wowtype_core::session::{keysym, Frame, Key, Selection, Session};
+use std::sync::Arc;
+
+use wowtype_core::datetime::LocalTime;
+use wowtype_core::lm::BigramLm;
+use wowtype_core::session::{keysym, CandidateKind, Config, Frame, Key, Selection, Session};
+use wowtype_core::{Engine, Lexicon, MemoryLexicon};
 
 /// 按一串键，和 key_harness 的 type() 一样：<sp> <bs> <cr> <esc> 等是特殊键，其余按字符。
 fn type_keys(session: &mut Session, keys: &str) -> Frame {
@@ -48,7 +56,7 @@ fn type_keys(session: &mut Session, keys: &str) -> Frame {
 }
 
 /// 每个用例前清空（key_harness 的 fresh）。
-fn fresh() -> Session {
+fn fresh() -> Session<'static> {
     let mut session = Session::new();
     type_keys(&mut session, "<esc>");
     session
@@ -176,4 +184,273 @@ fn switching_input_method_commits_raw() {
     let frame = session.reset(false);
     assert_eq!(frame.commit, None);
     assert!(frame.preedit.is_empty());
+}
+
+// ---- 带引擎：候选和分音节 ----
+
+const LEXICON: &str = "\
+ni hao\t你好\t9000
+zhong guo\t中国\t9000
+heng xiang\t横向\t5000
+kai xin\t开心\t9000
+kai xin\t凯欣\t300
+kai xin\t开新\t200
+ba\t吧\t9000
+ba\t八\t8000
+ba\t把\t7000
+ri qi\t日期\t9000
+shi jian\t时间\t9000
+xing qi\t星期\t9000
+shi\t是\t9000
+shi\t十\t8000
+";
+
+fn engine() -> &'static Engine {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )))
+}
+
+/// 2026-11-11 10:20:30，星期三。
+fn fixed_time() -> Option<LocalTime> {
+    Some(LocalTime {
+        year: 2026,
+        month: 11,
+        day: 11,
+        hour: 10,
+        minute: 20,
+        second: 30,
+        weekday: 3,
+    })
+}
+
+fn with(engine: &'static Engine) -> Session<'static> {
+    let mut session = Session::with_engine(engine);
+    session.set_clock(fixed_time);
+    session
+}
+
+fn texts(session: &mut Session) -> Vec<String> {
+    session
+        .candidates()
+        .iter()
+        .map(|c| c.text.clone())
+        .collect()
+}
+
+#[test]
+fn preedit_is_segmented() {
+    // key_harness：「编辑区给拼音分音节」「编辑区 = 已选 + 剩余拼音（分好音节）」「退格先撤销选词」
+    let mut session = with(engine());
+    assert_eq!(type_keys(&mut session, "hengxiang").preedit, "heng'xiang");
+
+    let mut session = with(engine());
+    assert_eq!(
+        type_keys(&mut session, "nihaozhongguo").preedit,
+        "ni'hao'zhong'guo"
+    );
+    select_prefix(&mut session, "你好", "ni hao", 5);
+    assert_eq!(session.frame(false).preedit, "你好zhong'guo");
+    assert_eq!(
+        type_keys(&mut session, "<bs>").preedit,
+        "ni'hao'zhong'guo",
+        "退格撤销选词，分音节跟着回来"
+    );
+}
+
+#[test]
+fn candidates_come_from_the_engine() {
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    let all = session.candidates();
+    assert_eq!(all[0].text, "你好");
+    assert_eq!(all[0].pinyin, "ni hao");
+    assert_eq!(all[0].consumed, 5);
+    assert_eq!(all[0].kind, CandidateKind::Word);
+    assert_eq!(all[0].commit, "你好");
+}
+
+#[test]
+fn no_engine_yet_means_no_candidates() {
+    // 词库在后台载入：载入好之前照样打字，编辑区是原始输入；载入好了候选马上出来
+    let mut session = Session::new();
+    type_keys(&mut session, "hengxiang");
+    assert!(session.candidates().is_empty());
+    assert_eq!(session.frame(false).preedit, "hengxiang");
+    session.set_engine(Some(engine()));
+    assert_eq!(texts(&mut session)[0], "横向");
+    assert_eq!(session.frame(false).preedit, "heng'xiang");
+}
+
+#[test]
+fn emoji_suggestion_is_third() {
+    // key_harness：「打字时推荐 emoji：插在第三个候选」
+    let mut session = with(engine());
+    type_keys(&mut session, "kaixin");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "开心");
+    assert_eq!(all[2].text, "😊");
+    assert_eq!(all[2].kind, CandidateKind::Emoji);
+    assert_eq!(all[2].commit, "😊");
+    assert_eq!(all[2].emoji, "😊");
+
+    // 关掉 emoji 推荐后没有 😊
+    session.configure(Config {
+        emoji_suggest: false,
+        ..Config::default()
+    });
+    assert!(!texts(&mut session).contains(&"😊".to_string()));
+}
+
+#[test]
+fn keycap_follows_number_word() {
+    // key_harness：「ba：八 后面是 8️⃣」「拼音没打完的『八』不跟 8️⃣」
+    let mut session = with(engine());
+    type_keys(&mut session, "ba");
+    let all = session.candidates().to_vec();
+    let at = all.iter().position(|c| c.text == "8️⃣").expect("没有 8️⃣");
+    assert_eq!(all[at - 1].text, "八");
+    assert_eq!(all[at].kind, CandidateKind::Emoji);
+    assert_eq!(all[at].commit, "8️⃣");
+    assert_eq!(
+        all.iter()
+            .filter(|c| c.kind == CandidateKind::Emoji)
+            .count(),
+        1,
+        "只跟一个"
+    );
+
+    // 第一页（page_size）之外的数字字不跟
+    session.configure(Config {
+        page_size: 1,
+        ..Config::default()
+    });
+    assert!(!texts(&mut session).contains(&"8️⃣".to_string()));
+}
+
+#[test]
+fn date_time_after_first() {
+    // key_harness：「日期时间候选：格式从第二个开始」
+    let mut session = with(engine());
+    type_keys(&mut session, "riqi");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "日期");
+    assert_eq!(all[1].text, "2026年11月11日");
+    assert_eq!(all[1].kind, CandidateKind::Plain);
+    assert_eq!(all[2].text, "2026-11-11");
+
+    let mut session = with(engine());
+    type_keys(&mut session, "shijian");
+    assert_eq!(texts(&mut session)[..3], ["时间", "10:20", "10:20:30"]);
+
+    let mut session = with(engine());
+    type_keys(&mut session, "xingqi");
+    assert_eq!(texts(&mut session)[1], "星期三");
+
+    // 选过词以后不出
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaoriqi");
+    select_prefix(&mut session, "你好", "ni hao", 5);
+    assert!(!texts(&mut session).iter().any(|t| t.contains('年')));
+
+    // 关掉不出
+    let mut session = with(engine());
+    session.configure(Config {
+        date_time: false,
+        ..Config::default()
+    });
+    type_keys(&mut session, "riqi");
+    assert!(!texts(&mut session).iter().any(|t| t.contains('年')));
+}
+
+#[test]
+fn insertion_order_emoji_keycap_date_time() {
+    // 外壳的顺序：emoji 推荐插第 3 个，然后在第一页里找数字字跟按键 emoji，
+    // 最后日期时间插在首选后面（把前面插的往后挤）
+    let mut session = with(engine());
+    type_keys(&mut session, "riqi");
+    let all = session.candidates().to_vec();
+    let formats = all
+        .iter()
+        .skip(1)
+        .take_while(|c| c.kind == CandidateKind::Plain)
+        .count();
+    assert!(formats >= 5, "日期格式紧跟首选：{:?}", texts(&mut session));
+    assert!(
+        all[1 + formats..]
+            .iter()
+            .all(|c| c.kind != CandidateKind::Plain),
+        "日期格式是连着的"
+    );
+}
+
+#[test]
+fn shuangpin_display_and_date_key() {
+    // key_harness：「双拼编辑区显示全拼」；双拼时日期时间看首选的拼音
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_shuangpin(true);
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = with(engine);
+    let frame = type_keys(&mut session, "vsgo");
+    assert!(frame.preedit.contains("zhong"), "{}", frame.preedit);
+    assert_eq!(texts(&mut session)[0], "中国");
+
+    let mut session = with(engine);
+    type_keys(&mut session, "riqi");
+    let all = texts(&mut session);
+    assert_eq!(all[0], "日期");
+    assert_eq!(all[1], "2026年11月11日");
+
+    // 双拼不开计算器（v 是韵母键）
+    let mut session = with(engine);
+    type_keys(&mut session, "v");
+    session.append("1+2");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
+}
+
+#[test]
+fn calculator() {
+    // key_harness：「V 模式计算器」（v 后面的数字和运算符是外壳 append 进来的）
+    let mut session = with(engine());
+    type_keys(&mut session, "v");
+    session.append("1+2*3");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "7");
+    assert_eq!(all[0].kind, CandidateKind::Plain);
+    assert_eq!(all[1].text, "1+2*3=7");
+    assert_eq!(session.frame(false).preedit, "v1+2*3", "算式不分音节");
+
+    let mut session = with(engine());
+    type_keys(&mut session, "v");
+    session.append("(1.5-0.5)/4");
+    assert_eq!(texts(&mut session)[0], "0.25");
+
+    // 关掉计算器：v1+2 不算
+    let mut session = with(engine());
+    session.configure(Config {
+        calculator: false,
+        ..Config::default()
+    });
+    type_keys(&mut session, "v");
+    session.append("1+2");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
+}
+
+#[test]
+fn cache_follows_edits() {
+    // 改了编辑区、上文、设置，候选跟着变；没改就不重算
+    let mut session = with(engine());
+    type_keys(&mut session, "ba");
+    let first = texts(&mut session);
+    assert_eq!(texts(&mut session), first);
+    type_keys(&mut session, "<bs>");
+    type_keys(&mut session, "<esc>shi");
+    assert_eq!(texts(&mut session)[0], "是");
+    session.set_context("我");
+    assert_eq!(texts(&mut session)[0], "是");
+    type_keys(&mut session, "<esc>");
+    assert!(session.candidates().is_empty());
 }

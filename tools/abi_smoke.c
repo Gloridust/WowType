@@ -148,9 +148,10 @@ int main(int argc, char **argv) {
         check(p && strcmp(p, "，") == 0, "punct: comma -> ，");
     }
 
-    /* 输入会话（ABI 1.3）：字母进编辑区、选句首词、退格先撤销选词、切换输入法时上屏 */
+    /* 输入会话（ABI 1.3）：字母进编辑区、选句首词、退格先撤销选词、切换输入法时上屏。
+     * 不带引擎（词库还没载入好时就是这样）：编辑区是原始输入 */
     {
-        WowtypeSession *s = wowtype_session_new(e, NULL);
+        WowtypeSession *s = wowtype_session_new(NULL, NULL);
         check(s != NULL, "session_new");
         const WowtypeFrame *f = NULL;
         const char *keys = "nihaoma";
@@ -179,6 +180,42 @@ int main(int argc, char **argv) {
         f = wowtype_session_reset(s, 1);
         check(f && f->commit && strcmp(f->commit, "nihaoma") == 0 && f->preedit[0] == 0,
               "session: reset commits raw input");
+        wowtype_session_free(s);
+    }
+
+    /* 输入会话带引擎（ABI 1.4）：候选列表和分音节 */
+    {
+        WowtypeSessionConfig config = {sizeof(WowtypeSessionConfig), 9, 1, 0, 0};
+        WowtypeSession *s = wowtype_session_new(NULL, &config);
+        for (const char *k = "nihaozhongguo"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        check(wowtype_session_candidate_total(s) == 0, "session: no engine, no candidates");
+        wowtype_session_set_engine(s, e);
+        wowtype_session_set_context(s, "");
+        const WowtypeFrame *f = wowtype_session_frame(s);
+        check(f && !f->handled && strcmp(f->preedit, "ni'hao'zhong'guo") == 0,
+              "session: preedit segmented");
+        check(wowtype_session_candidate_total(s) > 0, "session: candidates with engine");
+        WowtypeCandidateInfo info;
+        memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "你好中国") == 0 &&
+                  strcmp(info.pinyin, "ni hao zhong guo") == 0 && info.consumed == 13 &&
+                  info.kind == WOWTYPE_CAND_WORD && strcmp(info.commit, "你好中国") == 0 &&
+                  info.emoji[0] == 0 && info.size == sizeof info,
+              "session: candidate info");
+        check(wowtype_session_candidate_info(s, wowtype_session_candidate_total(s), &info) == -1,
+              "session: candidate info out of range");
+        wowtype_session_push_selection(s, "你好", "ni hao", 5);
+        f = wowtype_session_frame(s);
+        check(f && strcmp(f->preedit, "你好zhong'guo") == 0, "session: selected + segmented");
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "中国") == 0 &&
+                  info.consumed == 8,
+              "session: candidates follow selection");
+        wowtype_session_set_engine(s, NULL);
+        check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
         wowtype_session_free(s);
     }
 
