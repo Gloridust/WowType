@@ -134,8 +134,8 @@ EOF
   depends="${shlibs:+$shlibs, }fcitx5"
 
   # 设置界面要 PyGObject + GTK 4 + libadwaita；不装也不影响打字
-  # emoji 要彩色 emoji 字体才画得出来（桌面版系统一般都装了）
-  RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, fonts-noto-color-emoji" \
+  # emoji 要彩色 emoji 字体才画得出来（桌面版系统一般都装了）；互译用 curl 发请求
+  RECOMMENDS="python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, fonts-noto-color-emoji, curl" \
   REPLACES="wowtype-data-rime-ice" \
   DEB_FILE="wowtype_${version}_${distro}_$(dpkg --print-architecture).deb" \
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \

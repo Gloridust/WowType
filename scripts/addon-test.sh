@@ -19,7 +19,18 @@ cmake -S fcitx5-addon -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DWOWTYPE_BUILD_TES
 cmake --build "$BUILD" -j
 
 ROOT=$(mktemp -d)
-trap 'rm -rf "$ROOT"' EXIT
+MOCK_PID=
+trap '[[ -n "$MOCK_PID" ]] && kill "$MOCK_PID" 2>/dev/null; rm -rf "$ROOT"' EXIT
+
+# 互译用例：本机起一个假的 OpenAI 服务（没有 python3 或 curl 时跳过）
+TRANSLATE_URL=
+if command -v python3 >/dev/null && command -v curl >/dev/null; then
+  python3 fcitx5-addon/test/mock_openai.py > "$ROOT/mock.port" &
+  MOCK_PID=$!
+  for _ in $(seq 50); do [[ -s "$ROOT/mock.port" ]] && break; sleep 0.1; done
+  TRANSLATE_URL="http://127.0.0.1:$(head -1 "$ROOT/mock.port")/v1"
+  echo sk-harness > "$ROOT/translate.key"
+fi
 mkdir -p "$ROOT/data/fcitx5/addon" "$ROOT/data/fcitx5/inputmethod" "$ROOT/config/fcitx5"
 cp "$BUILD/wowtype-addon.conf" "$ROOT/data/fcitx5/addon/wowtype.conf"
 cp "$BUILD/wowtype.conf" "$ROOT/data/fcitx5/inputmethod/wowtype.conf"
@@ -61,6 +72,7 @@ env -i PATH="$PATH" HOME="$ROOT" \
   FCITX_ADDON_DIRS="$BUILD:$SYSTEM_ADDONS" \
   WOWTYPE_LEXICON="$LEXICON" WOWTYPE_ENGLISH="$ENGLISH" WOWTYPE_LM="${WOWTYPE_LM:-}" WOWTYPE_LOG="${WOWTYPE_LOG:-0}" \
   WOWTYPE_USER_DICT="$ROOT/user.tsv" \
+  WOWTYPE_HARNESS_TRANSLATE_URL="$TRANSLATE_URL" WOWTYPE_TRANSLATE_KEY_FILE="$ROOT/translate.key" \
   WOWTYPE_VOICE_WAV="$VOICE_WAV" WOWTYPE_VOICE_MODEL_DIR="$VOICE_MODEL_DIR" \
   DBUS_SESSION_BUS_ADDRESS="${WOWTYPE_HARNESS_DBUS:-}" \
   WOWTYPE_NO_UPDATE_CHECK=1 WOWTYPE_HARNESS_SHOW="${WOWTYPE_HARNESS_SHOW:-}" WOWTYPE_VOICE_EXPECT="${WOWTYPE_VOICE_EXPECT:-}" \

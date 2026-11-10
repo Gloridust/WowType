@@ -21,6 +21,8 @@ pub mod shuangpin;
 pub mod syllable;
 pub mod symbols;
 pub mod train;
+pub mod translate;
+pub mod translate_ffi;
 #[cfg(feature = "voice")]
 pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]

@@ -49,7 +49,7 @@ license=('MIT' 'Apache-2.0' 'GPL-3.0-only' 'CC-BY-SA-4.0' 'Unicode-3.0')
 depends=('fcitx5' 'alsa-lib' 'gcc-libs' 'glibc' 'python')
 makedepends=('rust' 'cmake' 'extra-cmake-modules' 'pkgconf')
 optdepends=('python-gobject: settings app' 'gtk4: settings app' 'libadwaita: settings app'
-            'noto-fonts-emoji: color emoji in candidates')
+            'noto-fonts-emoji: color emoji in candidates' 'curl: translate mode')
 # makepkg handles ELF stripping and byte-sized .PKGINFO/.MTREE/.BUILDINFO.
 # Avoid a second debug package in the CI release artifacts.
 options=('!debug')
