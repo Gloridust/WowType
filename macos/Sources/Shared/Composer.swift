@@ -326,7 +326,8 @@ public final class Composer {
     }
 
     private func commitInput() {
-        apply(wowtype_session_commit_input(session))
+        // 回车：已选的词 + 剩下的字母原样上屏（会话会记选词）。_commit_input 在 ABI 1.6 删掉，用 _reset(s,1)
+        apply(wowtype_session_reset(session, 1))
     }
 
     private var pageCount: Int {
