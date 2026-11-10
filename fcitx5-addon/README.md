@@ -90,7 +90,7 @@ Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲�
 | `bigram.tsv` | `WOWTYPE_LM` | bigram（可选） |
 | `english.txt` | `WOWTYPE_ENGLISH` | 英文词表（可选）；有了它 hello/github 会排第一 |
 | `s2t.tsv` | `WOWTYPE_S2T` | 简繁表，开了繁体输出时用 |
-| `custom.tsv` | `WOWTYPE_CUSTOM` | 自定义词（`拼音<TAB>词[<TAB>频次]`），设置界面维护；只在用户目录找 |
+| `custom.tsv` | `WOWTYPE_CUSTOM` | 自定义词（`编码<TAB>词[<TAB>频次]`，编码是拼音或字母，词里 `\n` 换行），设置界面维护；只在用户目录找 |
 
 不用 root 也能装真实词库和英文词表：
 
@@ -134,7 +134,8 @@ bigram 格式（可选）：
 ## 配置
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
-`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`FuzzyZh` 等 9 组模糊音、`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
+`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -151,6 +152,9 @@ bigram 格式（可选）：
 | `WOWTYPE_USER_DICT` | 用户词库路径，默认 `$XDG_DATA_HOME/wowtype/user.tsv` |
 | `WOWTYPE_TYPO` | `0` 关闭按错键纠错（默认开；双拼下不生效） |
 | `WOWTYPE_FUZZY` | `1` 开启模糊音 |
+| `WOWTYPE_FUZZY_GROUPS` | 模糊音分组位掩码（见 `wowtype_engine_set_fuzzy_groups`） |
+| `WOWTYPE_SELECT_KEYS` | 分号引号选词：`off`、`semicolon`、`quote` |
+| `WOWTYPE_DATETIME` / `WOWTYPE_CALC` | `0` 关掉日期时间候选 / V 模式计算器 |
 | `WOWTYPE_SHUANGPIN` | `1` 使用双拼 |
 | `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案：`ziranma`、`xiaohe`、`microsoft`、`sogou`、`abc`、`ziguang`、`pinyinjiajia`；设了就打开双拼 |
 | `WOWTYPE_SHIFT_TOGGLE` | 单按哪个 Shift 切英文：`both`（默认）、`left`、`right`、`off` |
@@ -181,6 +185,10 @@ bigram 格式（可选）：
   （默认左 Shift）生效时 fcitx5 会先把 Shift 吃掉，两者不会重复切换
 - 切换输入法时已选的词 + 原始字母上屏，不会丢。失去焦点时清空编辑区，不往别的窗口上屏
 - 双拼时编辑区显示全拼（`vsgo` → `zhong'guo`）；微软、搜狗、紫光的 `;` 是 ing，等第二个键时按 `;` 进编辑区
+- `riqi` / `shijian` / `xingqi` / `date` / `time`（`DateTime`）：首选后面插入当前日期时间的几种写法，选中原样上屏、不学习
+- 全拼下 `v` 开头（`Calculator`）：`v` 后面的数字、`+ - * / % ^ . ( )` 进编辑区，候选是结果和「算式=结果」，`空格` 或 `=` 上屏结果
+- `SelectKeys=Semicolon`：打字途中 `;` 选第 2 个候选（分号当韵母的双拼方案里不选）；`SemicolonQuote` 再加 `'` 选第 3 个（引号不再当隔音符）
+- 自定义词里的换行在候选窗画成 `⏎`，上屏时是真的换行
 - 编辑区里 `←→` `Tab` `Delete` 吃掉不处理，免得应用里的光标乱跑
 
 ## 选词学习

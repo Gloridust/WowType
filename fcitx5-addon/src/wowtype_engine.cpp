@@ -3,12 +3,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -227,12 +229,68 @@ WowtypeEngineHandle *loadCore(const std::string &userDict) {
     return core;
 }
 
+/// 候选窗里显示的样子：自定义词里的换行、制表符画成 ⏎、⇥，不把候选窗撑乱。
+std::string shownText(const std::string &text) {
+    if (text.find_first_of("\n\t") == std::string::npos) {
+        return text;
+    }
+    std::string out;
+    for (const char c : text) {
+        if (c == '\n') {
+            out += "⏎";
+        } else if (c == '\t') {
+            out += "⇥";
+        } else {
+            out.push_back(c);
+        }
+    }
+    return out;
+}
+
+/// V 模式计算器认的字符（数字、运算符、括号），小键盘也算。不是的话返回 0。
+char calcChar(const fcitx::Key &key) {
+    const auto sym = key.sym();
+    if (sym >= FcitxKey_0 && sym <= FcitxKey_9) {
+        return static_cast<char>('0' + (sym - FcitxKey_0));
+    }
+    if (sym >= FcitxKey_KP_0 && sym <= FcitxKey_KP_9) {
+        return static_cast<char>('0' + (sym - FcitxKey_KP_0));
+    }
+    switch (sym) {
+    case FcitxKey_plus:
+    case FcitxKey_KP_Add:
+        return '+';
+    case FcitxKey_minus:
+    case FcitxKey_KP_Subtract:
+        return '-';
+    case FcitxKey_asterisk:
+    case FcitxKey_KP_Multiply:
+        return '*';
+    case FcitxKey_slash:
+    case FcitxKey_KP_Divide:
+        return '/';
+    case FcitxKey_period:
+    case FcitxKey_KP_Decimal:
+        return '.';
+    case FcitxKey_percent:
+        return '%';
+    case FcitxKey_asciicircum:
+        return '^';
+    case FcitxKey_parenleft:
+        return '(';
+    case FcitxKey_parenright:
+        return ')';
+    default:
+        return 0;
+    }
+}
+
 class WowtypeCandidateWord final : public fcitx::CandidateWord {
 public:
     WowtypeCandidateWord(WowtypeEngine *engine, WowtypeState *state,
                          std::size_t index, const std::string &text)
         : engine_(engine), state_(state), index_(index) {
-        setText(fcitx::Text(text));
+        setText(fcitx::Text(shownText(text)));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -335,6 +393,8 @@ struct WowtypeCandidate {
     std::string commit;
     /// emoji 本身（打字推荐的候选显示的是「开心😊」，这里是「😊」）。
     std::string emojiText;
+    /// 日期时间、计算结果这类：选中时原样上屏，不学习选词。
+    bool plain = false;
 };
 
 /// 每个输入上下文独立保存的缓冲区和候选。
@@ -471,6 +531,24 @@ void WowtypeEngine::applyConfig() {
     horizontal_ = !envOr("WOWTYPE_VERTICAL", *config_.layout == WowtypeLayout::Vertical);
     pageSize_ = static_cast<std::size_t>(std::clamp(*config_.pageSize, 3, 9));
     fuzzy_ = envOr("WOWTYPE_FUZZY", *config_.fuzzy);
+    // 位掩码，和核心的 syllable::fuzzy 一致
+    fuzzyGroups_ = (*config_.fuzzyZh ? 1u : 0u) | (*config_.fuzzyCh ? 2u : 0u) |
+                   (*config_.fuzzySh ? 4u : 0u) | (*config_.fuzzyNL ? 8u : 0u) |
+                   (*config_.fuzzyFH ? 16u : 0u) | (*config_.fuzzyRL ? 32u : 0u) |
+                   (*config_.fuzzyAn ? 64u : 0u) | (*config_.fuzzyEn ? 128u : 0u) |
+                   (*config_.fuzzyIn ? 256u : 0u);
+    if (const char *env = std::getenv("WOWTYPE_FUZZY_GROUPS"); env && *env) {
+        fuzzyGroups_ = static_cast<unsigned>(std::strtoul(env, nullptr, 0));
+    }
+    selectKeys_ = *config_.selectKeys;
+    if (const char *env = std::getenv("WOWTYPE_SELECT_KEYS"); env && *env) {
+        const std::string name = env;
+        selectKeys_ = name == "semicolon"   ? WowtypeSelectKeys::Semicolon
+                      : name == "quote"     ? WowtypeSelectKeys::SemicolonQuote
+                                            : WowtypeSelectKeys::Off;
+    }
+    dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
+    calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
     shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
@@ -518,10 +596,12 @@ void WowtypeEngine::applyConfig() {
         voice_ = wowtype_voice_new(dir);
     }
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
-             << " 模糊音=" << fuzzy_ << " 纠错=" << typo_ << " 双拼=" << shuangpin_
+             << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 双拼=" << shuangpin_
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
+             << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
+             << " 计算器=" << calculator_
              << " 检查更新=" << *config_.checkUpdate;
     if (core_) {
         applyCoreSettings();
@@ -533,6 +613,7 @@ void WowtypeEngine::applyCoreSettings() {
     // 翻页能一直翻到生僻字（每次按键多花不到 1ms）
     wowtype_engine_set_max_candidates(core_, kMaxCandidates);
     wowtype_engine_set_fuzzy(core_, fuzzy_ ? 1 : 0);
+    wowtype_engine_set_fuzzy_groups(core_, fuzzyGroups_);
     wowtype_engine_set_shuangpin(core_, shuangpin_ ? 1 : 0);
     if (wowtype_engine_set_shuangpin_scheme(core_, shuangpinScheme_.c_str()) != 0) {
         WLOG_W() << "WowType: 不认识双拼方案 " << shuangpinScheme_ << "，用自然码";
@@ -711,6 +792,20 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     if (input.empty() || !coreReady()) {
         return;
     }
+    if (calcActive(state) && input.size() > 1) {
+        // V 模式：v 后面是算式，候选是结果和「算式=结果」
+        if (WowtypeCandidates *raw = wowtype_calc_candidates(input.c_str() + 1)) {
+            for (std::size_t i = 0; i < wowtype_candidates_len(raw); ++i) {
+                if (const char *text = wowtype_candidates_text(raw, i)) {
+                    WowtypeCandidate candidate{text, "", input.size()};
+                    candidate.plain = true;
+                    state->candidates_.push_back(std::move(candidate));
+                }
+            }
+            wowtype_candidates_free(raw);
+        }
+        return;
+    }
 
     WowtypeCandidates *raw = nullptr;
     {
@@ -734,12 +829,71 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
         if (consumed == 0 || consumed > input.size()) {
             consumed = input.size();
         }
-        state->candidates_.push_back({text, pinyin ? pinyin : "", consumed});
+        WowtypeCandidate candidate{text, pinyin ? pinyin : "", consumed};
+        // 自定义词里带换行的，不往用户词库里记（词库是一行一条）
+        candidate.plain = candidate.text.find_first_of("\n\t") != std::string::npos;
+        state->candidates_.push_back(std::move(candidate));
     }
     wowtype_candidates_free(raw);
     if (emojiSuggest_) {
         addEmojiSuggestions(state, input);
     }
+    if (dateTime_ && state->selections_.empty()) {
+        addDateTimeCandidates(state, input);
+    }
+}
+
+void WowtypeEngine::addDateTimeCandidates(WowtypeState *state, const std::string &input) {
+    auto &all = state->candidates_;
+    if (all.empty()) {
+        return;
+    }
+    // 全拼看打的字母（rq、sj 这类简拼不算）；双拼看首选的拼音
+    std::string key;
+    if (shuangpin_) {
+        if (all.front().consumed < input.size()) {
+            return;
+        }
+        key = all.front().pinyin;
+    } else {
+        key = input;
+    }
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+    if (!localtime_r(&now, &local)) {
+        return;
+    }
+    WowtypeCandidates *raw = wowtype_datetime_candidates(
+        key.c_str(), local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour,
+        local.tm_min, local.tm_sec, local.tm_wday);
+    if (!raw) {
+        return;
+    }
+    std::vector<WowtypeCandidate> extra;
+    for (std::size_t i = 0; i < wowtype_candidates_len(raw); ++i) {
+        if (const char *text = wowtype_candidates_text(raw, i)) {
+            WowtypeCandidate candidate{text, "", input.size()};
+            candidate.plain = true;
+            extra.push_back(std::move(candidate));
+        }
+    }
+    wowtype_candidates_free(raw);
+    // 首选还是那个词（日期、时间），格式从第二个开始
+    all.insert(all.begin() + 1, extra.begin(), extra.end());
+}
+
+void WowtypeEngine::commitPlainCandidate(fcitx::InputContext *ic, WowtypeState *state,
+                                         std::size_t index) {
+    if (!ic || index >= state->candidates_.size()) {
+        return;
+    }
+    const std::string text = state->selectedText() + state->candidates_[index].text;
+    if (!text.empty()) {
+        ic->commitString(text);
+        rememberContext(text);
+    }
+    state->clear();
+    updateInputPanel(ic, state);
 }
 
 void WowtypeEngine::addEmojiSuggestions(WowtypeState *state, const std::string &input) {
@@ -1057,7 +1211,7 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
         std::size_t widths[kGridCols] = {};
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
-                widths[c] = std::max(widths[c], displayWidth(all[r * kGridCols + c].text));
+                widths[c] = std::max(widths[c], displayWidth(shownText(all[r * kGridCols + c].text)));
             }
         }
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
@@ -1067,12 +1221,12 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
                 const bool here = index == state->gridCursor_;
                 line += r == cursorRow ? kLabels[c] : "\u3000";
                 line += here ? "\u3014" : "\u3000";
-                line += all[index].text;
+                line += shownText(all[index].text);
                 if (here) {
                     line += "\u3015";
-                    padTo(line, displayWidth(all[index].text), widths[c]);
+                    padTo(line, displayWidth(shownText(all[index].text)), widths[c]);
                 } else {
-                    padTo(line, displayWidth(all[index].text), widths[c]);
+                    padTo(line, displayWidth(shownText(all[index].text)), widths[c]);
                     line += "\u3000";
                 }
             }
@@ -1172,6 +1326,11 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     }
     if (state->candidates_[index].emoji) {
         commitEmoji(ic, state, index);
+        return;
+    }
+    if (state->candidates_[index].plain &&
+        state->candidates_[index].consumed >= state->remaining().size()) {
+        commitPlainCandidate(ic, state, index);
         return;
     }
     const WowtypeCandidate chosen = state->candidates_[index];
@@ -1287,6 +1446,30 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             // 回车：已选的词 + 原始字母上屏
             commitAll(ic, state, state->remaining(), {});
             updateInputPanel(ic, state);
+            event.filterAndAccept();
+            return;
+        }
+        if (calculator_ && !shuangpin_) {
+            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
+            if (sym == FcitxKey_equal && calcActive(state) && state->buffer_.size() > 1) {
+                // = 上屏计算结果（第一个候选）
+                commitCurrent(ic, state);
+                event.filterAndAccept();
+                return;
+            }
+            if (const char c = calcChar(key); c != 0 && calcActive(state)) {
+                state->buffer_.push_back(c);
+                refreshCandidates(state);
+                updateInputPanel(ic, state);
+                event.filterAndAccept();
+                return;
+            }
+        }
+        if (const int nth = selectKeyIndex(sym); nth > 0) {
+            // 分号选第 2 个、引号选第 3 个（设置里打开时）；没这么多候选就什么都不做
+            if (auto list = ic->inputPanel().candidateList(); list && nth <= list->size()) {
+                list->candidate(nth - 1).select(ic);
+            }
             event.filterAndAccept();
             return;
         }
@@ -1520,6 +1703,38 @@ std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
 std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
                                             fcitx::InputContext & /*ic*/) {
     return asciiMode_ ? "英" : "";
+}
+
+int WowtypeEngine::selectKeyIndex(fcitx::KeySym sym) const {
+    if (selectKeys_ == WowtypeSelectKeys::Off) {
+        return 0;
+    }
+    if (sym == FcitxKey_semicolon) {
+        // 微软、搜狗、紫光双拼里分号是 ing 键，不能拿来选词
+        return shuangpin_ && shuangpinSemicolon_ ? 0 : 2;
+    }
+    if (sym == FcitxKey_apostrophe && selectKeys_ == WowtypeSelectKeys::SemicolonQuote) {
+        return 3;
+    }
+    return 0;
+}
+
+bool WowtypeEngine::calcActive(WowtypeState *state) const {
+    if (!calculator_ || shuangpin_ || !state->selections_.empty()) {
+        return false;
+    }
+    const std::string &buffer = state->buffer_;
+    if (buffer.empty() || buffer[0] != 'v') {
+        return false;
+    }
+    for (std::size_t i = 1; i < buffer.size(); ++i) {
+        const char c = buffer[i];
+        if (!((c >= '0' && c <= '9') || std::string_view("+-*/%^.()").find(c) !=
+                                            std::string_view::npos)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool WowtypeEngine::semicolonIsKey(WowtypeState *state) const {

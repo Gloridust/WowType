@@ -515,6 +515,21 @@ pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
     0
 }
 
+/// 设置打开的模糊音分组（位掩码：1 z/zh，2 c/ch，4 s/sh，8 n/l，16 f/h，32 r/l，
+/// 64 an/ang，128 en/eng，256 in/ing）。总开关仍是 wowtype_engine_set_fuzzy。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_fuzzy_groups(
+    engine: *mut WowtypeEngineHandle,
+    groups: u32,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_fuzzy_groups(groups);
+    0
+}
+
 /// 开关双拼（方案用 wowtype_engine_set_shuangpin_scheme 选）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_shuangpin(
@@ -690,6 +705,55 @@ pub unsafe extern "C" fn wowtype_emoji_recommend(
     let mut out = WowtypeCandidates::plain(texts, scores);
     out.commits = commits;
     Box::into_raw(Box::new(out))
+}
+
+/// 日期、时间候选：key 是触发词（riqi / shijian / xingqi / date / time，可带隔音符），
+/// 时间字段由调用方按本地时区给出（weekday 0 = 星期日）。不是触发词时返回空列表。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_datetime_candidates(
+    key: *const c_char,
+    year: c_int,
+    month: c_int,
+    day: c_int,
+    hour: c_int,
+    minute: c_int,
+    second: c_int,
+    weekday: c_int,
+) -> *mut WowtypeCandidates {
+    let Some(key) = (unsafe { cstr_to_str(key) }) else {
+        set_last_error("key is null or not utf8");
+        return ptr::null_mut();
+    };
+    let now = crate::datetime::LocalTime {
+        year,
+        month: month.max(0) as u32,
+        day: day.max(0) as u32,
+        hour: hour.max(0) as u32,
+        minute: minute.max(0) as u32,
+        second: second.max(0) as u32,
+        weekday: weekday.max(0) as u32,
+    };
+    plain_candidates(crate::datetime::candidates(key, &now))
+}
+
+/// V 模式计算器：expr 是 v 后面的算式。算得出来时给「结果」「算式=结果」，
+/// 没写完时只给算式本身。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_calc_candidates(expr: *const c_char) -> *mut WowtypeCandidates {
+    let Some(expr) = (unsafe { cstr_to_str(expr) }) else {
+        set_last_error("expr is null or not utf8");
+        return ptr::null_mut();
+    };
+    plain_candidates(crate::calc::candidates(expr))
+}
+
+fn plain_candidates(list: Vec<String>) -> *mut WowtypeCandidates {
+    let texts: Vec<CString> = list
+        .into_iter()
+        .filter_map(|t| CString::new(t).ok())
+        .collect();
+    let scores = vec![0.0; texts.len()];
+    Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
 }
 
 /// 表情面板的搜索：query 为空给全部 emoji；否则按拼音（经引擎转成中文词）、英文和

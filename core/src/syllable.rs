@@ -116,6 +116,114 @@ pub fn fuzzy_id(id: SyllableId) -> Option<SyllableId> {
     Some(Syllable::from_text(&canon).map(|s| s.id).unwrap_or(id))
 }
 
+/// 模糊音分组（位掩码），可以分别打开。
+pub mod fuzzy {
+    /// z = zh
+    pub const ZH: u32 = 1 << 0;
+    /// c = ch
+    pub const CH: u32 = 1 << 1;
+    /// s = sh
+    pub const SH: u32 = 1 << 2;
+    /// n = l
+    pub const NL: u32 = 1 << 3;
+    /// f = h
+    pub const FH: u32 = 1 << 4;
+    /// r = l
+    pub const RL: u32 = 1 << 5;
+    /// an = ang（含 ian = iang、uan = uang）
+    pub const AN: u32 = 1 << 6;
+    /// en = eng
+    pub const EN: u32 = 1 << 7;
+    /// in = ing
+    pub const IN: u32 = 1 << 8;
+    /// 全部分组。
+    pub const ALL: u32 = (1 << 9) - 1;
+    /// 默认打开的分组：平翘舌和前后鼻音（和只有一个总开关时一样）。
+    pub const DEFAULT: u32 = ZH | CH | SH | AN | EN | IN;
+}
+
+fn fuzzy_initial(initial: &str) -> &str {
+    match initial {
+        "zh" => "z",
+        "ch" => "c",
+        "sh" => "s",
+        "n" | "r" => "l",
+        "f" => "h",
+        other => other,
+    }
+}
+
+fn fuzzy_final(final_: &str) -> &str {
+    match final_ {
+        "iang" => "ian",
+        "uang" => "uan",
+        "ang" => "an",
+        "eng" => "en",
+        "ing" => "in",
+        other => other,
+    }
+}
+
+/// 音节在「全部模糊音分组都打开」时的归并键：声母、韵母各自归并后编码。
+///
+/// 模糊音索引按这个键建一次；具体打开了哪些分组，查到以后再用 [`fuzzy_groups_between`] 过滤，
+/// 这样改开关不用重建 55 万词的索引。
+pub fn fuzzy_key(id: SyllableId) -> Option<u32> {
+    static TABLE: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        SYLLABLES
+            .iter()
+            .enumerate()
+            .map(|(i, text)| match split(text) {
+                Some((initial, final_)) => {
+                    let ic = INITIALS
+                        .iter()
+                        .position(|x| *x == fuzzy_initial(initial))
+                        .map_or(0, |p| p as u32 + 1);
+                    let fc = bsearch(FINALS, fuzzy_final(final_)).map_or(0, |p| p as u32 + 1);
+                    (ic << 8) | fc
+                }
+                // 拆不开的音节只和自己相同
+                None => 0x1_0000 | i as u32,
+            })
+            .collect()
+    });
+    table.get(id as usize).copied()
+}
+
+/// a、b 两个音节要打开哪些模糊音分组才算相同；本来就相同返回 Some(0)，
+/// 怎么都不算相同（比如 n 和 r）返回 None。
+pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
+    if a == b {
+        return Some(0);
+    }
+    let (ai, af) = split(SYLLABLES.get(a as usize)?)?;
+    let (bi, bf) = split(SYLLABLES.get(b as usize)?)?;
+    let mut need = 0;
+    if ai != bi {
+        let pair = if ai < bi { (ai, bi) } else { (bi, ai) };
+        need |= match pair {
+            ("z", "zh") => fuzzy::ZH,
+            ("c", "ch") => fuzzy::CH,
+            ("s", "sh") => fuzzy::SH,
+            ("l", "n") => fuzzy::NL,
+            ("f", "h") => fuzzy::FH,
+            ("l", "r") => fuzzy::RL,
+            _ => return None,
+        };
+    }
+    if af != bf {
+        let pair = if af < bf { (af, bf) } else { (bf, af) };
+        need |= match pair {
+            ("an", "ang") | ("ian", "iang") | ("uan", "uang") => fuzzy::AN,
+            ("en", "eng") => fuzzy::EN,
+            ("in", "ing") => fuzzy::IN,
+            _ => return None,
+        };
+    }
+    Some(need)
+}
+
 pub fn is_valid(text: &str) -> bool {
     bsearch(SYLLABLES, text).is_some()
 }
