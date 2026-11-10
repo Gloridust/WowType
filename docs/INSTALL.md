@@ -10,7 +10,7 @@ WowType 是 Fcitx 5 的输入法插件。安装时需要让插件、Fcitx 5 和�
 
 | 系统 | 方式 | 说明 |
 |---|---|---|
-| Arch Linux | 一键安装或本机 `makepkg` | 先完整升级，预编译包为 x86_64 |
+| Arch Linux | 一键安装或本机 `makepkg` | 预编译包为 x86_64；依赖不满足时先 `sudo pacman -Syu` |
 | EndeavourOS / Garuda / CachyOS | Arch 安装路径或本机打包 | 系统必须与所用 Arch 动态库兼容；加载失败时本机重编译 |
 | Manjaro | 本机 `makepkg` | 使用自己的软件源，脚本不会自动套用 Arch 包 |
 | Ubuntu 24.04 / 26.04 | 对应版本 deb | 不跨 Ubuntu 版本混装 |
@@ -36,7 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 
 下载目标来自当前仓库，按系统选择 `.deb`、`.pkg.tar.zst` 或 `.rpm`，每个文件都校验 SHA256。
 缺少匹配包、校验记录重复、哈希不符或下载失败时，脚本在安装前停止。
-Arch 会先执行完整 `pacman -Syu`，请先保存工作并查看升级提示。
+Arch 不会替你升级整个系统；提示依赖不满足时，先运行 `sudo pacman -Syu` 再重新安装。
 
 查看安装目标、固定版本或保留当前桌面设置：
 

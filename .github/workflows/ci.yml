@@ -351,7 +351,7 @@ jobs:
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [installer, core, data, addon, arch, fedora, opensuse, nix]
+    needs: [installer, core, data, addon, arch, fedora]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

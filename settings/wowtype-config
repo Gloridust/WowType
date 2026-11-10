@@ -1153,7 +1153,7 @@ def package_version(manager, package=ENGINE_PKG):
 
 
 def install_commands(manager, paths):
-    """使用参数列表调用包管理器；Arch 必须先完整升级，避免部分升级。"""
+    """使用参数列表调用包管理器。Arch 只 -U，不替用户 -Syu（依赖不满足时 pacman 会报错）。"""
     if not paths or any(not os.path.isabs(path) for path in paths):
         raise ValueError("安装包必须是已校验的本地绝对路径")
     if manager == "apt-get":
@@ -1161,8 +1161,7 @@ def install_commands(manager, paths):
     if manager == "dnf":
         return [["pkexec", "dnf", "install", "-y", *paths]]
     if manager == "pacman":
-        return [["pkexec", "pacman", "-Syu", "--noconfirm"],
-                ["pkexec", "pacman", "-U", "--noconfirm", *paths]]
+        return [["pkexec", "pacman", "-U", "--noconfirm", *paths]]
     raise ValueError("这个系统请按安装说明手动更新")
 
 
@@ -1270,7 +1269,7 @@ def plan_update(release):
         return [], f"这一版没有 {distro} 的安装包，请按安装说明从源码构建，不混用其他发行版的包"
     if "SHA256SUMS" not in release["assets"]:
         return [], "发布页缺少 SHA256SUMS，暂不安装，请到下载页检查"
-    reason = "先完整升级 Arch 系统（pacman -Syu），再安装 WowType；请先保存正在处理的工作" if manager == "pacman" else ""
+    reason = "要是提示依赖不满足，先在终端运行 sudo pacman -Syu 升级系统" if manager == "pacman" else ""
     return [(name, release["assets"][name])], reason
 
 

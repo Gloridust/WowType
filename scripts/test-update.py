@@ -135,7 +135,6 @@ class UpdateTests(unittest.TestCase):
     def test_install_commands_use_argv_and_full_arch_upgrade(self):
         paths = ["/tmp/wow type; echo not-a-command.pkg.tar.zst"]
         self.assertEqual(updater["install_commands"]("pacman", paths), [
-            ["pkexec", "pacman", "-Syu", "--noconfirm"],
             ["pkexec", "pacman", "-U", "--noconfirm", *paths],
         ])
         for manager in ("apt-get", "dnf"):
@@ -177,8 +176,9 @@ class UpdateTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 updater["download_updates"]({"tag": "v0.3.9", "assets": {}}, [("../escape", "x")], lambda *_: None)
 
-    def test_arch_installer_stops_after_failed_upgrade(self):
-        for codes, expected_calls, updated in [([0, 0], 2, True), ([1], 1, False), ([0, 126], 2, False)]:
+    def test_arch_installer_single_command(self):
+        # Arch 只跑一条 pacman -U：成功就更新了，失败（依赖不满足、取消授权）就停
+        for codes, expected_calls, updated in [([0], 1, True), ([1], 1, False), ([126], 1, False)]:
             with self.subTest(codes=codes):
                 commands = []
                 results = iter(codes)

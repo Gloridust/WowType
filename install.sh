@@ -181,6 +181,15 @@ manifest_hash() {
   printf '%s\n' "$found"
 }
 
+# 要用户确认的命令从终端读输入（curl | bash 时标准输入是脚本本身）；没有终端就照常
+from_tty() {
+  if [[ -z "${WOWTYPE_YES:-}" ]] && { : < /dev/tty; } 2>/dev/null; then
+    "$@" < /dev/tty
+  else
+    "$@"
+  fi
+}
+
 install_packages() {
   local -a paths=("${files[@]/#/$tmp/}") yes=()
   [[ -n "${WOWTYPE_YES:-}" ]] && yes=(--noconfirm)
@@ -192,10 +201,13 @@ install_packages() {
         python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
       ;;
     pacman)
-      say "更新 Arch 系统与输入法依赖（pacman -Syu；避免部分升级）"
-      "${SUDO[@]}" pacman -Syu --needed "${yes[@]}" fcitx5 fcitx5-gtk fcitx5-qt \
-        fcitx5-configtool python-gobject gtk4 libadwaita
-      "${SUDO[@]}" pacman -U "${yes[@]}" "${paths[@]}"
+      # 不替用户 -Syu（整机升级该由用户自己决定）；-S 不带 y 不会造成部分升级。
+      # 依赖装不上多半是软件源太旧：先 sudo pacman -Syu 再重跑。
+      # curl | bash 时标准输入是脚本本身，pacman 的确认要从终端读。
+      from_tty "${SUDO[@]}" pacman -S --needed "${yes[@]}" fcitx5 fcitx5-gtk fcitx5-qt \
+        fcitx5-configtool python-gobject gtk4 libadwaita ||
+        die "依赖装不上：先运行 sudo pacman -Syu 升级系统，再重新安装"
+      from_tty "${SUDO[@]}" pacman -U "${yes[@]}" "${paths[@]}"
       ;;
     dnf)
       "${SUDO[@]}" dnf install -y "${paths[@]}" \

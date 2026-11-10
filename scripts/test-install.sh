@@ -147,11 +147,12 @@ reset 'ID=arch'
 asset wowtype-0.3.8-1-x86_64.pkg.tar.zst
 asset wowtype-data-rime-ice_20260101_all.deb
 run > "$work/output" 2>&1 || fail "pacman install: $(cat "$work/output")"
-assert_log 'pacman -Syu --needed --noconfirm'
+assert_log 'pacman -S --needed --noconfirm'
+if grep -q 'pacman -Syu' "$work/commands"; then fail 'installer ran a full system upgrade'; fi
 assert_log 'python-gobject gtk4 libadwaita'
 assert_log 'pacman -U --noconfirm'
 if grep -q 'wowtype-data-rime-ice' "$work/fetches"; then fail 'Arch fetched a Debian data package'; fi
-pass 'Pacman performs full upgrade, installs GUI dependencies and local package'
+pass 'Pacman installs GUI dependencies and local package without -Syu'
 
 reset $'ID=fedora\nVERSION_ID=43'
 asset wowtype-0.3.8-1.fc43.x86_64.rpm

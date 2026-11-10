@@ -81,96 +81,98 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
 ## 安装
 
-需要 Linux、**Fcitx 5.1 或更新**。设置界面需要 Python 3、PyGObject、GTK 4 和 libadwaita 1.5+。
-预编译包面向 x86_64；源码构建和 Nix flake 按本机架构编译。Ubuntu 22.04 自带的 Fcitx 5.0 不满足要求。
+### 系统要求
 
-| 发行版 | 安装方式 |
-|---|---|
-| Arch Linux、EndeavourOS、Garuda、CachyOS | 一键脚本自动选择 pacman 包；先完整升级系统 |
-| Ubuntu 24.04 / 26.04、Debian 13 | 一键脚本自动选择对应版本的 deb |
-| Linux Mint、Pop!_OS 等 Ubuntu / Debian 衍生版 | 根据系统明确声明的 `noble` / `resolute` / `trixie` 基线选择包 |
-| Fedora 43 / 44 / 45 | 一键脚本选择同一 Fedora 版本的 RPM |
-| Manjaro | 在本机用 `makepkg` 构建，避免与 Arch 的动态库版本错配 |
-| openSUSE Tumbleweed | 安装 zypper 依赖后从源码构建 |
-| NixOS / Home Manager | 把 flake 输出加入 Fcitx 5 的插件列表 |
-| Fedora Atomic（Silverblue / Kinoite 等） | 使用宿主的 `rpm-ostree` 分层安装 |
+- Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
-安装包以 [Releases](https://github.com/Gloridust/WowType/releases) 中实际提供的文件为准。
-没有对应发布包时，按 [源码构建](docs/INSTALL.md#从源码构建) 安装当前代码。各发行版依赖、桌面设置和卸载命令集中在 [安装说明](docs/INSTALL.md)。
+### 一行命令安装（推荐）
 
-### 一键安装
-
-已有对应发布包的系统可以运行：
+Ubuntu 24.04 / 26.04、Debian 13 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 ```
 
-脚本识别当前发行版，下载匹配的包，逐文件验证 `SHA256SUMS`，再调用 `apt-get`、`pacman` 或 `dnf`。
-它会安装设置界面和 GTK / Qt 输入法前端，并帮助把 WowType 加进 Fcitx 5 输入法列表。
-Arch 系统会先执行完整的 `pacman -Syu`，请保存正在进行的工作；Manjaro 请使用下面的本机打包方式。
+它会：
 
-想先检查脚本和安装目标：
+1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
+2. 用 `sudo apt-get install` 装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita
+3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
+4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh -o install.sh
-bash install.sh --print-plan     # 显示发行版、包管理器和包名，不联网或安装
-bash install.sh                  # 安装；再次运行即可升级
-```
+装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
+以后再跑一遍同样的命令就是升级（设置界面里也会提醒有新版本）。
 
-不要在脚本前加 `sudo`；需要提权时它会自行调用。安装指定版本可用 `WOWTYPE_VERSION=v0.3.8 bash install.sh`。
-`WOWTYPE_NO_IM_CONFIG=1` 保留输入法框架设置，`WOWTYPE_NO_RESTART=1` 保留正在运行的 Fcitx 5。
+> 想先看看脚本做了什么：[install.sh](install.sh)。
+> 不想让它改输入法框架或重启 fcitx5，可以加环境变量，例如 `curl -fsSL … | WOWTYPE_NO_IM_CONFIG=1 WOWTYPE_NO_RESTART=1 bash`。
+>
+> GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
+> [Input Method Panel](https://extensions.gnome.org/extension/261/kimpanel/)，
+> 活动概览的搜索框等地方才能显示候选框。
 
-### Arch Linux / Manjaro 本机打包
+### 手动安装
 
-这种方式直接编译当前代码，也适合发布页还没有安装包的情况。用普通用户执行，`makepkg` 不接受 root：
+#### 第 1 步：确认你在用 fcitx5
 
-```bash
-sudo pacman -Syu --needed base-devel rust cmake extra-cmake-modules pkgconf git curl xz \
-  fcitx5 fcitx5-gtk fcitx5-qt fcitx5-configtool alsa-lib \
-  python python-gobject gtk4 libadwaita
-
-git clone https://github.com/Gloridust/WowType.git
-cd WowType
-scripts/make-data.sh "" dist/data
-version=$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml)
-scripts/package-arch.sh "$version" dist/pkg
-sudo pacman -U "dist/pkg/wowtype-$version-1-$(uname -m).pkg.tar.zst"
-```
-
-打包会包含完整词库、设置界面和自检工具。安装后按下方步骤启用。
-本项目提供 pacman 包和本机打包脚本；AUR 中是否有同名条目不影响这两种安装方式。
-
-### Debian / Ubuntu 与 Fedora 手动安装
-
-从 Releases 下载**与系统版本一致的一个包**，然后在下载目录执行对应命令：
+Ubuntu 默认用的是 IBus。先装好 fcitx5 并设为默认输入法框架（已经在用 fcitx5 的跳过这步）：
 
 ```bash
-# Debian / Ubuntu
-sudo apt install ./wowtype_*_amd64.deb fcitx5-frontend-all fcitx5-config-qt im-config \
-  python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
-
-# Fedora：只选择与 /etc/os-release 中 VERSION_ID 一致的 .fc<版本>.rpm
-sudo dnf install ./wowtype-*.rpm fcitx5-configtool \
-  fcitx5-gtk3 fcitx5-gtk4 fcitx5-qt5 fcitx5-qt6 \
-  python3-gobject gtk4 libadwaita gobject-introspection
+sudo apt install fcitx5 fcitx5-config-qt \
+  fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5
+im-config -n fcitx5
 ```
 
-目录中只保留这次要安装的那个包。RPM 的发行版后缀有实际含义，Fedora 包应在对应 Fedora 系统上使用。
+然后**注销并重新登录**。登录后右上角托盘里应该有一个键盘图标。
 
-### NixOS / Nix
+#### 第 2 步：安装 WowType
 
-在系统 flake 中添加输入，再注册到 Fcitx 5：
+##### 方式一：安装包
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
+`wowtype_<版本>_<发行版>_amd64.deb`（`ubuntu24.04`、`ubuntu26.04`、`debian13`），词库已经包含在里面。
+不知道自己是哪个发行版：
+
+```bash
+. /etc/os-release && echo "$ID$VERSION_ID"     # 例如 ubuntu24.04
+```
+
+在下载目录里安装：
+
+```bash
+sudo apt install ./wowtype_*_amd64.deb
+```
+
+`apt` 会顺带装上设置界面要用的 GTK 4 和 libadwaita（`python3-gi`、`gir1.2-gtk-4.0`、`gir1.2-adw-1`）。
+加了 `--no-install-recommends` 的话不会装，打字不受影响，只是打不开设置界面。
+
+> 0.3.3 及以前的版本，词库是单独的 `wowtype-data-rime-ice` 包。装新版时 apt 会自动把它删掉（文件由新包接管），不用管它。
+
+###### Fedora
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.x86_64.rpm`（词库已经在包里），然后：
+
+```bash
+sudo dnf install ./wowtype-*.rpm
+wowtype-config --add-to-group      # 把 WowType 加进 fcitx5 的输入法列表
+```
+
+`dnf` 会顺带装上 fcitx5 和设置界面要用的 PyGObject、GTK 4、libadwaita。
+还没在用 fcitx5 的话，先 `sudo dnf install fcitx5 fcitx5-configtool fcitx5-gtk fcitx5-qt fcitx5-autostart` 并重新登录。
+
+###### NixOS / Nix
+
+仓库根目录有 `flake.nix`。在 NixOS 的 flake 配置里加上输入，再把 WowType 加进 fcitx5 的插件：
 
 ```nix
 # flake.nix
 inputs.wowtype = {
   url = "github:Gloridust/WowType";
-  inputs.nixpkgs.follows = "nixpkgs";
+  inputs.nixpkgs.follows = "nixpkgs";   # 和系统用同一份 fcitx5
 };
 
-# configuration.nix，inputs 通过 specialArgs 传入
-# 插件和系统 Fcitx 5 使用同一份 nixpkgs。
+# configuration.nix（通过 specialArgs 把 inputs 传进来）
 i18n.inputMethod = {
   enable = true;
   type = "fcitx5";
@@ -178,44 +180,37 @@ i18n.inputMethod = {
 };
 ```
 
-执行 `sudo nixos-rebuild switch` 后重新登录。Home Manager 和 overlay 用法见 [安装说明](docs/INSTALL.md#nixos--nix)。
+`nixos-rebuild switch` 后重新登录，运行 `wowtype-config --add-to-group`（或在 Fcitx 5 配置里添加 WowType）。
+也提供了 overlay：`nixpkgs.overlays = [ inputs.wowtype.overlays.default ];` 之后用 `pkgs.wowtype`。
+home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
 
-### 从源码构建
+##### 方式二：从源码构建
 
-[安装说明](docs/INSTALL.md#从源码构建) 提供 Debian / Ubuntu、Arch / Manjaro、Fedora 和 openSUSE 的完整依赖命令。
-通用构建步骤如下；先安装对应发行版的依赖和当前稳定版 Rust：
+其他发行版，或者想用最新代码：依赖、编译、词库生成、排障都在 [docs/INSTALL.md](docs/INSTALL.md)。
 
-```bash
-git clone https://github.com/Gloridust/WowType.git
-cd WowType
-cargo build --release --locked -p wowtype-core
-cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build -j"$(nproc)"
-sudo cmake --install build
-sudo install -m755 target/release/wowtype-check target/release/wowtype-show /usr/bin/
-scripts/make-data.sh "" dist/data
-install -Dm644 -t "${XDG_DATA_HOME:-$HOME/.local/share}/wowtype" \
-  dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm
-```
+#### 第 3 步：把 WowType 加进输入法列表
 
-插件会使用 Fcitx 5 自己声明的安装目录，覆盖 Debian 的 multiarch 路径、Arch 的 `lib` 和 Fedora / openSUSE 的 `lib64`。
-只用文字输入、关闭语音，或不安装设置界面的构建方法见完整说明。
+1. 重启 fcitx5：`fcitx5 -r -d`（或者注销再登录）
+2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
+3. 在右边「可用输入法」里**取消勾选「仅显示当前语言」**，搜索 `WowType`，点 ← 加到左边
+4. 关掉配置窗口，按 `Ctrl+Space` 切换到 WowType，打 `nihao` 试试
 
-### 启用并检查
+也可以从应用菜单打开 **WowType 设置**：「常规」页第一行会显示 WowType 有没有在输入法列表里，没有的话点「添加」就行。
 
-按桌面环境完成 [Fcitx 5 设置](docs/INSTALL.md#启用-fcitx-5)，再运行：
+<!-- 截图（补上后删掉这行注释）：<img src="docs/images/configtool.png" width="560" alt="在 Fcitx 5 配置里添加 WowType"> -->
+
+> **重要：重启 fcitx5 以后，Chrome、VS Code、Slack、微信等 Chromium / Electron 程序要彻底退出再打开**，
+> 否则在它们里面打不了中文。终端、GTK、Qt 程序会自动重新连上。
+
+### 检查是否装好
 
 ```bash
-wowtype-config --add-to-group --restart
-wowtype-config --self-test
+wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv    # 源码安装的用 ~/.local/share/wowtype/lexicon.tsv
+wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
+# nihao: 1.你好词 2.拟好词 ...
 ```
 
-也可以在 `fcitx5-configtool` 中取消勾选“仅显示当前语言”，搜索并添加 **WowType**。
-然后按 `Ctrl+Space` 切换输入法，输入 `nihao`。
-Debian / Ubuntu 可用 `im-config -n fcitx5` 选择框架；Arch 不需要 `im-config`。
-KDE Plasma Wayland 在“系统设置 → 虚拟键盘”选择 Fcitx 5，其他会话见完整说明。
-
-如果切换了输入法框架，请注销并重新登录。重启 Fcitx 5 后，正在运行的 Chromium / Electron 程序可能需要退出后重新打开。
+`wowtype-show` 和插件用的是同一个引擎、同样的配置，打出来的候选应该和输入法里一样。
 
 ## 使用
 
@@ -370,13 +365,11 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 
 ### 更新
 
-通过 deb、pacman 或 Fedora RPM 安装的版本，可以在“WowType 设置 → 更新”中下载并安装新版本。
-更新器按本机发行版选择包，验证 SHA256，再通过对应包管理器安装；Arch 更新会先完整升级系统。
-没有匹配资产或采用源码、NixOS、Manjaro、不可变系统安装时，界面会给出对应的手动更新说明。
-
-Fcitx 5 启动后第一次切到 WowType 时会在后台检查更新，有新版本时发通知。
-可在更新页关闭自动检查，也可重新运行[一键安装命令](#一键安装)。
-从源码安装的版本用 `git pull --ff-only` 获取更新，再重复原来的构建安装步骤；Manjaro 重新运行本机打包脚本。
+用 deb 包装的会自动检查更新：fcitx5 启动后第一次切到 WowType 时在后台查一下（一天最多一次），
+有新版本就弹一条通知，点开进「WowType 设置」的「更新」页，能看更新内容，点「下载并安装」，
+按系统提示授权就装好了（下载后会对照 `SHA256SUMS` 校验），最后点「重启输入法」生效。
+也可以重新运行[一行安装命令](#一行命令安装推荐)。
+不想自动检查，在「更新」页关掉「自动检查更新」（就是配置文件里的 `CheckUpdate=False`）。从源码装的只会提示新版本，要自己更新。
 
 ## 常见问题
 
@@ -388,9 +381,9 @@ Fcitx 5 启动后第一次切到 WowType 时会在后台检查更新，有新版
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
 | 按右 Alt 提示「开不了麦克风」 | 在系统设置的「声音」里确认有输入设备；`arecord -l` 应该能列出麦克风 |
 | 按 Super + . 打不开表情面板 | 只在 WowType 是当前输入法时有效；桌面或别的程序占了这个键的话，到设置里换成 Ctrl + ; |
-| emoji 显示成方块 | 安装彩色 emoji 字体：Debian / Ubuntu 用 `fonts-noto-color-emoji`，Arch 用 `noto-fonts-emoji`，Fedora 用 `google-noto-color-emoji-fonts` |
+| emoji 显示成方块 | 缺彩色 emoji 字体：`sudo apt install fonts-noto-color-emoji` |
 | 按右 Alt 没反应 | 只在 WowType 是当前输入法、没在打拼音时有效；有的键盘右边是 AltGr，到设置的「语音」页换个键 |
-| 应用菜单里没有「WowType 设置」，或者打不开 | 按[安装说明](docs/INSTALL.md#从源码构建)补齐本发行版的 PyGObject / GTK 4 / libadwaita。运行 `wowtype-config --self-test` 查看具体缺项 |
+| 应用菜单里没有「WowType 设置」，或者打不开 | 缺 GTK 4 / libadwaita：`sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1`。在终端里运行 `wowtype-config` 能看到报错 |
 | 设置里改了，打字时没变化 | 看看是不是设了 `WOWTYPE_*` 环境变量（`env \| grep WOWTYPE`），它们优先于设置；fcitx5 没在运行时，设置会在它下次启动时生效 |
 | 想看日志 | `~/.local/state/wowtype/wowtype.log`，或者[导出日志](#出问题时导出日志) |
 | 怎么确认 fcitx5 在工作 | 运行 `fcitx5-diagnose`，它会列出缺的环境变量和前端 |
@@ -448,6 +441,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 - 输入示例：[docs/USAGE.md](docs/USAGE.md)
 - 设置项、环境变量、数据文件：[docs/CONFIG.md](docs/CONFIG.md)
+- 从源码构建：[docs/INSTALL.md](docs/INSTALL.md)
 - 卸载：[docs/INSTALL.md](docs/INSTALL.md#卸载)
 - 目前做不到的：[docs/LIMITATIONS.md](docs/LIMITATIONS.md)
 

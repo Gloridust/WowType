@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 用 makepkg 从当前源码打 Arch Linux 安装包（不要以 root 运行）。
 #   scripts/package-arch.sh <版本> [输出目录]
-# 需要 base-devel rust cmake extra-cmake-modules pkgconf fcitx5 alsa-lib；
+# 需要 base-devel rust cmake extra-cmake-modules fcitx5 alsa-lib；
 # 词库用 scripts/make-data.sh 的产物，默认 dist/data。
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -14,12 +14,6 @@ VERSION=${1:?用法: package-arch.sh <版本> [输出目录]}
 }
 (( EUID != 0 )) || { echo "makepkg 不能以 root 运行，请用普通用户运行此脚本" >&2; exit 1; }
 command -v makepkg >/dev/null || { echo "需要 Arch Linux 的 makepkg（pacman/base-devel）" >&2; exit 1; }
-FCITX_VERSION=$(pkg-config --modversion Fcitx5Core) || {
-  echo "找不到 Fcitx5Core.pc，请安装 fcitx5 和 pkgconf" >&2; exit 1;
-}
-[[ "$FCITX_VERSION" =~ ^[0-9]+(\.[0-9]+){1,3}$ ]] || {
-  echo "无效的 Fcitx5Core 版本：$FCITX_VERSION" >&2; exit 1;
-}
 OUT=$(realpath -m "${2:-dist}")
 DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
@@ -44,7 +38,6 @@ rm -rf "$work/source"
 checksum=$(sha256sum "$work/wowtype-src.tar")
 {
   printf 'pkgver=%q\n' "$VERSION"
-  printf '_wowtype_fcitx_version=%q\n' "$FCITX_VERSION"
   printf "sha256sums=('%s')\n" "${checksum%% *}"
   cat <<'PKGBUILD'
 pkgname=wowtype
@@ -53,8 +46,7 @@ pkgdesc='WeChat-style pinyin input method for fcitx5, with bundled dictionaries 
 arch=('x86_64')
 url='https://github.com/Gloridust/WowType'
 license=('MIT' 'Apache-2.0' 'GPL-3.0-only' 'CC-BY-SA-4.0' 'Unicode-3.0')
-# 新版头文件可能引入旧库没有的符号；手动安装时也要求满足构建版本。
-depends=("fcitx5>=$_wowtype_fcitx_version" 'alsa-lib' 'gcc-libs' 'glibc' 'python')
+depends=('fcitx5' 'alsa-lib' 'gcc-libs' 'glibc' 'python')
 makedepends=('rust' 'cmake' 'extra-cmake-modules' 'pkgconf')
 optdepends=('python-gobject: settings app' 'gtk4: settings app' 'libadwaita: settings app'
             'noto-fonts-emoji: color emoji in candidates' 'curl: translate mode')
