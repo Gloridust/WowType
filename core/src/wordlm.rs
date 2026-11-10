@@ -356,7 +356,10 @@ mod tests {
         assert!(lm.score(None, "我们") > 0.0);
         assert_eq!(lm.score(Some("不认识"), "见"), 0.0);
         // 不认识的词和「认识但没搭配过」的词同分，不会比常用词高
-        assert_eq!(lm.score(Some("明天"), "不认识"), lm.score(Some("明天"), "面"));
+        assert_eq!(
+            lm.score(Some("明天"), "不认识"),
+            lm.score(Some("明天"), "面")
+        );
         assert_eq!(lm.top_next("明天", 1)[0].0, "见");
     }
 }

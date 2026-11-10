@@ -78,6 +78,10 @@ WowtypeCandidates *wowtype_symbol_search(const char *query, size_t limit);
  * 上屏用 wowtype_candidates_commit（整个词对上时只有 emoji，句尾对上时是整句 + emoji）。 */
 WowtypeCandidates *wowtype_emoji_recommend(const char *text, size_t limit);
 
+/* 候选正好是数字字（零到十）时对应的按键 emoji（「八」-> 8️⃣），别的返回 NULL。
+ * 返回静态字符串，不用释放。 */
+const char *wowtype_emoji_keycap(const char *text);
+
 /* 日期、时间候选：key 是 riqi / shijian / xingqi / date / time（可带隔音符）；时间按本地时区，
  * weekday 0 = 星期日。不是触发词时返回空列表。 */
 WowtypeCandidates *wowtype_datetime_candidates(const char *key, int year, int month, int day,
