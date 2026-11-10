@@ -1,0 +1,250 @@
+// macOS 外壳的按键测试：用一个假的输入框（FakeClient）把按键喂给 Composer，看上屏、编辑区、候选框。
+// 不依赖 AppKit，Linux 和 macOS 都能跑（macos/test.sh）。
+//
+//   harness <lexicon.tsv> [english.txt]
+//
+// 没给词库时自己写一份小词库（shi 有 3 页候选，测翻页）。
+
+#if canImport(Glibc)
+import Glibc
+#else
+import Darwin
+#endif
+
+final class FakeClient: TextClient {
+    var committed = ""
+    var marked = ""
+    var markedCursor = 0
+    var page: CandidatePage?
+
+    func insertText(_ text: String) {
+        committed += text
+        marked = ""
+    }
+
+    func setMarkedText(_ text: String, cursor: Int) {
+        marked = text
+        markedCursor = cursor
+    }
+
+    func showCandidates(_ page: CandidatePage?) {
+        self.page = page
+    }
+
+    var previousCharacter: UInt32 {
+        committed.unicodeScalars.last?.value ?? 0
+    }
+}
+
+var failures = 0
+func check(_ ok: Bool, _ name: String, _ detail: @autoclosure () -> String = "") {
+    if ok {
+        print("ok   \(name)")
+    } else {
+        failures += 1
+        print("FAIL \(name) \(detail())")
+    }
+}
+
+func type(_ composer: Composer, _ text: String) {
+    for c in text {
+        _ = composer.handle(.char(c))
+    }
+}
+
+/// 测试用的小词库：你好、ni/hao 的单字，加上 shi 的 24 个字（9 个一页，3 页）。
+func writeTestLexicon() -> String {
+    var lines = ["nihao\t你好\t50000", "ni\t你\t40000", "ni\t尼\t3000", "hao\t好\t40000", "hao\t号\t5000",
+                 "shishi\t事实\t8000"]
+    let shi = Array("是十时事市使实式试世师史石示视适识施室势诗释湿")
+    for (i, ch) in shi.enumerated() {
+        lines.append("shi\t\(ch)\t\(60000 - i * 1000)")
+    }
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).tsv"
+    guard let f = fopen(path, "w") else {
+        print("FAIL 写测试词库 \(path)")
+        exit(1)
+    }
+    fputs(lines.joined(separator: "\n") + "\n", f)
+    fclose(f)
+    return path
+}
+
+let args = CommandLine.arguments
+let ownLexicon = args.count <= 1
+let lexicon = ownLexicon ? writeTestLexicon() : args[1]
+guard let engine = Engine(lexicon: lexicon) else {
+    print("FAIL 载入词库 \(lexicon)")
+    exit(1)
+}
+if args.count > 2 {
+    engine.loadEnglish(args[2])
+}
+if ownLexicon {
+    // 已经读进内存了；词库旁边的快照也一起删
+    unlink(lexicon)
+    unlink(lexicon + ".wcache")
+}
+check(Engine.abiVersion > 0, "ABI 版本 \(Engine.abiVersion)")
+
+func fresh() -> (Composer, FakeClient) {
+    let client = FakeClient()
+    return (Composer(engine: engine, client: client), client)
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "nihao")
+    check(c.isComposing, "打 nihao 进编辑区")
+    check(client.marked == "ni'hao", "编辑区分音节", client.marked)
+    check(client.markedCursor == client.marked.utf16.count, "光标在编辑区末尾", "\(client.markedCursor)")
+    check(client.page?.texts.first == "你好", "第一个候选是你好", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char(" "))
+    check(client.committed == "你好", "空格上屏第一个", client.committed)
+    check(!c.isComposing && client.marked.isEmpty && client.page == nil, "上屏后清空编辑区和候选框")
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "shi")
+    let texts = client.page?.texts ?? []
+    check(texts.count > 1, "shi 有多个候选", "\(texts)")
+    _ = c.handle(.char("2"))
+    check(texts.count > 1 && client.committed == texts[1], "数字 2 选第二个", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "shi")
+    let all = c.allCandidates()
+    let pages = (all.count + c.pageSize - 1) / c.pageSize
+    check(client.page?.pageCount == pages, "页数", "\(client.page?.pageCount ?? 0) vs \(pages)")
+    check(pages > 1, "shi 不止一页", "\(all.count)")
+    if pages > 1 {
+        _ = c.handle(.key(Keysym.down))
+        check(client.page?.pageIndex == 1, "下键翻到第二页")
+        check(client.page?.texts.first == all[c.pageSize], "第二页从第 10 个开始",
+              "\(client.page?.texts.first ?? "") vs \(all[c.pageSize])")
+        _ = c.handle(.char("1"))
+        check(client.committed == all[c.pageSize], "第二页按 1 选第二页的第一个", client.committed)
+    }
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "shi")
+    let all = c.allCandidates()
+    // 一直按右键：光标越过一页时候选框跟着翻页（fcitx5 那边出过「光标到了下一页、框还停在第一页」）
+    for _ in 0..<(c.pageSize + 2) {
+        _ = c.handle(.key(Keysym.right))
+    }
+    if all.count > c.pageSize + 2 {
+        check(client.page?.pageIndex == 1 && client.page?.cursor == 2, "右键越过一页自动翻页",
+              "\(client.page?.pageIndex ?? -1)/\(client.page?.cursor ?? -1)")
+        _ = c.handle(.char(" "))
+        check(client.committed == all[c.pageSize + 2], "空格选光标所在的", client.committed)
+    }
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "nih")
+    _ = c.handle(.key(Keysym.backspace))
+    check(c.input == "ni", "退格删一个字母", c.input)
+    _ = c.handle(.key(Keysym.escape))
+    check(!c.isComposing && client.committed.isEmpty, "Esc 清空不上屏")
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "nihao")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "nihao", "回车上屏原始字母", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "nihao")
+    _ = c.handle(.char(","))
+    check(client.committed == "你好，", "打字途中按逗号：先上屏候选再上屏中文逗号", client.committed)
+    _ = c.handle(.char("."))
+    check(client.committed == "你好，。", "没在打字时句号是中文句号", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
+    // 不在打字时数字、大写字母交给应用
+    check(!c.handle(.char("1")), "数字交给应用")
+    check(!c.handle(.char("A", .shift)), "大写字母交给应用")
+    check(!c.handle(.char("c", .command)), "Command+C 交给应用")
+    check(client.committed.isEmpty, "没有上屏")
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "ni")
+    // 单按 Shift：打到一半切英文，字母原样上屏
+    check(c.shiftChanged(down: true, otherModifiers: false, now: 1.0) == false, "按下 Shift 不切")
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 1.2), "0.2 秒内松开算单按")
+    check(c.mode == .english && client.committed == "ni", "切英文并上屏 ni", client.committed)
+    check(!c.handle(.char("a")), "英文模式字母交给应用")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 2.0)
+    _ = c.handle(.char("A", .shift))
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 2.1), "Shift+A 不算单按")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 3.0)
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 3.8), "按太久不算单按")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 4.0)
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 4.1) && c.mode == .chinese, "再单按切回中文")
+}
+
+do {
+    let (c, client) = fresh()
+    type(c, "nihao")
+    c.commitComposition()
+    check(client.committed == "nihao" && !c.isComposing, "切走输入法时原样上屏", client.committed)
+}
+
+do {
+    // NSEvent 的字段 → KeyInput
+    let a = translateKeyDown(keyCode: 0, characters: "a", charactersIgnoringModifiers: "a", cocoaFlags: 0)
+    check(a == .char("a"), "a")
+    let bang = translateKeyDown(keyCode: 18, characters: "!", charactersIgnoringModifiers: "1", cocoaFlags: 1 << 17)
+    check(bang == .char("!", .shift), "Shift+1 是 !")
+    let cmdC = translateKeyDown(keyCode: 8, characters: "c", charactersIgnoringModifiers: "c", cocoaFlags: 1 << 20)
+    check(cmdC == .char("c", .command), "Command+C")
+    let optE = translateKeyDown(keyCode: 14, characters: "´", charactersIgnoringModifiers: "e", cocoaFlags: 1 << 19)
+    check(optE == .char("e", .option), "Option+E 不用组合出来的字符")
+    let del = translateKeyDown(keyCode: VirtualKey.backspace, characters: "\u{7f}", charactersIgnoringModifiers: "\u{7f}", cocoaFlags: 0)
+    check(del == .key(Keysym.backspace), "退格")
+    let arrow = translateKeyDown(keyCode: VirtualKey.down, characters: "\u{f701}", charactersIgnoringModifiers: "\u{f701}", cocoaFlags: 1 << 23)
+    check(arrow == .key(Keysym.down), "方向键（带 numericPad / function 标志）")
+    check(utf16Offset("你好a", byteOffset: 6) == 2, "UTF-8 偏移转 UTF-16")
+}
+
+do {
+    // 词库还没载入（外壳在后台读词库）：字母交给应用，载入以后照常打字
+    let client = FakeClient()
+    let c = Composer(engine: nil, client: client)
+    check(!c.handle(.char("n")) && !c.isComposing, "没有词库时字母交给应用")
+    check(!c.handle(.char(",")), "没有词库时标点也交给应用")
+    c.setEngine(engine)
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    check(client.committed == "你好", "载入词库后照常打字", client.committed)
+}
+
+do {
+    let (c, _) = fresh()
+    var commits: [String] = []
+    c.onCommit = { commits.append($0) }
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char(","))
+    check(commits == ["你好", "，"], "上屏回调", "\(commits)")
+}
+
+if failures > 0 {
+    print("macOS HARNESS FAILED (\(failures))")
+    exit(1)
+}
+print("macOS harness ok")
