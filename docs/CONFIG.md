@@ -233,7 +233,7 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 
 ### 可选词库：万象拼音
 
-默认词库是[雾凇拼音](https://github.com/iDvel/rime-ice)（约 55 万词，随安装包一起装好）。
+默认词库是[雾凇拼音](https://github.com/iDvel/rime-ice)（约 89 万词，随安装包一起装好）。
 另外可以换成从[万象拼音](https://github.com/amzxyz/rime_wanxiang)转换的词库（约 168 万词，CC BY 4.0），词更多。
 它不在安装包里，每次发版作为单独的 `wowtype-data-wanxiang-<版本>.tar.gz` 放在 Release 上。
 
