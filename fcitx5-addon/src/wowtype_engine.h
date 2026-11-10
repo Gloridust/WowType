@@ -33,6 +33,9 @@ class KeyEvent;
 
 class WowtypeState;
 
+/// v + 空格打开的工具栏里现在是哪一页（符号、表情直接用表情面板）。
+enum class WowtypeTool { None, Menu, Clipboard, Phrases };
+
 enum class WowtypeLayout { Horizontal, Vertical };
 FCITX_CONFIG_ENUM_NAME(WowtypeLayout, "Horizontal", "Vertical");
 
@@ -166,11 +169,21 @@ FCITX_CONFIGURATION(
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
                                    true};
+    fcitx::Option<bool> toolbar{this, "Toolbar",
+                                "v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）",
+                                true};
+    // 默认关：fcitx5 的 clipboard 插件不告诉我们哪条是密码管理器复制的密码
+    fcitx::Option<bool> clipboardHistory{this, "ClipboardHistory",
+                                         "记录剪贴板历史（只在内存里，最多 20 条）", false};
+    fcitx::Option<bool> autoSpace{this, "AutoSpace", "汉字和英文、数字之间自动加空格", false};
+    fcitx::Option<bool> autoSpaceLetters{this, "AutoSpaceLetters", "汉字和英文字母之间", true};
+    fcitx::Option<bool> autoSpaceDigits{this, "AutoSpaceDigits", "汉字和数字之间", true};
     fcitx::Option<bool> voice{this, "Voice", "语音输入", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> voiceKey{
         this, "VoiceKey", "语音输入键（按住说话，或点一下开始）", fcitx::Key(FcitxKey_Alt_R),
         fcitx::KeyConstrain({fcitx::KeyConstrainFlag::AllowModifierOnly,
                              fcitx::KeyConstrainFlag::AllowModifierLess})};
+    fcitx::Option<bool> voiceCopy{this, "VoiceCopy", "语音识别的结果同时复制到剪贴板", false};
     fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
@@ -265,6 +278,10 @@ private:
     std::string translateKeyFile() const;
     /// 上屏一段文字：互译模式下攒进原文，否则直接交给应用。所有上屏都走这里。
     void emit(fcitx::InputContext *ic, const std::string &text);
+    /// 上屏 next 之前要不要先补一个空格（光标前是汉字、next 是字母数字，或反过来）。
+    bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
+    /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
+    bool autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key);
     /// 原文变了：过一会儿（句末标点立刻）发请求。
     void translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state, bool now);
     /// 互译模式下、没有正在打的拼音时的按键，处理了返回 true。
@@ -294,6 +311,18 @@ private:
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
+    /// 打开表情面板，但空搜索词时列全部符号（工具栏的「符号」）。
+    void openSymbolPanel(fcitx::InputContext *ic, WowtypeState *state);
+    void openTool(fcitx::InputContext *ic, WowtypeState *state, WowtypeTool tool);
+    bool handleToolKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
+    void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
+    /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
+    void sampleClipboard(fcitx::InputContext *ic);
+
+public:
+    void selectTool(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
+
+private:
     void closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
     void refreshEmojiPanel(WowtypeState *state);
     /// 面板开着时的按键，处理了返回 true。
@@ -361,6 +390,10 @@ private:
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool dateTime_ = true;
     bool calculator_ = true;
+    bool toolbar_ = true;
+    bool clipboardHistory_ = false;
+    /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
+    int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
@@ -389,6 +422,8 @@ private:
     bool recentEmojiLoaded_ = false;
 
     WowtypeVoice *voice_ = nullptr;
+    /// 语音结果同时复制到剪贴板（默认关）。
+    bool voiceCopy_ = false;
     /// 语音热键，默认右 Alt；FcitxKey_None 表示关掉语音。
     fcitx::Key voiceKey_;
     /// 热键按下还没松开（松开那一下也要吃掉，免得应用把单按 Alt 当成打开菜单）。

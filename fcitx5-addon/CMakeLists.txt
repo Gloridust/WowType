@@ -37,6 +37,7 @@ endif()
 
 add_library(wowtype MODULE
     src/wowtype_engine.cpp
+    src/clipboard_copy.cpp
 )
 # fcitx5 5.1.11 起才有 showCustomInputMethodInformation（切中英文时的小提示）
 if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL 5.1.11)
@@ -152,6 +153,7 @@ endif()
 # 按键行为测试（scripts/addon-test.sh 会打开它）：私有、无界面的 fcitx5 实例里加载插件按键
 option(WOWTYPE_BUILD_TESTS "Build the key-handling harness" OFF)
 if(WOWTYPE_BUILD_TESTS)
-    add_executable(wowtype-key-harness test/key_harness.cpp)
+    add_executable(wowtype-key-harness test/key_harness.cpp src/clipboard_copy.cpp)
+    target_include_directories(wowtype-key-harness PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(wowtype-key-harness PRIVATE Fcitx5::Core Fcitx5::Utils)
 endif()

@@ -10,10 +10,17 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include <fcitx/addoninstance.h>
+#include <fcitx/addonfactory.h>
+#include <fcitx/addonloader.h>
+#include <unistd.h>
+#include <iterator>
+
+#include "clipboard_copy.h"
 #include <fcitx/addonmanager.h>
 #include <fcitx/candidatelist.h>
 #include <fcitx/inputmethodentry.h>
@@ -30,10 +37,34 @@
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
+#include <fcitx-utils/utf8.h>
+
+// 假的 fcitx5 clipboard 插件（scripts/addon-test.sh 写了它的 addon 配置）：插件从它拿最新一条剪贴板
+FCITX_ADDON_DECLARE_FUNCTION(Clipboard, clipboard, std::string(const fcitx::InputContext *ic));
 
 using namespace fcitx;
 
 namespace {
+
+class Clipboard final : public AddonInstance {
+public:
+    std::string clipboard(const InputContext * /*ic*/) { return text; }
+    std::string text;
+
+private:
+    FCITX_ADDON_EXPORT_FUNCTION(Clipboard, clipboard);
+};
+
+Clipboard *fakeClipboard = nullptr;
+
+class FakeClipboardFactory final : public AddonFactory {
+public:
+    AddonInstance *create(AddonManager * /*manager*/) override {
+        fakeClipboard = new Clipboard;
+        return fakeClipboard;
+    }
+};
+
 
 class HarnessInputContext : public InputContext {
 public:
@@ -133,10 +164,25 @@ std::string join(const std::vector<std::string> &items) {
 }
 
 /// 每个用例前清空上屏记录和编辑区。
+void setClipboard(const std::string &text) {
+    check(fakeClipboard != nullptr, "假的 clipboard 插件载入了");
+    if (fakeClipboard) {
+        fakeClipboard->text = text;
+    }
+}
+
 void fresh(HarnessInputContext *ic) {
     type(ic, "<esc>");
     ic->committed.clear();
     ic->passed.clear();
+}
+
+/// 单按一个修饰键（按下 + 松开），比如单按 Shift 切中英文。
+void tapKey(HarnessInputContext *ic, KeySym sym) {
+    KeyEvent press(ic, Key(sym), false);
+    ic->keyEvent(press);
+    KeyEvent release(ic, Key(sym, KeyState::Shift), true);
+    ic->keyEvent(release);
 }
 
 void runCases(Instance &instance) {
@@ -536,7 +582,8 @@ void runCases(Instance &instance) {
     check(addon && addon->getConfig(), "插件有配置项");
     {
         std::ofstream(configDir + "/wowtype.conf")
-            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\nEmojiSuggest=False\n";
+            << "CandidateLayout=Vertical\nPageSize=5\nVoice=False\nEmojiSuggest=False\n"
+               "ClipboardHistory=True\n";
         std::ofstream(customFile) << "# 测试\nni hao\t妮好\nwo de you xiang\t我的邮箱\n";
     }
     addon->reloadConfig();
@@ -559,6 +606,81 @@ void runCases(Instance &instance) {
     type(ic.get(), "kaixin");
     check(join(page(ic.get())).find("😊") == std::string::npos, "关掉 emoji 推荐后没有 😊：" + join(page(ic.get())));
 
+    // V 模式工具栏：v + 空格打开，菜单里选剪贴板、常用语、符号、表情
+    fresh(ic.get());
+    type(ic.get(), "v<sp>");
+    check(page(ic.get()).size() == 4 && page(ic.get())[0] == "剪贴板" && ic->committed.empty(),
+          "v + 空格打开工具栏：" + join(page(ic.get())));
+    type(ic.get(), "a");
+    check(ic->passed.empty() && page(ic.get()).size() == 4, "工具栏里别的键吃掉、不收起");
+    type(ic.get(), "2");
+    check(page(ic.get()).size() == 2 && page(ic.get())[0] == "ni hao　妮好" &&
+              page(ic.get())[1] == "wo de you xiang　我的邮箱",
+          "常用语按文件顺序：" + join(page(ic.get())));
+    type(ic.get(), "2");
+    check(ic->committed == "我的邮箱" && page(ic.get()).empty(), "数字键选常用语：" + ic->committed);
+    if (std::getenv("WOWTYPE_HARNESS_REAL_CLIPBOARD")) {
+        // 系统装的 clipboard 插件（没有显示器，历史是空的）：只确认调用它不出错
+        fresh(ic.get());
+        type(ic.get(), "v<sp>1");
+        check(ic->inputPanel().auxUp().toString().find("剪贴板") != std::string::npos,
+              "真的 clipboard 插件：打开剪贴板不出错：" + ic->inputPanel().auxUp().toString());
+        type(ic.get(), "<esc>");
+    } else {
+    // 剪贴板：插件从 fcitx5 的 clipboard 插件取最新一条记下来，最新的在前；
+    // 换行显示成 ⏎、上屏时是真的换行
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1");
+    check(ic->inputPanel().auxUp().toString().find("还没有记录") != std::string::npos,
+          "空剪贴板提示：" + ic->inputPanel().auxUp().toString());
+    type(ic.get(), "<cr>");
+    check(ic->inputPanel().auxUp().empty() && ic->committed.empty(), "空列表回车关闭");
+    setClipboard("第一条");
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).size() == 1 && page(ic.get())[0] == "第一条",
+          "打开剪贴板时记下最新一条：" + join(page(ic.get())));
+    fresh(ic.get());
+    setClipboard("line1\nline2");
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).size() == 2 && page(ic.get())[0] == "line1\u23CEline2",
+          "剪贴板历史最新的在前：" + join(page(ic.get())));
+    type(ic.get(), "<down><sp>");
+    check(ic->committed == "第一条", "下键再空格选第二条：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1<cr>");
+    check(ic->committed == "line1\nline2", "回车选第一条，换行原样：" + ic->committed);
+    }
+    // 退格返回菜单，菜单里再退格关闭
+    fresh(ic.get());
+    type(ic.get(), "v<sp>1<bs>");
+    check(page(ic.get()).size() == 4, "退格回到菜单：" + join(page(ic.get())));
+    type(ic.get(), "<bs>");
+    check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(), "菜单里退格关闭");
+    // 组合键（Ctrl+C）收起工具栏，交给应用
+    type(ic.get(), "v<sp>");
+    check(!send(ic.get(), Key(FcitxKey_c, KeyState::Ctrl)) && page(ic.get()).empty(),
+          "Ctrl+C 收起工具栏、交给应用");
+    // 符号：列全部内置符号，空格选第一个
+    fresh(ic.get());
+    type(ic.get(), "v<sp>3");
+    check(ic->inputPanel().auxUp().toString().find("符号") != std::string::npos &&
+              !page(ic.get()).empty(),
+          "工具栏打开符号面板：" + ic->inputPanel().auxUp().toString());
+    type(ic.get(), "<sp>");
+    check(ic->committed == "，", "符号面板空格选第一个（，）：" + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "v<sp>4");
+    check(ic->inputPanel().auxUp().toString().find("表情") != std::string::npos,
+          "工具栏打开表情面板：" + ic->inputPanel().auxUp().toString());
+    fresh(ic.get());
+    // vim 照常打字，v1+2 照常算
+    type(ic.get(), "vim");
+    check(preedit(ic.get()) != "" && ic->inputPanel().auxUp().empty(), "vim 不打开工具栏：" + preedit(ic.get()));
+    fresh(ic.get());
+    type(ic.get(), "v1+2<sp>");
+    check(ic->committed == "3", "v1+2 空格仍上屏结果：" + ic->committed);
+    fresh(ic.get());
+
     // 删掉文件再 reload：回到默认
     std::filesystem::remove(configDir + "/wowtype.conf");
     std::filesystem::remove(customFile);
@@ -569,6 +691,13 @@ void runCases(Instance &instance) {
     check(panelList && panelList->layoutHint() == CandidateLayoutHint::Horizontal &&
               page(ic.get()).size() == 9 && page(ic.get())[0] == "你好",
           "恢复默认：横排、9 个、你好第一：" + join(page(ic.get())));
+    fresh(ic.get());
+    // 剪贴板历史默认关：关掉时清空，工具栏里提示去哪打开
+    type(ic.get(), "v<sp>1");
+    check(page(ic.get()).empty() &&
+              ic->inputPanel().auxUp().toString().find("没打开") != std::string::npos,
+          "默认不记剪贴板，关掉时清空：" + ic->inputPanel().auxUp().toString() + " | " +
+              join(page(ic.get())));
     fresh(ic.get());
 
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
@@ -794,6 +923,83 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     fresh(ic.get());
 
+    // 自动补空格（#36）：只看光标前一个字和要上屏的第一个字；读不到光标前的文字、密码框不补
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "AutoSpace=True\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    auto surround = [&](const std::string &text, int cursorBack = 0, int anchorBack = 0) {
+        const auto len = static_cast<unsigned>(utf8::length(text));
+        ic->surroundingText().setText(text, len - cursorBack, len - anchorBack);
+    };
+    ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+    fresh(ic.get());
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed == " 5" && ic->passed.empty(), "汉字后打数字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("第 5");
+    type(ic.get(), "zhangjie<sp>");
+    check(ic->committed == " 章节", "数字后上屏汉字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("Linux");
+    type(ic.get(), "xitong<sp>");
+    check(ic->committed == " 系统", "字母后上屏汉字补空格：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好");
+    tapKey(ic.get(), FcitxKey_Shift_R);  // 切到英文
+    type(ic.get(), "L");
+    surround("你好 L");
+    type(ic.get(), "i");
+    tapKey(ic.get(), FcitxKey_Shift_R);  // 回中文
+    check(ic->committed == " L" && ic->passed == "i",
+          "英文模式汉字后第一个字母补空格，后面的照常交给应用：[" + ic->committed + "] " + ic->passed);
+    fresh(ic.get());
+    surround("第 ");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "已经有空格不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好");
+    type(ic.get(), "shijie<sp>");
+    check(ic->committed == "世界", "纯中文不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    surround("你好abc", 3, 0);  // 光标在「好」后面、选中了 abc
+    type(ic.get(), "5");
+    check(ic->committed == " 5", "有选区时看选区前面的字：[" + ic->committed + "]");
+    fresh(ic.get());
+    ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::SurroundingText, CapabilityFlag::Password});
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "密码框不补：[" + ic->committed + "]");
+    fresh(ic.get());
+    for (const auto flag : {CapabilityFlag::Url, CapabilityFlag::Email}) {
+        ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::SurroundingText, flag});
+        surround("第");
+        type(ic.get(), "5");
+        check(ic->committed.empty() && ic->passed == "5", "网址、邮箱输入框不补：[" + ic->committed + "]");
+        fresh(ic.get());
+    }
+    ic->setCapabilityFlags(CapabilityFlags{});
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "读不到光标前的文字不补");
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "AutoSpace=True\nAutoSpaceDigits=False\nEmojiSuggest=False\n";
+    }
+    addon->reloadConfig();
+    ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+    fresh(ic.get());
+    surround("第");
+    type(ic.get(), "5");
+    check(ic->committed.empty() && ic->passed == "5", "关掉数字那项后数字不补");
+    fresh(ic.get());
+    surround("Linux");
+    type(ic.get(), "xitong<sp>");
+    check(ic->committed == " 系统", "字母那项还开着：[" + ic->committed + "]");
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    ic->setCapabilityFlags(CapabilityFlags{});
+    fresh(ic.get());
+
     ic.reset();
 }
 
@@ -816,12 +1022,6 @@ struct TranslateCase {
     std::string configFile;
 };
 
-void tapKey(HarnessInputContext *ic, KeySym sym) {
-    KeyEvent press(ic, Key(sym), false);
-    ic->keyEvent(press);
-    KeyEvent release(ic, Key(sym, KeyState::Shift), true);
-    ic->keyEvent(release);
-}
 
 std::string aux(HarnessInputContext *ic) { return ic->inputPanel().auxUp().toString(); }
 std::string auxDown(HarnessInputContext *ic) { return ic->inputPanel().auxDown().toString(); }
@@ -878,6 +1078,15 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
     s.push_back({"回车上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
                  [](HarnessInputContext *ic) {
                      return ic->committed == "EN:你好" && preedit(ic).empty() && inlineText(ic).empty();
+                 }});
+    s.push_back({"互译模式下 v + 空格不开工具栏",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "v<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return aux(ic).find("工具栏") == std::string::npos &&
+                            join(page(ic)).find("剪贴板") == std::string::npos;
                  }});
     s.push_back({"同一句话再打一遍：记住了，马上就有译文",
                  [reset](HarnessInputContext *ic) {
@@ -1092,6 +1301,45 @@ void runVoiceCase(Instance &instance, std::function<void()> done) {
         });
 }
 
+/// 语音结果复制到剪贴板：用假的 wl-copy（把标准输入写进文件）代替真的剪贴板。
+void runClipboardCase() {
+    const auto dir = std::filesystem::temp_directory_path() /
+                     ("wowtype-clip-" + std::to_string(::getpid()));
+    std::filesystem::create_directories(dir);
+    const auto out = dir / "copied.txt";
+    {
+        std::ofstream script(dir / "wl-copy");
+        script << "#!/bin/sh\ncat > \"" << out.string() << ".tmp\" && mv \"" << out.string()
+               << ".tmp\" \"" << out.string() << "\"\n";
+    }
+    std::filesystem::permissions(dir / "wl-copy", std::filesystem::perms::owner_all);
+    const std::string oldPath = std::getenv("PATH") ? std::getenv("PATH") : "";
+    const char *oldWayland = std::getenv("WAYLAND_DISPLAY");
+    const std::string savedWayland = oldWayland ? oldWayland : "";
+    ::setenv("PATH", (dir.string() + ":" + oldPath).c_str(), 1);
+    ::setenv("WAYLAND_DISPLAY", "wayland-test", 1);
+
+    const std::string text = "语音结果 \"$HOME\" `id`\n第二行";
+    const bool started = wowtype::copyToClipboard(text);
+    std::string copied;
+    for (int i = 0; i < 100 && copied.empty(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::ifstream in(out);
+        copied.assign(std::istreambuf_iterator<char>(in), {});
+    }
+    check(started && copied == text, "语音结果复制到剪贴板（原样，不经 shell 展开）：" + copied);
+    check(!wowtype::copyToClipboard(""), "空的不复制");
+    check(!wowtype::copyToClipboard(std::string(40 * 1024, 'a')), "太长的不复制");
+
+    ::setenv("PATH", oldPath.c_str(), 1);
+    if (oldWayland) {
+        ::setenv("WAYLAND_DISPLAY", savedWayland.c_str(), 1);
+    } else {
+        ::unsetenv("WAYLAND_DISPLAY");
+    }
+    std::filesystem::remove_all(dir);
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1099,15 +1347,19 @@ int main(int argc, char **argv) {
     (void)argv;
     char arg0[] = "wowtype-key-harness";
     char arg1[] = "--disable=all";
-    char arg2[] = "--enable=wowtype,testim";
+    char arg2[] = "--enable=wowtype,testim,clipboard";
     char *args[] = {arg0, arg1, arg2};
     Instance instance(3, args);
-    instance.addonManager().registerDefaultLoader(nullptr);
+    FakeClipboardFactory clipboardFactory;
+    StaticAddonRegistry registry{{"clipboard", &clipboardFactory}};
+    instance.addonManager().registerDefaultLoader(
+        std::getenv("WOWTYPE_HARNESS_REAL_CLIPBOARD") ? nullptr : &registry);
     EventDispatcher mainDispatcher;
     mainDispatcher.attach(&instance.eventLoop());
     dispatcher = &mainDispatcher;
     mainDispatcher.schedule([&instance]() {
         runCases(instance);
+        runClipboardCase();
         runTranslateCase(instance, [&instance]() {
             runVoiceCase(instance, [&instance]() {
                 std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);

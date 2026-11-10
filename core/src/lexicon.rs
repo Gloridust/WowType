@@ -640,6 +640,8 @@ pub struct UserLexicon {
     custom: RwLock<Vec<(String, String, f64)>>,
     /// 自定义词里编码不是拼音的（mail -> 邮箱地址）：只在整个输入正好等于编码时给出。
     codes: RwLock<Vec<(String, String)>>,
+    /// 全部自定义词按文件里的顺序（编码、词，词保留转义），给工具栏的「常用语」列表用。
+    phrases: RwLock<Vec<(String, String)>>,
     snapshot: RwLock<Arc<MemoryLexicon>>,
 }
 
@@ -653,6 +655,7 @@ impl UserLexicon {
             words: RwLock::new(Vec::new()),
             custom: RwLock::new(Vec::new()),
             codes: RwLock::new(Vec::new()),
+            phrases: RwLock::new(Vec::new()),
             snapshot: RwLock::new(Arc::new(MemoryLexicon::new())),
         }
     }
@@ -747,6 +750,7 @@ impl UserLexicon {
     pub fn set_custom_tsv(&self, data: &str) -> usize {
         let mut custom = Vec::new();
         let mut codes = Vec::new();
+        let mut phrases = Vec::new();
         for line in data.lines() {
             let line = line.trim_end_matches('\r');
             if line.trim().is_empty() || line.starts_with('#') {
@@ -769,10 +773,12 @@ impl UserLexicon {
             }) else {
                 let code: String = code.chars().filter(|c| *c != '\'').collect();
                 if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase()) {
+                    phrases.push((code.clone(), word.to_string()));
                     codes.push((code, word.to_string()));
                 }
                 continue;
             };
+            phrases.push((code, word.to_string()));
             let freq = cols
                 .next()
                 .and_then(|f| f.trim().parse::<f64>().ok())
@@ -787,8 +793,17 @@ impl UserLexicon {
         if let Ok(mut slot) = self.codes.write() {
             *slot = codes;
         }
+        if let Ok(mut slot) = self.phrases.write() {
+            *slot = phrases;
+        }
         self.rebuild();
         count
+    }
+
+    /// 全部自定义词，按 custom.tsv 里的顺序：(编码, 词)。词还是转义过的（`\n`），上屏前要
+    /// [`crate::unescape_custom`]。
+    pub fn custom_phrases(&self) -> Vec<(String, String)> {
+        self.phrases.read().map(|p| p.clone()).unwrap_or_default()
     }
 
     /// 从文件读自定义词（整体替换）；文件不存在就清空。

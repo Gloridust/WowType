@@ -680,6 +680,83 @@ pub extern "C" fn wowtype_punct(code: c_int, style: c_int, prev: c_int) -> *cons
     })
 }
 
+/// 中英文之间自动补空格（ABI 1.2 起）：prev 是光标前一个字，next 是要上屏的第一个字，
+/// flags：1 汉字和字母之间、2 汉字和数字之间。要补空格返回 1，否则 0。
+#[no_mangle]
+pub extern "C" fn wowtype_autospace(prev: c_int, next: c_int, flags: c_int) -> c_int {
+    let (Some(prev), Some(next)) = (char::from_u32(prev as u32), char::from_u32(next as u32))
+    else {
+        return 0;
+    };
+    c_int::from(crate::autospace::needs_space(prev, next, flags as u32))
+}
+
+/// 全部内置符号（ABI 1.2 起），按内置顺序：工具栏的「符号」面板用。
+#[no_mangle]
+pub extern "C" fn wowtype_symbol_list() -> *mut WowtypeCandidates {
+    let texts: Vec<CString> = crate::symbols::SYMBOLS
+        .iter()
+        .filter_map(|s| CString::new(s.text).ok())
+        .collect();
+    let scores = vec![0.0; texts.len()];
+    Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
+}
+
+/// 记下一条剪贴板文字（ABI 1.2 起；只在内存里，最多 20 条，最新的在前，重复的挪到最前）。
+/// 空白、超过 16 KB 的不记。记下返回 1，否则 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_clipboard_remember(text: *const c_char) -> c_int {
+    match unsafe { cstr_to_str(text) } {
+        Some(text) => c_int::from(crate::clipboard::remember(text)),
+        None => 0,
+    }
+}
+
+/// 剪贴板历史（ABI 1.2 起），最新的在前。
+#[no_mangle]
+pub extern "C" fn wowtype_clipboard_history() -> *mut WowtypeCandidates {
+    let texts: Vec<CString> = crate::clipboard::history()
+        .into_iter()
+        .filter_map(|t| CString::new(t).ok())
+        .collect();
+    let scores = vec![0.0; texts.len()];
+    Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
+}
+
+/// 清空剪贴板历史（ABI 1.2 起）。
+#[no_mangle]
+pub extern "C" fn wowtype_clipboard_clear() {
+    crate::clipboard::clear();
+}
+
+/// 自定义词（常用语）按 custom.tsv 里的顺序（ABI 1.2 起）。text 是词（`\n` 等转义原样显示），
+/// pinyin 是编码，wowtype_candidates_commit 是上屏的文字（转义换成了真的换行）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_custom_phrases(
+    engine: *const WowtypeEngineHandle,
+) -> *mut WowtypeCandidates {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return ptr::null_mut();
+    }
+    let mut out = WowtypeCandidates::plain(Vec::new(), Vec::new());
+    for (code, word) in unsafe { &*engine }.engine.lexicon().custom_phrases() {
+        let (Ok(text), Ok(code), Ok(commit)) = (
+            CString::new(word.as_str()),
+            CString::new(code),
+            CString::new(crate::unescape_custom(&word)),
+        ) else {
+            continue;
+        };
+        out.texts.push(text);
+        out.scores.push(0.0);
+        out.pinyins.push(code);
+        out.consumed.push(0);
+        out.commits.push(commit);
+    }
+    Box::into_raw(Box::new(out))
+}
+
 /// 符号检索。query 为拼音或中文名前缀，结果放在候选结构里（score 恒为 0）。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_symbol_search(
@@ -996,7 +1073,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 1;
+pub const ABI_VERSION_MINOR: c_int = 2;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1053,6 +1130,77 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1001);
+        assert_eq!(wowtype_abi_version(), 1002);
+    }
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    use super::*;
+
+    unsafe fn texts(c: *mut WowtypeCandidates) -> Vec<(String, String, String)> {
+        assert!(!c.is_null());
+        let n = unsafe { wowtype_candidates_len(c) };
+        let get = |p: *const c_char| unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
+        let out = (0..n)
+            .map(|i| unsafe {
+                (
+                    get(wowtype_candidates_text(c, i)),
+                    get(wowtype_candidates_pinyin(c, i)),
+                    get(wowtype_candidates_commit(c, i)),
+                )
+            })
+            .collect();
+        unsafe { wowtype_candidates_free(c) };
+        out
+    }
+
+    #[test]
+    fn custom_phrases_in_file_order() {
+        let lexicon = concat!(env!("CARGO_MANIFEST_DIR"), "/data/demo_lexicon.tsv");
+        let lexicon = CString::new(lexicon).unwrap();
+        let engine = unsafe { wowtype_engine_new(lexicon.as_ptr(), ptr::null()) };
+        assert!(!engine.is_null());
+        unsafe { &*engine }.engine.lexicon().set_custom_tsv(
+            "# 注释\ndz\t北京市海淀区\\n100080\nni hao\t妮好\n\t空码\nbad1\t不收\n",
+        );
+        let got = unsafe { texts(wowtype_engine_custom_phrases(engine)) };
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "北京市海淀区\\n100080".to_string(),
+                    "dz".to_string(),
+                    "北京市海淀区\n100080".to_string()
+                ),
+                ("妮好".to_string(), "ni hao".to_string(), "妮好".to_string()),
+            ]
+        );
+        assert!(unsafe { wowtype_engine_custom_phrases(ptr::null()) }.is_null());
+        unsafe { wowtype_engine_free(engine) };
+    }
+
+    #[test]
+    fn clipboard_and_symbols() {
+        let _guard = crate::clipboard::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        wowtype_clipboard_clear();
+        let a = CString::new("第一条").unwrap();
+        let b = CString::new("second").unwrap();
+        assert_eq!(unsafe { wowtype_clipboard_remember(a.as_ptr()) }, 1);
+        assert_eq!(unsafe { wowtype_clipboard_remember(b.as_ptr()) }, 1);
+        assert_eq!(unsafe { wowtype_clipboard_remember(ptr::null()) }, 0);
+        let got: Vec<String> = unsafe { texts(wowtype_clipboard_history()) }
+            .into_iter()
+            .map(|t| t.0)
+            .collect();
+        assert_eq!(got, vec!["second", "第一条"]);
+        wowtype_clipboard_clear();
+        assert!(unsafe { texts(wowtype_clipboard_history()) }.is_empty());
+
+        let symbols = unsafe { texts(wowtype_symbol_list()) };
+        assert_eq!(symbols.len(), crate::symbols::SYMBOLS.len());
+        assert_eq!(symbols[0].0, "，");
     }
 }

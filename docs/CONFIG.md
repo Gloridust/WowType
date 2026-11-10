@@ -18,6 +18,7 @@ di zhi	四川省\n宜宾市
 - 编码也可以不是拼音，只要全是字母（`mail`、`addr`）：正好打这几个字母时，这个词排第一。
 - 词里写 `\n` 表示换行、`\t` 表示制表符，上屏时换成真的；候选窗里画成 `⏎`。带换行的词不记进自动学习。
 - 设置界面「自定义词」页右上角能**导入**、**导出**这种文件。导入时同一个词用文件里的编码，别的词保留。
+- 自定义词也是**常用语**：只打一个 `v` 再按空格打开[工具栏](#v--空格工具栏)，「常用语」里按文件顺序列出全部，选一条上屏。
 
 在设置界面里加的词马上能用；手动改了文件，要让 fcitx5 重新读一下：
 
@@ -72,6 +73,27 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
   它**不适用于欧盟、英国和韩国**；月活超过 1 亿的产品要另找腾讯授权。WowType 不分发这个模型，
   是你自己从 Hugging Face 下载，下载前设置界面会让你确认。[协议全文](https://huggingface.co/tencent/HY-MT1.5-1.8B/blob/main/License.txt)
 
+## v + 空格：工具栏
+
+全拼下只打一个 `v`、再按空格，打开工具栏（`vim`、`vscode` 这些照常打字，`v1+2*3` 照常算算式）：
+
+| 项 | 内容 |
+|---|---|
+| 剪贴板 | 最近复制过的文字，最新的在前，最多 20 条 |
+| 常用语 | [自定义词](#自定义词)，按 `custom.tsv` 里的顺序 |
+| 符号 | 全部内置符号；也能打拼音搜（`youjiantou` → →） |
+| 表情 | 和 `Super+.` 打开的表情面板一样 |
+
+数字键或方向键加空格/回车选择，退格返回上一层，Esc 关闭；工具栏开着时别的键不会打进应用，`Ctrl+C` 这类组合键会收起工具栏、交给应用。
+
+**剪贴板历史默认关**，在设置「输入」页打开「记录剪贴板历史」（`ClipboardHistory=True`）。打开后只在内存里记，不写到磁盘，重启 fcitx5 就清空；再关掉时立刻清空。
+
+WowType 自己读不到系统剪贴板，是从 fcitx5 自带的 clipboard 插件拿最新一条：打开工具栏、切换输入框时各取一次，所以连着复制了好几次、中间没切换输入框的话，只记得到最后一次。没装或关掉了 fcitx5 的 clipboard 插件就没有记录。
+
+**密码**：光标在密码框里时不取剪贴板。但从密码管理器复制的密码，fcitx5 自己的剪贴板会显示成圆点、30 秒后清掉，它对外给输入法的接口却不带「这是密码」的标记，所以 WowType 分不出来，会把它当普通文字记下、在工具栏里明文显示，直到重启 fcitx5 或关掉这个开关。常用密码管理器的话，建议保持关闭，或者在 fcitx5 的剪贴板设置里打开「Do not show password from password managers」（这样 fcitx5 根本不收这类内容）。
+
+互译模式（「译」）下不开工具栏。
+
 ## 配置文件和环境变量
 
 设置存在 `~/.config/fcitx5/conf/wowtype.conf`，设置界面和 Fcitx 5 配置改的都是这个文件：
@@ -100,8 +122,14 @@ Traditional=False
 SelectKeys=Off
 DateTime=True
 Calculator=True
+Toolbar=True
+ClipboardHistory=False
+AutoSpace=False
+AutoSpaceLetters=True
+AutoSpaceDigits=True
 Voice=True
 VoiceKey=Alt_R
+VoiceCopy=False
 EmojiSuggest=True
 EmojiKey=Super+period
 Translate=False
@@ -120,7 +148,8 @@ CheckUpdate=True
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Voice`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateLocal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateLocal`、`CheckUpdate` | `True` / `False` |
+| `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
@@ -139,7 +168,8 @@ CheckUpdate=True
 
 | 变量 | 作用 |
 |---|---|
-| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0`、`WOWTYPE_DATETIME=0`、`WOWTYPE_CALC=0` | 对应上面的开关 |
+| `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0`、`WOWTYPE_DATETIME=0`、`WOWTYPE_CALC=0`、`WOWTYPE_TOOLBAR=0`、`WOWTYPE_CLIPBOARD_HISTORY=0`、`WOWTYPE_VOICE_COPY=1` | 对应上面的开关 |
+| `WOWTYPE_AUTOSPACE` | 自动加空格的位掩码：1 汉字和字母之间、2 汉字和数字之间，`3` 两种都加，`0` 关 |
 | `WOWTYPE_FUZZY_GROUPS` | 模糊音分组的位掩码（1 z/zh、2 c/ch、4 s/sh、8 n/l、16 f/h、32 r/l、64 an/ang、128 en/eng、256 in/ing、512 ian/iang、1024 uan/uang、2048 un/ong） |
 | `WOWTYPE_SELECT_KEYS` | `off`、`semicolon`、`quote` |
 | `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼 |

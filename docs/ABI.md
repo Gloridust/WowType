@@ -16,6 +16,7 @@
 |---|---|---|
 | 1.0 | 0.3.11 | 第一版带版本号的接口 |
 | 1.1 | 0.3.11 | 加 `wowtype_translate_configure_local`、`wowtype_translate_local_running`（本地翻译模型） |
+| 1.2 | 0.3.11 | 加 `wowtype_autospace`（中英文之间自动加空格）、`wowtype_symbol_list`、`wowtype_clipboard_*`（剪贴板历史）、`wowtype_engine_custom_phrases`（按文件顺序的常用语） |
 
 ## 所有权和生命周期
 
