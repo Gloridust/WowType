@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="icons/hicolor/scalable/apps/wowtype.svg" width="112" alt="WowType 图标">
+
 # WowType
 
 **在 Linux 上打字，像微信输入法一样顺手。**
