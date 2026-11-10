@@ -75,6 +75,8 @@ const WowtypeFrame *wowtype_session_reset(WowtypeSession *s, int commit_pending)
 void wowtype_session_free(WowtypeSession *s);
 ```
 
+> 已经落地的部分（ABI 1.3）以 `core/include/wowtype_core.h` 为准，和上面的草案有几处不同：`WowtypeKey`、`WowtypeSessionConfig` 也以 `size` 开头，`release` 是 `uint32_t`；`wowtype_session_new` 的 `engine` 现在可以传 NULL；`wowtype_session_select`（点候选）和 `wowtype_session_tick`（定时器）还没加，等候选和互译挪进来时再加；另有几个标了「过渡」的函数，挪完删。规则见 [ABI.md](ABI.md)「输入会话」。
+
 要点：
 
 - **按键测试跟着搬**。现在 `fcitx5-addon/test/key_harness.cpp` 里的 117 条按键检查（`nihao,` → 你好，、退格撤销选词、翻页、互译……）改写成 `core/tests/` 里对会话接口的测试。这样 macOS 外壳天然继承同一套行为，CI 在两个平台都跑。
@@ -134,5 +136,7 @@ macos/           macOS 外壳：IMK 输入法 + 设置窗口 + 打包脚本
 3. **最小 macOS 外壳**：IMK bundle，打 `nihao` 出「你好」，验证 marked text 和自绘候选框。只依赖会话接口。
 4. **补齐**：展开面板、表情、互译、设置窗口、打包和更新。
 5. **语音**：cpal 采集 + 小窗浮条。
+
+进度：第 1 步做完了（ABI 1.0）。第 2 步的第一块（ABI 1.3）：`core/src/session.rs` 和 `wowtype_session_*` 建好了，编辑区的原始输入、已选词栈、字母 / 隔音符 / 退格 / Esc 挪进了会话，fcitx5 外壳改成调会话，对应按键测试在 `core/tests/session_keys.rs`。接下来按这个顺序挪：候选和分音节显示 → 选词、上屏、学习 → 翻页、选词键、展开面板 → 标点和小数点 → 中 / 英 / 译 和单按 Shift → 互译 → 语音键 → 表情面板和工具栏。
 
 第 1 步可以马上做；第 3 步可以在第 2 步挪完「编辑区 + 选词 + 翻页」这几块之后就开始，不用等全部挪完。

@@ -10,12 +10,13 @@
 #define WOWTYPE_CORE_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /* 接口版本（不是 WowType 的版本）。同一个主版本里只加函数、只在结构体末尾加字段；
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 2
+#define WOWTYPE_ABI_VERSION_MINOR 3
 
 #ifdef __cplusplus
 extern "C" {
@@ -292,6 +293,79 @@ const char *wowtype_translate_source(const WowtypeTranslator *translator);
 const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
+
+/* ---- 输入会话（ABI 1.3 起，见 docs/PORTING.md、docs/ABI.md）----
+ *
+ * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
+ * 画编辑区、上屏。会话只能在一个线程里用。
+ *
+ * 暂定：输入行为还在一块一块从 fcitx5 外壳挪进来（docs/PORTING.md 第 2 步），挪完之前
+ * 这组函数不在「只加不删」的承诺里。标了「过渡」的函数挪完就删；现在 handled = 0 的意思是
+ * 「会话还不管这个键」，外壳接着用自己的逻辑处理（挪完以后就是「交给应用」）。
+ *
+ * 已经由会话处理的键：字母、隔音符（编辑区不空时）、退格（先撤销最后一次选词，没有选词
+ * 才删字母）、Esc（清空）。 */
+
+typedef struct WowtypeSession WowtypeSession;
+
+/* 修饰键位掩码（和 X11 / fcitx5 的 KeyState 取值一样）。 */
+#define WOWTYPE_MOD_SHIFT (1u << 0)
+#define WOWTYPE_MOD_CAPS (1u << 1)
+#define WOWTYPE_MOD_CTRL (1u << 2)
+#define WOWTYPE_MOD_ALT (1u << 3)
+#define WOWTYPE_MOD_SUPER (1u << 6)
+
+/* 一次按键。keysym 是 XKB keysym 的子集（字母、数字、标点、方向、功能键）。
+ * size 填 sizeof(WowtypeKey)：以后在末尾加字段，旧外壳没填的字段当 0。 */
+typedef struct {
+    uint32_t size;
+    uint32_t keysym;
+    uint32_t modifiers; /* WOWTYPE_MOD_* */
+    uint32_t release;   /* 0 按下，1 松开 */
+    uint32_t prev_char; /* 光标前一个字符（Unicode 码位），不知道给 0 */
+} WowtypeKey;
+
+/* 建会话的设置。size 填 sizeof(WowtypeSessionConfig)；现在没有可设的项，可以传 NULL。 */
+typedef struct {
+    uint32_t size;
+} WowtypeSessionConfig;
+
+/* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
+ * 读 size 之外的字段前先看 size（旧核心给的结构体短）。 */
+typedef struct {
+    uint32_t size;
+    int handled;           /* 会话处理了这个键；0 见上面「暂定」 */
+    const char *commit;    /* 要上屏的字，没有为 NULL */
+    const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 原始输入，分音节显示还没挪 */
+    int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
+    const char *aux;       /* 候选框上方的提示，没有为 NULL（还没用） */
+    int panel;             /* 0 普通 1 展开面板 2 表情面板（还没用，恒为 0） */
+    size_t cand_count;     /* 当前页候选个数（还没用，恒为 0） */
+    int cand_cursor;
+    int has_prev, has_next;
+    uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
+} WowtypeFrame;
+
+/* 建会话。engine 现在还不用，可以传 NULL（词库没载入好时也能打字）；传了的话要比会话活得久。 */
+WowtypeSession *wowtype_session_new(WowtypeEngineHandle *engine, const WowtypeSessionConfig *config);
+void wowtype_session_free(WowtypeSession *session);
+/* 处理一次按键（按下和松开都给）。session 或 key 为 NULL 时返回 NULL。 */
+const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKey *key);
+/* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时）。 */
+const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
+
+/* 过渡：候选、上屏还在外壳时，外壳用这些读写编辑区。返回的字符串在同一会话下一次调用前有效。 */
+const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */
+const char *wowtype_session_remaining(WowtypeSession *session);     /* 还没选词的部分 */
+const char *wowtype_session_selected_text(WowtypeSession *session); /* 已选的词连起来 */
+size_t wowtype_session_selection_count(const WowtypeSession *session);
+/* 第 index 个已选词的拼音（空格分音节）；越界返回 NULL。 */
+const char *wowtype_session_selection_pinyin(WowtypeSession *session, size_t index);
+/* 选了句首词：压进已选栈，bytes 是它用掉的原始输入字节数。 */
+void wowtype_session_push_selection(WowtypeSession *session, const char *text, const char *pinyin,
+                                    size_t bytes);
+/* 往原始输入后面加字（计算器算式、双拼分号、表情面板搜索词）。 */
+void wowtype_session_append(WowtypeSession *session, const char *text);
 
 #ifdef __cplusplus
 }

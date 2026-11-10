@@ -148,6 +148,40 @@ int main(int argc, char **argv) {
         check(p && strcmp(p, "，") == 0, "punct: comma -> ，");
     }
 
+    /* 输入会话（ABI 1.3）：字母进编辑区、选句首词、退格先撤销选词、切换输入法时上屏 */
+    {
+        WowtypeSession *s = wowtype_session_new(e, NULL);
+        check(s != NULL, "session_new");
+        const WowtypeFrame *f = NULL;
+        const char *keys = "nihaoma";
+        int letters_ok = 1;
+        for (const char *k = keys; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            f = wowtype_session_key(s, &key);
+            letters_ok = letters_ok && f && f->handled && f->size == sizeof(WowtypeFrame);
+            WowtypeKey up = key;
+            up.release = 1;
+            letters_ok = letters_ok && !wowtype_session_key(s, &up)->handled;
+        }
+        check(letters_ok, "session: letters handled, releases not, frame size matches header");
+        /* f 指向会话自己的 frame：上面的松开键已经覆盖了它，这里看的是松开后的编辑区 */
+        check(f && strcmp(f->preedit, "nihaoma") == 0 && f->commit == NULL, "session: preedit nihaoma");
+        wowtype_session_push_selection(s, "你好", "ni hao", 5);
+        check(strcmp(wowtype_session_remaining(s), "ma") == 0, "session: remaining ma");
+        check(wowtype_session_selection_count(s) == 1 &&
+                  strcmp(wowtype_session_selection_pinyin(s, 0), "ni hao") == 0,
+              "session: selection pinyin");
+        WowtypeKey bs = {sizeof(WowtypeKey), 0xff08, 0, 0, 0};
+        f = wowtype_session_key(s, &bs);
+        check(f && f->handled && strcmp(f->preedit, "nihaoma") == 0, "session: backspace undoes selection");
+        WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0};
+        check(!wowtype_session_key(s, &space)->handled, "session: space still the shell's");
+        f = wowtype_session_reset(s, 1);
+        check(f && f->commit && strcmp(f->commit, "nihaoma") == 0 && f->preedit[0] == 0,
+              "session: reset commits raw input");
+        wowtype_session_free(s);
+    }
+
     if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {
         fprintf(stderr, "ABI 主版本不一致：库 %d，头文件 %d\n", wowtype_abi_version(),
                 WOWTYPE_ABI_VERSION_MAJOR);

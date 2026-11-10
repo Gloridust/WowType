@@ -534,6 +534,19 @@ void runCases(Instance &instance) {
     send(ic.get(), emojiKey);
     type(ic.get(), "a<bs><bs>");
     check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(), "退格删空再退格关闭");
+    // 面板里退格删搜索词一个字；删空了面板还开着（列全部），再退格才关闭
+    fresh(ic.get());
+    send(ic.get(), emojiKey);
+    type(ic.get(), "xiaox<bs>");
+    check(preedit(ic.get()) == "xiao" && join(page(ic.get())).find("😂") != std::string::npos,
+          "面板里退格删一个字：xiaox 退格 = xiao，实际 " + preedit(ic.get()));
+    type(ic.get(), "<bs><bs><bs><bs>");
+    check(preedit(ic.get()).empty() && !page(ic.get()).empty() &&
+              ic->inputPanel().auxUp().toString().find("表情") != std::string::npos,
+          "搜索词删空面板还开着：" + ic->inputPanel().auxUp().toString());
+    type(ic.get(), "<bs>");
+    check(page(ic.get()).empty() && ic->committed.empty() && ic->passed.empty(),
+          "再退格关闭面板");
 
     // 数字字后面跟按键 emoji：ba -> 吧 八 8️⃣ 把
     // （放在表情面板后面：选过的 8️⃣ 会进「最近用过」）
