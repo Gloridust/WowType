@@ -654,6 +654,32 @@ pub extern "C" fn wowtype_fullwidth_punct(code: c_int) -> *const c_char {
     })
 }
 
+/// 按标点样式转换。style：0 全角、1 半角；prev 是光标前一个字符（不知道传 0）。
+/// 返回 NULL 表示原样上屏这个 ASCII 字符。指针在下一次调用前有效。
+#[no_mangle]
+pub extern "C" fn wowtype_punct(code: c_int, style: c_int, prev: c_int) -> *const c_char {
+    let Some(ch) = char::from_u32(code as u32) else {
+        return ptr::null();
+    };
+    let style = if style == 1 {
+        crate::symbols::PunctStyle::Halfwidth
+    } else {
+        crate::symbols::PunctStyle::Fullwidth
+    };
+    let prev = if prev > 0 {
+        char::from_u32(prev as u32)
+    } else {
+        None
+    };
+    let Some(text) = crate::symbols::punct(ch, style, prev) else {
+        return ptr::null();
+    };
+    PUNCT_BUF.with(|slot| {
+        *slot.borrow_mut() = CString::new(text).unwrap_or_default();
+        slot.borrow().as_ptr()
+    })
+}
+
 /// 符号检索。query 为拼音或中文名前缀，结果放在候选结构里（score 恒为 0）。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_symbol_search(

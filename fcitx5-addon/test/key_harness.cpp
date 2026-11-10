@@ -169,6 +169,18 @@ void runCases(Instance &instance) {
     type(ic.get(), "nihao,");
     check(ic->committed == "你好，", "打字途中按逗号：先上屏再出中文逗号，实际 " + ic->committed);
 
+    // 数字后的句点是小数点（#50）：数字原样交给应用，句点也原样
+    fresh(ic.get());
+    type(ic.get(), "3.14");
+    check(ic->committed.empty() && ic->passed == "3.14", "3.14 原样（小数点不换成句号），实际 上屏「" +
+                                                            ic->committed + "」交给应用「" + ic->passed + "」");
+    fresh(ic.get());
+    type(ic.get(), "nihao.");
+    check(ic->committed == "你好。", "汉字后面的句点还是句号，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "3<bs>.");
+    check(ic->committed == "。", "删掉数字后句点是句号，实际 " + ic->committed);
+
     fresh(ic.get());
     type(ic.get(), "zhognguo<sp>");
     check(ic->committed == "中国", "按反纠错 zhognguo -> 中国，实际 " + ic->committed);
@@ -244,12 +256,12 @@ void runCases(Instance &instance) {
         type(ic.get(), std::string(1, static_cast<char>('1' + prefix)));
         check(ic->committed.empty(), "选句首词不上屏，实际 " + ic->committed);
         check(preedit(ic.get()) == "你好zhong'guo", "编辑区 = 已选 + 剩余拼音（分好音节），实际 " + preedit(ic.get()));
-        // 删掉剩余拼音，再退格撤销选词
-        type(ic.get(), "<bs><bs><bs><bs><bs><bs><bs><bs>");
-        check(preedit(ic.get()) == "你好", "删完剩余拼音，实际 " + preedit(ic.get()));
+        // 退格先撤销选词（#49），剩余拼音不动；没有选词了才删字母
         type(ic.get(), "<bs>");
-        check(preedit(ic.get()) == "ni'hao", "再退格撤销选词，实际 " + preedit(ic.get()));
-        type(ic.get(), "zhongguo");
+        check(preedit(ic.get()) == "ni'hao'zhong'guo", "退格先撤销选词，实际 " + preedit(ic.get()));
+        type(ic.get(), "<bs>");
+        check(preedit(ic.get()) == "ni'hao'zhong'gu", "没有选词了退格删字母，实际 " + preedit(ic.get()));
+        type(ic.get(), "o");
         cands = page(ic.get());
         for (std::size_t i = 0; i < cands.size(); ++i) {
             if (cands[i] == "你好") {
@@ -690,6 +702,18 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     type(ic.get(), "liunai");
     check(join(page(ic.get())).find("牛奶") != std::string::npos, "打开 n=l 后 liunai 出牛奶：" + join(page(ic.get())));
+    fresh(ic.get());
+
+    // 标点样式：半角（#51）
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "PunctuationStyle=Halfwidth\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao,");
+    check(ic->committed == "你好,", "半角：打字途中逗号是英文逗号，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "(.)");
+    check(ic->committed.empty() && ic->passed == "(.)", "半角：没在打字时标点原样交给应用，实际 " + ic->passed);
     fresh(ic.get());
 
     // 翻页键可选（#36）：打开 , . 和 Tab，关掉 - =
