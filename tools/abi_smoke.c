@@ -172,10 +172,17 @@ int main(int argc, char **argv) {
         WowtypeKey bs = {sizeof(WowtypeKey), 0xff08, 0, 0, 0};
         f = wowtype_session_key(s, &bs);
         check(f && f->handled && strcmp(f->preedit, "nihaom") == 0, "session: backspace");
+        /* ABI 1.6：没有候选时空格上屏原始输入 */
         WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0};
-        check(!wowtype_session_key(s, &space)->handled, "session: space still the shell's");
+        f = wowtype_session_key(s, &space);
+        check(f && f->handled && f->commit && strcmp(f->commit, "nihaom") == 0 && f->preedit[0] == 0,
+              "session: space commits raw input without candidates");
+        for (const char *k = "ab"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
         f = wowtype_session_reset(s, 1);
-        check(f && f->commit && strcmp(f->commit, "nihaom") == 0 && f->preedit[0] == 0,
+        check(f && f->commit && strcmp(f->commit, "ab") == 0 && f->preedit[0] == 0,
               "session: reset commits raw input");
         wowtype_session_free(s);
     }
@@ -227,8 +234,37 @@ int main(int argc, char **argv) {
             WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
             wowtype_session_key(s, &key);
         }
-        f = wowtype_session_commit_input(s);
-        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0, "session: commit_input raw letters");
+        WowtypeKey enter = {sizeof(WowtypeKey), 0xff0d, 0, 0, 0};
+        f = wowtype_session_key(s, &enter);
+        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0, "session: return commits raw letters");
+        check(wowtype_session_last_choice(s, &info) == -1, "session: return is not a candidate");
+        /* ABI 1.6：显示的这一页、点候选、上屏的是哪个候选、候选框状态 */
+        for (const char *k = "nihao"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        f = wowtype_session_frame(s);
+        const size_t shown = f ? f->cand_count : 0;
+        check(shown > 0 && shown <= 9 && f->cand_cursor == 0 && f->panel == 0 && !f->has_prev,
+              "session: frame shows a page");
+        check(wowtype_session_candidate(s, shown) == NULL, "session: candidate out of range");
+        char first[64] = {0};
+        const char *text = wowtype_session_candidate(s, 0);
+        check(text != NULL, "session: candidate text");
+        if (text) {
+            strncpy(first, text, sizeof first - 1);
+        }
+        WowtypeSessionView view;
+        memset(&view, 0, sizeof view);
+        view.size = sizeof view;
+        check(wowtype_session_view(s, &view) == 0 && view.page == 0 && view.cursor == 0 &&
+                  !view.expanded && view.size == sizeof view,
+              "session: view");
+        check(!wowtype_session_select(s, shown)->handled, "session: select out of range");
+        f = wowtype_session_select(s, 0);
+        check(f && f->handled && f->commit && strcmp(f->commit, first) == 0, "session: select commits");
+        check(wowtype_session_last_choice(s, &info) == 0 && strcmp(info.text, first) == 0,
+              "session: last choice");
         wowtype_session_set_engine(s, NULL);
         check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
         wowtype_session_free(s);
