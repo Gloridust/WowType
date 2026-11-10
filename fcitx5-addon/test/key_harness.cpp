@@ -668,7 +668,12 @@ void runCases(Instance &instance) {
           "xingqi：星期几：" + join(page(ic.get())));
     fresh(ic.get());
     type(ic.get(), "sj");
-    check(join(page(ic.get())).find(':') == std::string::npos, "简拼 sj 不出时间：" + join(page(ic.get())));
+    {
+        // 简拼 sj 也出时间，但首选仍是普通词，格式从第二个开始
+        const auto p = page(ic.get());
+        check(p.size() > 1 && p[0].find(':') == std::string::npos && p[1].find(':') != std::string::npos,
+              "简拼 sj 首选是词、第二个是时间：" + join(p));
+    }
     fresh(ic.get());
 
     // V 模式计算器

@@ -2213,11 +2213,45 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_new_groups() {
+        use crate::syllable::fuzzy;
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "dong xi\t东西\t5000\nguang zhou\t广州\t5000\nxiang fa\t想法\t5000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        let has =
+            |e: &Engine, input: &str, word: &str| e.input(input).iter().any(|c| c.text == word);
+        // 默认：ian/iang、uan/uang 开，un/ong 不开
+        assert!(has(&e, "guanzhou", "广州"));
+        assert!(has(&e, "xianfa", "想法"));
+        assert!(!has(&e, "dunxi", "东西"), "un/ong 默认不开");
+        e.set_fuzzy_groups(fuzzy::UN);
+        assert!(has(&e, "dunxi", "东西"));
+        assert!(
+            !has(&e, "guanzhou", "广州"),
+            "关掉 uan/uang 后 guan 不再等于 guang"
+        );
+        // an/ang 和 ian/iang 分开：只开 an/ang 时 xian 不等于 xiang
+        e.set_fuzzy_groups(fuzzy::AN);
+        assert!(!has(&e, "xianfa", "想法"));
+    }
+
+    #[test]
     fn fuzzy_groups_between_pairs() {
         use crate::syllable::{fuzzy, fuzzy_groups_between, id_of};
         let g = |a: &str, b: &str| fuzzy_groups_between(id_of(a).unwrap(), id_of(b).unwrap());
         assert_eq!(g("zhang", "zan"), Some(fuzzy::ZH | fuzzy::AN));
-        assert_eq!(g("niang", "lian"), Some(fuzzy::NL | fuzzy::AN));
+        assert_eq!(g("niang", "lian"), Some(fuzzy::NL | fuzzy::IAN));
+        assert_eq!(g("guang", "guan"), Some(fuzzy::UAN));
+        assert_eq!(g("dong", "dun"), Some(fuzzy::UN));
+        assert_eq!(g("chong", "cun"), Some(fuzzy::CH | fuzzy::UN));
+        assert_eq!(g("jiong", "jun"), None, "iong 和 un 不是一组");
         assert_eq!(g("huang", "fang"), None, "uang 和 ang 不是一组");
         assert_eq!(g("ren", "leng"), Some(fuzzy::RL | fuzzy::EN));
         assert_eq!(g("nu", "ru"), None);

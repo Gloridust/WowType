@@ -516,7 +516,7 @@ pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
 }
 
 /// 设置打开的模糊音分组（位掩码：1 z/zh，2 c/ch，4 s/sh，8 n/l，16 f/h，32 r/l，
-/// 64 an/ang，128 en/eng，256 in/ing）。总开关仍是 wowtype_engine_set_fuzzy。返回 0 成功，-1 失败。
+/// 64 an/ang，128 en/eng，256 in/ing，512 ian/iang，1024 uan/uang，2048 un/ong）。总开关仍是 wowtype_engine_set_fuzzy。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_fuzzy_groups(
     engine: *mut WowtypeEngineHandle,
