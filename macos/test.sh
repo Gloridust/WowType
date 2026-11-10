@@ -33,7 +33,7 @@ fi
 RUN=("$OUT/wowtype-macos-harness")
 if [[ -n "${WOWTYPE_SWIFT_DOCKER:-}" ]]; then
   # 容器里编的可执行文件要容器里的 Swift 运行库
-  RUN=(docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" "$WOWTYPE_SWIFT_DOCKER" "${RUN[@]}")
+  RUN=(docker run --rm -u "$(id -u):$(id -g)" -e WOWTYPE_EXPECT_FULL_CHARS -v "$PWD:$PWD" -w "$PWD" "$WOWTYPE_SWIFT_DOCKER" "${RUN[@]}")
   # 词库路径要在挂进去的目录里
 fi
 "${RUN[@]}" "$@"

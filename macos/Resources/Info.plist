@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- build.sh 把 @VERSION@ 换成版本号。各个 ID 的写法照 Squirrel：
-     bundle ID 里带 .inputmethod.，连接名是 <bundle ID>_Connection，输入模式 ID 以 bundle ID 开头。 -->
+<!-- build.sh 把 @VERSION@ 换成版本号。参照 Squirrel：bundle ID 里带 .inputmethod.，
+     输入模式 ID 以 bundle ID 开头；连接名只要唯一（Squirrel 用 Squirrel_Connection），这里用 <bundle ID>_Connection。 -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>

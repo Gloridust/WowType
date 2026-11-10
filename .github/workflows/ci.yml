@@ -71,7 +71,7 @@ jobs:
 
   macos-app:
     # macOS 输入法外壳（macos/）：按键测试、打通用安装包、用安装包里的词库自检。
-    # 还在开发，不在 release 的 needs 里，安装包只放在 Artifacts。
+    # 还在开发，不在 release 的 needs 里，安装包只放在 Artifacts（macos-preview）。
     name: macOS 输入法
     needs: data
     runs-on: macos-latest
@@ -88,7 +88,7 @@ jobs:
       - name: 按键测试（小词库 + 真实词库）
         run: |
           macos/test.sh
-          macos/test.sh dist/data/lexicon.tsv dist/data/english.txt
+          WOWTYPE_EXPECT_FULL_CHARS=1 macos/test.sh dist/data/lexicon.tsv dist/data/english.txt
       - name: 核心静态库要链接的系统库（对照 build.sh 的链接参数）
         run: |
           cargo rustc --release -q -p wowtype-core --no-default-features --lib --crate-type staticlib \
@@ -114,9 +114,12 @@ jobs:
           fi
       - name: 自检（载入安装包里的词库打 nihao）
         run: WOWTYPE_DATA_DIR="$RUNNER_TEMP/wowtype-data" dist/macos/WowType.app/Contents/MacOS/WowType --selftest
+      - name: 自检以后安装包没被改过（词库快照要写在数据目录，不能写进签过名的安装包）
+        run: codesign --verify --strict dist/macos/WowType.app
       - uses: actions/upload-artifact@v4
         with:
-          name: pkg-macos
+          # 不叫 pkg-*：发版任务按 pkg-* 收安装包，macOS 版在真机试过之前不进 Release
+          name: macos-preview
           path: dist/macos/*.zip
 
   data:

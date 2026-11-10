@@ -243,6 +243,14 @@ do {
     check(commits == ["你好", "，"], "上屏回调", "\(commits)")
 }
 
+if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
+    // 真实词库（补了雾凇大字表）：一个音节的字要列全，yi 有八百多个
+    let (c, _) = fresh()
+    type(c, "yi")
+    let count = c.allCandidates().count
+    check(count > 300, "yi 的字列全（超过 300 个）", "\(count)")
+}
+
 if failures > 0 {
     print("macOS HARNESS FAILED (\(failures))")
     exit(1)
