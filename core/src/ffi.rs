@@ -1161,10 +1161,9 @@ mod toolbar_tests {
         let lexicon = CString::new(lexicon).unwrap();
         let engine = unsafe { wowtype_engine_new(lexicon.as_ptr(), ptr::null()) };
         assert!(!engine.is_null());
-        unsafe { &*engine }
-            .engine
-            .lexicon()
-            .set_custom_tsv("# 注释\ndz\t北京市海淀区\\n100080\nni hao\t妮好\n\t空码\n");
+        unsafe { &*engine }.engine.lexicon().set_custom_tsv(
+            "# 注释\ndz\t北京市海淀区\\n100080\nni hao\t妮好\n\t空码\nbad1\t不收\n",
+        );
         let got = unsafe { texts(wowtype_engine_custom_phrases(engine)) };
         assert_eq!(
             got,

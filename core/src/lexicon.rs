@@ -766,9 +766,6 @@ impl UserLexicon {
                 continue;
             }
             let code = pinyin.clone();
-            if !code.is_empty() {
-                phrases.push((code.clone(), word.to_string()));
-            }
             let Some(pinyin) = (if parse_pinyin_keys(&pinyin).is_ok() {
                 Some(pinyin)
             } else {
@@ -776,10 +773,12 @@ impl UserLexicon {
             }) else {
                 let code: String = code.chars().filter(|c| *c != '\'').collect();
                 if !code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase()) {
+                    phrases.push((code.clone(), word.to_string()));
                     codes.push((code, word.to_string()));
                 }
                 continue;
             };
+            phrases.push((code, word.to_string()));
             let freq = cols
                 .next()
                 .and_then(|f| f.trim().parse::<f64>().ok())
