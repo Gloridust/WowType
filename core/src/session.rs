@@ -670,11 +670,11 @@ impl<'e> Session<'e> {
         Some(true)
     }
 
-    /// 收起展开面板：回到第一页，光标是面板里的光标（不在第一页上时这一页没有光标）。
+    /// 收起展开面板：光标是面板里的光标，翻到它所在的那一页。
     fn collapse(&mut self) {
         self.expanded = false;
-        self.page = 0;
         self.cursor = self.grid_cursor;
+        self.page = self.cursor / self.page_size();
     }
 
     fn page_size(&self) -> usize {

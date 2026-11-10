@@ -996,6 +996,47 @@ fn expanded_panel() {
 }
 
 #[test]
+fn expanded_panel_second_screen() {
+    // key_harness：「展开后下移 7 行：面板翻到第二屏」「第二屏收起后，横排候选框停在光标那一页」
+    let tsv: String = (0..60u32)
+        .map(|i| format!("shi\t{}\t{}\n", char::from_u32(0x4e00 + i).unwrap(), 9000 - i))
+        .collect();
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_max_candidates(300);
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = with(engine);
+    session.configure(Config {
+        page_size: 5,
+        emoji_suggest: false,
+        date_time: false,
+        ..Config::default()
+    });
+    type_keys(&mut session, "shi");
+    let all = texts(&mut session);
+    assert!(all.len() > 8 * 6, "要超过 8 行：{}", all.len());
+
+    // 一直按下键走到第二屏：面板显示光标那一屏
+    let frame = type_keys(&mut session, "<down><down><down><down><down><down><down><down>");
+    assert_eq!(frame.panel, Panel::Expanded);
+    assert_eq!(frame.cand_start, 36);
+    assert_eq!(frame.cand_cursor, Some(6));
+    assert_eq!(session.view().grid_cursor, 42);
+
+    // 收起：停在光标那一页，光标看得见
+    let frame = type_keys(&mut session, "<esc>");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(session.view().page, 42 / 5);
+    assert_eq!(frame.cand_start, 40);
+    assert_eq!(frame.cand_cursor, Some(2));
+    assert!(frame.has_prev);
+    assert_eq!(
+        type_keys(&mut session, "<sp>").commit.as_deref(),
+        Some(all[42].as_str())
+    );
+}
+
+#[test]
 fn select_by_shown_index() {
     // 点候选：序号是在显示的那些（这一页，或展开面板的这一屏）里的
     let (mut session, all) = default_paged();
