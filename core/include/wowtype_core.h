@@ -45,8 +45,19 @@ int wowtype_engine_load_nnlm(WowtypeEngineHandle *engine, const char *path);
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
 
-/* 开关双拼（自然码方案）。返回 0 成功。 */
+/* 开关双拼。返回 0 成功。 */
 int wowtype_engine_set_shuangpin(WowtypeEngineHandle *engine, int on);
+
+/* 选双拼方案：ziranma xiaohe microsoft sogou abc ziguang pinyinjiajia（也认中文名）。
+ * 返回 0 成功，-1 不认识。 */
+int wowtype_engine_set_shuangpin_scheme(WowtypeEngineHandle *engine, const char *name);
+
+/* 这个双拼方案有没有用分号键（微软、搜狗、紫光的 ing）。 */
+int wowtype_shuangpin_uses_semicolon(const char *name);
+
+/* 双拼时编辑区显示的全拼：vsgo -> zhong'guo；没开双拼返回 NULL。
+ * 返回的串在同一线程下一次调用本函数或 wowtype_segment_input 前有效。 */
+const char *wowtype_engine_shuangpin_display(const WowtypeEngineHandle *engine, const char *input);
 
 /* 开关繁体输出。返回 0 成功。 */
 int wowtype_engine_set_traditional(WowtypeEngineHandle *engine, int on);

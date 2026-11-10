@@ -82,8 +82,10 @@ pub struct EngineConfig {
     pub fuzzy: bool,
     /// 模糊候选的分数惩罚（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
-    /// 是否使用双拼（自然码方案）。
+    /// 是否使用双拼。
     pub shuangpin: bool,
+    /// 双拼方案（自然码、小鹤……）。
+    pub shuangpin_scheme: crate::shuangpin::Scheme,
     /// 是否在候选末尾追加原始输入（英文/未登录串）。
     pub english_candidate: bool,
     /// 是否把候选转成繁体。
@@ -112,6 +114,7 @@ impl Default for EngineConfig {
             fuzzy: false,
             fuzzy_penalty: 2.5,
             shuangpin: false,
+            shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
             english_candidate: true,
             traditional: false,
             auto_learn: true,
@@ -239,10 +242,10 @@ impl Engine {
         if count < self.config.auto_learn_threshold.max(1) {
             return;
         }
-        // 双拼模式下上游传进来的是键位串（如 "vsgo"），要先展开成全拼，
-        // 否则用户词会带着一串无效音节存进去，永远也打不出来。
-        let pinyin = if self.config.shuangpin {
-            crate::shuangpin::to_full_pinyin(pinyin)
+        // 候选带的拼音已经是全拼（双拼也翻好了）；以前的前端会传双拼键位串（如 "vsgo"），
+        // 那样的要先展开，否则用户词会带着一串无效音节存进去，永远也打不出来。
+        let pinyin = if self.config.shuangpin && !pinyin.trim().contains(' ') {
+            crate::shuangpin::to_full_pinyin(self.config.shuangpin_scheme, pinyin.trim())
         } else {
             pinyin.to_string()
         };
@@ -367,9 +370,21 @@ impl Engine {
         self.config.typo_correction = on;
     }
 
-    /// 开关双拼（自然码）。
+    /// 开关双拼。
     pub fn set_shuangpin(&mut self, on: bool) {
         self.config.shuangpin = on;
+    }
+
+    /// 选双拼方案（不改开关）。
+    pub fn set_shuangpin_scheme(&mut self, scheme: crate::shuangpin::Scheme) {
+        self.config.shuangpin_scheme = scheme;
+    }
+
+    /// 编辑区里怎么显示还没选的输入：双拼翻成全拼（`vsgo` -> `zhong'guo`），全拼返回 None。
+    pub fn shuangpin_display(&self, input: &str) -> Option<String> {
+        self.config
+            .shuangpin
+            .then(|| crate::shuangpin::display(self.config.shuangpin_scheme, input))
     }
 
     /// 开关繁体输出。
@@ -556,50 +571,100 @@ impl Engine {
     }
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        let display = raw.trim();
-        let normalized = display.to_ascii_lowercase();
+        let result = if self.config.shuangpin {
+            self.shuangpin_candidates(raw, at_ms)?
+        } else {
+            self.pinyin_candidates(raw, None, at_ms)?
+        };
+        if let Ok(mut last) = self.last_words.write() {
+            last.clear();
+            for c in &result {
+                if !is_raw_candidate(c) {
+                    last.insert(
+                        c.text.clone(),
+                        c.words.iter().map(|w| w.text.clone()).collect(),
+                    );
+                }
+            }
+        }
+        Ok(result)
+    }
 
-        let mut result = if self.config.shuangpin {
-            // 双拼：先把键位展开成全拼变体（自然码有少量重叠），每种都跑一遍再合并。
-            let variants = crate::shuangpin::to_full_pinyin_variants(&normalized);
-            let mut merged: HashMap<String, Candidate> = HashMap::new();
-            for variant in &variants {
-                for candidate in self.query_plain(variant, at_ms)? {
-                    match merged.entry(candidate.text.clone()) {
-                        Entry::Vacant(slot) => {
-                            slot.insert(candidate);
-                        }
-                        Entry::Occupied(mut slot) => {
-                            if candidate.score > slot.get().score {
-                                slot.insert(candidate);
-                            }
+    /// 双拼：先把键翻成全拼（`vsgo` -> `zhong'guo`），再走全拼那一套，
+    /// 最后把候选用掉的全拼字节数换回双拼键的字节数。
+    fn shuangpin_candidates(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
+        let display = raw.trim();
+        let leading = raw.len() - raw.trim_start().len();
+        let variants = crate::shuangpin::decode(self.config.shuangpin_scheme, display);
+        let Some(first) = variants.first() else {
+            // 翻不了（不是双拼）：只给原始串
+            let mut result = Vec::new();
+            self.append_raw_candidate(display, &mut result);
+            for c in &mut result {
+                c.consumed = raw.len();
+            }
+            return Ok(result);
+        };
+        let mut result = self.pinyin_candidates(&first.pinyin, Some(display), at_ms)?;
+        result.retain_mut(|c| {
+            let used = if is_raw_candidate(c) {
+                display.len()
+            } else {
+                first.raw_bytes(c.consumed, display.len())
+            };
+            c.consumed = if used >= display.len() {
+                raw.len()
+            } else {
+                leading + used
+            };
+            used > 0
+        });
+        // 有重码时，其他读法的整句候选补在后面
+        let max = self.config.max_candidates.max(1);
+        for other in variants.iter().skip(1) {
+            for mut c in self.query_plain(&other.pinyin.to_ascii_lowercase(), at_ms)? {
+                if result.len() >= max {
+                    break;
+                }
+                if result.iter().any(|r| r.text == c.text) {
+                    continue;
+                }
+                if self.config.traditional {
+                    if let Ok(conv) = self.converter.read() {
+                        if !conv.is_empty() {
+                            c.text = conv.convert(&c.text);
                         }
                     }
                 }
+                c.consumed = raw.len();
+                result.push(c);
             }
-            let mut list: Vec<Candidate> = merged.into_values().collect();
-            list.sort_by(|a, b| {
-                b.score
-                    .total_cmp(&a.score)
-                    .then_with(|| a.text.cmp(&b.text))
-            });
-            list.truncate(self.config.max_candidates.max(1));
-            list
-        } else {
-            self.query_plain(&normalized, at_ms)?
-        };
+        }
+        Ok(result)
+    }
+
+    /// 全拼的完整流程。`raw_display` 给了的话（双拼），原始串候选用它而不是 raw。
+    fn pinyin_candidates(
+        &self,
+        raw: &str,
+        raw_display: Option<&str>,
+        at_ms: u64,
+    ) -> Result<Vec<Candidate>> {
+        let display = raw.trim();
+        let normalized = display.to_ascii_lowercase();
+        let mut result = self.query_plain(&normalized, at_ms)?;
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
         self.promote_custom(&mut result);
-        self.append_raw_candidate(display, &mut result);
+        self.append_raw_candidate(raw_display.unwrap_or(display), &mut result);
         if self.config.traditional {
             self.apply_traditional(&mut result);
         }
         for candidate in &mut result {
             candidate.consumed = raw.len();
         }
-        if !self.config.shuangpin && self.config.prefix_candidates > 0 {
+        if self.config.prefix_candidates > 0 {
             let leading = raw.len() - raw.trim_start().len();
             let mut prefix = self.prefix_candidates(&normalized)?;
             prefix_on_syllable_boundaries(&result, &normalized, &mut prefix);
@@ -620,19 +685,8 @@ impl Engine {
             }
             compose_candidates(&mut result, prefix, self.config.max_candidates.max(1));
         }
-        if self.config.more_candidates && !self.config.shuangpin {
+        if self.config.more_candidates {
             self.append_more_candidates(raw, display, &normalized, &mut result)?;
-        }
-        if let Ok(mut last) = self.last_words.write() {
-            last.clear();
-            for c in &result {
-                if !is_raw_candidate(c) {
-                    last.insert(
-                        c.text.clone(),
-                        c.words.iter().map(|w| w.text.clone()).collect(),
-                    );
-                }
-            }
         }
         Ok(result)
     }
@@ -647,7 +701,7 @@ impl Engine {
         if parsed.len() < 2 {
             return Ok(Vec::new());
         }
-        let typo = self.config.typo_correction;
+        let typo = self.config.typo_correction && !self.config.shuangpin;
         let full = SyllableGraph::build(
             &parsed,
             GraphOptions {
@@ -728,7 +782,7 @@ impl Engine {
         if parsed.is_empty() {
             return Ok(());
         }
-        let typo = self.config.typo_correction;
+        let typo = self.config.typo_correction && !self.config.shuangpin;
         let full = SyllableGraph::build(
             &parsed,
             GraphOptions {
@@ -2062,6 +2116,42 @@ mod tests {
             e.input("nihk").iter().any(|c| c.text == "你好"),
             "双拼 nihk 应当命中 你好"
         );
+    }
+
+    #[test]
+    fn shuangpin_prefix_and_trailing_key() {
+        use crate::shuangpin::Scheme;
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "zhong guo\t中国\t8000\nren\t人\t9000\nzhong guo ren\t中国人\t3000\n\
+                 ni hao\t你好\t10000\nni\t你\t9000\nhao\t好\t9000\nzhong\t中\t9000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_shuangpin(true);
+        // 自然码 vs go rf：句首词「中」用掉前 2 个键
+        let c = e.input("vsgorf");
+        assert!(
+            c.iter().any(|x| x.text == "中国人" && x.consumed == 6),
+            "{c:?}"
+        );
+        assert!(c.iter().any(|x| x.text == "中" && x.consumed == 2), "{c:?}");
+        // 句首词「你好」用掉前 4 个键（隔音符也算进去）
+        let c = e.input("ni'hkvs");
+        assert!(
+            c.iter().any(|x| x.text == "你好" && x.consumed == 5),
+            "{c:?}"
+        );
+        // 最后单一个键当声母
+        assert!(e.input("vsg").iter().any(|x| x.text == "中国"));
+        assert_eq!(e.shuangpin_display("vsgo").as_deref(), Some("zhong'guo"));
+        // 换成小鹤：hao 是 hc
+        e.set_shuangpin_scheme(Scheme::Xiaohe);
+        assert!(e.input("nihc").iter().any(|x| x.text == "你好"));
+        // 学习时传进来的拼音是全拼
+        assert!(e.input("nihk").iter().all(|x| x.text != "你好"));
     }
 
     #[test]

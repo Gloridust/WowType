@@ -134,7 +134,7 @@ bigram 格式（可选）：
 ## 配置
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
-`Shuangpin`、`Traditional`、`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`Voice`、`VoiceKey`、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -151,7 +151,9 @@ bigram 格式（可选）：
 | `WOWTYPE_USER_DICT` | 用户词库路径，默认 `$XDG_DATA_HOME/wowtype/user.tsv` |
 | `WOWTYPE_TYPO` | `0` 关闭按错键纠错（默认开；双拼下不生效） |
 | `WOWTYPE_FUZZY` | `1` 开启模糊音 |
-| `WOWTYPE_SHUANGPIN` | `1` 使用双拼（自然码） |
+| `WOWTYPE_SHUANGPIN` | `1` 使用双拼 |
+| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案：`ziranma`、`xiaohe`、`microsoft`、`sogou`、`abc`、`ziguang`、`pinyinjiajia`；设了就打开双拼 |
+| `WOWTYPE_SHIFT_TOGGLE` | 单按哪个 Shift 切英文：`both`（默认）、`left`、`right`、`off` |
 | `WOWTYPE_TRADITIONAL` / `WOWTYPE_S2T` | 繁体输出 / 简繁表路径 |
 | `WOWTYPE_VERTICAL` | `1` 候选竖排 |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名），`none` 关掉语音 |
@@ -168,14 +170,17 @@ bigram 格式（可选）：
 - `空格` 上屏光标所在的候选；无候选时上屏原始拼音
 - `回车` 上屏已选的词 + 原始拼音
 - `1`–`9` 选**当前页**对应的候选
-- `↑↓` 移动光标，`PgUp` `PgDn` / `-` `=` 翻页
+- `↑↓` 移动光标，`PgUp` `PgDn` / `-` `=` 翻页；fcitx5 全局的 `[Hotkey/PrevPage]` `[Hotkey/NextPage]` `[Hotkey/PrevCandidate]` `[Hotkey/NextCandidate]` 也认（方向键除外，它们按横排/竖排走），配成 `,` `.` 时打字途中按它们只翻页，不上屏标点
 - 打字途中按标点：先上屏当前候选，再出中文标点（`nihao,` → 你好，）
 - 缓冲为空时，ASCII 标点自动转成中文标点；数字直接交给应用
 - `/` 等没有对应中文标点的符号原样上屏；打拼音途中按它们，先上屏当前候选（`nihao/` → 你好/）
 - 首选候选对得上 emoji 时（`kaixin` → 开心），第三个候选插一个 emoji；`EmojiSuggest=False` 关掉
 - `Super+.`（`EmojiKey` 可改）打开表情面板：打拼音或英文搜 emoji 和符号，方向键挑，空格/回车/`1`–`6` 上屏，`Esc` 关闭
-- 中英文切换用 fcitx5 自己的「临时切换输入法」热键（默认左 Shift）；
-  打到一半切走时，已选的词 + 原始字母上屏，不会丢。失去焦点时清空编辑区，不往别的窗口上屏
+- 单按 Shift（按下松开，中间没按别的键、不超过 0.5 秒）切 WowType 自己的英文模式：按键原样交给应用，
+  状态栏显示「英」；打到一半切英文时，已选的词 + 原始字母上屏。fcitx5 的「临时切换输入法」热键
+  （默认左 Shift）生效时 fcitx5 会先把 Shift 吃掉，两者不会重复切换
+- 切换输入法时已选的词 + 原始字母上屏，不会丢。失去焦点时清空编辑区，不往别的窗口上屏
+- 双拼时编辑区显示全拼（`vsgo` → `zhong'guo`）；微软、搜狗、紫光的 `;` 是 ing，等第二个键时按 `;` 进编辑区
 - 编辑区里 `←→` `Tab` `Delete` 吃掉不处理，免得应用里的光标乱跑
 
 ## 选词学习

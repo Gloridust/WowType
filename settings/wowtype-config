@@ -66,6 +66,8 @@ DEFAULTS = {
     "Fuzzy": "False",
     "TypoCorrection": "True",
     "Shuangpin": "False",
+    "ShuangpinScheme": "Ziranma",
+    "ShiftToggle": "Both",
     "Traditional": "False",
     "Voice": "True",
     "VoiceKey": "Alt_R",
@@ -73,6 +75,65 @@ DEFAULTS = {
     "EmojiKey": "Super+period",
     "CheckUpdate": "True",
 }
+
+# 双拼方案（存盘名和插件的 WowtypeShuangpinScheme 一致）
+SHUANGPIN_SCHEMES = [
+    ("自然码", "Ziranma"),
+    ("小鹤双拼", "Xiaohe"),
+    ("微软双拼", "Microsoft"),
+    ("搜狗双拼", "Sogou"),
+    ("智能 ABC", "ABC"),
+    ("紫光双拼", "Ziguang"),
+    ("拼音加加", "PinyinJiajia"),
+]
+
+SHIFT_TOGGLES = [
+    ("左右 Shift 都行", "Both"),
+    ("左 Shift", "Left"),
+    ("右 Shift", "Right"),
+    ("不用 Shift 切换", "Off"),
+]
+
+# 设置窗口的样式（照微信输入法：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片）
+GREEN = "#0EAF76"
+STYLE_LIGHT = """
+.wt-sidebar { background-image: linear-gradient(180deg, #d9f3e6 0%, #e9f8f0 40%, #f5fbf8 100%); }
+.wt-sidebar headerbar { background: transparent; box-shadow: none; }
+.wt-brand { margin: 4px 22px 18px 22px; }
+.wt-brand-name { font-weight: 800; font-size: 15pt; }
+.wt-nav, .wt-nav row { background: transparent; }
+.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; }
+.wt-nav row:hover { background: alpha(#0EAF76, 0.10); }
+.wt-nav row:selected { background: #0EAF76; color: white; }
+.wt-nav row:selected image, .wt-nav row:selected label { color: white; }
+.wt-content, .wt-content headerbar { background: #f5f7f6; box-shadow: none; }
+.wt-page-title { font-weight: 800; font-size: 17pt; margin-left: 10px; }
+.wt-content list.boxed-list { border-radius: 12px; background: white; box-shadow: 0 0 0 1px #e6eae8; }
+.wt-content preferencesgroup > box > box > label.heading { color: #6b7570; }
+"""
+STYLE_DARK = """
+.wt-sidebar { background-image: linear-gradient(180deg, #17332a 0%, #1c2a25 45%, #202523 100%); }
+.wt-sidebar headerbar { background: transparent; box-shadow: none; }
+.wt-brand { margin: 4px 22px 18px 22px; }
+.wt-brand-name { font-weight: 800; font-size: 15pt; }
+.wt-nav, .wt-nav row { background: transparent; }
+.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; }
+.wt-nav row:hover { background: alpha(#3CCB93, 0.12); }
+.wt-nav row:selected { background: #0EAF76; color: white; }
+.wt-nav row:selected image, .wt-nav row:selected label { color: white; }
+.wt-content, .wt-content headerbar { background: #1d201f; box-shadow: none; }
+.wt-page-title { font-weight: 800; font-size: 17pt; margin-left: 10px; }
+.wt-content list.boxed-list { border-radius: 12px; background: #282c2a; box-shadow: 0 0 0 1px #3b4144; }
+"""
+# 开关、单选框、主按钮换成 WowType 绿（旧版 libadwaita 用命名颜色，1.6 起用 CSS 变量）
+STYLE_ACCENT = """
+@define-color accent_bg_color #0EAF76;
+@define-color accent_color %s;
+@define-color accent_fg_color #ffffff;
+"""
+STYLE_ACCENT_VARS = """
+:root { --accent-bg-color: #0EAF76; --accent-fg-color: #ffffff; --accent-color: %s; }
+"""
 
 VOICE_KEYS = [
     ("右 Alt", "Alt_R"),
@@ -1014,7 +1075,6 @@ def dir_size(path):
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app, page=None):
         super().__init__(application=app, title="WowType 设置")
-        self.set_default_size(620, 720)
         self.fcitx = Fcitx()
         self.guesser = PinyinGuesser()
         self.values, self.extra = read_config()
@@ -1023,22 +1083,64 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.guess_source = 0
         self.pinyin_edited = False
 
+        self.set_default_size(860, 680)
         self.toasts = Adw.ToastOverlay()
-        self.stack = Adw.ViewStack()
-        self.stack.add_titled_with_icon(self.build_general(), "general", "常规",
-                                        "preferences-system-symbolic")
-        self.stack.add_titled_with_icon(self.build_voice(), "voice", "语音",
-                                        "audio-input-microphone-symbolic")
-        self.stack.add_titled_with_icon(self.build_words(), "words", "自定义词",
-                                        "accessories-dictionary-symbolic")
-        self.stack.add_titled_with_icon(self.build_update(), "update", "更新",
-                                        "software-update-available-symbolic")
-        if page:
-            self.stack.set_visible_child_name(page)
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
+                               transition_duration=120)
+        pages = (
+            ("general", "常规", "preferences-system-symbolic", self.build_general),
+            ("input", "输入", "input-keyboard-symbolic", self.build_input),
+            ("emoji", "表情", "face-smile-symbolic", self.build_emoji),
+            ("voice", "语音", "audio-input-microphone-symbolic", self.build_voice),
+            ("words", "自定义词", "accessories-dictionary-symbolic", self.build_words),
+            ("update", "更新", "software-update-available-symbolic", self.build_update),
+        )
+        self.switches = {}
+        self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
+        self.nav.add_css_class("wt-nav")
+        self.nav_rows = {}
+        for name, title, icon, build in pages:
+            self.stack.add_titled(build(), name, title)
+            box = Gtk.Box(spacing=12)
+            box.append(Gtk.Image(icon_name=icon))
+            box.append(Gtk.Label(label=title, xalign=0))
+            row = Gtk.ListBoxRow(child=box)
+            row.page_name = name
+            self.nav.append(row)
+            self.nav_rows[name] = row
+        self.nav.connect("row-selected", self.on_nav_selected)
+        self.stack.connect("notify::visible-child-name", self.on_page_changed)
 
-        header = Adw.HeaderBar()
-        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
-        header.set_title_widget(switcher)
+        # 左边：图标、名字、导航
+        brand = Gtk.Box(spacing=10)
+        brand.add_css_class("wt-brand")
+        brand.append(Gtk.Image(icon_name="wowtype", pixel_size=36))
+        names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
+        name_label = Gtk.Label(label="WowType", xalign=0)
+        name_label.add_css_class("wt-brand-name")
+        names.append(name_label)
+        version_label = Gtk.Label(label="设置", xalign=0)
+        version_label.add_css_class("dim-label")
+        version_label.add_css_class("caption")
+        names.append(version_label)
+        brand.append(names)
+        side_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        side_box.append(brand)
+        side_box.append(self.nav)
+        side_header = Adw.HeaderBar(show_end_title_buttons=False)
+        side_header.set_title_widget(Gtk.Box())
+        sidebar = Adw.ToolbarView()
+        sidebar.add_css_class("wt-sidebar")
+        sidebar.add_top_bar(side_header)
+        sidebar.set_content(side_box)
+        sidebar.set_size_request(210, -1)
+
+        # 右边：页面标题 + 菜单，下面是页面
+        header = Adw.HeaderBar(show_start_title_buttons=False)
+        header.set_title_widget(Gtk.Box())
+        self.page_title = Gtk.Label(xalign=0)
+        self.page_title.add_css_class("wt-page-title")
+        header.pack_start(self.page_title)
         menu = Gio.Menu()
         menu.append("用文本编辑器打开自定义词", "win.open-custom")
         menu.append("导出日志…", "win.export-log")
@@ -1052,18 +1154,44 @@ class SettingsWindow(Adw.ApplicationWindow):
             action.connect("activate", handler)
             self.add_action(action)
 
-        view = Adw.ToolbarView()
-        view.add_top_bar(header)
+        content = Adw.ToolbarView()
+        content.add_css_class("wt-content")
+        content.add_top_bar(header)
         self.toasts.set_child(self.stack)
-        view.set_content(self.toasts)
-        self.set_content(view)
-        self.set_size_request(420, 400)
+        content.set_content(self.toasts)
+        content.set_hexpand(True)
+
+        split = Gtk.Box()
+        split.append(sidebar)
+        split.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
+        split.append(content)
+        self.set_content(split)
+        self.set_size_request(640, 460)
+        self.show_page(page or "general")
 
         self.refresh_status()
         self.refresh_theme()
         self.release = None
         self.update_files = []
         self.on_check_update()
+
+    def show_page(self, name):
+        if name not in self.nav_rows:
+            name = "general"
+        self.stack.set_visible_child_name(name)
+        self.on_page_changed()
+
+    def on_nav_selected(self, _box, row):
+        if row is not None and self.stack.get_visible_child_name() != row.page_name:
+            self.stack.set_visible_child_name(row.page_name)
+
+    def on_page_changed(self, *_args):
+        name = self.stack.get_visible_child_name()
+        row = self.nav_rows.get(name)
+        if row is not None and self.nav.get_selected_row() is not row:
+            self.nav.select_row(row)
+        self.page_title.set_label(self.stack.get_page(self.stack.get_visible_child()).get_title()
+                                  if self.stack.get_visible_child() else "")
 
     # ---------------- 常规
 
@@ -1108,36 +1236,6 @@ class SettingsWindow(Adw.ApplicationWindow):
         look.add(self.theme_row)
         page.add(look)
 
-        pinyin = Adw.PreferencesGroup(title="拼音")
-        self.switches = {}
-        for key, title, subtitle in (
-            ("Fuzzy", "模糊音", "z 和 zh、c 和 ch、s 和 sh，an 和 ang、en 和 eng、in 和 ing 不分"),
-            ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」"),
-            ("Shuangpin", "双拼", "自然码方案"),
-            ("Traditional", "繁体字", "候选词转成繁体"),
-        ):
-            pinyin.add(self.make_switch(key, title, subtitle))
-        page.add(pinyin)
-
-        emoji = Adw.PreferencesGroup(
-            title="表情",
-            description="按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
-                        "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。")
-        emoji.add(self.make_switch("EmojiSuggest", "打字时推荐 emoji",
-                                   "打「开心」「点赞」这类词时，第三个候选是对应的 emoji"))
-        current = self.values["EmojiKey"]
-        labels = [label for label, _ in EMOJI_KEYS]
-        self.emoji_keys = [name for _, name in EMOJI_KEYS]
-        if current not in self.emoji_keys:
-            labels.append(f"其他（{current}）")
-            self.emoji_keys.append(current)
-        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", model=Gtk.StringList.new(labels))
-        self.emoji_key_row.set_selected(self.emoji_keys.index(current))
-        self.emoji_key_row.connect("notify::selected", lambda row, _p: self.set_value(
-            "EmojiKey", self.emoji_keys[row.get_selected()]))
-        emoji.add(self.emoji_key_row)
-        page.add(emoji)
-
         tips = Adw.PreferencesGroup(title="小技巧")
         for title, subtitle in (
             ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持"),
@@ -1162,6 +1260,91 @@ class SettingsWindow(Adw.ApplicationWindow):
         issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
         feedback.add(issue_row)
         page.add(feedback)
+        return page
+
+    # ---------------- 输入
+
+    def build_input(self):
+        page = Adw.PreferencesPage()
+
+        mode = Adw.PreferencesGroup(title="输入方式")
+        self.full_pinyin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
+        self.shuangpin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.full_pinyin_check)
+        full_row = Adw.ActionRow(title="拼音输入", subtitle="全拼，也可以只打声母：bjdx → 北京大学")
+        full_row.add_prefix(self.full_pinyin_check)
+        full_row.set_activatable_widget(self.full_pinyin_check)
+        sp_row = Adw.ActionRow(title="双拼输入", subtitle="每个字两个键，编辑区显示成全拼")
+        sp_row.add_prefix(self.shuangpin_check)
+        sp_row.set_activatable_widget(self.shuangpin_check)
+        mode.add(full_row)
+        mode.add(sp_row)
+        self.scheme_names = [name for _, name in SHUANGPIN_SCHEMES]
+        self.scheme_row = Adw.ComboRow(
+            title="双拼方案", model=Gtk.StringList.new([label for label, _ in SHUANGPIN_SCHEMES]))
+        current = self.values.get("ShuangpinScheme", "Ziranma")
+        self.scheme_row.set_selected(
+            self.scheme_names.index(current) if current in self.scheme_names else 0)
+        self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "ShuangpinScheme", self.scheme_names[row.get_selected()]))
+        mode.add(self.scheme_row)
+        (self.shuangpin_check if self.values["Shuangpin"] == "True"
+         else self.full_pinyin_check).set_active(True)
+        self.scheme_row.set_sensitive(self.values["Shuangpin"] == "True")
+        self.shuangpin_check.connect("toggled", self.on_shuangpin_toggled)
+        page.add(mode)
+
+        switch = Adw.PreferencesGroup(
+            title="中英文切换",
+            description="单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
+                        "打到一半切英文，打的字母原样上屏。")
+        self.shift_names = [name for _, name in SHIFT_TOGGLES]
+        self.shift_row = Adw.ComboRow(
+            title="切换键", model=Gtk.StringList.new([label for label, _ in SHIFT_TOGGLES]))
+        current = self.values.get("ShiftToggle", "Both")
+        self.shift_row.set_selected(
+            self.shift_names.index(current) if current in self.shift_names else 0)
+        self.shift_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "ShiftToggle", self.shift_names[row.get_selected()]))
+        switch.add(self.shift_row)
+        page.add(switch)
+
+        pinyin = Adw.PreferencesGroup(title="拼音")
+        for key, title, subtitle in (
+            ("Fuzzy", "模糊音", "z 和 zh、c 和 ch、s 和 sh，an 和 ang、en 和 eng、in 和 ing 不分"),
+            ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」（全拼时）"),
+            ("Traditional", "繁体字", "候选词转成繁体"),
+        ):
+            pinyin.add(self.make_switch(key, title, subtitle))
+        page.add(pinyin)
+        return page
+
+    def on_shuangpin_toggled(self, check):
+        on = check.get_active()
+        self.scheme_row.set_sensitive(on)
+        self.set_value("Shuangpin", "True" if on else "False")
+
+    # ---------------- 表情
+
+    def build_emoji(self):
+        page = Adw.PreferencesPage()
+        emoji = Adw.PreferencesGroup(
+            title="表情",
+            description="按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
+                        "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。")
+        emoji.add(self.make_switch("EmojiSuggest", "打字时推荐 emoji",
+                                   "打「开心」「点赞」这类词时，第三个候选是对应的 emoji"))
+        current = self.values["EmojiKey"]
+        labels = [label for label, _ in EMOJI_KEYS]
+        self.emoji_keys = [name for _, name in EMOJI_KEYS]
+        if current not in self.emoji_keys:
+            labels.append(f"其他（{current}）")
+            self.emoji_keys.append(current)
+        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", model=Gtk.StringList.new(labels))
+        self.emoji_key_row.set_selected(self.emoji_keys.index(current))
+        self.emoji_key_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "EmojiKey", self.emoji_keys[row.get_selected()]))
+        emoji.add(self.emoji_key_row)
+        page.add(emoji)
         return page
 
     def open_url(self, url):
@@ -1661,6 +1844,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.page_row.set_value(9)
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")
+            self.full_pinyin_check.set_active(True)
+            self.scheme_row.set_selected(0)
+            self.shift_row.set_selected(0)
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
             self.toast("已恢复默认设置")
@@ -1689,7 +1875,7 @@ class SettingsApp(Adw.Application):
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.page = None
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
-                             "打开时显示的页面：general、voice、words、update", "页面")
+                             "打开时显示的页面：general、input、emoji、voice、words、update", "页面")
 
     def do_startup(self):
         Adw.Application.do_startup(self)
@@ -1701,6 +1887,13 @@ class SettingsApp(Adw.Application):
         settings = Gtk.Settings.get_default()
         settings.connect("notify::gtk-font-name", lambda *_: self.update_font_css())
         self.update_font_css()
+        # 微信输入法风格的配色，深色模式换一套
+        self.style_css = Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(), self.style_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        manager = Adw.StyleManager.get_default()
+        manager.connect("notify::dark", lambda *_: self.update_style_css())
+        self.update_style_css()
 
     def update_font_css(self):
         name = Gtk.Settings.get_default().props.gtk_font_name or "Sans 11"
@@ -1708,6 +1901,14 @@ class SettingsApp(Adw.Application):
         families = [family] + [f for f in CJK_SC_FONTS if f != family]
         quoted = ", ".join('"' + f.replace('"', "") + '"' for f in families)
         self.font_css.load_from_string(f"window {{ font-family: {quoted}; }}")
+
+    def update_style_css(self):
+        dark = Adw.StyleManager.get_default().get_dark()
+        accent_text = "#3CCB93" if dark else "#0a8a5c"
+        css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT % accent_text
+        if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):
+            css += STYLE_ACCENT_VARS % accent_text
+        self.style_css.load_from_string(css)
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict().end().unpack()
@@ -1721,7 +1922,7 @@ class SettingsApp(Adw.Application):
         if not window:
             window = SettingsWindow(self, self.page)
         elif self.page:
-            window.stack.set_visible_child_name(self.page)
+            window.show_page(self.page)
         window.present()
 
 

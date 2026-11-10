@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 - **候选横排**，和微信输入法一样：整句只留几个，后面是词，最后是单字。
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **Emoji**：打「开心」「点赞」「生日快乐」时，第三个候选就是对应的 emoji；按 `Super` + `.` 打开表情面板，打拼音或英文搜 emoji 和符号（`xiao` → 😂、`pizza` → 🍕、`youjiantou` → →）。
-- **繁体、模糊音、双拼**：可切繁体输出；可开模糊音、自然码双拼。
+- **繁体、模糊音、双拼**：可切繁体输出；可开模糊音；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
 - **图形设置界面**：候选排列、模糊音、语音键都在「WowType 设置」里点一下就改，马上生效；还能加自定义词（人名、公司名、常用的长句），加进去的词排第一，简拼也能打。
 - **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型第一次用时下载一次）。
 
@@ -229,13 +229,13 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 | `1`–`9` | 上屏对应的候选 |
 | `←` `→` | 在候选之间移动光标 |
 | `↓` | 展开候选面板（6 列，像微信输入法），在面板里用方向键挪、空格或 `1`–`6` 选；第一行按 `↑` 或 `Esc` 收起 |
-| `↑`、`-` `=`、`PgUp` `PgDn` | 翻页 |
+| `↑`、`-` `=`、`PgUp` `PgDn` | 翻页；fcitx5 全局设置里配的翻页、移动候选热键（比如 `,` `.` 翻页）也认 |
 | 回车 | 把打的字母原样上屏 |
 | `Esc` | 清空正在打的内容 |
 | 退格 | 删一个字母；刚选过词时先撤销那次选词 |
 | `'` | 分隔音节，比如 `xi'an` → 西安 |
 | `Super` + `.` | 表情面板：打拼音或英文搜 emoji 和符号，见下 |
-| 左 `Shift` | 临时切英文（fcitx5 的设置），打了一半的字母原样上屏 |
+| 单按 `Shift` | 切到英文（字母、半角标点直接上屏），再按一下回中文；打了一半的字母原样上屏。左右 Shift 都行，设置里能改成只用一边或关掉 |
 | 右 `Alt` | 语音输入，见下 |
 
 **编辑区自动分音节**：打 `hengxiang` 显示 `heng'xiang`，按第一个候选的切法分；打了一半、简拼、按错键也分（`zhong'g`、`b'j'd'x`）。
@@ -288,9 +288,9 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 <table>
 <tr>
 <td align="center" width="50%">
-<img src="docs/images/settings-general.png" alt="WowType 设置的常规页：输入法状态、候选排列方向、每页个数、绿色主题、模糊音、按错键纠正、双拼、繁体字、emoji 推荐"><br>
-<b>常规</b><br>
-<sub>候选横排还是竖排、每页几个，模糊音、纠错、双拼、繁体</sub>
+<img src="docs/images/settings-input.png" alt="WowType 设置的输入页：拼音输入或双拼输入、双拼方案、单按 Shift 切换中英文、模糊音、按错键纠正、繁体字"><br>
+<b>输入</b><br>
+<sub>全拼还是双拼（7 种方案）、Shift 切英文、模糊音、纠错、繁体</sub>
 </td>
 <td align="center" width="50%">
 <img src="docs/images/settings-words.png" alt="WowType 设置的自定义词页：输入词后拼音自动填好，下面是已经加过的词"><br>
@@ -314,7 +314,9 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 | 页面 | 能改什么 |
 |---|---|
-| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、双拼（自然码）、繁体字、打字时推荐 emoji、表情面板快捷键。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
+| 输入 | 拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文、模糊音（z=zh、c=ch、s=sh，an=ang、en=eng、in=ing）、按错键自动纠正、繁体字 |
+| 表情 | 打字时推荐 emoji、表情面板快捷键 |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别模型下没下载 |
 | 自定义词 | 人名、公司名、常用的长句。填上词，拼音自动查好（多音字记得检查一下）；可以搜索，删错了能撤销 |
 | 更新 | 检查新版本、看更新内容、下载并安装（见[更新](#更新)），自动检查的开关 |
@@ -378,6 +380,8 @@ PageSize=9
 Fuzzy=False
 TypoCorrection=True
 Shuangpin=False
+ShuangpinScheme=Ziranma
+ShiftToggle=Both
 Traditional=False
 Voice=True
 VoiceKey=Alt_R
@@ -391,6 +395,8 @@ CheckUpdate=True
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
 | `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`Voice`、`EmojiSuggest`、`CheckUpdate` | `True` / `False` |
+| `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
+| `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off` |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键 |
 
@@ -401,6 +407,8 @@ CheckUpdate=True
 | 变量 | 作用 |
 |---|---|
 | `WOWTYPE_FUZZY=1`、`WOWTYPE_SHUANGPIN=1`、`WOWTYPE_TRADITIONAL=1`、`WOWTYPE_TYPO=0`、`WOWTYPE_VERTICAL=1`、`WOWTYPE_EMOJI=0` | 对应上面的开关 |
+| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼 |
+| `WOWTYPE_SHIFT_TOGGLE` | `both`、`left`、`right`、`off` |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |
 | `WOWTYPE_VOICE_OVERLAY=0` | GNOME 上也不用语音浮条，用候选框里的文字提示 |
 | `WOWTYPE_LEXICON`、`WOWTYPE_ENGLISH` | 词库、英文词表路径（默认的查找顺序见下） |
