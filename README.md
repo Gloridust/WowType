@@ -82,7 +82,7 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 ### 系统要求
 
 - Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](#方式二从源码构建)
+- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
 ### 一行命令安装（推荐）
@@ -184,39 +184,7 @@ home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
 
 ##### 方式二：从源码构建
 
-适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
-（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git；
-设置界面另外要 PyGObject、GTK 4 和 libadwaita 1.4+）。
-
-```bash
-# 1. 依赖
-sudo apt install build-essential pkg-config cmake extra-cmake-modules \
-  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev git python3 curl
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1    # 设置界面用，不装也能打字
-curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
-
-# 2. 代码
-git clone https://github.com/Gloridust/WowType.git
-cd WowType
-
-# 3. 编译并安装插件和设置界面（Rust 核心静态链接进插件，不用另装 .so）
-cargo build --release -p wowtype-core
-cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
-cmake --build build -j"$(nproc)"
-sudo cmake --install build
-
-# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice 和语言模型）
-scripts/make-data.sh "" dist/data
-mkdir -p ~/.local/share/wowtype
-cp dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm ~/.local/share/wowtype/
-```
-
-> 不想装设置界面，cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`。
->
-> Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
-> 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成你系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
-
-不想自己生成词库，也可以只下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
+其他发行版，或者想用最新代码：依赖、编译、词库生成、排障都在 [docs/INSTALL.md](docs/INSTALL.md)。
 
 #### 第 3 步：把 WowType 加进输入法列表
 
@@ -452,6 +420,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 - 输入示例：[docs/USAGE.md](docs/USAGE.md)
 - 设置项、环境变量、数据文件：[docs/CONFIG.md](docs/CONFIG.md)
+- 从源码构建：[docs/INSTALL.md](docs/INSTALL.md)
 - 卸载：[docs/INSTALL.md](docs/INSTALL.md#卸载)
 - 目前做不到的：[docs/LIMITATIONS.md](docs/LIMITATIONS.md)
 

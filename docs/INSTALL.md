@@ -3,6 +3,44 @@
 普通用户用 [README](../README.md#安装) 里的安装包就行。这里是从源码一步步构建、每步都能验证的版本，
 方便出问题时定位到哪一层。需要 fcitx5 5.1 或更新（Ubuntu 24.04 / Debian 13 起）。
 
+## 快速构建（4 步）
+
+适合其他发行版，或者想用最新代码的情况。下面以 Debian/Ubuntu 为例，其他发行版装对应的包即可
+（需要：C++20 编译器、CMake ≥ 3.16、extra-cmake-modules、fcitx5 的开发包、ALSA 开发包（语音输入用）、Rust 1.70+、Python 3、git；
+设置界面另外要 PyGObject、GTK 4 和 libadwaita 1.4+）。
+
+```bash
+# 1. 依赖
+sudo apt install build-essential pkg-config cmake extra-cmake-modules \
+  libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev git python3 curl
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1    # 设置界面用，不装也能打字
+curl -sSf https://sh.rustup.rs | sh        # 已经装了 Rust 的跳过
+
+# 2. 代码
+git clone https://github.com/Gloridust/WowType.git
+cd WowType
+
+# 3. 编译并安装插件和设置界面（Rust 核心静态链接进插件，不用另装 .so）
+cargo build --release -p wowtype-core
+cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build build -j"$(nproc)"
+sudo cmake --install build
+
+# 4. 词库：从雾凇拼音生成，放到用户目录（约 30 秒，需要联网下载 rime-ice 和语言模型）
+scripts/make-data.sh "" dist/data
+mkdir -p ~/.local/share/wowtype
+cp dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm ~/.local/share/wowtype/
+```
+
+> 不想装设置界面，cmake 时加 `-DWOWTYPE_INSTALL_SETTINGS=OFF`。
+>
+> Arch、Fedora 等发行版的 fcitx5 插件目录可能不是 `/usr/lib/x86_64-linux-gnu/fcitx5`。
+> 如果装完找不到输入法，把 `-DCMAKE_INSTALL_LIBDIR=` 设成系统里 `libpinyin.so`、`librime.so` 这类 fcitx5 插件所在目录的上一级（例如 `lib` 或 `lib64`）。
+>
+> 不想自己生成词库，也可以下载 Releases 里的 `wowtype-data-rime-ice-<日期.修订>.tar.gz`，解压到 `~/.local/share/wowtype/`。
+
+下面是从零开始、每一步都能验证的版本，出问题时用它定位到哪一层。
+
 ## 0. 依赖
 
 ```bash
