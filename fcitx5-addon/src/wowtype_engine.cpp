@@ -2139,14 +2139,18 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
 }
 
 /// 后台的小事交给设置界面（wowtype-config --startup）：第一次用时打开 WowType 主题、
-/// 检查更新（它自己看「自动检查更新」开关，限一天一次，有新版本时发桌面通知）。
-/// 插件这边只是每次 fcitx5 运行里第一次切到 WowType 时叫它一下。
+/// 检查更新（它自己看「自动检查更新」开关，最多一小时查一次，有新版本时发桌面通知）。
+/// 插件这边在切到 WowType 时叫它，同一个 fcitx5 进程里最多一小时叫一次。
 void WowtypeEngine::maybeCheckUpdate() {
 #ifdef WOWTYPE_CONFIG_TOOL
-    if (updateChecked_ || std::getenv("WOWTYPE_NO_UPDATE_CHECK")) {
+    if (std::getenv("WOWTYPE_NO_UPDATE_CHECK")) {
         return;
     }
-    updateChecked_ = true;
+    const auto nowTime = std::chrono::steady_clock::now();
+    if (updateCheckedAt_ && nowTime - *updateCheckedAt_ < std::chrono::hours(1)) {
+        return;
+    }
+    updateCheckedAt_ = nowTime;
     std::error_code ec;
     if (std::filesystem::exists(WOWTYPE_CONFIG_TOOL, ec)) {
         fcitx::startProcess({WOWTYPE_CONFIG_TOOL, "--startup"});
