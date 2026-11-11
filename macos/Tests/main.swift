@@ -223,6 +223,20 @@ do {
 
 do {
     let (c, client) = fresh()
+    // @ # % 没有中文写法，交给应用；{ } 是直角引号
+    check(!c.handle(.char("@", .shift)), "@ 交给应用")
+    check(!c.handle(.char("%", .shift)), "% 交给应用")
+    _ = c.handle(.char("{", .shift))
+    type(c, "nihao")
+    _ = c.handle(.char("}", .shift))
+    check(client.committed == "「你好」", "{ } 是直角引号", client.committed)
+    type(c, "nihao")
+    _ = c.handle(.char("@", .shift))
+    check(client.committed == "「你好」你好@", "打字途中按 @：先上屏候选再上屏半角 @", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
     // 数字交给了应用，光标前是数字：后面的符号原样（20:22、3,000）
     client.committed = "20"
     _ = c.handle(.char(":"))

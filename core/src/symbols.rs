@@ -76,6 +76,9 @@ pub const SYMBOLS: &[Symbol] = &[
 ];
 
 /// ASCII 标点 -> 中文标点。未收录的返回 None。
+///
+/// `@ # % & *` 不收：邮箱、话题、百分比、Markdown 里都要半角，主流输入法也原样上屏。
+/// `{ }` 照 macOS 自带拼音给直角引号「」。
 pub fn fullwidth_punct(ascii: char) -> Option<&'static str> {
     let text = match ascii {
         ',' => "，",
@@ -97,12 +100,9 @@ pub fn fullwidth_punct(ascii: char) -> Option<&'static str> {
         '_' => "——",
         '"' => "“",
         '\'' => "‘",
-        '@' => "＠",
-        '#' => "＃",
+        '{' => "「",
+        '}' => "」",
         '$' => "￥",
-        '%' => "％",
-        '&' => "＆",
-        '*' => "＊",
         _ => return None,
     };
     Some(text)
@@ -191,6 +191,18 @@ mod tests {
     }
 
     #[test]
+    fn at_hash_percent_stay_ascii_and_braces_are_corner_brackets() {
+        use PunctStyle::*;
+        for c in ['@', '#', '%', '&', '*', '/', '+', '='] {
+            assert_eq!(punct(c, Fullwidth, None), None, "{c}");
+        }
+        assert_eq!(punct('{', Fullwidth, None), Some("「"));
+        assert_eq!(punct('}', Fullwidth, Some('好')), Some("」"));
+        assert_eq!(punct('[', Fullwidth, None), Some("【"));
+        assert_eq!(punct('{', Halfwidth, None), None);
+    }
+
+    #[test]
     fn punct_follows_style() {
         use PunctStyle::*;
         for c in [',', '.', '(', ')', ';', ':', '?', '!'] {
@@ -204,7 +216,7 @@ mod tests {
     fn punct_after_digit_stays_ascii() {
         use PunctStyle::*;
         // 3.14、20:22、3,000、50%：数字后面的符号都原样
-        for c in ['.', ':', ',', '%', ';', '(', ')', '$', '~', '"'] {
+        for c in ['.', ':', ',', ';', '(', ')', '$', '~', '"', '}'] {
             assert_eq!(punct(c, Fullwidth, Some('3')), None, "{c}");
         }
         assert_eq!(punct('.', Fullwidth, Some('好')), Some("。"));
