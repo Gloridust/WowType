@@ -459,6 +459,15 @@ fn calculator() {
     session.append("(1.5-0.5)/4");
     assert_eq!(texts(&mut session)[0], "0.25");
 
+    // 只打一个数：大写金额、中文数字、数字本身（#92）
+    let mut session = with(engine());
+    type_keys(&mut session, "v");
+    session.append("12345.67");
+    assert_eq!(
+        texts(&mut session),
+        ["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
+    );
+
     // 关掉计算器：v1+2 不算
     let mut session = with(engine());
     session.configure(Config {

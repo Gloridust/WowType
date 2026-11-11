@@ -1073,6 +1073,9 @@ void runCases(Instance &instance) {
     type(ic.get(), "v1+2<sp>");
     check(ic->committed == "3", "v1+2 空格仍上屏结果：" + ic->committed);
     fresh(ic.get());
+    type(ic.get(), "v100.5<sp>");
+    check(ic->committed == "壹佰元伍角", "v 后面只打一个数：空格上屏大写金额：" + ic->committed);
+    fresh(ic.get());
 
     // 删掉文件再 reload：回到默认
     std::filesystem::remove(configDir + "/wowtype.conf");
