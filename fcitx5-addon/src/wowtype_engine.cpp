@@ -615,6 +615,77 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     loading_ = std::async(std::launch::async, loadCore, userDictPath(), lexicon_);
     applyConfig();
     setupVoiceOverlay();
+    setupControl();
+}
+
+namespace {
+constexpr char kControlService[] = "org.wowtype.Input";
+constexpr char kControlPath[] = "/org/wowtype/Input";
+constexpr char kControlInterface[] = "org.wowtype.Input1";
+} // namespace
+
+std::string WowtypeControl::mode() { return engine_->modeName(); }
+
+std::string WowtypeControl::setMode(const std::string &mode) {
+    if (!engine_->setModeByName(mode)) {
+        throw fcitx::dbus::MethodCallError("org.freedesktop.DBus.Error.InvalidArgs",
+                                           ("不认识的模式或现在切不了：" + mode +
+                                            "（可以是 zh、en、translate、toggle）")
+                                               .c_str());
+    }
+    return engine_->modeName();
+}
+
+void WowtypeEngine::setupControl() {
+    try {
+        auto bus = std::make_unique<fcitx::dbus::Bus>(fcitx::dbus::BusType::Session);
+        if (!bus->isOpen()) {
+            return;
+        }
+        bus->attachEventLoop(&instance_->eventLoop());
+        auto control = std::make_unique<WowtypeControl>(this);
+        if (!bus->addObjectVTable(kControlPath, kControlInterface, *control) ||
+            !bus->requestName(kControlService,
+                              fcitx::Flags<fcitx::dbus::RequestNameFlag>{
+                                  fcitx::dbus::RequestNameFlag::ReplaceExisting,
+                                  fcitx::dbus::RequestNameFlag::AllowReplacement})) {
+            WLOG_W() << "WowType: 登记 " << kControlService << " 失败，外部命令切不了模式";
+            return;
+        }
+        controlBus_ = std::move(bus);
+        control_ = std::move(control);
+    } catch (const std::exception &e) {
+        WLOG_I() << "WowType: 连不上会话总线，外部命令切不了模式：" << e.what();
+    }
+}
+
+std::string WowtypeEngine::modeName() const {
+    return translateMode_ ? "translate" : asciiMode_ ? "en" : "zh";
+}
+
+bool WowtypeEngine::setModeByName(const std::string &mode) {
+    bool ascii = false;
+    bool translate = false;
+    if (mode == "en") {
+        ascii = true;
+    } else if (mode == "translate") {
+        if (!translateAvailable()) {
+            return false;
+        }
+        translate = true;
+    } else if (mode == "toggle") {
+        ascii = !asciiMode_ && !translateMode_;
+    } else if (mode != "zh") {
+        return false;
+    }
+    if (ascii == asciiMode_ && translate == translateMode_) {
+        return true;
+    }
+    // 切的是最近用过的输入框（vim 所在的终端）；它没在用 WowType 时只改模式
+    fcitx::InputContext *ic = instance_->mostRecentInputContext();
+    WowtypeState *state = ic ? ic->propertyFor(&factory_) : nullptr;
+    switchMode(ic, state, ascii, translate, false);
+    return true;
 }
 
 void WowtypeEngine::setupVoiceOverlay() {
@@ -2264,39 +2335,54 @@ bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *sta
 
 void WowtypeEngine::toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state) {
     if (translateMode_) {
-        // 译 → 中：攒着的原文原样上屏，正在打的拼音留着接着打
-        if (!state->tsource_.empty()) {
+        switchMode(ic, state, false, false, true);
+    } else if (asciiMode_) {
+        // 英 → 译（配置了翻译服务才有这一档）或 → 中
+        switchMode(ic, state, false, translateAvailable(), true);
+    } else {
+        switchMode(ic, state, true, false, true);
+    }
+}
+
+void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii,
+                               bool translate, bool notify) {
+    if (translateMode_ && !translate) {
+        // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+        if (ic && state && !state->tsource_.empty()) {
             const std::string source = state->tsource_;
             clearTranslation(state);
             ic->commitString(source);
         }
         translateMode_ = false;
-        updateInputPanel(ic, state);
-    } else if (asciiMode_) {
-        // 英 → 译（配置了翻译服务才有这一档）或 → 中
-        asciiMode_ = false;
-        translateMode_ = translateAvailable();
-    } else {
-        asciiMode_ = true;
-        if (state->composing()) {
-            // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
-            commitInput(ic, state);
-            state->clear();
+        if (ic && state) {
             updateInputPanel(ic, state);
         }
     }
+    if (ascii && !asciiMode_ && ic && state && state->composing()) {
+        // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
+        commitInput(ic, state);
+        state->clear();
+        updateInputPanel(ic, state);
+    }
+    asciiMode_ = ascii;
+    translateMode_ = translate;
     const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
     WLOG_I() << "WowType: 切到" << name;
-#ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
-    std::string label = translateMode_ ? "译" : asciiMode_ ? "英" : "中";
-    if (translateMode_ && translator_) {
-        label += " ";
-        label += wowtype_translate_tag(translator_, "");
+    if (!ic) {
+        return;
     }
-    instance_->showCustomInputMethodInformation(ic, label);
+    if (notify) {
+#ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
+        std::string label = translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+        if (translateMode_ && translator_) {
+            label += " ";
+            label += wowtype_translate_tag(translator_, "");
+        }
+        instance_->showCustomInputMethodInformation(ic, label);
 #else
-    instance_->showInputMethodInformation(ic);
+        instance_->showInputMethodInformation(ic);
 #endif
+    }
     ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
 }
 
