@@ -229,6 +229,17 @@ void runCases(Instance &instance) {
               std::string(text) + " 原样（数字后的符号不换成中文标点），实际 上屏「" + ic->committed +
                   "」交给应用「" + ic->passed + "」");
     }
+    // @ # % & * 没有中文写法，原样（#91）；{ } 是直角引号（#96）
+    fresh(ic.get());
+    type(ic.get(), "@#%&*");
+    check(ic->committed.empty() && ic->passed == "@#%&*", "@#%&* 原样交给应用，实际 上屏「" + ic->committed +
+                                                             "」交给应用「" + ic->passed + "」");
+    fresh(ic.get());
+    type(ic.get(), "nihao@");
+    check(ic->committed == "你好@", "打字途中按 @：先上屏再出半角 @，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "{nihao}");
+    check(ic->committed == "「你好」", "{ } 是直角引号，实际 " + ic->committed);
     fresh(ic.get());
     type(ic.get(), "nihao:");
     check(ic->committed == "你好：", "汉字后面的冒号还是中文冒号，实际 " + ic->committed);
