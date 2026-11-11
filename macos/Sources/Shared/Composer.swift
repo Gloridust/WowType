@@ -278,8 +278,10 @@ public final class Composer {
         return true
     }
 
+    /// 没在打拼音时 ' 是单引号（‘ ’ 交替）；打拼音途中它是隔音符，进不到这里。
+    /// 引号左右交替的状态在核心里，所以一个键只能调一次 wowtype_punct。
     private func punctuation(for c: UInt8) -> String? {
-        guard c != 0x27, wowtype_fullwidth_punct(Int32(c)) != nil else {
+        guard wowtype_fullwidth_punct(Int32(c)) != nil else {
             return nil
         }
         let prev = client?.previousCharacter ?? 0
