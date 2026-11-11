@@ -117,6 +117,8 @@ DEFAULTS = {
     "TranslateLlamaServer": "",
     "TranslateIdleMinutes": "5",
     "CheckUpdate": "True",
+    # 词库文件，留空用默认的雾凇；切到万象时是 WANXIANG_LEXICON
+    "Lexicon": "",
 }
 
 # 互译语言（存盘名和插件的 WowtypeTranslateTarget、core/src/translate.rs 的 LANGUAGES 一致）
@@ -1111,7 +1113,11 @@ def collect_diagnostics():
     add("")
 
     add("## 数据文件")
-    for path in [*LEXICON_CANDIDATES,
+    kind, path = active_lexicon(values)
+    label = {"rime-ice": "雾凇（默认）", "wanxiang": "万象", "custom": "自己指定"}[kind]
+    add(f"  词库：{label}" + (f"，{path}" if path else ""))
+    add(f"  万象词库包：{lexicon_pack_version() or '没装'}")
+    for path in [*LEXICON_CANDIDATES, WANXIANG_LEXICON, WANXIANG_LEXICON + ".wcache",
                  os.path.join(DATA_DIR, "english.txt"), "/usr/share/wowtype/english.txt",
                  os.environ.get("WOWTYPE_LM", ""),
                  os.path.join(DATA_DIR, "words.lm"), "/usr/share/wowtype/words.lm",
@@ -1511,6 +1517,256 @@ def background_check():
     if chosen in ("open", "default"):
         os.execv(sys.executable, [sys.executable, os.path.abspath(__file__), "--page", "update"])
     return 0
+
+# ---------------------------------------------------------------- 词库
+
+# 默认词库是雾凇（rime-ice），在安装包里。万象拼音（rime_wanxiang）是可选词库包：
+# 每次发版时 CI 用 scripts/make-wanxiang.sh 打成 wowtype-data-wanxiang-<版本>.tar.gz 放在 Release 上，
+# 这里下载、按 SHA256SUMS 校验后解到 DICTS_DIR/wanxiang/，再把 Lexicon= 写进 wowtype.conf
+DICTS_DIR = os.path.join(DATA_DIR, "dicts")
+WANXIANG_DIR = os.path.join(DICTS_DIR, "wanxiang")
+WANXIANG_LEXICON = os.path.join(WANXIANG_DIR, "lexicon.tsv")
+WANXIANG_ASSET = re.compile(r"wowtype-data-wanxiang-([0-9][0-9A-Za-z.]*)\.tar\.gz")
+WANXIANG_PAGE = "https://github.com/amzxyz/rime_wanxiang"
+LEXICON_PACK_FILES = ("lexicon.tsv", "LICENSE", "SOURCE.txt", "VERSION")
+# 包里至少这么多条才算像样的词库（防止下到一个坏包把输入法弄得没词）
+LEXICON_PACK_MIN = 100000
+
+
+def active_lexicon(values):
+    """配置里用的是哪个词库：("rime-ice" | "wanxiang" | "custom", 路径)。
+
+    Lexicon 留空或文件不在时插件用默认词库，这里也算 rime-ice。"""
+    path = os.path.expanduser(values.get("Lexicon", "").strip())
+    if not path or not os.path.isfile(path):
+        return "rime-ice", ""
+    if os.path.abspath(path) == os.path.abspath(WANXIANG_LEXICON):
+        return "wanxiang", path
+    return "custom", path
+
+
+def lexicon_pack_version(folder=WANXIANG_DIR):
+    """装好的词库包的版本，没装返回 None。"""
+    if not os.path.isfile(os.path.join(folder, "lexicon.tsv")):
+        return None
+    try:
+        with open(os.path.join(folder, "VERSION"), encoding="utf-8") as f:
+            return f.read().strip() or "?"
+    except OSError:
+        return "?"
+
+
+def find_lexicon_asset(release, pattern=WANXIANG_ASSET):
+    """发布里的词库包：(文件名, 地址, 版本)，没有返回 None。有好几个时取版本最大的。"""
+    found = []
+    for name, url in (release or {}).get("assets", {}).items():
+        match = pattern.fullmatch(name)
+        if match:
+            found.append((parse_version(match.group(1)), match.group(1), name, url))
+    if not found:
+        return None
+    _key, version, name, url = max(found)
+    return name, url, version
+
+
+def install_lexicon_pack(tarball, folder=WANXIANG_DIR):
+    """把词库包解到 folder（先解到旁边的临时目录，检查好了再换进去），返回版本。
+
+    只认 LEXICON_PACK_FILES 里的普通文件，别的（目录、链接、../ 路径）一律不解。
+    旧目录连同它的词库快照（lexicon.tsv.wcache）一起删掉，插件下次载入时重建快照。"""
+    import tarfile
+    parent = os.path.dirname(folder)
+    os.makedirs(parent, exist_ok=True)
+    staging = folder + ".new"
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    try:
+        with tarfile.open(tarball, "r:gz") as tar:
+            for member in tar.getmembers():
+                name = member.name.removeprefix("./")
+                if not name or name == ".":
+                    continue
+                if name not in LEXICON_PACK_FILES or not member.isfile():
+                    raise ValueError(f"词库包里有不认识的文件 {member.name}，不安装")
+                source = tar.extractfile(member)
+                with source, open(os.path.join(staging, name), "wb") as out:
+                    shutil.copyfileobj(source, out)
+        lexicon = os.path.join(staging, "lexicon.tsv")
+        if not os.path.isfile(lexicon):
+            raise ValueError("词库包里没有 lexicon.tsv，不安装")
+        count = 0
+        with open(lexicon, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+                if len(line.rstrip("\n").split("\t")) < 2:
+                    raise ValueError("lexicon.tsv 格式不对（应为 拼音<TAB>词<TAB>频次），不安装")
+                count += 1
+        if count < LEXICON_PACK_MIN:
+            raise ValueError(f"lexicon.tsv 只有 {count} 条，像是不完整，不安装")
+        old = folder + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        if os.path.exists(folder):
+            os.replace(folder, old)
+        os.replace(staging, folder)
+        shutil.rmtree(old, ignore_errors=True)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    return lexicon_pack_version(folder)
+
+
+def remove_lexicon_pack(folder=WANXIANG_DIR):
+    """删掉词库包（和它的词库快照），返回空出的字节数。"""
+    size = dir_size(folder) if os.path.isdir(folder) else 0
+    shutil.rmtree(folder, ignore_errors=True)
+    return size
+
+
+def install_lexicon_cli(args):
+    """命令行：--install-lexicon wanxiang|<文件.tar.gz> 下载/装上万象并切过去，--use-lexicon rime-ice 切回。"""
+    values, extra = read_config()
+    if args[0] == "--use-lexicon":
+        if args[1:] != ["rime-ice"] and args[1:] != ["wanxiang"]:
+            print("用法：wowtype-config --use-lexicon rime-ice|wanxiang")
+            return 2
+        if args[1] == "wanxiang" and not lexicon_pack_version():
+            print("还没装万象词库，先运行 wowtype-config --install-lexicon wanxiang")
+            return 1
+        values["Lexicon"] = WANXIANG_LEXICON if args[1] == "wanxiang" else ""
+    else:
+        source = args[1] if len(args) > 1 else "wanxiang"
+        if source == "wanxiang":
+            release = fetch_latest()
+            asset = find_lexicon_asset(release)
+            if not asset:
+                print(f"最新版 {release['version']} 的发布页上还没有万象词库包")
+                return 1
+            name, url, version = asset
+
+            def progress(done, total):
+                text = f"{human_size(done)} / {human_size(total)}" if total else human_size(done)
+                print(f"\r下载 {name}：{text}   ", end="", flush=True)
+            path = download_updates(release, [(name, url)], progress)[0]
+            print()
+        else:
+            path = source
+        version = install_lexicon_pack(path)
+        if source == "wanxiang":
+            os.unlink(path)
+        print(f"万象词库 {version} 装好了：{WANXIANG_DIR}")
+        values["Lexicon"] = WANXIANG_LEXICON
+    write_config(values, extra)
+    log(f"词库改为 {active_lexicon(values)[0]}（命令行）")
+    running = fcitx_call_sync("ReloadAddonConfig", GLib.Variant("(s)", ("wowtype",))) is not None
+    print("已切到" + ("万象拼音" if values["Lexicon"] else "雾凇拼音（默认）") +
+          ("，fcitx5 正在后台换词库，过几秒生效" if running else "，fcitx5 下次启动时生效"))
+    return 0
+
+
+def lexicon_self_test():
+    """词库包：找发布里的包、解包检查、装上、切换、删掉（不联网）。"""
+    import io
+    import tarfile
+    import tempfile
+    release = {"assets": {"wowtype-data-rime-ice-2026.10.31.2.tar.gz": "u0",
+                          "wowtype-data-wanxiang-2026.11.10.0.tar.gz": "u1",
+                          "wowtype-data-wanxiang-2026.11.9.3.tar.gz": "u2",
+                          "wowtype_0.3.10_ubuntu24.04_amd64.deb": "u3"}}
+    assert find_lexicon_asset(release) == ("wowtype-data-wanxiang-2026.11.10.0.tar.gz", "u1",
+                                           "2026.11.10.0")
+    assert find_lexicon_asset({"assets": {"wowtype-data-rime-ice-1.tar.gz": "x"}}) is None
+    assert find_lexicon_asset(None) is None
+
+    def make_pack(path, files):
+        with tarfile.open(path, "w:gz") as tar:
+            for name, text in files.items():
+                data = text.encode("utf-8")
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+    lexicon = "# 测试\n" + "".join(f"ce shi\t测试{i}\t{i}\n" for i in range(LEXICON_PACK_MIN))
+    good = {"lexicon.tsv": lexicon, "LICENSE": "CC BY 4.0", "SOURCE.txt": "src",
+            "VERSION": "2026.11.10.0\n"}
+    with tempfile.TemporaryDirectory() as tmp:
+        folder = os.path.join(tmp, "dicts", "wanxiang")
+        pack = os.path.join(tmp, "pack.tar.gz")
+        make_pack(pack, good)
+        assert lexicon_pack_version(folder) is None
+        assert install_lexicon_pack(pack, folder) == "2026.11.10.0"
+        assert sorted(os.listdir(folder)) == sorted(LEXICON_PACK_FILES)
+        # 再装一遍（更新）：旧的快照跟着旧目录一起没了
+        with open(os.path.join(folder, "lexicon.tsv.wcache"), "w") as f:
+            f.write("old")
+        make_pack(pack, {**good, "VERSION": "2026.11.11.0"})
+        assert install_lexicon_pack(pack, folder) == "2026.11.11.0"
+        assert not os.path.exists(os.path.join(folder, "lexicon.tsv.wcache"))
+        # 坏包不装，原来的留着
+        for bad in ({**good, "../evil": "x"}, {**good, "bin/sh": "x"},
+                    {"LICENSE": "x", "VERSION": "1"},
+                    {**good, "lexicon.tsv": "ni hao\t你好\t1\n"},
+                    {**good, "lexicon.tsv": "nonsense\n" * LEXICON_PACK_MIN}):
+            make_pack(pack, bad)
+            try:
+                install_lexicon_pack(pack, folder)
+                raise AssertionError(f"坏包应该装不上：{sorted(bad)}")
+            except ValueError:
+                pass
+            assert lexicon_pack_version(folder) == "2026.11.11.0"
+            assert not os.path.exists(folder + ".new")
+        with tarfile.open(pack, "w:gz") as tar:  # 符号链接也不行
+            info = tarfile.TarInfo("lexicon.tsv")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/etc/passwd"
+            tar.addfile(info)
+        try:
+            install_lexicon_pack(pack, folder)
+            raise AssertionError("链接应该装不上")
+        except ValueError:
+            pass
+        assert remove_lexicon_pack(folder) > 0 and not os.path.exists(folder)
+
+        # 从发布页下载：本机起一个假的 Release，按 SHA256SUMS 校验后装上
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        name = "wowtype-data-wanxiang-2026.11.12.0.tar.gz"
+        make_pack(pack, {**good, "VERSION": "2026.11.12.0"})
+        with open(pack, "rb") as f:
+            files = {name: f.read()}
+        files["SHA256SUMS"] = f"{hashlib.sha256(files[name]).hexdigest()}  {name}\n".encode()
+
+        class Release(BaseHTTPRequestHandler):
+            def do_GET(self):
+                data = files.get(self.path.lstrip("/"))
+                self.send_response(200 if data is not None else 404)
+                self.send_header("Content-Length", str(len(data or b"")))
+                self.end_headers()
+                self.wfile.write(data or b"")
+
+            def log_message(self, *_args):
+                pass
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Release)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        release = {"tag": "v9.9.9", "assets": {n: f"{base}/{n}" for n in files}}
+        global UPDATE_DIR
+        saved_dir, UPDATE_DIR = UPDATE_DIR, os.path.join(tmp, "updates")
+        try:
+            asset_name, url, _version = find_lexicon_asset(release)
+            path = download_updates(release, [(asset_name, url)], lambda *_a: None)[0]
+            assert install_lexicon_pack(path, folder) == "2026.11.12.0"
+            files["SHA256SUMS"] = f"{'0' * 64}  {name}\n".encode()  # 校验和对不上：不装
+            try:
+                download_updates(release, [(asset_name, url)], lambda *_a: None)
+                raise AssertionError("校验和不对应该失败")
+            except RuntimeError:
+                pass
+        finally:
+            UPDATE_DIR = saved_dir
+            server.shutdown()
+    assert active_lexicon({"Lexicon": ""}) == ("rime-ice", "")
+    assert active_lexicon({"Lexicon": "/nonexistent/lexicon.tsv"}) == ("rime-ice", "")
+    print("lexicon self-test ok")
+
 
 # ---------------------------------------------------------------- 界面
 
@@ -2086,10 +2342,179 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(feedback)
         return page
 
+    # ---------------- 词库（在「输入」页最上面）
+
+    def build_lexicon(self):
+        group = Adw.PreferencesGroup(
+            title="词库",
+            description="换了以后输入法在后台重新载入，几秒内生效；自定义词、学到的词和输入习惯两边通用。")
+        self.lexicon_busy = False
+        self.lexicon_updating = False
+        self.rime_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
+        self.wanxiang_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.rime_check)
+        rime_row = Adw.ActionRow(title="雾凇拼音（默认）",
+                                 subtitle="约 89 万条，在安装包里，跟着 WowType 一起更新")
+        rime_row.add_prefix(self.rime_check)
+        rime_row.set_activatable_widget(self.rime_check)
+        group.add(rime_row)
+
+        self.wanxiang_row = Adw.ActionRow(title="万象拼音")
+        self.wanxiang_row.add_prefix(self.wanxiang_check)
+        self.wanxiang_row.set_activatable_widget(self.wanxiang_check)
+        self.lexicon_button = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
+        self.lexicon_button.add_css_class("suggested-action")
+        self.lexicon_button.connect("clicked", lambda _b: self.start_lexicon_install())
+        self.wanxiang_row.add_suffix(self.lexicon_button)
+        self.lexicon_file = Gtk.Button(icon_name="document-open-symbolic", valign=Gtk.Align.CENTER,
+                                       tooltip_text="从下载好的词库包安装（wowtype-data-wanxiang-*.tar.gz）")
+        self.lexicon_file.add_css_class("flat")
+        self.lexicon_file.connect("clicked", self.on_lexicon_from_file)
+        self.wanxiang_row.add_suffix(self.lexicon_file)
+        self.lexicon_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                                         tooltip_text="删掉万象词库")
+        self.lexicon_delete.add_css_class("flat")
+        self.lexicon_delete.connect("clicked", self.on_lexicon_delete)
+        self.wanxiang_row.add_suffix(self.lexicon_delete)
+        group.add(self.wanxiang_row)
+
+        source = Adw.ActionRow(
+            title="万象拼音的来源",
+            subtitle=GLib.markup_escape_text(
+                "amzxyz/rime_wanxiang，CC BY 4.0。词条更多，词频来自万象；"
+                "WowType 只用它的词条（去掉声调、统一词频量级），不用它的 .gram 语法模型，"
+                "语言模型还是 WowType 自己的。比雾凇多占约 300 MB 内存。"))
+        source.add_suffix(Gtk.LinkButton(uri=WANXIANG_PAGE, label="项目主页",
+                                         valign=Gtk.Align.CENTER))
+        group.add(source)
+        self.rime_check.connect("toggled", self.on_lexicon_choice)
+        self.wanxiang_check.connect("toggled", self.on_lexicon_choice)
+        self.refresh_lexicon()
+        return group
+
+    def refresh_lexicon(self, progress=None):
+        if not hasattr(self, "wanxiang_row"):
+            return
+        kind, path = active_lexicon(self.values)
+        version = lexicon_pack_version()
+        self.lexicon_updating = True
+        self.wanxiang_check.set_active(kind == "wanxiang")
+        self.rime_check.set_active(kind == "rime-ice")
+        self.lexicon_updating = False
+        asset = find_lexicon_asset(self.release) if getattr(self, "release", None) else None
+        newer = bool(asset and version and parse_version(asset[2]) > parse_version(version))
+        if progress:
+            subtitle = progress
+        elif kind == "custom":
+            subtitle = f"现在用的是 wowtype.conf 里指定的词库：{_home(path)}"
+        elif version:
+            subtitle = (f"已装 {version}（{human_size(os.path.getsize(WANXIANG_LEXICON))}），约 170 万条"
+                        + (f"；有新版 {asset[2]}" if newer else ""))
+        elif getattr(self, "release", None) and not asset:
+            subtitle = "最新的发布页上还没有万象词库包，可以先从文件安装"
+        else:
+            subtitle = "约 170 万条，要下载约 20 MB"
+        self.wanxiang_row.set_subtitle(GLib.markup_escape_text(subtitle))
+        self.lexicon_button.set_label("更新" if version else "下载")
+        self.lexicon_button.set_visible(not self.lexicon_busy and (not version or newer)
+                                        and not (getattr(self, "release", None) and not asset))
+        self.lexicon_file.set_sensitive(not self.lexicon_busy)
+        self.lexicon_delete.set_visible(bool(version) and kind != "wanxiang" and not self.lexicon_busy)
+        self.wanxiang_check.set_sensitive(not self.lexicon_busy)
+
+    def on_lexicon_choice(self, button):
+        if self.lexicon_updating or not button.get_active():
+            return
+        if button is self.wanxiang_check and not lexicon_pack_version():
+            # 还没下载：先下载，装好了再切过去
+            self.refresh_lexicon()
+            self.start_lexicon_install()
+            return
+        self.use_lexicon(WANXIANG_LEXICON if button is self.wanxiang_check else "")
+
+    def use_lexicon(self, path):
+        self.values["Lexicon"] = path
+        self.save_config()  # 每次都让插件重读：词库包更新了、路径没变也要重载
+        log(f"词库改为 {active_lexicon(self.values)[0]}")
+        self.toast(("已切到万象拼音" if path else "已切回雾凇拼音") + "，几秒后生效")
+        self.refresh_lexicon()
+
+    def start_lexicon_install(self, tarball=None):
+        """下载（或者从 tarball 文件）装万象词库，装好后切过去。"""
+        if self.lexicon_busy:
+            return
+        self.lexicon_busy = True
+        self.refresh_lexicon("正在连接…" if tarball is None else "正在安装…")
+        release = getattr(self, "release", None)
+
+        def progress(done, total):
+            text = (f"正在下载：{human_size(done)} / {human_size(total)}（{done * 100 // total}%）"
+                    if total else f"正在下载：{human_size(done)}")
+            GLib.idle_add(self.refresh_lexicon, text)
+
+        def work():
+            error = version = None
+            try:
+                if tarball is None:
+                    latest = release or fetch_latest()
+                    asset = find_lexicon_asset(latest)
+                    if not asset:
+                        raise RuntimeError(f"{latest['version']} 的发布页上还没有万象词库包")
+                    name, url, _version = asset
+                    path = download_updates(latest, [(name, url)], progress)[0]
+                    GLib.idle_add(self.refresh_lexicon, "正在安装…")
+                    try:
+                        version = install_lexicon_pack(path)
+                    finally:
+                        os.unlink(path)
+                else:
+                    version = install_lexicon_pack(tarball)
+            except (OSError, ValueError, RuntimeError) as e:
+                error = str(getattr(e, "reason", None) or e)
+            except Exception as e:  # noqa: BLE001  网络错误各式各样
+                error = str(e)
+            GLib.idle_add(self.lexicon_install_done, error, version)
+        threading.Thread(target=work, daemon=True).start()
+
+    def lexicon_install_done(self, error, version):
+        self.lexicon_busy = False
+        if error:
+            log(f"万象词库没装好：{error}")
+            self.toast(f"万象词库没装好：{error}")
+            self.refresh_lexicon()
+            return GLib.SOURCE_REMOVE
+        log(f"万象词库 {version} 装好了")
+        self.use_lexicon(WANXIANG_LEXICON)
+        return GLib.SOURCE_REMOVE
+
+    def on_lexicon_from_file(self, _button):
+        dialog = Gtk.FileDialog(title="安装万象词库包")
+        patterns = Gtk.FileFilter(name="WowType 词库包（*.tar.gz）")
+        patterns.add_pattern("*.tar.gz")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(patterns)
+        dialog.set_filters(filters)
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.open_finish(result).get_path()
+            except GLib.Error:
+                return  # 取消
+            self.start_lexicon_install(path)
+        dialog.open(self, None, chosen)
+
+    def on_lexicon_delete(self, _button):
+        if active_lexicon(self.values)[0] == "wanxiang":
+            return
+        size = remove_lexicon_pack()
+        log("删掉了万象词库")
+        self.toast(f"已删除，空出 {human_size(size)}")
+        self.refresh_lexicon()
+
     # ---------------- 输入
 
     def build_input(self):
         page = self.new_page()
+        page.add(self.build_lexicon())
 
         mode = Adw.PreferencesGroup(title="输入方式")
         self.full_pinyin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
@@ -3129,6 +3554,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.check_button.set_sensitive(True)
         self.release = release
         self.update_files = files
+        self.refresh_lexicon()
         if error:
             self.latest_row.set_title("检查更新失败")
             self.latest_row.set_subtitle(GLib.markup_escape_text(f"连不上 GitHub：{error}"))
@@ -3294,7 +3720,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                 return
             keep = {key: self.values[key] for key in (
                 "TranslateBaseUrl", "TranslateModel", "TranslateLocal", "TranslateLocalModel",
-                "TranslateLlamaServer", "TranslateIdleMinutes")}
+                "TranslateLlamaServer", "TranslateIdleMinutes", "Lexicon")}
             self.values = {**DEFAULTS, **keep}
             self.save_config()
             self.layout_row.set_selected(0)
@@ -3407,8 +3833,17 @@ if __name__ == "__main__":
         sys.exit(0)
     if "--download-model" in sys.argv:
         sys.exit(download_model_cli("--accept-license" in sys.argv))
+    for flag in ("--install-lexicon", "--use-lexicon"):
+        if flag in sys.argv:
+            at = sys.argv.index(flag)
+            try:
+                sys.exit(install_lexicon_cli(sys.argv[at:at + 2]))
+            except (OSError, ValueError, RuntimeError) as e:
+                print(f"\n没装好：{e}")
+                sys.exit(1)
     if "--self-test" in sys.argv:
         download_self_test()
+        lexicon_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」
         hotkey = {"TriggerKeys": {"0": "Control+space", "1": "Zenkaku_Hankaku"},
                   "AltTriggerKeys": {"0": "Shift_L"}}
