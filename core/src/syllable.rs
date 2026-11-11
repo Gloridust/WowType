@@ -239,12 +239,31 @@ pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
 
 /// 别的写法 -> 表里的写法。
 ///
-/// lüe、nüe 照《汉语拼音方案》也写成 lue、nue（u 上省掉两点不会和别的音节混），
-/// 很多人就这么打；表里用 v 表示 ü，所以这里换成 lve、nve。
+/// - lüe、nüe 照《汉语拼音方案》也写成 lue、nue（u 上省掉两点不会和别的音节混），
+///   很多人就这么打；表里用 v 表示 ü，所以这里换成 lve、nve。
+/// - j、q、x、y 后面的 ü 写成 u（ju 居、qu 去）。用 v 打（jv、qvan）的人也不少，
+///   雾凇、搜狗都认；表里虽然有 jv、qvan 这些扩展音节，词库却都记在 ju、quan 下面，
+///   以前打 qv、xv、yv 一个候选都没有，jv 还会被纠错成「女」。
 pub fn canonical(text: &str) -> &str {
     match text {
         "lue" => "lve",
         "nue" => "nve",
+        "jv" => "ju",
+        "jvan" => "juan",
+        "jve" => "jue",
+        "jvn" => "jun",
+        "qv" => "qu",
+        "qvan" => "quan",
+        "qve" => "que",
+        "qvn" => "qun",
+        "xv" => "xu",
+        "xvan" => "xuan",
+        "xve" => "xue",
+        "xvn" => "xun",
+        "yv" => "yu",
+        "yvan" => "yuan",
+        "yve" => "yue",
+        "yvn" => "yun",
         _ => text,
     }
 }
@@ -471,14 +490,12 @@ impl ParsedInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError {
     InvalidChar(char),
-    DanglingErhua,
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidChar(c) => write!(f, "非法字符 {c:?}：拼音输入只允许 a-z 和隔音符 '"),
-            Self::DanglingErhua => write!(f, "孤立的儿化标记 r：前面没有可儿化的音节"),
         }
     }
 }
@@ -491,6 +508,7 @@ impl std::error::Error for ParseError {}
 /// - xi'an -> letters=xian, forced=[2]
 /// - hua'r -> letters=hua, erhua_at=[3]
 /// - huar  -> letters=huar（儿化由音节图识别尾部 r）
+/// - r     -> letters=r（前面没有音节时 r 就是普通字母，简拼 r -> 人、日）
 pub fn parse(input: &str) -> Result<ParsedInput, ParseError> {
     let mut letters = Vec::with_capacity(input.len());
     let mut forced_boundaries = Vec::new();
@@ -500,10 +518,9 @@ pub fn parse(input: &str) -> Result<ParsedInput, ParseError> {
         if chunk.is_empty() {
             continue;
         }
-        if chunk == "r" {
-            if letters.is_empty() {
-                return Err(ParseError::DanglingErhua);
-            }
+        // 隔开的一个 r 是儿化标记（hua'r）。前面还没有字母时不是儿化：单独打 r 是简拼，
+        // 以前这里报错，整个输入作废，打 r 一个候选都没有。
+        if chunk == "r" && !letters.is_empty() {
             let pos = letters.len();
             if !erhua_at.contains(&pos) {
                 erhua_at.push(pos);
@@ -571,6 +588,13 @@ mod tests {
         assert_eq!(id_of("nue"), id_of("nve"));
         assert_eq!(Syllable::from_text("lue").map(|s| s.text), Some("lve"));
         assert_eq!(split("nue"), Some(("n", "ve")));
+        // j q x y 后面的 ü 用 v 打：和 u 是同一个音节
+        for (v, u) in [("jv", "ju"), ("qv", "qu"), ("xv", "xu"), ("yv", "yu"), ("qvan", "quan"), ("xve", "xue"), ("jvn", "jun")] {
+            assert_eq!(id_of(v), id_of(u), "{v} 应等于 {u}");
+        }
+        // l、n 后面的 v 不动：lv（绿）和 lu（路）是两个音节
+        assert_ne!(id_of("lv"), id_of("lu"));
+        assert_ne!(id_of("nv"), id_of("nu"));
         assert!(!is_valid("abc"));
         assert!(!is_valid(""));
     }
@@ -592,8 +616,9 @@ mod tests {
         assert_eq!(split("an"), Some(("", "an")));
         assert_eq!(split("er"), Some(("", "er")));
         assert_eq!(split("zhuang"), Some(("zh", "uang")));
-        assert_eq!(split("yvan"), Some(("y", "van")));
-        assert_eq!(split("jv"), Some(("j", "v")));
+        // jv、yvan 是 ju、yuan 的别的写法，按表里的写法拆
+        assert_eq!(split("yvan"), Some(("y", "uan")));
+        assert_eq!(split("jv"), Some(("j", "u")));
         assert_eq!(split("hng"), Some(("", "hng")));
     }
 
@@ -618,6 +643,12 @@ mod tests {
     fn parse_rejects_non_lowercase() {
         assert_eq!(parse("Xian"), Err(ParseError::InvalidChar('X')));
         assert_eq!(parse("xi1an"), Err(ParseError::InvalidChar('1')));
-        assert_eq!(parse("r"), Err(ParseError::DanglingErhua));
+    }
+
+    #[test]
+    fn parse_lone_r_is_a_letter() {
+        assert_eq!(parse("r").unwrap().letters, b"r");
+        assert!(parse("r").unwrap().erhua_at.is_empty());
+        assert_eq!(parse("'r").unwrap().letters, b"r");
     }
 }
