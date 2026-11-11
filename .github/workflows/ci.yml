@@ -87,9 +87,26 @@ jobs:
           name: pkg-data
           path: dist/pkg
 
+  # 可选的万象词库包（不进安装包，用户在设置里下载切换），随发布上传
+  data-wanxiang:
+    name: 词库（万象，可选）
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/make-wanxiang.sh "" dist/wanxiang dist/pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-wanxiang
+          path: dist/wanxiang
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-data-wanxiang
+          path: dist/pkg
+
   addon:
     name: 插件 · ${{ matrix.distro }}
-    needs: data
+    needs: [data, data-wanxiang]
     runs-on: ubuntu-24.04
     container: ${{ matrix.image }}
     strategy:
@@ -125,6 +142,14 @@ jobs:
           path: dist/data
       - name: 按键测试（私有 fcitx5 实例 + 真实词库和语言模型）
         run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - uses: actions/download-artifact@v4
+        if: matrix.distro == 'ubuntu26.04'
+        with:
+          name: data-wanxiang
+          path: dist/wanxiang
+      - name: 按键测试（万象词库）
+        if: matrix.distro == 'ubuntu26.04'
+        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/wanxiang/lexicon.tsv" "$PWD/dist/data/english.txt"
       - name: 版本号
         run: |
           if [ "${GITHUB_REF_TYPE}" = tag ]; then
@@ -364,7 +389,7 @@ jobs:
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [installer, core, data, addon, arch, fedora]
+    needs: [installer, core, data, data-wanxiang, addon, arch, fedora]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -398,6 +423,9 @@ jobs:
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
+
+          可选词库：\`wowtype-data-wanxiang-*.tar.gz\` 是从[万象拼音](https://github.com/amzxyz/rime_wanxiang)（CC BY 4.0）转换的词库，不在安装包里。
+          想用的话在「WowType 设置 → 输入 → 词库」里选「万象拼音」并下载，或运行 \`wowtype-config --install-lexicon wanxiang\`；随时可以切回默认的雾凇。
 
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
