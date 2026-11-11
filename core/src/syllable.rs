@@ -234,19 +234,32 @@ pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
     Some(need)
 }
 
-pub fn is_valid(text: &str) -> bool {
-    bsearch(SYLLABLES, text).is_some()
+/// 别的写法 -> 表里的写法。
+///
+/// lüe、nüe 照《汉语拼音方案》也写成 lue、nue（u 上省掉两点不会和别的音节混），
+/// 很多人就这么打；表里用 v 表示 ü，所以这里换成 lve、nve。
+pub fn canonical(text: &str) -> &str {
+    match text {
+        "lue" => "lve",
+        "nue" => "nve",
+        _ => text,
+    }
 }
 
-/// 查音节 ID。
+pub fn is_valid(text: &str) -> bool {
+    bsearch(SYLLABLES, canonical(text)).is_some()
+}
+
+/// 查音节 ID（lue、nue 这样的别的写法也认）。
 pub fn id_of(text: &str) -> Option<SyllableId> {
-    bsearch(SYLLABLES, text).map(|i| i as SyllableId)
+    bsearch(SYLLABLES, canonical(text)).map(|i| i as SyllableId)
 }
 
 /// 把音节拆成声母 + 韵母；零声母音节的声母为空串。
 ///
 /// 返回的字符串都是静态表里的规范形式。
 pub fn split(text: &str) -> Option<(&'static str, &'static str)> {
+    let text = canonical(text);
     if !is_valid(text) {
         return None;
     }
@@ -550,6 +563,11 @@ mod tests {
         assert!(is_valid("nve"));
         assert!(is_valid("lve"));
         assert!(!is_valid("xiann"));
+        // lüe、nüe 也能写成 lue、nue（https://x.com/so1v3/status/2120415675969896729）
+        assert_eq!(id_of("lue"), id_of("lve"));
+        assert_eq!(id_of("nue"), id_of("nve"));
+        assert_eq!(Syllable::from_text("lue").map(|s| s.text), Some("lve"));
+        assert_eq!(split("nue"), Some(("n", "ve")));
         assert!(!is_valid("abc"));
         assert!(!is_valid(""));
     }
