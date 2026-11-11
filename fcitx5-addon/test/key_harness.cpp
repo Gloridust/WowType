@@ -34,6 +34,8 @@
 #include <fcitx/inputpanel.h>
 #include <fcitx/instance.h>
 #include <cstdlib>
+#include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/message.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
 #include <fcitx-utils/key.h>
@@ -1766,6 +1768,107 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
         });
 }
 
+/// 外部命令切模式（#98）：经会话总线调 org.wowtype.Input1。addon-test.sh 起了私有总线才跑。
+/// 插件的总线和这里的总线挂在同一个事件循环上，所以只能异步调。
+struct ModeCall {
+    std::string arg; // SetMode 的参数；空表示调 Mode
+    std::function<void(HarnessInputContext *)> before;
+    std::function<void(HarnessInputContext *, const std::string &reply, bool error)> after;
+};
+
+struct ModeCase {
+    std::unique_ptr<HarnessInputContext> ic;
+    std::unique_ptr<dbus::Bus> bus;
+    std::unique_ptr<dbus::Slot> pending;
+    std::vector<ModeCall> calls;
+    size_t current = 0;
+    std::function<void()> done;
+};
+
+void nextModeCall(ModeCase *c) {
+    if (c->current >= c->calls.size()) {
+        c->ic.reset();
+        auto done = c->done;
+        dispatcher->schedule([c]() { delete c; });
+        done();
+        return;
+    }
+    auto &call = c->calls[c->current];
+    if (call.before) {
+        call.before(c->ic.get());
+    }
+    auto msg = c->bus->createMethodCall("org.wowtype.Input", "/org/wowtype/Input", "org.wowtype.Input1",
+                                        call.arg.empty() ? "Mode" : "SetMode");
+    if (!call.arg.empty()) {
+        msg << call.arg;
+    }
+    c->pending = msg.callAsync(3000000, [c](dbus::Message &reply) {
+        std::string text;
+        const bool error = reply.isError();
+        if (error) {
+            text = reply.errorName();
+        } else {
+            reply >> text;
+        }
+        c->calls[c->current].after(c->ic.get(), text, error);
+        ++c->current;
+        dispatcher->schedule([c]() { nextModeCall(c); });
+        return true;
+    });
+}
+
+void runModeCase(Instance &instance, std::function<void()> done) {
+    const char *address = std::getenv("DBUS_SESSION_BUS_ADDRESS");
+    if (!address || !*address) {
+        std::printf("skip 外部命令切模式（没有会话总线）\n");
+        done();
+        return;
+    }
+    auto *c = new ModeCase{std::make_unique<HarnessInputContext>(instance.inputContextManager()),
+                           std::make_unique<dbus::Bus>(dbus::BusType::Session), {}, {}, 0, done};
+    c->bus->attachEventLoop(&instance.eventLoop());
+    c->ic->focusIn();
+    instance.setCurrentInputMethod(c->ic.get(), "wowtype", true);
+    auto expect = [](const std::string &name, const std::string &want) {
+        return [name, want](HarnessInputContext *, const std::string &reply, bool error) {
+            check(!error && reply == want, "外部命令：" + name + "，回复「" + reply + "」");
+        };
+    };
+    auto &calls = c->calls;
+    calls.push_back({"", nullptr, expect("Mode 一开始是 zh", "zh")});
+    calls.push_back({"en", [](HarnessInputContext *ic) { fresh(ic); type(ic, "nih"); },
+                     [](HarnessInputContext *ic, const std::string &reply, bool error) {
+                         check(!error && reply == "en", "外部命令：SetMode en 回复 en：" + reply);
+                         check(ic->committed == "nih" && preedit(ic).empty(),
+                               "外部命令切英文：打到一半的字母原样上屏：" + ic->committed);
+                     }});
+    calls.push_back({"", nullptr, [](HarnessInputContext *ic, const std::string &reply, bool error) {
+                         check(!error && reply == "en", "外部命令：Mode 是 en：" + reply);
+                         fresh(ic);
+                         type(ic, "nihao");
+                         check(ic->committed.empty() && ic->passed == "nihao",
+                               "外部命令切到英文后字母交给应用：" + ic->passed);
+                     }});
+    calls.push_back({"toggle", nullptr, [](HarnessInputContext *ic, const std::string &reply, bool error) {
+                         check(!error && reply == "zh", "外部命令：toggle 从英文切回 zh：" + reply);
+                         fresh(ic);
+                         type(ic, "nihao<sp>");
+                         check(ic->committed == "你好", "外部命令切回中文照常打字：" + ic->committed);
+                     }});
+    calls.push_back({"toggle", nullptr, expect("toggle 从中文切到 en", "en")});
+    calls.push_back({"zh", nullptr, expect("SetMode zh", "zh")});
+    calls.push_back({"zh", nullptr, expect("已经是中文再切 zh 不变", "zh")});
+    calls.push_back({"bogus", nullptr, [](HarnessInputContext *, const std::string &reply, bool error) {
+                         check(error && reply == "org.freedesktop.DBus.Error.InvalidArgs",
+                               "外部命令：不认识的模式报错：" + reply);
+                     }});
+    calls.push_back({"translate", nullptr, [](HarnessInputContext *, const std::string &reply, bool error) {
+                         check(error, "外部命令：没配翻译服务时切不到 translate：" + reply);
+                     }});
+    calls.push_back({"", [](HarnessInputContext *ic) { fresh(ic); }, expect("报错以后模式不变", "zh")});
+    nextModeCall(c);
+}
+
 /// 语音：按住右 Alt 说话（WOWTYPE_VOICE_WAV 代替麦克风），松开后等识别结果上屏。
 /// 要真模型，所以只在 addon-test.sh 带了 WOWTYPE_VOICE_WAV 时跑。异步：靠事件循环里的定时器推进。
 struct VoiceCase {
@@ -2059,6 +2162,7 @@ int main(int argc, char **argv) {
     mainDispatcher.schedule([&instance]() {
         runCases(instance);
         runClipboardCase();
+        runModeCase(instance, [&instance]() {
         runTranslateCase(instance, [&instance]() {
             runVoiceNoModelCase(instance, [&instance]() {
                 runVoiceCase(instance, [&instance]() {
@@ -2068,6 +2172,7 @@ int main(int argc, char **argv) {
                     });
                 });
             });
+        });
         });
     });
     instance.exec();

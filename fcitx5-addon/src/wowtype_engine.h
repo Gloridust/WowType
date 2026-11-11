@@ -17,6 +17,7 @@
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/key.h>
@@ -221,6 +222,23 @@ FCITX_CONFIGURATION(
     fcitx::Option<std::string> lexicon{this, "Lexicon", "词库文件（留空用自带的雾凇词库）", ""};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
 
+class WowtypeEngine;
+
+/// 会话总线上的 org.wowtype.Input：外部命令切中 / 英 / 译（vim 退出插入模式切英文，#98）。
+///   busctl --user call org.wowtype.Input /org/wowtype/Input org.wowtype.Input1 SetMode s en
+class WowtypeControl : public fcitx::dbus::ObjectVTable<WowtypeControl> {
+public:
+    explicit WowtypeControl(WowtypeEngine *engine) : engine_(engine) {}
+    std::string mode();
+    /// zh / en / translate / toggle（只在中英之间切），返回切完以后的模式。
+    std::string setMode(const std::string &mode);
+
+private:
+    WowtypeEngine *engine_;
+    FCITX_OBJECT_VTABLE_METHOD(mode, "Mode", "", "s");
+    FCITX_OBJECT_VTABLE_METHOD(setMode, "SetMode", "s", "s");
+};
+
 class WowtypeEngine final : public fcitx::InputMethodEngineV2 {
 public:
     explicit WowtypeEngine(fcitx::Instance *instance);
@@ -280,6 +298,10 @@ private:
                            fcitx::KeyEvent &event);
     /// Shift 循环切换：中 → 英 → 译（配置了翻译服务才有）→ 中。
     void toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// 切到指定模式。离开「译」上屏攒着的原文，切到英文上屏打到一半的；
+    /// notify：弹出「中 / 英 / 译」提示（外部命令切的不弹，免得 vim 每按一次 Esc 闪一下）。
+    void switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii, bool translate,
+                    bool notify);
 
     // 互译模式：打的字先攒成原文，模型译好后上屏译文
     /// 现在是互译模式，而且这个输入框能用（密码框里不翻译、不往外发）。
@@ -377,6 +399,8 @@ private:
     void cancelVoice();
     /// GNOME 下由 WowType 扩展画语音浮条：插件经 D-Bus 把状态发给它。
     void setupVoiceOverlay();
+    /// 在会话总线上登记 org.wowtype.Input（外部命令切模式）。
+    void setupControl();
     bool voiceOverlay() const { return !overlayOwner_.empty(); }
     void sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state, const std::string &label,
                           int level);
@@ -479,6 +503,16 @@ private:
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> overlayWatch_;
     /// 扩展在总线上的唯一名；空表示扩展没在跑，用候选框里的文字提示。
     std::string overlayOwner_;
+
+    // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
+    std::unique_ptr<fcitx::dbus::Bus> controlBus_;
+    std::unique_ptr<WowtypeControl> control_;
+
+public:
+    /// 现在的模式：zh / en / translate。
+    std::string modeName() const;
+    /// 外部命令切模式（WowtypeControl 调）；不认识的模式、没配翻译时切「译」返回 false。
+    bool setModeByName(const std::string &mode);
 };
 
 #endif /* WOWTYPE_FCITX5_ENGINE_H */

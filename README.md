@@ -250,6 +250,29 @@ fcitx5 默认用左 Shift「临时切换输入法」（切到 en 键盘），这
 它从 fcitx5 的快捷键里去掉单按的 Shift，之后切别的输入法用 `Ctrl` + `空格`；关掉就原样还给 fcitx5。
 fcitx5 的配置文件写不了时（比如 NixOS 用 Home Manager 配 fcitx5，`~/.config/fcitx5` 是只读的），开关下面会提示「只在这次有效」，这时要在 Nix 配置里写，见 [NixOS 安装说明](docs/INSTALL.md#单按-shift-在-nixos-上)。
 
+#### 用命令切中英文（vim 等）
+
+WowType 在会话总线上登记了 `org.wowtype.Input`，外部命令可以直接切 WowType 自己的中 / 英 / 译，不用切到别的输入法（切到 en 键盘的话语音输入就用不了了）：
+
+```bash
+busctl --user call org.wowtype.Input /org/wowtype/Input org.wowtype.Input1 SetMode s en
+```
+
+模式可以是 `zh`、`en`、`translate`（配置了互译时）、`toggle`（中英之间切），返回切完以后的模式；查现在的模式用 `Mode`。
+neovim 里退出插入模式切英文、回到插入模式切回原来的模式：
+
+```lua
+local mode = "zh"
+local function wowtype(args) return vim.fn.system("busctl --user call org.wowtype.Input /org/wowtype/Input org.wowtype.Input1 " .. args) end
+vim.api.nvim_create_autocmd("InsertLeave", { callback = function()
+  mode = wowtype("Mode"):match('"(%a+)"') or mode
+  wowtype("SetMode s en")
+end })
+vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetMode s " .. mode) end })
+```
+
+切的是最近用过的输入框（vim 所在的终端），不弹「中 / 英」提示。
+
 中文标点自动转全角（`,` → ，`?` → ？，`^` → ……，`_` → ——，`$` → ￥，`` ` `` → ·，`{` `}` → 「」），引号左右交替（`"` → “ ”，`'` → ‘ ’），数字后面的符号保持英文（`3.14`、`20:22`、`3,000`、`50%`）；设置「输入 → 标点样式」可以改成半角（英文标点）。`/`、`+`、`=`、`@`、`#`、`%`、`&`、`*` 这类符号原样上屏；打拼音途中按它们，先上屏当前候选。
 
 ### Emoji 和符号

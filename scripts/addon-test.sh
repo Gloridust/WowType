@@ -20,7 +20,14 @@ cmake --build "$BUILD" -j
 
 ROOT=$(mktemp -d)
 MOCK_PID=
-trap '[[ -n "$MOCK_PID" ]] && kill "$MOCK_PID" 2>/dev/null; rm -rf "$ROOT"' EXIT
+DBUS_PID=
+trap '[[ -n "$MOCK_PID" ]] && kill "$MOCK_PID" 2>/dev/null; [[ -n "$DBUS_PID" ]] && kill "$DBUS_PID" 2>/dev/null; rm -rf "$ROOT"' EXIT
+
+# 外部命令切模式的用例要会话总线：没给 WOWTYPE_HARNESS_DBUS 时起一条私有的（没有 dbus-daemon 时跳过）
+if [[ -z "${WOWTYPE_HARNESS_DBUS:-}" ]] && command -v dbus-daemon >/dev/null; then
+  WOWTYPE_HARNESS_DBUS=$(dbus-daemon --session --fork --print-address=1 --print-pid=3 3>"$ROOT/dbus.pid")
+  DBUS_PID=$(cat "$ROOT/dbus.pid")
+fi
 
 # 互译用例：本机起一个假的 OpenAI 服务（没有 python3 或 curl 时跳过）
 TRANSLATE_URL=
