@@ -55,10 +55,15 @@ Wayland 下"抢一个键"本质上不被允许（安全模型），所以要么�
 ### 微信离线（wtlocal，纯 Rust）
 
 `voice/src/wtlocal/` 直接加载微信输入法的离线模型包并自己推理，**不需要官方程序**，
-全平台可用（无系统依赖）。首次使用时从腾讯 CDN 下载约 100MB 模型并校验 MD5。
+全平台可用（无系统依赖）。模型约 100MB，从腾讯 CDN 下载并校验大小和 MD5，**由用户在设置里明确下载**
+（`WowType 设置 → 语音 → 下载`，或 `wowtype-config --install-voice-model`），输入法插件自己从不下载。
+下载、校验、解包在 `settings/wowtype-config`（Python 标准库 `zipfile`，不用系统 `unzip`）；地址、大小、MD5 和
+`voice/src/wtlocal/pack.rs` 一致，`voice` 里有个测试核对这三个值。
+
+开发工具仍然可以自己下载（是命令行上明确要的）：
 
 ```bash
-wowtype-voiced --asr wtlocal          # 首次会下载模型
+wowtype-voiced --asr wtlocal          # 没有模型时会下载
 wowtype-asr --download 音频.wav        # 或直接转写一个 WAV（16kHz 单声道）
 ```
 
@@ -93,7 +98,7 @@ Wayland 下这是唯一不需要额外权限的做法：键本来就送到输入
 |---|---|---|
 | C 接口 | `core/src/voice_ffi.rs`、`core/include/wowtype_core.h` | `wowtype_voice_new/key_down/key_up/poll/text/cancel`；都不阻塞 |
 | 工作线程 | 同上 | 每次说话一个线程：cpal 开默认输入设备 → 分帧 + VAD → 喂 wtlocal 出中间结果 → 结束时整段定稿 |
-| 模型线程 | 同上 | 第一次按热键时下载（腾讯 CDN，约 100MB，校验 MD5）并载入，只做一次；还没好时音频先攒着 |
+| 模型线程 | 同上 | 第一次按热键时把模型读进内存，只做一次；还没读完时音频先攒着。不下载：模型不在磁盘上时不开麦克风，`poll` 返回出错，文字是「没有语音模型，请在「WowType 设置 → 语音」里下载」，`model_state` 返回 `MODEL_MISSING` |
 | 插件 | `fcitx5-addon/src/wowtype_engine.cpp` | 热键按下/松开都吃掉（免得应用把单按 Alt 当成打开菜单）；50ms 定时轮询；编辑区显示中间结果，前面是麦克风图标和跟着音量动的波形（不写说明文字，免得和识别出的字混在一起）；结果用 `commitString` 上屏 |
 
 ### 语音浮条（GNOME）
@@ -121,6 +126,8 @@ fcitx5 的候选框只能显示文字，画不出宣传片里那条带动画的�
 
 规则：
 
+- 没下载模型：按热键只显示「去设置里下载」的提示（候选框或 GNOME 浮条，4 秒，打字就收起），什么也不录、不下载；
+  设置里语音输入的开关在下载好模型前是灰的（显示为关）。配置里 `Voice=True` 但没有模型的老用户也是这样，不会自动下载；
 - 正在打拼音时热键交给应用，不抢；
 - 按住 ≥300ms 松开即结束；更短算点按，静音 1.5 秒或再按一次结束；单次最长 120 秒；
 - 说话时按 `Esc` 丢掉；按别的键也丢掉，那个键照常处理；切走输入框（失去焦点、切输入法）丢掉；
@@ -130,7 +137,9 @@ fcitx5 的候选框只能显示文字，画不出宣传片里那条带动画的�
 插件用 `-DWOWTYPE_VOICE=OFF` 配置即可。
 
 测试：`WOWTYPE_VOICE_WAV=x.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-test.sh ...` 用 WAV 代替麦克风，
-在私有 fcitx5 实例里走一遍「按住右 Alt → 松开 → 上屏」。
+在私有 fcitx5 实例里走一遍「按住右 Alt → 松开 → 上屏」。不给 WAV 时模型目录是一个空的临时目录，
+跑「没有模型时按右 Alt 只提示、不下载」。设置界面这边的下载、续传、校验、解包、取消、删除在
+`wowtype-config --self-test` 里（本机起一个假的下载服务，不联网）。
 
 ## 5. 下一步
 

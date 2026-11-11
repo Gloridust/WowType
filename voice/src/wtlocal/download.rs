@@ -1,7 +1,11 @@
 //! 离线语音包的下载与缓存。
 //!
-//! 模型是腾讯的资源包，不随仓库分发：首次使用时从官方 CDN 下载并校验。
+//! 模型是腾讯的资源包，不随仓库分发：从官方 CDN 下载并校验。
 //! 这一步和用户自己安装微信输入法获取资源是同一性质。
+//!
+//! 输入法插件不调这里（模型在设置界面 `settings/wowtype-config` 里下载，那边用 Python 重写了
+//! 一遍下载、校验、解包，地址和校验和与 `pack.rs` 一致）；这里给 `wowtype-asr --download`、
+//! `wowtype-voiced` 这些开发工具用。
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -91,6 +95,18 @@ mod tests {
     #[test]
     fn default_dir_ends_with_wtlocal() {
         assert!(default_dir().ends_with("wowtype/wtlocal"));
+    }
+
+    #[test]
+    fn settings_tool_uses_same_pack() {
+        // 设置界面里下载语音模型用的地址、大小、MD5 要和这里一致
+        let settings = include_str!("../../../settings/wowtype-config");
+        assert!(settings.contains(pack::URL), "wowtype-config 里的语音模型地址不对");
+        assert!(settings.contains(pack::MD5), "wowtype-config 里的语音模型 MD5 不对");
+        assert!(
+            settings.contains(&format!("VOICE_MODEL_SIZE = {}", pack::SIZE)),
+            "wowtype-config 里的语音模型大小不对"
+        );
     }
 
     #[test]

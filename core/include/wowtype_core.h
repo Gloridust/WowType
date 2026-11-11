@@ -205,8 +205,10 @@ const char *wowtype_version(void);
 /*
  * 语音输入（核心带 voice 特性编译时才有，默认带）。
  *
- * 识别用微信输入法的离线模型：不随软件分发，第一次按热键时从腾讯 CDN 下载（约 100MB）
- * 到 model_dir，之后常驻内存。所有函数都不阻塞：开麦克风、下载、解码都在后台线程。
+ * 识别用微信输入法的离线模型：不随软件分发，由用户在设置界面（wowtype-config）里下载到
+ * model_dir；这里只读不下载，第一次按热键时读进内存，之后常驻。没有模型时按热键，
+ * poll 返回 WOWTYPE_VOICE_ERROR（文本是去设置里下载的提示），model_state 返回
+ * WOWTYPE_VOICE_MODEL_MISSING。所有函数都不阻塞：开麦克风、读模型、解码都在后台线程。
  *
  * 用法：热键按下/松开调 key_down/key_up；录音期间每几十毫秒调一次 poll，
  * 按返回的状态显示提示或上屏 wowtype_voice_text。
@@ -225,10 +227,11 @@ enum {
 
 enum {
     WOWTYPE_VOICE_MODEL_NONE = 0,
-    WOWTYPE_VOICE_MODEL_DOWNLOADING = 1,
+    WOWTYPE_VOICE_MODEL_DOWNLOADING = 1, /* 不再返回：模型改在设置界面里下载 */
     WOWTYPE_VOICE_MODEL_LOADING = 2,
     WOWTYPE_VOICE_MODEL_READY = 3,
     WOWTYPE_VOICE_MODEL_FAILED = 4,
+    WOWTYPE_VOICE_MODEL_MISSING = 5, /* 按了热键，但模型还没下载 */
 };
 
 /* model_dir 为 NULL/空串时用 ~/.local/share/wowtype/wtlocal。

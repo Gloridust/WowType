@@ -1894,16 +1894,17 @@ class DownloadCancelled(Exception):
     pass
 
 
-def _sha256_of(path):
-    digest = hashlib.sha256()
+def _digest_of(path, algo="sha256"):
+    digest = hashlib.new(algo)
     with open(path, "rb") as f:
         while chunk := f.read(1 << 20):
             digest.update(chunk)
     return digest
 
 
-def download_model(dest, url=None, sha256=None, progress=None, cancelled=None, timeout=30):
-    """下载到 dest（先写 dest.part，断了能接着下），校验 SHA256 后改名。
+def download_model(dest, url=None, sha256=None, progress=None, cancelled=None, timeout=30,
+                   algo="sha256"):
+    """下载到 dest（先写 dest.part，断了能接着下），校验 SHA256（algo="md5" 时 sha256 给 MD5）后改名。
 
     progress(已下载, 总大小) 时不时调一下；cancelled() 返回 True 时停下（.part 留着下次续）。
     校验不过就删掉 .part 抛 ValueError；网络出错抛 OSError。"""
@@ -1923,14 +1924,14 @@ def download_model(dest, url=None, sha256=None, progress=None, cancelled=None, t
         response = None  # .part 已经下完整了，只差校验
     done = have
     if response is None:
-        digest = _sha256_of(part)
+        digest = _digest_of(part, algo)
     else:
         with response:
             if have and response.status != 206:
                 have = done = 0  # 服务不支持续传：从头来
             length = int(response.headers.get("Content-Length") or 0)
             total = have + length if length else 0
-            digest = _sha256_of(part) if have else hashlib.sha256()
+            digest = _digest_of(part, algo) if have else hashlib.new(algo)
             last = 0.0
             with open(part, "ab" if have else "wb") as out:
                 while chunk := response.read(1 << 16):
@@ -1945,7 +1946,7 @@ def download_model(dest, url=None, sha256=None, progress=None, cancelled=None, t
                         progress(done, total)
     if digest.hexdigest() != sha256:
         os.unlink(part)
-        raise ValueError("下载的文件校验不对（SHA256 不一致），已删除，请重试")
+        raise ValueError(f"下载的文件校验不对（{algo.upper()} 不一致），已删除，请重试")
     os.replace(part, dest)
     if progress:
         progress(done, done)
@@ -2039,6 +2040,273 @@ def download_self_test():
         assert local_model_path({"TranslateLocalModel": ""}).endswith(LOCAL_MODEL_FILE)
         assert local_model_path({"TranslateLocalModel": "~/x.gguf"}) == os.path.expanduser("~/x.gguf")
     server.shutdown()
+
+
+# ---------------------------------------------------------------- 语音模型
+
+
+# 语音识别模型：微信输入法的离线语音包（腾讯的，不随 WowType 分发），用户在「语音」页点下载。
+# 地址、大小、MD5 和 voice/src/wtlocal/pack.rs 一致（那边有测试对这三个值）
+VOICE_MODEL_URL = os.environ.get("WOWTYPE_VOICE_MODEL_URL") or "https://download.z.weixin.qq.com/publish_words/v1/ime_asr_decoder_model/20260710220526250_ime_asr_decoder_model.apk"  # noqa: E501
+VOICE_MODEL_SIZE = 102920639
+VOICE_MODEL_MD5 = "28386481eb94ff73b28ee3949c0cf690"
+# 测试用：换成本机的假服务和假包
+if os.environ.get("WOWTYPE_VOICE_MODEL_MD5"):
+    VOICE_MODEL_MD5 = os.environ["WOWTYPE_VOICE_MODEL_MD5"]
+    VOICE_MODEL_SIZE = int(os.environ.get("WOWTYPE_VOICE_MODEL_SIZE") or 0)
+# 解开后模型和词表大约多大（界面上提示用）
+VOICE_MODEL_DISK = 130 * 1000 * 1000
+# 语音包（.apk 其实是 zip）里套着的模型包，只要里面的 *.xnet 和词表
+VOICE_MODEL_INNER = "ime_asr_decoder_model.zip"
+VOICE_MODEL_DICT = "dict.decoder.utf8.txt"
+VOICE_MODEL_NOTE = "语音模型是微信输入法的离线语音包，属于腾讯，从腾讯的服务器下载，WowType 不分发它。"
+
+
+def voice_model_ready(folder=None):
+    """语音模型在不在（和 voice/src/wtlocal/download.rs 的 is_ready 一样：有 .xnet 和词表）。"""
+    folder = folder or VOICE_MODEL_DIR
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    return VOICE_MODEL_DICT in names and any(n.endswith(".xnet") for n in names)
+
+
+def unpack_voice_model(pack, folder):
+    """从语音包里解出模型和词表到 folder：先解到旁边的临时目录，齐了再换进去。
+
+    只取内层模型包里的 *.xnet 和词表，扁平解出（不认包里的路径），别的不要。
+    坏包抛 ValueError，原来的 folder 不动。"""
+    import io
+    import zipfile
+    staging = folder + ".new"
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    try:
+        try:
+            with zipfile.ZipFile(pack) as outer:
+                inner_data = outer.read(VOICE_MODEL_INNER)
+            with zipfile.ZipFile(io.BytesIO(inner_data)) as inner:
+                for info in inner.infolist():
+                    name = info.filename.replace("\\", "/").rsplit("/", 1)[-1]
+                    if info.is_dir() or not (name.endswith(".xnet") or name == VOICE_MODEL_DICT):
+                        continue
+                    with inner.open(info) as src, open(os.path.join(staging, name), "wb") as out:
+                        shutil.copyfileobj(src, out)
+        except (zipfile.BadZipFile, KeyError) as e:
+            raise ValueError(f"语音包格式不对：{e}") from e
+        if not voice_model_ready(staging):
+            raise ValueError("语音包里没有模型或词表，不安装")
+        old = folder + ".old"
+        shutil.rmtree(old, ignore_errors=True)
+        if os.path.exists(folder):
+            os.replace(folder, old)
+        os.replace(staging, folder)
+        shutil.rmtree(old, ignore_errors=True)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def install_voice_model(folder=None, pack=None, url=None, md5=None, size=None,
+                        progress=None, cancelled=None):
+    """下载语音包（断了能接着下）、核对大小和 MD5、解出模型。给了 pack 就用这个文件，不下载。
+
+    下载的包放在 folder 旁边（wtlocal.apk），装好后删掉。取消抛 DownloadCancelled（.part 留着下次续），
+    校验不过抛 ValueError（下载的坏包删掉），网络出错抛 OSError。返回模型占的字节数。"""
+    folder = folder or VOICE_MODEL_DIR
+    md5 = (md5 or VOICE_MODEL_MD5).lower()
+    size = VOICE_MODEL_SIZE if size is None else size
+    downloaded = pack is None
+    if downloaded:
+        pack = folder + ".apk"
+        if not os.path.isfile(pack):
+            download_model(pack, url or VOICE_MODEL_URL, md5, progress=progress,
+                           cancelled=cancelled, algo="md5")
+    try:
+        have = os.path.getsize(pack)
+        if have != size:
+            raise ValueError(f"语音包大小不对：{have} 字节，应该是 {size} 字节")
+        if _digest_of(pack, "md5").hexdigest() != md5:
+            raise ValueError("语音包校验不对（MD5 不一致）")
+        unpack_voice_model(pack, folder)
+    finally:
+        # 下载的包用完（或者是坏的）就删掉；用户给的文件留着
+        if downloaded and os.path.exists(pack):
+            os.unlink(pack)
+    return dir_size(folder)
+
+
+def remove_voice_model(folder=None):
+    """删掉语音模型（连同没下完的包），返回空出的字节数。"""
+    folder = folder or VOICE_MODEL_DIR
+    size = 0
+    for path in (folder, folder + ".apk", folder + ".apk.part", folder + ".part",
+                 folder + ".tmp", folder + ".new", folder + ".old"):
+        try:
+            if os.path.isdir(path):
+                size += dir_size(path)
+                shutil.rmtree(path, ignore_errors=True)
+            elif os.path.exists(path):
+                size += os.path.getsize(path)
+                os.unlink(path)
+        except OSError:
+            pass
+    return size
+
+
+def voice_model_cli(args):
+    """命令行：--install-voice-model [语音包.apk] 下载（或从文件）装上语音模型并打开语音输入，
+    --remove-voice-model 删掉模型并关掉语音输入。"""
+    values, extra = read_config()
+    if args[0] == "--remove-voice-model":
+        size = remove_voice_model()
+        values["Voice"] = "False"
+        print(f"已删除语音模型，空出 {human_size(size)}" if size else "没有语音模型")
+        log("删掉了语音模型（命令行）")
+    else:
+        source = args[1] if len(args) > 1 and not args[1].startswith("-") else None
+        if voice_model_ready() and source is None:
+            print(f"语音模型已经有了：{_home(VOICE_MODEL_DIR)}")
+        else:
+            if source is None:
+                print(VOICE_MODEL_NOTE)
+
+            def progress(done, total):
+                text = f"{human_size(done)} / {human_size(total)}" if total else human_size(done)
+                print(f"\r下载语音模型：{text}   ", end="", flush=True)
+            try:
+                size = install_voice_model(pack=source, progress=progress)
+            except KeyboardInterrupt:
+                print("\n已暂停，再跑一次会接着下")
+                return 130
+            print(f"\n语音模型装好了（{human_size(size)}）：{_home(VOICE_MODEL_DIR)}")
+            log("语音模型装好了（命令行）")
+        values["Voice"] = "True"
+    write_config(values, extra)
+    running = fcitx_call_sync("ReloadAddonConfig", GLib.Variant("(s)", ("wowtype",))) is not None
+    on = values["Voice"] == "True"
+    print(("语音输入已打开，按语音键（默认右 Alt）说话" if on else "语音输入已关闭") +
+          ("" if running else "，fcitx5 下次启动时生效"))
+    return 0
+
+
+def voice_model_self_test():
+    """语音模型：本机起一个假的 CDN，下载、续传、校验、解包、取消、删掉（不联网，不碰真模型）。"""
+    import http.server
+    import io
+    import tempfile
+    import zipfile
+
+    def make_pack(inner_files):
+        inner = io.BytesIO()
+        with zipfile.ZipFile(inner, "w") as z:
+            for name, data in inner_files.items():
+                z.writestr(name, data)
+        outer = io.BytesIO()
+        with zipfile.ZipFile(outer, "w") as z:
+            z.writestr("AndroidManifest.xml", b"x")
+            z.writestr(VOICE_MODEL_INNER, inner.getvalue())
+        return outer.getvalue()
+    good = make_pack({"model/encoder.xnet": os.urandom(200_000), "model/decoder.xnet": b"d" * 1000,
+                      f"model/{VOICE_MODEL_DICT}": "你\n好\n".encode(), "model/readme.txt": b"junk",
+                      "../../evil.xnet": b"evil"})
+    blob = {"data": good}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_a):
+            pass
+
+        def do_GET(self):
+            data = blob["data"]
+            start = 0
+            if rng := self.headers.get("Range"):
+                start = int(rng.split("=")[1].split("-")[0])
+                if start >= len(data):
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                self.send_response(206)
+            else:
+                self.send_response(200)
+            self.send_header("Content-Length", str(len(data) - start))
+            self.end_headers()
+            self.wfile.write(data[start:])
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/voice.apk"
+    md5 = hashlib.md5(good).hexdigest()
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = os.path.join(tmp, "wowtype")
+            folder = os.path.join(parent, "wtlocal")
+            args = {"folder": folder, "url": url, "md5": md5, "size": len(good)}
+            assert not voice_model_ready(folder)
+            # 取消：什么也没装，.part 留着下次续
+            try:
+                install_voice_model(**args, cancelled=lambda: True)
+                raise AssertionError("取消应该报 DownloadCancelled")
+            except DownloadCancelled:
+                pass
+            assert not voice_model_ready(folder) and os.listdir(parent) == ["wtlocal.apk.part"]
+            # 接着下完、装上：只留 .xnet 和词表，不认包里的路径，包删掉
+            seen = []
+            assert install_voice_model(**args, progress=lambda d, t: seen.append(d)) > 0
+            assert voice_model_ready(folder)
+            assert sorted(os.listdir(folder)) == sorted(["encoder.xnet", "decoder.xnet",
+                                                         "evil.xnet", VOICE_MODEL_DICT])
+            assert os.listdir(parent) == ["wtlocal"] and sorted(os.listdir(tmp)) == ["wowtype"]
+            assert seen and seen[-1] == len(good)
+            # MD5 不对：报错，坏包删掉，装好的那份不动
+            for bad_args in ({"md5": "0" * 32}, {"size": len(good) + 1}):
+                try:
+                    install_voice_model(**{**args, **bad_args})
+                    raise AssertionError(f"应该失败：{bad_args}")
+                except ValueError:
+                    pass
+                assert voice_model_ready(folder) and os.listdir(parent) == ["wtlocal"]
+            # 内容不全的包不装，原来的留着
+            bad = make_pack({"model/readme.txt": b"x"})
+            blob["data"] = bad
+            try:
+                install_voice_model(**{**args, "md5": hashlib.md5(bad).hexdigest(), "size": len(bad)})
+                raise AssertionError("没有模型的包应该装不上")
+            except ValueError:
+                pass
+            assert voice_model_ready(folder) and os.listdir(parent) == ["wtlocal"]
+            # 服务器出错（404）：OSError
+            server.RequestHandlerClass = type("Gone", (Handler,), {
+                "do_GET": lambda self: (self.send_response(404), self.end_headers())})
+            shutil.rmtree(folder)
+            try:
+                install_voice_model(**args)
+                raise AssertionError("404 应该失败")
+            except OSError:
+                pass
+            assert not voice_model_ready(folder)
+            # 从文件装；文件留着。不是 zip 的文件报 ValueError
+            pack = os.path.join(tmp, "x.apk")
+            with open(pack, "wb") as f:
+                f.write(good)
+            install_voice_model(folder, pack=pack, md5=md5, size=len(good))
+            assert voice_model_ready(folder) and os.path.exists(pack)
+            with open(pack, "wb") as f:
+                f.write(b"not a zip")
+            try:
+                install_voice_model(folder, pack=pack, md5=hashlib.md5(b"not a zip").hexdigest(),
+                                    size=9)
+                raise AssertionError("不是 zip 应该失败")
+            except ValueError:
+                pass
+            assert voice_model_ready(folder)
+            # 删掉
+            assert remove_voice_model(folder) > 0
+            assert not voice_model_ready(folder) and os.listdir(parent) == []
+            assert remove_voice_model(folder) == 0
+    finally:
+        server.shutdown()
+    print("voice model self-test ok")
 
 
 def human_size(n):
@@ -2237,6 +2505,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("update", "更新", "software-update-available-symbolic", self.build_update),
         )
         self.switches = {}
+        self.quiet_switch = False
         self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         self.nav.add_css_class("wt-nav")
         self.nav_rows = {}
@@ -2897,7 +3166,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         if subtitle:
             row.set_subtitle(subtitle)
         row.set_active(self.values[key] == "True")
-        row.connect("notify::active", lambda r, _p: self.set_value(
+        row.connect("notify::active", lambda r, _p: self.quiet_switch or self.set_value(
             key, "True" if r.get_active() else "False"))
         self.switches[key] = row
         return row
@@ -2941,7 +3210,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             title="语音输入",
             description="按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
                         "说的时候按 Esc 取消。正在打拼音时语音键不起作用。")
-        group.add(self.make_switch("Voice", "语音输入", "用微信输入法的离线模型，在本机识别，不联网"))
+        self.voice_row = self.make_switch("Voice", "语音输入", "")
+        group.add(self.voice_row)
 
         current = self.values["VoiceKey"]
         labels = [label for label, _ in VOICE_KEYS]
@@ -2964,21 +3234,133 @@ class SettingsWindow(Adw.ApplicationWindow):
         group.add(copy_row)
         page.add(group)
 
-        model = Adw.PreferencesGroup(title="识别模型")
-        self.model_row = Adw.ActionRow()
+        model = Adw.PreferencesGroup(
+            title="识别模型",
+            description="在本机识别，录音不上传。" + VOICE_MODEL_NOTE)
+        self.model_row = Adw.ActionRow(title="语音模型")
+        self.voice_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
+        self.voice_download.add_css_class("suggested-action")
+        self.voice_download.connect("clicked", self.on_voice_download)
+        self.model_row.add_suffix(self.voice_download)
+        self.voice_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
+                                       tooltip_text="删掉语音模型，关掉语音输入")
+        self.voice_delete.add_css_class("flat")
+        self.voice_delete.connect("clicked", self.on_voice_delete)
+        self.model_row.add_suffix(self.voice_delete)
         model.add(self.model_row)
-        self.update_model_row()
+        self.voice_cancel = None
+        self.voice_error = None
+        self.refresh_voice_model()
         page.add(model)
         return page
 
-    def update_model_row(self):
-        size = dir_size(VOICE_MODEL_DIR) if os.path.isdir(VOICE_MODEL_DIR) else 0
-        if size > 10 * 1024 * 1024:
-            self.model_row.set_title(f"已下载（{size / 1024 / 1024:.0f} MB）")
-            self.model_row.set_subtitle(VOICE_MODEL_DIR)
+    def refresh_voice_model(self, progress=None):
+        """模型在不在决定语音输入能不能打开：没有模型时开关灰掉、显示成关着（不改配置）。"""
+        if not hasattr(self, "model_row"):
+            return
+        ready = voice_model_ready()
+        busy = self.voice_cancel is not None
+        if progress:
+            subtitle = progress
+        elif busy:
+            subtitle = None  # 进度由下载线程更新
+        elif ready:
+            subtitle = f"已下载（{human_size(dir_size(VOICE_MODEL_DIR))}）：{_home(VOICE_MODEL_DIR)}"
+        elif self.voice_error:
+            subtitle = f"没下载好：{self.voice_error}。点「重试」再下"
+        elif os.path.exists(VOICE_MODEL_DIR + ".apk.part"):
+            done = os.path.getsize(VOICE_MODEL_DIR + ".apk.part")
+            subtitle = (f"下了 {human_size(done)} / {human_size(VOICE_MODEL_SIZE)}，"
+                        "点「下载」接着下")
         else:
-            self.model_row.set_title("还没下载")
-            self.model_row.set_subtitle("第一次按语音键时自动下载，约 130 MB，来自微信输入法的服务器")
+            subtitle = (f"还没下载。要下载 {human_size(VOICE_MODEL_SIZE)}，"
+                        f"解开后占 {human_size(VOICE_MODEL_DISK)} 左右")
+        if subtitle is not None:
+            self.model_row.set_subtitle(GLib.markup_escape_text(subtitle))
+        self.voice_download.set_label("取消" if busy else ("重试" if self.voice_error else "下载"))
+        self.voice_download.set_visible(busy or not ready)
+        self.voice_download.set_sensitive(progress != "正在解包…")
+        self.voice_delete.set_visible(ready and not busy)
+        # 开关：有模型才能开；显示的样子跟着模型走，但不在这里写配置
+        self.quiet_switch = True
+        self.voice_row.set_active(ready and self.values["Voice"] == "True")
+        self.quiet_switch = False
+        self.voice_row.set_sensitive(ready)
+        self.voice_row.set_subtitle(
+            "按语音键说话，在本机识别，不联网" if ready else "要先在下面下载语音模型才能打开")
+
+    def on_voice_download(self, _button):
+        if self.voice_cancel is not None:
+            self.voice_cancel.set()
+            return
+        cancel = threading.Event()
+        self.voice_cancel = cancel
+        self.voice_error = None
+        self.refresh_voice_model("正在连接…")
+        log(f"开始下载语音模型到 {_home(VOICE_MODEL_DIR)}")
+
+        def progress(done, total):
+            text = (f"正在下载：{human_size(done)} / {human_size(total)}（{done * 100 // total}%）"
+                    if total else f"正在下载：{human_size(done)}")
+            if done and done == total:
+                text = "正在解包…"
+            GLib.idle_add(self.refresh_voice_model, text)
+
+        def work():
+            error = None
+            try:
+                install_voice_model(progress=progress, cancelled=cancel.is_set)
+            except DownloadCancelled:
+                error = ""
+            except ValueError as e:
+                error = str(e)
+            except OSError as e:
+                reason = getattr(e, "reason", None) or e
+                error = f"连不上下载服务器（{getattr(reason, 'strerror', None) or reason}）"
+            except Exception as e:  # noqa: BLE001  网络错误各式各样
+                error = str(e)
+            GLib.idle_add(self.voice_download_done, error)
+        threading.Thread(target=work, daemon=True).start()
+
+    def voice_download_done(self, error):
+        self.voice_cancel = None
+        if error == "":
+            log("语音模型下载暂停了")
+            self.toast("已取消，再点下载会接着下")
+        elif error:
+            log(f"语音模型没下载好：{error}")
+            self.voice_error = error
+            self.toast(f"语音模型没下载好：{error}")
+        else:
+            # 用户自己点的下载：下完直接打开语音输入
+            log("语音模型下载好了，打开语音输入")
+            self.values["Voice"] = "True"
+            self.save_config()
+            self.toast("语音模型下载好了，语音输入已打开")
+        self.refresh_voice_model()
+        return GLib.SOURCE_REMOVE
+
+    def on_voice_delete(self, _button):
+        size = dir_size(VOICE_MODEL_DIR)
+        dialog = Adw.AlertDialog(
+            heading="删掉语音模型？",
+            body=f"空出 {human_size(size)}，语音输入会关掉。以后想用再到这里下载。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("delete", "删除")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+
+        def answered(_dialog, response):
+            if response != "delete":
+                return
+            freed = remove_voice_model()
+            log("删掉了语音模型，关掉语音输入")
+            self.values["Voice"] = "False"
+            self.save_config()
+            self.voice_error = None
+            self.toast(f"已删除，空出 {human_size(freed)}；语音输入已关闭")
+            self.refresh_voice_model()
+        dialog.connect("response", answered)
+        dialog.present(self)
 
     # ---------------- 翻译
 
@@ -3832,6 +4214,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.fuzzy_row.set_enable_expansion(False)
             self.select_row.set_selected(0)
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
+            self.refresh_voice_model()
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
             self.target_row.set_selected(0)
             self.toast("已恢复默认设置")
@@ -3849,7 +4232,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             license_type=Gtk.License.CUSTOM,
             license="代码按 MIT 或 Apache-2.0 双许可证发布。\n"
                     "词库数据来自 rime-ice（GPL-3.0）。\n"
-                    "语音模型属于腾讯微信输入法，使用时从腾讯服务器下载，不随 WowType 分发。",
+                    "语音模型属于腾讯微信输入法，在设置的「语音」页从腾讯服务器下载，不随 WowType 分发。",
             comments="好用的拼音输入法：整句、简拼、按错键纠正、语音输入。")
         about.present(self)
 
@@ -3932,6 +4315,17 @@ if __name__ == "__main__":
         sys.exit(0)
     if "--download-model" in sys.argv:
         sys.exit(download_model_cli("--accept-license" in sys.argv))
+    for flag in ("--install-voice-model", "--remove-voice-model"):
+        if flag in sys.argv:
+            at = sys.argv.index(flag)
+            try:
+                sys.exit(voice_model_cli(sys.argv[at:at + 2]))
+            except ValueError as e:
+                print(f"\n没装好：{e}")
+                sys.exit(1)
+            except OSError as e:
+                print(f"\n没下载好：{getattr(e, 'reason', None) or e}（再跑一次会接着下）")
+                sys.exit(1)
     for flag in ("--install-lexicon", "--use-lexicon"):
         if flag in sys.argv:
             at = sys.argv.index(flag)
@@ -3942,6 +4336,7 @@ if __name__ == "__main__":
                 sys.exit(1)
     if "--self-test" in sys.argv:
         download_self_test()
+        voice_model_self_test()
         lexicon_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」
         hotkey = {"TriggerKeys": {"0": "Control+space", "1": "Zenkaku_Hankaku"},

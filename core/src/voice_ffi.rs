@@ -1,12 +1,13 @@
 //! 语音输入的 C 接口：按住（或点一下）热键说话，松开后把识别结果交给插件上屏。
 //!
 //! 识别用微信输入法的离线模型（`wowtype_voice::wtlocal`）。模型不随软件分发，
-//! 第一次按热键时从腾讯 CDN 下载（约 100MB）并校验，之后常驻内存。
+//! 用户在设置界面（WowType 设置 → 语音）里下载；这里只读，不下载。
+//! 没有模型时按热键只给一句提示（VOICE_ERROR + MODEL_MISSING），什么也不做。
 //!
 //! 线程：
 //! - 插件线程只调 `wowtype_voice_*`，这些函数都不阻塞（不开设备、不解码）；
 //! - 每次说话起一个工作线程：开麦克风、分帧、VAD、喂识别、出中间结果，结束时整段定稿；
-//! - 模型的下载与加载在单独的线程里，只做一次。说话时模型还没好，音频先攒着，好了再补喂。
+//! - 模型的加载在单独的线程里，只做一次。说话时模型还没读完，音频先攒着，好了再补喂。
 //!
 //! 插件定时调 `wowtype_voice_poll`（几十毫秒一次）取状态与文本。
 //!
@@ -38,12 +39,19 @@ pub const VOICE_RESULT: c_int = 3;
 /// 出错或没听清；文本是给用户看的原因。只返回一次。
 pub const VOICE_ERROR: c_int = 4;
 
-/// 模型状态（给插件显示「正在下载」之类的提示）。
+/// 模型状态。
 pub const MODEL_NONE: c_int = 0;
+/// 不再用：模型改在设置界面里下载，这里不会返回它（留着编号免得插件和核心对不上）。
+#[allow(dead_code)]
 pub const MODEL_DOWNLOADING: c_int = 1;
 pub const MODEL_LOADING: c_int = 2;
 pub const MODEL_READY: c_int = 3;
 pub const MODEL_FAILED: c_int = 4;
+/// 按了热键，但模型还没下载。
+pub const MODEL_MISSING: c_int = 5;
+
+/// 没有模型时按热键显示的提示。
+const MISSING_HINT: &str = "没有语音模型，请在「WowType 设置 → 语音」里下载";
 
 /// 单次最长录音。和 SenseVoice 那套一样，误触不会一直录下去。
 const MAX_RECORDING: Duration = Duration::from_secs(120);
@@ -54,7 +62,7 @@ static EMPTY: [u8; 1] = [0];
 
 enum ModelState {
     None,
-    Downloading,
+    Missing,
     Loading,
     Ready,
     Failed(String),
@@ -69,36 +77,33 @@ impl ModelSlot {
     fn code(&self) -> c_int {
         match &*self.state.lock().unwrap() {
             ModelState::None => MODEL_NONE,
-            ModelState::Downloading => MODEL_DOWNLOADING,
+            ModelState::Missing => MODEL_MISSING,
             ModelState::Loading => MODEL_LOADING,
             ModelState::Ready => MODEL_READY,
             ModelState::Failed(_) => MODEL_FAILED,
         }
     }
 
-    /// 还没开始（或上次失败）就起线程下载 + 加载。
-    fn prepare(self: &Arc<Self>, dir: &Path) {
+    /// 还没载入（或上次失败）就起线程载入。模型不在磁盘上返回 false，不下载。
+    fn prepare(self: &Arc<Self>, dir: &Path) -> bool {
         {
             let mut state = self.state.lock().unwrap();
-            if !matches!(*state, ModelState::None | ModelState::Failed(_)) {
-                return;
+            if !matches!(*state, ModelState::None | ModelState::Missing | ModelState::Failed(_)) {
+                return true;
             }
-            *state = if download::is_ready(dir) {
-                ModelState::Loading
-            } else {
-                ModelState::Downloading
-            };
+            // 每次都看一眼磁盘：设置界面可能刚下载好，也可能刚删掉
+            if !download::is_ready(dir) {
+                *state = ModelState::Missing;
+                return false;
+            }
+            *state = ModelState::Loading;
         }
         let slot = self.clone();
         let dir = dir.to_path_buf();
         std::thread::Builder::new()
             .name("wowtype-voice-model".into())
             .spawn(move || {
-                let result = download::ensure(&dir).and_then(|()| {
-                    *slot.state.lock().unwrap() = ModelState::Loading;
-                    slot.changed.notify_all();
-                    wtlocal::load(&dir).map(|_| ())
-                });
+                let result = wtlocal::load(&dir).map(|_| ());
                 *slot.state.lock().unwrap() = match result {
                     Ok(()) => ModelState::Ready,
                     Err(e) => {
@@ -109,9 +114,10 @@ impl ModelSlot {
                 slot.changed.notify_all();
             })
             .expect("spawn model thread");
+        true
     }
 
-    /// 等模型就绪；下载中不等（可能要几分钟），只等「正在读进内存」。
+    /// 等模型读进内存。
     fn wait_ready(&self) -> Result<(), String> {
         let deadline = Instant::now() + LOAD_WAIT;
         let mut state = self.state.lock().unwrap();
@@ -120,9 +126,7 @@ impl ModelSlot {
                 ModelState::Ready => return Ok(()),
                 ModelState::Failed(e) => return Err(format!("语音模型不可用：{e}")),
                 ModelState::None => return Err("语音模型没有准备".into()),
-                ModelState::Downloading => {
-                    return Err("语音模型还在下载（约 100MB），好了再试".into())
-                }
+                ModelState::Missing => return Err(MISSING_HINT.into()),
                 ModelState::Loading => {
                     let left = deadline.saturating_duration_since(Instant::now());
                     if left.is_zero() {
@@ -220,7 +224,18 @@ impl WowtypeVoice {
         if let Some(tx) = self.tx.take() {
             let _ = tx.send(Msg::Cancel);
         }
-        self.model.prepare(&self.dir);
+        if !self.model.prepare(&self.dir) {
+            // 没有模型：只提示去设置里下载，不开麦克风、不下载
+            self.session += 1;
+            {
+                let mut shared = self.shared.lock().unwrap();
+                shared.session = self.session;
+                shared.voice_at = None;
+                shared.level = 0;
+            }
+            self.fail(MISSING_HINT);
+            return;
+        }
         self.session += 1;
         {
             let mut shared = self.shared.lock().unwrap();
@@ -486,7 +501,7 @@ impl Worker {
 }
 
 /// 创建语音句柄；model_dir 为 NULL/空串时用默认目录（~/.local/share/wowtype/wtlocal）。
-/// 不碰麦克风、不下载，第一次按热键时才做。
+/// 不碰麦克风、不读模型，第一次按热键时才读；从来不下载（模型在设置界面里下载）。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_voice_new(model_dir: *const c_char) -> *mut WowtypeVoice {
     let dir = if model_dir.is_null() {
@@ -595,6 +610,29 @@ mod tests {
         voice.cancel();
         assert_eq!(voice.poll(), VOICE_IDLE);
         assert!(!voice.trigger.is_recording());
+    }
+
+    #[test]
+    fn key_without_model_hints_and_downloads_nothing() {
+        let root = std::env::temp_dir().join(format!("wowtype-nomodel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let dir = root.join("wtlocal");
+        let mut voice = WowtypeVoice::new(dir.clone());
+        let actions = voice.trigger.on_down(Instant::now());
+        voice.apply(actions);
+        assert!(voice.tx.is_none(), "没有模型不该开录音线程");
+        assert_eq!(voice.poll(), VOICE_ERROR);
+        assert!(voice.text.to_str().unwrap().contains("设置"));
+        assert_eq!(voice.model.code(), MODEL_MISSING);
+        assert!(!voice.trigger.is_recording());
+        let actions = voice.trigger.on_up(Instant::now());
+        voice.apply(actions);
+        assert_eq!(voice.poll(), VOICE_IDLE);
+        // 什么也没下载：目录里没有模型、没有 .apk / .part
+        assert!(!dir.exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

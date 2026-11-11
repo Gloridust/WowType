@@ -141,6 +141,8 @@ std::string voiceWave(const std::vector<int> &levels) {
     return out;
 }
 constexpr uint64_t kVoiceErrorUsec = 1500 * 1000;
+/// 「没有语音模型，去设置里下载」这句提示显示多久。
+constexpr uint64_t kVoiceHintUsec = 4000 * 1000;
 /// 互译：原文停下来这么久才发请求（句末标点立刻发），以及取结果的间隔。
 constexpr uint64_t kTranslateDelayUsec = 500 * 1000;
 // 定时器精度。fcitx5 底下是 sd-event，传 0 等于默认的 250ms，50ms 的轮询实际一秒只有 4 次
@@ -822,7 +824,8 @@ void WowtypeEngine::applyConfig() {
     voiceKey_ = key;
     voiceCopy_ = envOr("WOWTYPE_VOICE_COPY", *config_.voiceCopy);
     if (voiceKey_.sym() != FcitxKey_None && !voice_) {
-        // 只建句柄：不开麦克风、不下载模型，第一次按热键时才做
+        // 只建句柄：不开麦克风、不读模型，第一次按热键时才读。模型从来不在这里下载，
+        // 没下载时按热键只提示去「WowType 设置 → 语音」里下载
         const char *dir = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
         voice_ = wowtype_voice_new(dir);
     }
@@ -2410,25 +2413,18 @@ bool WowtypeEngine::pollVoice() {
     switch (phase) {
     case WOWTYPE_VOICE_LISTENING: {
         const int level = wowtype_voice_level(voice_);
-        const bool downloading =
-            wowtype_voice_model_state(voice_) == WOWTYPE_VOICE_MODEL_DOWNLOADING;
         if (voiceOverlay()) {
             // 浮条由 GNOME 扩展画，这里只留编辑区里识别到一半的字
             showVoice(ic, {}, text);
-            sendVoiceOverlay(ic, kOverlayListening, downloading ? "下载语音模型…" : "正在听…",
-                             level);
+            sendVoiceOverlay(ic, kOverlayListening, "正在听…", level);
             return true;
         }
-        // 不写字，只画麦克风 + 跟着音量滚动的波形；第一次下载模型要很久，才写一句
+        // 不写字，只画麦克风 + 跟着音量滚动的波形
         voiceLevels_.push_back(level);
         if (voiceLevels_.size() > kVoiceBars) {
             voiceLevels_.erase(voiceLevels_.begin());
         }
-        std::string status = "🎙 " + voiceWave(voiceLevels_);
-        if (downloading) {
-            status += " 下载语音模型…";
-        }
-        showVoice(ic, status + " ", text);
+        showVoice(ic, "🎙 " + voiceWave(voiceLevels_) + " ", text);
         return true;
     }
     case WOWTYPE_VOICE_RECOGNIZING: {
@@ -2456,16 +2452,25 @@ bool WowtypeEngine::pollVoice() {
         return false;
     case WOWTYPE_VOICE_ERROR:
         WLOG_I() << "WowType: 语音 " << text;
+        voiceErrorText_ = text;
         if (voiceOverlay()) {
             showVoice(ic, {}, {});
             sendVoiceOverlay(ic, kOverlayError, text, 0);
         } else {
             showVoice(ic, "🎙 " + text, {});
         }
-        voiceErrorUntil_ = fcitx::now(CLOCK_MONOTONIC) + kVoiceErrorUsec;
+        // 没下载模型的提示要去设置里操作，多留一会儿让人看清
+        voiceErrorUntil_ = fcitx::now(CLOCK_MONOTONIC) +
+                           (wowtype_voice_model_state(voice_) == WOWTYPE_VOICE_MODEL_MISSING
+                                ? kVoiceHintUsec
+                                : kVoiceErrorUsec);
         return true;
     default:
         if (voiceErrorUntil_ && fcitx::now(CLOCK_MONOTONIC) < voiceErrorUntil_) {
+            // 浮条 1.5 秒收不到信号会自己收起：提示要留得更久时接着发
+            if (voiceOverlay()) {
+                sendVoiceOverlay(ic, kOverlayError, voiceErrorText_, 0);
+            }
             return true;
         }
         clearVoice();
@@ -2513,6 +2518,7 @@ void WowtypeEngine::clearVoice(bool done) {
     voiceLevels_.clear();
     voiceFrame_ = 0;
     voiceErrorUntil_ = 0;
+    voiceErrorText_.clear();
     if (auto *ic = voiceIc_.get()) {
         // 回到说话前的样子（互译模式下还有原文和译文）
         updateInputPanel(ic, ic->propertyFor(&factory_));

@@ -73,9 +73,14 @@ Layout=
 0=Default
 PROFILE
 
-# 语音用例要真模型：给了 WOWTYPE_VOICE_WAV（代替麦克风的录音）才跑，模型默认用本机已下载的那份
+# 语音用例要真模型：给了 WOWTYPE_VOICE_WAV（代替麦克风的录音）才跑，模型默认用本机已下载的那份。
+# 没给时用一个空目录，跑「没有模型时按语音键只提示、不下载」
 VOICE_WAV=${WOWTYPE_VOICE_WAV:-}
-VOICE_MODEL_DIR=${WOWTYPE_VOICE_MODEL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/wowtype/wtlocal}
+if [[ -n "$VOICE_WAV" ]]; then
+  VOICE_MODEL_DIR=${WOWTYPE_VOICE_MODEL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/wowtype/wtlocal}
+else
+  VOICE_MODEL_DIR="$ROOT/data/wowtype/wtlocal"
+fi
 
 SYSTEM_ADDONS=$(pkg-config --variable=libdir Fcitx5Core 2>/dev/null || echo /usr/lib/x86_64-linux-gnu)/fcitx5
 env -i PATH="$PATH" HOME="$ROOT" \
