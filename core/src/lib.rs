@@ -116,6 +116,9 @@ pub struct EngineConfig {
     pub nnlm_rerank: usize,
 }
 
+/// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
+pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
+
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
@@ -254,6 +257,11 @@ impl Engine {
         if count < self.config.auto_learn_threshold.max(1) {
             return;
         }
+        self.add_learned_word(word, pinyin, count);
+    }
+
+    /// 学到的词收进用户词库。count 是选用次数，决定频次。
+    fn add_learned_word(&self, word: &str, pinyin: &str, count: u32) {
         // 候选带的拼音已经是全拼（双拼也翻好了）；以前的前端会传双拼键位串（如 "vsgo"），
         // 那样的要先展开，否则用户词会带着一串无效音节存进去，永远也打不出来。
         let pinyin = if self.config.shuangpin && !pinyin.trim().contains(' ') {
@@ -267,6 +275,29 @@ impl Engine {
         // 频次随选用次数增长但有上限，避免用户词压过通用高频词
         let freq = (1000.0 * f64::from(count)).min(50_000.0);
         let _ = self.lexicon.add(&pinyin, word, freq);
+    }
+
+    /// 用户分几次选出来、拼成的一个词（最多 [`COMPOSED_WORD_MAX_CHARS`] 个字）（「霜」「频」「阁」→ 霜频阁）：记一次选词，
+    /// 并且马上收进用户词库，不用等选够 [`EngineConfig::auto_learn_threshold`] 次。
+    ///
+    /// 用户特意一段一段挑出来的，就是想要这个词；主流输入法造词也是选一次就记住。
+    /// 一次就打出来的整句不走这里，还是按次数学，免得随手打的句子都进词库。
+    /// 反馈见 https://x.com/so1v3/status/2120415675969896729
+    pub fn record_composed_word(&self, word: &str, pinyin: &str) {
+        // 超过四个字的多半是先选句首词、再选剩下的长句，不是要造的词：照常按次数学
+        if word.chars().count() > COMPOSED_WORD_MAX_CHARS {
+            self.record_selection_with_pinyin(word, Some(pinyin));
+            return;
+        }
+        self.record_selection(word);
+        if !self.config.auto_learn || word.is_empty() || pinyin.trim().is_empty() {
+            return;
+        }
+        // 至少给到「选够次数」那一档的频次，下次一打就排前面
+        let count = self
+            .history_count(word)
+            .max(self.config.auto_learn_threshold.max(1));
+        self.add_learned_word(word, pinyin, count);
     }
 
     /// 带时间戳的选词记录（方便测试）。
@@ -2647,6 +2678,53 @@ mod tests {
             e.input("wote").iter().any(|c| c.text == "我特"),
             "自动学习后应当能打出 我特"
         );
+    }
+
+    #[test]
+    fn composed_word_is_learned_on_first_use() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "shuang\t双\t10000\nshuang\t霜\t500\npin\t拼\t8000\npin\t频\t500\n\
+                 ge\t个\t20000\nge\t阁\t300\nshuang pin\t双拼\t3000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let e = Engine::new(lexicon, lm);
+        assert!(!e.input("shuangpinge").iter().any(|c| c.text == "霜频阁"));
+
+        // 分三次选出来的词，用一次就记住、排第一
+        e.record_composed_word("霜频阁", "shuang pin ge");
+        assert_eq!(e.user_words().len(), 1);
+        assert_eq!(e.input("shuangpinge")[0].text, "霜频阁");
+    }
+
+    #[test]
+    fn long_composed_sentence_still_needs_repeats() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("ni hao\t你好\t10000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let e = Engine::new(lexicon, lm);
+        // 先选句首词再选剩下的长句：不当造词，一次不进词库
+        e.record_composed_word("我今天去学校了", "wo jin tian qu xue xiao le");
+        assert!(e.user_words().is_empty());
+        e.record_composed_word("我今天去学校了", "wo jin tian qu xue xiao le");
+        e.record_composed_word("我今天去学校了", "wo jin tian qu xue xiao le");
+        assert_eq!(e.user_words().len(), 1);
+    }
+
+    #[test]
+    fn composed_word_respects_auto_learn_off() {
+        let lexicon: Arc<dyn Lexicon> =
+            Arc::new(MemoryLexicon::from_tsv_str("ni hao\t你好\t10000\n").unwrap());
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let config = EngineConfig {
+            auto_learn: false,
+            ..EngineConfig::default()
+        };
+        let e = Engine::new(lexicon, lm).with_config(config);
+        e.record_composed_word("我特", "wo te");
+        assert!(e.user_words().is_empty());
     }
 
     #[test]

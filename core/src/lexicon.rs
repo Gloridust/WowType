@@ -23,6 +23,20 @@ use crate::syllable::{Syllable, SyllableId, SyllableQuery};
 const CACHE_MAGIC: &[u8; 4] = b"WLC1";
 const CACHE_VERSION: u32 = 2;
 
+/// 快照里存的是音节 ID（音节表的下标），音节表一改（比如补了 biang）旧快照就对不上了。
+/// 所以写进快照的版本号混进音节表的指纹：表一变，旧快照自动作废重建。
+fn cache_version() -> u32 {
+    // FNV-1a
+    let mut hash: u32 = 0x811c_9dc5;
+    for text in crate::syllable::SYLLABLES {
+        for &byte in text.as_bytes().iter().chain(std::iter::once(&b',')) {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+    }
+    CACHE_VERSION ^ (hash & 0xffff_ff00)
+}
+
 /// 占位频次的词估频时给的成词加成（自然对数，约 ×20）。见 `estimate_placeholder_freqs`。
 const PLACEHOLDER_BONUS: f64 = 3.0;
 /// 同一个频次至少有这么多多音节词才当占位值（小词库、用户词库不处理）。
@@ -275,7 +289,7 @@ impl MemoryLexicon {
     fn write_cache(&self, cache: &Path, src_len: u64, src_mtime: u64) -> Result<()> {
         let mut buf: Vec<u8> = Vec::with_capacity(self.entries.len() * 24);
         buf.extend_from_slice(CACHE_MAGIC);
-        buf.extend_from_slice(&CACHE_VERSION.to_le_bytes());
+        buf.extend_from_slice(&cache_version().to_le_bytes());
         buf.extend_from_slice(&src_len.to_le_bytes());
         buf.extend_from_slice(&src_mtime.to_le_bytes());
         buf.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
@@ -309,7 +323,7 @@ impl MemoryLexicon {
             return None;
         }
         let version = u32::from_le_bytes(data[4..8].try_into().ok()?);
-        if version != CACHE_VERSION {
+        if version != cache_version() {
             return None;
         }
         if u64::from_le_bytes(data[8..16].try_into().ok()?) != src_len
@@ -1204,8 +1218,8 @@ mod tests {
 
     #[test]
     fn lenient_loading_skips_unknown_syllables() {
-        // 「cei」不在音节表里，整行跳过而不是让整个词库失败
-        let lex = MemoryLexicon::from_tsv_str("ni hao\t你好\t100\ncei\t呲\t5\n").unwrap();
+        // 「qqq」不是音节，整行跳过而不是让整个词库失败
+        let lex = MemoryLexicon::from_tsv_str("ni hao\t你好\t100\nqqq\t呲\t5\n").unwrap();
         assert_eq!(lex.len(), 1);
         assert_eq!(lex.skipped(), 1);
     }
@@ -1268,6 +1282,21 @@ mod tests {
         .unwrap();
         let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert_eq!(second.len(), 3, "源文件更新后应当重新解析");
+        cleanup(&path);
+    }
+
+    #[test]
+    fn cache_from_other_syllable_table_is_ignored() {
+        // 音节表改了（版本号还是旧的那个）：快照里的音节 ID 对不上，必须重新解析
+        let path = temp_lexicon("table", "ni hao\t你好\t100\n");
+        let lex = MemoryLexicon::from_tsv_path(&path).unwrap();
+        let (len, mtime) = source_stamp(&path).unwrap();
+        let cache = cache_path(&path);
+        lex.write_cache(&cache, len, mtime).unwrap();
+        let mut data = std::fs::read(&cache).unwrap();
+        assert!(MemoryLexicon::read_cache(&data, len, mtime).is_some());
+        data[4..8].copy_from_slice(&CACHE_VERSION.to_le_bytes());
+        assert!(MemoryLexicon::read_cache(&data, len, mtime).is_none());
         cleanup(&path);
     }
 
