@@ -223,6 +223,19 @@ do {
 
 do {
     let (c, client) = fresh()
+    // 数字交给了应用，光标前是数字：后面的符号原样（20:22、3,000）
+    client.committed = "20"
+    _ = c.handle(.char(":"))
+    client.committed += "22"
+    _ = c.handle(.char(","))
+    check(client.committed == "20:22,", "数字后的符号不换成中文标点", client.committed)
+    type(c, "nihao")
+    _ = c.handle(.char(":"))
+    check(client.committed == "20:22,你好：", "汉字后面的冒号还是中文冒号", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
     // 不在打字时数字、大写字母交给应用
     check(!c.handle(.char("1")), "数字交给应用")
     check(!c.handle(.char("A", .shift)), "大写字母交给应用")

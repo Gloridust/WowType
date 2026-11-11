@@ -78,7 +78,7 @@ public protocol TextClient: AnyObject {
     func setMarkedText(_ text: String, cursor: Int)
     /// 画候选框；nil 表示收起。
     func showCandidates(_ page: CandidatePage?)
-    /// 光标前一个字符（Unicode 码位），不知道给 0。数字后面的句号要原样上屏。
+    /// 光标前一个字符（Unicode 码位），不知道给 0。数字后面的符号（3.14、20:22）要原样上屏。
     var previousCharacter: UInt32 { get }
 }
 

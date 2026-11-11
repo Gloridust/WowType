@@ -83,7 +83,7 @@ int wowtype_engine_load_conversion(WowtypeEngineHandle *engine, const char *path
 const char *wowtype_fullwidth_punct(int ascii_codepoint);
 
 /* 按标点样式转换：style 0 全角、1 半角；prev 是光标前一个字符（不知道传 0）。
- * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字后的小数点）。 */
+ * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字后面的符号）。 */
 const char *wowtype_punct(int ascii_codepoint, int style, int prev_codepoint);
 
 /* 中英文之间自动补空格（ABI 1.2 起）：prev 是光标前一个字，next 是要上屏的第一个字；

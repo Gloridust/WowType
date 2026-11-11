@@ -10,7 +10,7 @@ final class WowTypeInputController: IMKInputController {
     private var composer: Composer!
     /// 上一次给应用的编辑区，一样就不再发（每次上屏后 Composer 都会清一次编辑区）。
     private var lastMarked = ""
-    /// 最近自己上屏的最后一个字。很多应用读不到光标前的字（attributedSubstring 返回 nil），用它兜底。
+    /// 最近上屏或交给应用的最后一个字。很多应用读不到光标前的字（attributedSubstring 返回 nil），用它兜底。
     private var lastInserted: UInt32 = 0
     private var lastFlags: UInt = 0
 
@@ -42,7 +42,14 @@ final class WowTypeInputController: IMKInputController {
                 composer.otherModifierChanged()
                 return composer.isComposing
             }
-            return composer.handle(key)
+            let handled = composer.handle(key)
+            if !handled {
+                // 交给应用的键也记下来（读不到光标前的字时，20:22 的冒号要知道前面是数字）；
+                // 功能键、快捷键之后就不知道光标前是什么了
+                let shortcut = !key.modifiers.isDisjoint(with: [.control, .option, .command])
+                lastInserted = shortcut ? 0 : key.ascii.map { UInt32($0) } ?? 0
+            }
+            return handled
         default:
             return false
         }

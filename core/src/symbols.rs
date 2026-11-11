@@ -118,12 +118,12 @@ pub enum PunctStyle {
 /// 按样式和光标前一个字符决定标点。返回 `None` 表示原样上屏这个 ASCII 字符。
 ///
 /// - 半角样式：一律原样上屏
-/// - 全角样式：数字后面的 `.` 是小数点（3.14），不换成句号
+/// - 全角样式：数字后面的符号一律原样（3.14、20:22、3,000、50%），不换成中文标点
 pub fn punct(ascii: char, style: PunctStyle, prev: Option<char>) -> Option<&'static str> {
     if style == PunctStyle::Halfwidth {
         return None;
     }
-    if ascii == '.' && prev.is_some_and(|c| c.is_ascii_digit()) {
+    if prev.is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
     if ascii == '"' || ascii == '\'' {
@@ -201,13 +201,17 @@ mod tests {
     }
 
     #[test]
-    fn dot_after_digit_is_decimal_point() {
+    fn punct_after_digit_stays_ascii() {
         use PunctStyle::*;
-        assert_eq!(punct('.', Fullwidth, Some('3')), None);
+        // 3.14、20:22、3,000、50%：数字后面的符号都原样
+        for c in ['.', ':', ',', '%', ';', '(', ')', '$', '~', '"'] {
+            assert_eq!(punct(c, Fullwidth, Some('3')), None, "{c}");
+        }
         assert_eq!(punct('.', Fullwidth, Some('好')), Some("。"));
         assert_eq!(punct('.', Fullwidth, Some('a')), Some("。"));
-        // 只管句点：数字后面的逗号还是中文逗号
-        assert_eq!(punct(',', Fullwidth, Some('3')), Some("，"));
+        assert_eq!(punct(':', Fullwidth, Some('好')), Some("："));
+        // 全角数字不算
+        assert_eq!(punct(':', Fullwidth, Some('３')), Some("："));
     }
 
     /// 主流输入法的写法：Shift+6 省略号、Shift+- 破折号、Shift+4 人民币符号、` 间隔号。
