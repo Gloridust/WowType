@@ -2227,6 +2227,7 @@ std::string WowtypeEngine::punctFor(fcitx::InputContext *ic, WowtypeState *state
 bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
                                       fcitx::KeyEvent &event) {
     const auto sym = event.key().sym();
+    const int code = event.origKey().code();
     const bool isShift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
     const bool wanted =
         isShift && (shiftToggle_ == WowtypeShiftToggle::Both ||
@@ -2239,14 +2240,23 @@ bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *sta
                                    states.test(fcitx::KeyState::Super);
         if (wanted && !otherModifier && !state->emojiPanel_ &&
             state->tool_ == WowtypeTool::None) {
+            // 按住不放时的自动重复：还是那一下，不重新计时（key() 规整时去掉了 Repeat，要看 rawKey）
+            if (shiftDown_ != sym || !event.rawKey().states().test(fcitx::KeyState::Repeat)) {
+                shiftDownAt_ = fcitx::now(CLOCK_MONOTONIC);
+            }
             shiftDown_ = sym;
-            shiftDownAt_ = fcitx::now(CLOCK_MONOTONIC);
+            shiftDownCode_ = code;
         } else {
             shiftDown_ = FcitxKey_None;
         }
         return false;
     }
-    if (!wanted || sym != shiftDown_) {
+    // 松开时按键码认：xkb 选项（比如 grp:shifts_toggle）或 fcitx5 按输入法布局重新翻译时，
+    // 松开那一下 Shift 已经算按着，同一个键可能翻成别的符号（ISO_Next_Group 等）。
+    // 没有键码（测试、部分前端）时还按符号认。
+    const bool sameKey = shiftDown_ != FcitxKey_None &&
+                         (code && shiftDownCode_ ? code == shiftDownCode_ : sym == shiftDown_);
+    if (!sameKey) {
         if (!isShift) {
             shiftDown_ = FcitxKey_None;
         }

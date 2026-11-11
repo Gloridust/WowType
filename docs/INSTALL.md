@@ -283,6 +283,25 @@ flake 输入选哪个：
 CI 在 nixos-unstable（x86_64、aarch64）和当前稳定版 nixos-26.05（x86_64）上构建并自检，
 发布要等这些检查都通过。设置界面的更新提醒在 NixOS 上只提示新版本，不会去调用其他包管理器。
 
+### 单按 Shift 在 NixOS 上
+
+fcitx5 默认用左 Shift「临时切换输入法」，它先拿到这一下，WowType 收不到。设置界面的「Shift 只给 WowType 用」
+是让正在跑的 fcitx5 改掉这个快捷键，再由 fcitx5 存进 `~/.config/fcitx5/config`。
+用 Home Manager 的 `i18n.inputMethod.fcitx5.settings` 时，整个 `~/.config/fcitx5` 是指向 `/nix/store` 的只读目录，
+fcitx5 存不进去，重新登录后左 Shift 又被拿走（设置界面会提示「只在这次有效」）；WowType 自己的设置也存不了，
+要写在 `settings.addons.wowtype.globalSection` 里。这种情况把快捷键写进 Nix 配置：
+
+```nix
+# Home Manager
+i18n.inputMethod.fcitx5.settings.globalOptions = {
+  Hotkey.AltTriggerKeys = "";   # 空值 = 不用 Shift「临时切换输入法」；切输入法还是 Ctrl+空格
+};
+```
+
+NixOS 模块的同名选项（`i18n.inputMethod.fcitx5.settings.globalOptions`，写法相同）写的是 `/etc/xdg/fcitx5/config`，
+只在没有 `~/.config/fcitx5/config` 时才生效；已经有这个文件时，用设置界面的开关就行（它能写这个文件）。
+fcitx5 其他全局快捷键（`EnumerateForwardKeys` 等）里也不要放单按的 Shift。
+
 ### 维护：发版时的 Nix 相关步骤
 
 - `release` 分支由发布 job 自动更新。`GITHUB_TOKEN` 不能把分支移到改过 `.github/workflows` 的提交上，

@@ -41,6 +41,7 @@ jobs:
       - run: for script in install.sh scripts/*.sh; do bash -n "$script"; done
       - run: bash scripts/test-install.sh
       - run: python3 scripts/test-update.py
+      - run: python3 scripts/test-shift-config.py
 
   core:
     name: Rust 核心测试
