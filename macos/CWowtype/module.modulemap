@@ -1,0 +1,4 @@
+module CWowtype [system] {
+    header "../../core/include/wowtype_core.h"
+    export *
+}
