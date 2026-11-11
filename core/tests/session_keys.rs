@@ -1128,3 +1128,59 @@ fn shuangpin_semicolon_is_a_key_on_odd_count() {
     assert!(!frame.handled, "成对了：分号交给外壳");
     assert_eq!(session.input(), "x;");
 }
+
+/// 分几次选出来的词，用一次就记住（https://x.com/so1v3/status/2120415675969896729）。
+#[test]
+fn composed_word_is_learned_after_one_use() {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str(concat!(
+            "shuang\t双\t9000\n",
+            "shuang\t霜\t500\n",
+            "pin\t拼\t9000\n",
+            "pin\t频\t500\n",
+            "ge\t个\t9000\n",
+            "ge\t阁\t500\n",
+            "wo\t我\t9000\n",
+            "wo\t窝\t500\n",
+            "men\t们\t9000\n",
+            "men\t门\t500\n",
+            "qu\t去\t9000\n",
+            "qu\t区\t500\n",
+        ))
+        .unwrap(),
+    );
+    let engine: &'static Engine =
+        Box::leak(Box::new(Engine::new(lexicon, Arc::new(BigramLm::default()))));
+
+    let mut session = with(engine);
+    type_keys(&mut session, "shuangpinge");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("霜频阁"));
+    choose_text(&mut session, "霜");
+    choose_text(&mut session, "频");
+    let frame = choose_text(&mut session, "阁");
+    assert_eq!(frame.commit.as_deref(), Some("霜频阁"));
+    assert!(
+        engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"),
+        "选一次就进用户词库：{:?}",
+        engine.user_words()
+    );
+
+    let mut again = with(engine);
+    type_keys(&mut again, "shuangpinge");
+    assert_eq!(texts(&mut again).first().map(String::as_str), Some("霜频阁"));
+
+    // 超过四个字的是整句，不会一次就进词库
+    let mut long = with(engine);
+    type_keys(&mut long, "womenquwomen");
+    choose_text(&mut long, "窝");
+    choose_text(&mut long, "门");
+    choose_text(&mut long, "区");
+    choose_text(&mut long, "窝");
+    let frame = choose_text(&mut long, "门");
+    assert_eq!(frame.commit.as_deref(), Some("窝门区窝门"));
+    assert!(
+        !engine.user_words().iter().any(|(_, w, _)| w == "窝门区窝门"),
+        "整句不该一次就进词库：{:?}",
+        engine.user_words()
+    );
+}

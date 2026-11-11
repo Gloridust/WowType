@@ -1107,14 +1107,15 @@ impl<'e> Session<'e> {
                 self.learn(tail, tail_pinyin);
             }
             if !self.selections.is_empty() && !tail.is_empty() && !tail_pinyin.is_empty() {
-                // 分几次选出来的整句也记一次，下次能一次打出来
+                // 分几次选出来的也记一次，下次能一次打出来。四个字以内的当成用户造的词，
+                // 用一次就收进用户词库（「霜」「频」「阁」→ 霜频阁）；更长的是整句，照常按次数学。
                 let mut pinyin = String::new();
                 for selection in &self.selections {
                     pinyin.push_str(&selection.pinyin);
                     pinyin.push(' ');
                 }
                 pinyin.push_str(tail_pinyin);
-                self.learn(&text, &pinyin);
+                self.learn_composed(&text, &pinyin);
             }
         }
         self.finish(text);
@@ -1128,6 +1129,15 @@ impl<'e> Session<'e> {
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
         engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
+    }
+
+    /// 记分几次选出来拼成的词，见 [`Engine::record_composed_word`]。上文是还没选词时的上文。
+    fn learn_composed(&self, word: &str, pinyin: &str) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
+        engine.record_composed_word(word, pinyin);
     }
 
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。

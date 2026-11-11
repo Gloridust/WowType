@@ -778,15 +778,23 @@ void runCases(Instance &instance) {
     check(ic->inputPanel().auxUp().toString().find("表情") != std::string::npos &&
               !page(ic.get()).empty(),
           "打开表情面板：" + ic->inputPanel().auxUp().toString());
-    // 上面刚选过 😊：最近用过的排最前，后面是全部 emoji（😀 开头）
-    check(!page(ic.get()).empty() && page(ic.get())[0].find("〔😊〕２　😀") != std::string::npos,
-          "最近用过的排最前：" + (page(ic.get()).empty() ? std::string() : page(ic.get())[0]));
+    // 上面刚选过 😊：最近用过的排最前。第二个是什么看前面的用例选过什么
+    // （词库不同，前面翻页、展开时可能选到 🔟 这类按键 emoji；什么都没选过就是全部 emoji 的 😀）
+    const std::string recentGrid = page(ic.get()).empty() ? std::string() : page(ic.get())[0];
+    check(recentGrid.find("〔😊〕") != std::string::npos && recentGrid.find("〔😊〕") < recentGrid.find("２"),
+          "最近用过的排最前：" + recentGrid);
+    std::string recentSecond;
+    if (auto at = recentGrid.find("２　"); at != std::string::npos) {
+        at += std::string("２　").size();
+        recentSecond = recentGrid.substr(at, recentGrid.find("　", at) - at);
+    }
     type(ic.get(), "<right><sp>");
-    check(ic->committed == "😀", "右键移到第二个再选 😀，实际 " + ic->committed);
+    check(!recentSecond.empty() && ic->committed == recentSecond,
+          "右键移到第二个（" + recentSecond + "）再选，实际 " + ic->committed);
     fresh(ic.get());
     send(ic.get(), emojiKey);
     type(ic.get(), "<sp>");
-    check(ic->committed == "😀", "空格选第一个（刚用过的 😀），实际 " + ic->committed);
+    check(ic->committed == recentSecond, "空格选第一个（刚用过的 " + recentSecond + "），实际 " + ic->committed);
     // 搜拼音、英文和符号名
     fresh(ic.get());
     send(ic.get(), emojiKey);
