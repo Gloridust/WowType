@@ -1331,3 +1331,71 @@ fn ctrl_delete_keeps_custom_words_and_idle_is_not_ours() {
     assert!(!idle.key(&ctrl(keysym::DELETE)).handled);
     assert!(!idle.key(&ctrl(keysym::BACKSPACE)).handled);
 }
+
+#[test]
+fn brackets_pick_first_or_last_char() {
+    // 以词定字（#83）：[ 取光标处候选的第一个字，] 取最后一个字
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    assert_eq!(texts(&mut session)[0], "你好");
+    let frame = type_keys(&mut session, "[");
+    assert!(frame.handled);
+    assert_eq!(frame.commit.as_deref(), Some("你"));
+    assert!(frame.preedit.is_empty());
+
+    let mut session = with(engine());
+    assert_eq!(type_keys(&mut session, "kaixin]").commit.as_deref(), Some("心"));
+
+    // 光标挪到第二个候选：取它的字
+    let mut session = with(engine());
+    type_keys(&mut session, "kaixin<right>");
+    assert_eq!(type_keys(&mut session, "]").commit.as_deref(), Some("欣"));
+
+    // 句首词：取的字进已选栈，剩下的拼音接着选
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaozhongguo");
+    let prefix = session
+        .candidates()
+        .iter()
+        .position(|c| c.text == "你好")
+        .expect("有句首词你好");
+    for _ in 0..prefix {
+        type_keys(&mut session, "<right>");
+    }
+    let frame = type_keys(&mut session, "]");
+    assert_eq!(frame.commit, None);
+    assert_eq!(session.selected_text(), "好");
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("好中国"));
+
+    // 取出来的字不记选词：你好没学过，不会因为按了 [ 变成用户词
+    let engine = engine();
+    let mut session = with(engine);
+    type_keys(&mut session, "nihao[");
+    assert!(engine.user_words().is_empty(), "以词定字不学词：{:?}", engine.user_words());
+}
+
+#[test]
+fn brackets_fall_through_when_nothing_to_pick() {
+    // 单字候选：交给外壳（外壳先上屏再出【】）
+    let mut session = with(engine());
+    type_keys(&mut session, "ba");
+    assert_eq!(texts(&mut session)[0], "吧");
+    assert!(!type_keys(&mut session, "[").handled);
+
+    // 关掉以词定字，或者 [ ] 是翻页键：不取字
+    let mut session = with(engine());
+    session.configure(Config {
+        pick_char: false,
+        ..Config::default()
+    });
+    type_keys(&mut session, "nihao");
+    assert!(!type_keys(&mut session, "[").handled);
+
+    let mut session = with(engine());
+    session.configure(Config {
+        page_keys: wowtype_core::session::page_keys::BRACKET,
+        ..Config::default()
+    });
+    type_keys(&mut session, "nihao");
+    assert_eq!(type_keys(&mut session, "[").commit, None);
+}

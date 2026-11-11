@@ -66,6 +66,8 @@ pub struct WowtypeSessionConfig {
     pub page_keys: u32,
     /// `WOWTYPE_SELECT_KEYS_*`（默认关）。
     pub select_keys: c_int,
+    /// 1.8 起：以词定字（`[ ]` 取候选的第一个、最后一个字），默认 1。
+    pub pick_char: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -84,6 +86,7 @@ impl Default for WowtypeSessionConfig {
                 SelectKeys::Semicolon => WOWTYPE_SELECT_KEYS_SEMICOLON,
                 SelectKeys::SemicolonQuote => WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE,
             },
+            pick_char: c_int::from(config.pick_char),
         }
     }
 }
@@ -106,6 +109,7 @@ impl WowtypeSessionConfig {
                 WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE => SelectKeys::SemicolonQuote,
                 _ => SelectKeys::Off,
             },
+            pick_char: self.pick_char != 0,
         }
     }
 }

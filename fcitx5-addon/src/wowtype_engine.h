@@ -169,6 +169,8 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeSelectKeys, fcitx::NoConstrain<WowtypeSelectKeys>,
                   fcitx::DefaultMarshaller<WowtypeSelectKeys>, WowtypeSelectKeysAnnotation>
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
+    fcitx::Option<bool> pickChar{this, "PickChar",
+                                 "以词定字：打拼音时 [ ] 上屏候选的第一个、最后一个字", true};
     fcitx::Option<bool> dateTime{this, "DateTime",
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
@@ -406,6 +408,7 @@ private:
     unsigned fuzzyGroups_ = 0;
     bool typo_ = true;
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
+    bool pickChar_ = true;
     bool dateTime_ = true;
     bool calculator_ = true;
     bool toolbar_ = true;

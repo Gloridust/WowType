@@ -95,6 +95,7 @@ DEFAULTS = {
     "Traditional": "False",
     "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
+    "PickChar": "True",
     "DateTime": "True",
     "Calculator": "True",
     "Toolbar": "True",
@@ -2703,6 +2704,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.select_row.connect("notify::selected", lambda row, _p: self.set_value(
             "SelectKeys", self.select_names[row.get_selected()]))
         extras.add(self.select_row)
+        extras.add(self.make_switch(
+            "PickChar", "以词定字",
+            "打拼音时按 [ 上屏光标处候选的第一个字、] 上屏最后一个字（nihao [ → 你）。"
+            "翻页键用 [ ] 时不起作用"))
         auto_space = Adw.ExpanderRow(
             title="中英文之间自动加空格",
             subtitle="你好Linux → 你好 Linux、第5章 → 第 5 章。只在读得到光标前文字的输入框里生效"

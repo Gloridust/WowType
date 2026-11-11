@@ -277,6 +277,9 @@ pub struct Config {
     /// 翻页键，[`page_keys`] 的位掩码（PgUp PgDn 一直能用）。
     pub page_keys: u32,
     pub select_keys: SelectKeys,
+    /// 以词定字：打拼音途中 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字（#83）。
+    /// `[ ]` 设成翻页键时让给翻页。
+    pub pick_char: bool,
 }
 
 impl Default for Config {
@@ -289,6 +292,7 @@ impl Default for Config {
             horizontal: true,
             page_keys: page_keys::MINUS,
             select_keys: SelectKeys::Off,
+            pick_char: true,
         }
     }
 }
@@ -555,6 +559,13 @@ impl<'e> Session<'e> {
                 self.choose_now(start + nth - 1);
             }
             return Some(true);
+        }
+        if let Some(last) = self.pick_char_key(sym) {
+            // 以词定字：没有能拆的候选时交给外壳（照常当标点）
+            if self.pick_char(last) {
+                return Some(true);
+            }
+            return None;
         }
         if let Some(digit) = key.digit() {
             // 数字按当前页选词
@@ -826,6 +837,52 @@ impl<'e> Session<'e> {
         self.cursor = cursor.min(n - 1);
         self.expanded = expanded && n > 1;
         self.grid_cursor = grid_cursor.min(n - 1);
+    }
+
+    /// 以词定字的键：`[` 是 Some(false)（第一个字），`]` 是 Some(true)（最后一个字）。
+    fn pick_char_key(&self, sym: u32) -> Option<bool> {
+        if !self.config.pick_char || self.config.page_keys & page_keys::BRACKET != 0 {
+            return None;
+        }
+        match sym {
+            keysym::BRACKET_LEFT => Some(false),
+            keysym::BRACKET_RIGHT => Some(true),
+            _ => None,
+        }
+    }
+
+    /// 以词定字：光标处的候选只取第一个（last 时最后一个）字。没用完输入的候选（句首词）
+    /// 取的字进已选栈，剩下的拼音接着选；用完输入的连同已选的词上屏。取出来的字不记选词
+    /// （学的是词，不是这个字）。光标处不是引擎的多字词时返回 false。
+    fn pick_char(&mut self, last: bool) -> bool {
+        let Some(index) = self.current_index() else {
+            return false;
+        };
+        let chosen = self.candidates[index].clone();
+        let chars: Vec<char> = chosen.text.chars().collect();
+        if chosen.kind != CandidateKind::Word || chars.len() < 2 {
+            return false;
+        }
+        let pick = if last { chars[chars.len() - 1] } else { chars[0] };
+        // 拼音按音节对上字数时带上这个字的读音（以后拼成词能学），对不上就不带
+        let syllables: Vec<&str> = chosen.pinyin.split_whitespace().collect();
+        let pinyin = if syllables.len() == chars.len() {
+            (if last { syllables[syllables.len() - 1] } else { syllables[0] }).to_string()
+        } else {
+            String::new()
+        };
+        self.last_choice = None;
+        if chosen.consumed < self.remaining().len() {
+            self.push_selection(Selection {
+                text: pick.to_string(),
+                pinyin,
+                bytes: chosen.consumed,
+            });
+        } else {
+            let text = self.selected_text() + &pick.to_string();
+            self.finish(text);
+        }
+        true
     }
 
     /// 分号、引号选第几个；不是选词键是 None。
@@ -1179,7 +1236,12 @@ impl<'e> Session<'e> {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
                 self.learn(tail, tail_pinyin);
             }
-            if !self.selections.is_empty() && !tail.is_empty() && !tail_pinyin.is_empty() {
+            // 以词定字取出来的字对不上读音时拼音是空的，这样拼成的不学
+            if !self.selections.is_empty()
+                && !tail.is_empty()
+                && !tail_pinyin.is_empty()
+                && self.selections.iter().all(|s| !s.pinyin.is_empty())
+            {
                 // 分几次选出来的也记一次，下次能一次打出来。四个字以内的当成用户造的词，
                 // 用一次就收进用户词库（「霜」「频」「阁」→ 霜频阁）；更长的是整句，照常按次数学。
                 let mut pinyin = String::new();

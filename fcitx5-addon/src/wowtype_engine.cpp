@@ -760,6 +760,7 @@ void WowtypeEngine::applyConfig() {
                       : name == "quote"     ? WowtypeSelectKeys::SemicolonQuote
                                             : WowtypeSelectKeys::Off;
     }
+    pickChar_ = envOr("WOWTYPE_PICK_CHAR", *config_.pickChar);
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
@@ -1076,6 +1077,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                          : selectKeys_ == WowtypeSelectKeys::SemicolonQuote
                              ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
                              : WOWTYPE_SELECT_KEYS_OFF;
+    config.pick_char = pickChar_ ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
