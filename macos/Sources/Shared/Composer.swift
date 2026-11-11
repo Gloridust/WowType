@@ -2,9 +2,9 @@
 //
 // 不依赖 AppKit。输入法外壳实现 TextClient（IMK 的 client），按键测试用一个假的 TextClient。
 //
-// 过渡（docs/PORTING.md 第 2 步）：会话现在管字母、隔音符、退格、Esc、候选列表、选词和上屏；
-// 空格、数字选词、回车、翻页、光标移动、标点还没挪进会话，这里和 fcitx5 外壳一样先自己处理。
-// 挪进会话以后，这个文件只剩「按键给会话、按 frame 画界面」。
+// 会话（ABI 1.6 起）管打字途中的全部按键：字母、隔音符、退格、Esc、空格、回车、数字选词、
+// 翻页、移光标、展开面板。候选框照 frame 的 cand_* 画（显示的就是这一页 / 面板的这一屏）。
+// 还在外壳的（docs/PORTING.md 第 4 块挪进会话）：标点，以及打字途中按标点先上屏当前候选。
 
 import CWowtype
 
@@ -58,15 +58,16 @@ public final class Engine {
     }
 }
 
-/// 候选框这一页要画的东西。
+/// 候选框要画的东西（会话给的这一页，或展开面板的这一屏）。
 public struct CandidatePage: Equatable {
     public var texts: [String]
-    /// 光标在这一页的第几个
+    /// 光标在 texts 里的第几个；-1 不在这一页上（翻页翻走以后）
     public var cursor: Int
-    public var pageIndex: Int
-    public var pageCount: Int
-    public var hasPrev: Bool { pageIndex > 0 }
-    public var hasNext: Bool { pageIndex + 1 < pageCount }
+    public var hasPrev: Bool
+    public var hasNext: Bool
+    /// 展开面板（横排按下键）：每行 columns 个，数字选光标所在行的第几个
+    public var expanded: Bool
+    public static let columns = 6
 }
 
 /// 外壳要实现的：往输入框里写字、画编辑区和候选框。
@@ -88,16 +89,20 @@ public final class Composer {
     }
 
     public private(set) var mode: Mode = .chinese
-    public var pageSize = 9
+    /// 一页几个候选
+    public var pageSize = 9 {
+        didSet { configure() }
+    }
+    /// 候选横排（左右键移光标、上下键翻页、下键展开面板）；false 竖排（上下键移光标、左右键翻页）
+    public var horizontal = true {
+        didSet { configure() }
+    }
     /// 0 全角中文标点，1 半角
     public var punctStyle: Int32 = 0
 
     private let session: OpaquePointer
     private var engine: Engine?
     private weak var client: TextClient?
-    private var page = 0
-    private var cursor = 0
-    private var total = 0
     private var shiftTap = ShiftTap()
     /// 最近上屏的字（给会话当上文排序），只留末尾一小段。
     private var recent = ""
@@ -108,6 +113,7 @@ public final class Composer {
         self.engine = engine
         self.client = client
         session = wowtype_session_new(engine?.handle, nil)
+        configure()
     }
 
     deinit {
@@ -191,7 +197,7 @@ public final class Composer {
     /// 切走输入法、换输入框：打到一半的原样上屏。
     public func commitComposition() {
         guard isComposing else { return }
-        apply(wowtype_session_reset(session, 1))
+        commitInput()
     }
 
     /// 放弃正在打的（输入框失去焦点）。
@@ -199,7 +205,31 @@ public final class Composer {
         apply(wowtype_session_reset(session, 0))
     }
 
+    /// 点候选框里显示的第 index 个（和按数字键一样）。
+    public func select(_ index: Int) {
+        guard index >= 0, let frame = wowtype_session_select(session, index), frame.pointee.handled != 0 else {
+            return
+        }
+        apply(frame)
+    }
+
     // MARK: 内部
+
+    private func configure() {
+        var config = WowtypeSessionConfig()
+        config.size = UInt32(MemoryLayout<WowtypeSessionConfig>.size)
+        config.page_size = UInt32(max(pageSize, 1))
+        config.calculator = 1
+        config.date_time = 1
+        config.emoji_suggest = 1
+        config.horizontal = horizontal ? 1 : 0
+        config.page_keys = UInt32(WOWTYPE_PAGE_KEYS_MINUS)
+        config.select_keys = Int32(WOWTYPE_SELECT_KEYS_OFF)
+        wowtype_session_configure(session, &config)
+        if isComposing {
+            refresh()
+        }
+    }
 
     private func handleIdle(_ key: KeyInput) -> Bool {
         guard let c = key.ascii else {
@@ -220,59 +250,19 @@ public final class Composer {
     }
 
     private func handleComposing(_ key: KeyInput) -> Bool {
-        let sym = key.keysym
-        switch sym {
-        case Keysym.backspace, Keysym.escape:
-            return sendToSession(key) || true
-        case 0x20:
-            chooseCurrent()
+        if sendToSession(key) {
             return true
-        case Keysym.returnKey, Keysym.keypadEnter:
-            commitInput()
-            return true
-        case Keysym.left:
-            moveCursor(-1)
-            return true
-        case Keysym.right:
-            moveCursor(1)
-            return true
-        case Keysym.up, Keysym.pageUp:
-            turnPage(-1)
-            return true
-        case Keysym.down, Keysym.pageDown:
-            turnPage(1)
-            return true
-        default:
-            break
         }
-        guard let c = key.ascii else {
+        // 会话不管的键。展开面板里按了这种键，会话已经把面板收起来了，先重画
+        refresh()
+        guard let c = key.ascii, c > 0x20, c < 0x7f, c != 0x27 else {
             // 其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
             return true
         }
-        if key.isLetter || c == 0x27 {
-            if sendToSession(key) {
-                return true
-            }
-        }
-        if key.isDigit {
-            if c >= 0x31 {
-                let index = page * pageSize + Int(c - 0x31)
-                if index < total && Int(c - 0x31) < pageSize {
-                    choose(index)
-                }
-            }
-            return true
-        }
-        if c == 0x2d || c == 0x3d {
-            // - = 翻页；只有一页时照常当标点
-            if pageCount > 1 {
-                turnPage(c == 0x2d ? -1 : 1)
-                return true
-            }
-        }
-        // 打字途中按标点：先上屏当前候选（句首词选完还剩的接着选），再上屏标点
+        // 打字途中按标点、其他可见字符（/ + 等）：先上屏当前候选（光标停在句首词上时，
+        // 选完它还剩半句，接着选第一个候选，直到整句上屏），再上屏标点或这个字符
         for _ in 0..<16 where isComposing {
-            chooseCurrent()
+            commitCurrent()
         }
         insert(punctuation(for: c) ?? String(UnicodeScalar(c)))
         return true
@@ -291,6 +281,7 @@ public final class Composer {
         return String(cString: text)
     }
 
+    @discardableResult
     private func sendToSession(_ key: KeyInput) -> Bool {
         var raw = WowtypeKey()
         raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
@@ -303,54 +294,19 @@ public final class Composer {
         }
         let handled = frame.pointee.handled != 0
         if handled {
-            page = 0
-            cursor = 0
             apply(frame)
         }
         return handled
     }
 
-    private func chooseCurrent() {
-        guard total > 0 else {
-            commitInput()
-            return
-        }
-        choose(min(page * pageSize + cursor, total - 1))
-    }
-
-    private func choose(_ index: Int) {
-        guard let frame = wowtype_session_choose(session, index), frame.pointee.handled != 0 else {
-            return
-        }
-        page = 0
-        cursor = 0
-        apply(frame)
+    /// 和按空格一样：上屏光标处的候选，没有候选时上屏原始输入。
+    private func commitCurrent() {
+        sendToSession(.char(" "))
     }
 
     private func commitInput() {
-        // 回车：已选的词 + 剩下的字母原样上屏（会话会记选词）。_commit_input 在 ABI 1.6 删掉，用 _reset(s,1)
+        // 回车：已选的词 + 剩下的字母原样上屏（会话会记选词）
         apply(wowtype_session_reset(session, 1))
-    }
-
-    private var pageCount: Int {
-        total == 0 ? 0 : (total + pageSize - 1) / pageSize
-    }
-
-    private func turnPage(_ delta: Int) {
-        let target = page + delta
-        guard target >= 0, target < pageCount else { return }
-        page = target
-        cursor = 0
-        showCandidates()
-    }
-
-    private func moveCursor(_ delta: Int) {
-        guard total > 0 else { return }
-        let global = page * pageSize + cursor + delta
-        guard global >= 0, global < total else { return }
-        page = global / pageSize
-        cursor = global % pageSize
-        showCandidates()
     }
 
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
@@ -370,41 +326,29 @@ public final class Composer {
     }
 
     private func refresh() {
-        total = Int(wowtype_session_candidate_total(session))
-        if page * pageSize >= max(total, 1) {
-            page = 0
-            cursor = 0
-        }
-        if let frame = wowtype_session_frame(session), isComposing {
-            let preedit = String(cString: frame.pointee.preedit)
-            let byteCursor = Int(frame.pointee.preedit_cursor)
-            client?.setMarkedText(preedit, cursor: utf16Offset(preedit, byteOffset: byteCursor))
-        } else {
+        guard let frame = wowtype_session_frame(session), isComposing else {
             client?.setMarkedText("", cursor: 0)
-        }
-        showCandidates()
-    }
-
-    private func showCandidates() {
-        guard isComposing, total > 0 else {
             client?.showCandidates(nil)
             return
         }
-        // 只读这一页：候选可能有上千个
-        let start = page * pageSize
-        let end = min(start + pageSize, total)
+        let f = frame.pointee
+        let preedit = String(cString: f.preedit)
+        client?.setMarkedText(preedit, cursor: utf16Offset(preedit, byteOffset: Int(f.preedit_cursor)))
+        // 只读显示的这些：候选可能有上千个
         var texts: [String] = []
-        texts.reserveCapacity(end - start)
-        for i in start..<end {
-            var info = WowtypeCandidateInfo()
-            info.size = UInt32(MemoryLayout<WowtypeCandidateInfo>.size)
-            if wowtype_session_candidate_info(session, i, &info) == 0, let text = info.text {
+        texts.reserveCapacity(f.cand_count)
+        for i in 0..<f.cand_count {
+            if let text = wowtype_session_candidate(session, i) {
                 texts.append(String(cString: text))
             }
         }
-        cursor = min(cursor, max(texts.count - 1, 0))
-        client?.showCandidates(CandidatePage(texts: texts, cursor: cursor, pageIndex: page,
-                                             pageCount: pageCount))
+        guard !texts.isEmpty else {
+            client?.showCandidates(nil)
+            return
+        }
+        client?.showCandidates(CandidatePage(texts: texts, cursor: Int(f.cand_cursor),
+                                             hasPrev: f.has_prev != 0, hasNext: f.has_next != 0,
+                                             expanded: f.panel == 1))
     }
 
     /// 候选（全部，不分页），测试用。

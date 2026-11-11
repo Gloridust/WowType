@@ -52,10 +52,10 @@ func type(_ composer: Composer, _ text: String) {
     }
 }
 
-/// 测试用的小词库：你好、ni/hao 的单字，加上 shi 的 24 个字（9 个一页，3 页）。
+/// 测试用的小词库：你好、ni/hao 的单字、略（lve），加上 shi 的 24 个字（9 个一页，3 页）。
 func writeTestLexicon() -> String {
     var lines = ["nihao\t你好\t50000", "ni\t你\t40000", "ni\t尼\t3000", "hao\t好\t40000", "hao\t号\t5000",
-                 "shishi\t事实\t8000"]
+                 "shishi\t事实\t8000", "lve\t略\t30000"]
     let shi = Array("是十时事市使实式试世师史石示视适识施室势诗释湿")
     for (i, ch) in shi.enumerated() {
         lines.append("shi\t\(ch)\t\(60000 - i * 1000)")
@@ -117,14 +117,20 @@ do {
     let (c, client) = fresh()
     type(c, "shi")
     let all = c.allCandidates()
-    let pages = (all.count + c.pageSize - 1) / c.pageSize
-    check(client.page?.pageCount == pages, "页数", "\(client.page?.pageCount ?? 0) vs \(pages)")
-    check(pages > 1, "shi 不止一页", "\(all.count)")
-    if pages > 1 {
-        _ = c.handle(.key(Keysym.down))
-        check(client.page?.pageIndex == 1, "下键翻到第二页")
+    check(all.count > c.pageSize, "shi 不止一页", "\(all.count)")
+    check(client.page?.texts.count == c.pageSize && client.page?.hasNext == true && client.page?.hasPrev == false,
+          "第一页 9 个，后面还有", "\(client.page?.texts.count ?? 0)")
+    if all.count > c.pageSize {
+        _ = c.handle(.char("="))
+        check(client.page?.hasPrev == true, "= 翻到第二页")
         check(client.page?.texts.first == all[c.pageSize], "第二页从第 10 个开始",
               "\(client.page?.texts.first ?? "") vs \(all[c.pageSize])")
+        _ = c.handle(.char("-"))
+        check(client.page?.texts.first == all[0] && client.committed.isEmpty, "- 翻回第一页，不当标点上屏",
+              client.committed)
+        _ = c.handle(.char("-"))
+        check(client.committed.isEmpty && c.isComposing, "第一页再按 - 吃掉（不上屏减号）", client.committed)
+        _ = c.handle(.key(Keysym.pageDown))
         _ = c.handle(.char("1"))
         check(client.committed == all[c.pageSize], "第二页按 1 选第二页的第一个", client.committed)
     }
@@ -139,11 +145,55 @@ do {
         _ = c.handle(.key(Keysym.right))
     }
     if all.count > c.pageSize + 2 {
-        check(client.page?.pageIndex == 1 && client.page?.cursor == 2, "右键越过一页自动翻页",
-              "\(client.page?.pageIndex ?? -1)/\(client.page?.cursor ?? -1)")
+        check(client.page?.hasPrev == true && client.page?.cursor == 2, "右键越过一页自动翻页",
+              "\(client.page?.cursor ?? -1)")
         _ = c.handle(.char(" "))
         check(client.committed == all[c.pageSize + 2], "空格选光标所在的", client.committed)
     }
+}
+
+do {
+    // 横排时下键展开面板：一行 6 个，下键走一行，空格选光标处的，上键在第一行收起
+    let (c, client) = fresh()
+    type(c, "shi")
+    let all = c.allCandidates()
+    _ = c.handle(.key(Keysym.down))
+    let cols = CandidatePage.columns
+    check(client.page?.expanded == true, "下键展开面板")
+    check(client.page?.texts.count == min(all.count, 6 * cols), "面板一屏最多 36 个",
+          "\(client.page?.texts.count ?? 0)")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == cols, "面板里下键走一行", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.char("2"))
+    check(client.committed == all[cols + 1], "面板里数字选光标所在行的第几个", client.committed)
+    type(c, "shi")
+    _ = c.handle(.key(Keysym.down))
+    _ = c.handle(.key(Keysym.up))
+    check(client.page?.expanded == false && c.isComposing, "第一行再按上键收起面板")
+    _ = c.handle(.key(Keysym.down))
+    // 刚选过的字会被学习往前排，重新取一次候选
+    let first = c.allCandidates().first ?? ""
+    _ = c.handle(.char(","))
+    check(client.committed.hasSuffix(first + "，"), "面板开着按逗号：收起、上屏候选再上屏逗号", client.committed)
+}
+
+do {
+    // lue 和 lve 一样（反馈 #102）
+    let (c, client) = fresh()
+    type(c, "lue")
+    check(client.page?.texts.first == "略", "lue 出略", "\(client.page?.texts ?? [])")
+}
+
+do {
+    // 没在打字时：^ 省略号、_ 破折号、引号左右交替（反馈 #102）
+    let (c, client) = fresh()
+    _ = c.handle(.char("^", .shift))
+    _ = c.handle(.char("_", .shift))
+    check(client.committed == "……——", "^ _", client.committed)
+    _ = c.handle(.char("\"", .shift))
+    type(c, "nihao")
+    _ = c.handle(.char("\"", .shift))
+    check(client.committed == "……——“你好”", "双引号左右交替（打字途中按引号先上屏候选）", client.committed)
 }
 
 do {

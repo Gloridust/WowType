@@ -1,4 +1,5 @@
-// 候选框：一个不抢焦点的小窗口，横排「1 是  2 十 …」，当前候选高亮，右边是页码。
+// 候选框：一个不抢焦点的小窗口，横排「1 是  2 十 …」，当前候选高亮，右边是翻页箭头。
+// 展开面板（横排按下键）一行 6 个，只有光标所在行标 1–6（数字选这一行的第几个）。
 
 import AppKit
 
@@ -29,6 +30,7 @@ final class CandidatePanel {
 
         label.translatesAutoresizingMaskIntoConstraints = true
         label.lineBreakMode = .byClipping
+        label.maximumNumberOfLines = 0 // 展开面板有好几行
         background.addSubview(label)
     }
 
@@ -68,10 +70,13 @@ final class CandidatePanel {
     private func render(_ page: CandidatePage) -> NSAttributedString {
         let font = NSFont.systemFont(ofSize: 17)
         let small = NSFont.systemFont(ofSize: 12)
+        let columns = CandidatePage.columns
+        let cursorRow = page.cursor >= 0 ? page.cursor / columns : -1
         let out = NSMutableAttributedString()
         for (i, text) in page.texts.enumerated() {
             if i > 0 {
-                out.append(NSAttributedString(string: "  ", attributes: [.font: font]))
+                let newRow = page.expanded && i % columns == 0
+                out.append(NSAttributedString(string: newRow ? "\n" : "  ", attributes: [.font: font]))
             }
             let current = i == page.cursor
             let color: NSColor = current ? .selectedMenuItemTextColor : .labelColor
@@ -82,12 +87,18 @@ final class CandidatePanel {
                 attrs[.backgroundColor] = NSColor.controlAccentColor
                 numberAttrs[.backgroundColor] = NSColor.controlAccentColor
             }
-            out.append(NSAttributedString(string: " \(i + 1) ", attributes: numberAttrs))
+            let number: String
+            if page.expanded {
+                number = i / columns == cursorRow ? " \(i % columns + 1) " : "   "
+            } else {
+                number = " \(i + 1) "
+            }
+            out.append(NSAttributedString(string: number, attributes: numberAttrs))
             out.append(NSAttributedString(string: "\(text) ", attributes: attrs))
         }
-        if page.pageCount > 1 {
+        if page.hasPrev || page.hasNext {
             let arrows = (page.hasPrev ? "◀" : "◁") + (page.hasNext ? "▶" : "▷")
-            out.append(NSAttributedString(string: "   \(arrows) \(page.pageIndex + 1)/\(page.pageCount)",
+            out.append(NSAttributedString(string: "   \(arrows)",
                                           attributes: [.font: small, .foregroundColor: NSColor.secondaryLabelColor]))
         }
         return out
