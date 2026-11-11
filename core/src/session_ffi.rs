@@ -12,7 +12,9 @@ use std::panic;
 use std::ptr;
 
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
-use crate::session::{Candidate, CandidateKind, Config, Frame, Key, Session};
+use crate::session::{
+    Candidate, CandidateKind, Config, Frame, Key, KeyAction, Panel, SelectKeys, Session,
+};
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
 /// 以后在末尾加字段，旧外壳传的 size 小，没传的字段当 0。
@@ -24,7 +26,29 @@ pub struct WowtypeKey {
     pub modifiers: u32,
     pub release: u32,
     pub prev_char: u32,
+    /// `WOWTYPE_KEY_ACTION_*`：外壳认出来的全局热键、候选框上的翻页按钮。
+    pub action: u32,
 }
+
+pub const WOWTYPE_KEY_ACTION_NONE: u32 = 0;
+pub const WOWTYPE_KEY_ACTION_PREV_PAGE: u32 = 1;
+pub const WOWTYPE_KEY_ACTION_NEXT_PAGE: u32 = 2;
+pub const WOWTYPE_KEY_ACTION_PREV_CANDIDATE: u32 = 3;
+pub const WOWTYPE_KEY_ACTION_NEXT_CANDIDATE: u32 = 4;
+
+fn key_action(raw: u32) -> KeyAction {
+    match raw {
+        WOWTYPE_KEY_ACTION_PREV_PAGE => KeyAction::PrevPage,
+        WOWTYPE_KEY_ACTION_NEXT_PAGE => KeyAction::NextPage,
+        WOWTYPE_KEY_ACTION_PREV_CANDIDATE => KeyAction::PrevCandidate,
+        WOWTYPE_KEY_ACTION_NEXT_CANDIDATE => KeyAction::NextCandidate,
+        _ => KeyAction::None,
+    }
+}
+
+pub const WOWTYPE_SELECT_KEYS_OFF: c_int = 0;
+pub const WOWTYPE_SELECT_KEYS_SEMICOLON: c_int = 1;
+pub const WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE: c_int = 2;
 
 /// 会话的设置（C 布局）。外壳没填的字段（size 比我们认识的短）用默认值。
 #[repr(C)]
@@ -36,6 +60,12 @@ pub struct WowtypeSessionConfig {
     pub calculator: c_int,
     pub date_time: c_int,
     pub emoji_suggest: c_int,
+    /// 候选横排（默认 1）。
+    pub horizontal: c_int,
+    /// 翻页键，`WOWTYPE_PAGE_KEYS_*` 位掩码（默认 - =）。
+    pub page_keys: u32,
+    /// `WOWTYPE_SELECT_KEYS_*`（默认关）。
+    pub select_keys: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -47,6 +77,13 @@ impl Default for WowtypeSessionConfig {
             calculator: c_int::from(config.calculator),
             date_time: c_int::from(config.date_time),
             emoji_suggest: c_int::from(config.emoji_suggest),
+            horizontal: c_int::from(config.horizontal),
+            page_keys: config.page_keys,
+            select_keys: match config.select_keys {
+                SelectKeys::Off => WOWTYPE_SELECT_KEYS_OFF,
+                SelectKeys::Semicolon => WOWTYPE_SELECT_KEYS_SEMICOLON,
+                SelectKeys::SemicolonQuote => WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE,
+            },
         }
     }
 }
@@ -62,8 +99,28 @@ impl WowtypeSessionConfig {
             calculator: self.calculator != 0,
             date_time: self.date_time != 0,
             emoji_suggest: self.emoji_suggest != 0,
+            horizontal: self.horizontal != 0,
+            page_keys: self.page_keys,
+            select_keys: match self.select_keys {
+                WOWTYPE_SELECT_KEYS_SEMICOLON => SelectKeys::Semicolon,
+                WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE => SelectKeys::SemicolonQuote,
+                _ => SelectKeys::Off,
+            },
         }
     }
+}
+
+/// 过渡：候选框的状态（C 布局），fcitx5 外壳按它摆自己的候选列表。
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct WowtypeSessionView {
+    pub size: u32,
+    pub page: usize,
+    pub cursor: usize,
+    pub expanded: c_int,
+    pub grid_cursor: usize,
+    /// 候选重算过几次：变了就要重新抄候选。
+    pub generation: u64,
 }
 
 /// 过渡：一个候选的全部信息（C 布局），字段含义见头文件。
@@ -94,6 +151,18 @@ struct CCandidate {
 }
 
 impl CCandidate {
+    fn info(&self) -> WowtypeCandidateInfo {
+        WowtypeCandidateInfo {
+            size: 0,
+            text: self.text.as_ptr(),
+            pinyin: self.pinyin.as_ptr(),
+            consumed: self.consumed,
+            kind: self.kind,
+            commit: self.commit.as_ptr(),
+            emoji: self.emoji.as_ptr(),
+        }
+    }
+
     fn new(c: &Candidate) -> Self {
         Self {
             text: to_c(&c.text),
@@ -156,6 +225,10 @@ pub struct WowtypeSession {
     frame: WowtypeFrame,
     commit: Option<CString>,
     preedit: CString,
+    /// frame 里显示的候选在全部候选里的起点（`wowtype_session_candidate` 用）。
+    shown_start: usize,
+    /// 上一次上屏是选的哪个候选（`wowtype_session_last_choice` 用）。
+    last_choice: Option<CCandidate>,
     /// 过渡函数返回的字符串。
     text: CString,
 }
@@ -183,18 +256,56 @@ unsafe fn read_sized<T: Copy + Default>(ptr: *const T, size: u32) -> T {
     value
 }
 
+/// 按外壳的 out->size 写一个带 size 字段的结构体（size 字段写成实际写了多少字节）。
+unsafe fn write_sized<T: Copy>(out: *mut T, mut value: T) {
+    let len = (unsafe { *(out as *const u32) } as usize).min(size_of::<T>());
+    unsafe {
+        *(&mut value as *mut T as *mut u32) = len as u32;
+        ptr::copy_nonoverlapping(&value as *const T as *const u8, out as *mut u8, len);
+    }
+}
+
 impl WowtypeSession {
     fn publish(&mut self, frame: Frame) -> *const WowtypeFrame {
         self.commit = frame.commit.as_deref().map(to_c);
         self.preedit = to_c(&frame.preedit);
+        self.shown_start = frame.cand_start;
+        self.last_choice = self.session.last_choice().map(CCandidate::new);
         self.frame = WowtypeFrame {
             handled: c_int::from(frame.handled),
             commit: self.commit.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
             preedit: self.preedit.as_ptr(),
             preedit_cursor: frame.preedit_cursor.try_into().unwrap_or(c_int::MAX),
+            panel: match frame.panel {
+                Panel::Normal => 0,
+                Panel::Expanded => 1,
+            },
+            cand_count: frame.cand_count,
+            cand_cursor: frame
+                .cand_cursor
+                .and_then(|c| c_int::try_from(c).ok())
+                .unwrap_or(-1),
+            has_prev: c_int::from(frame.has_prev),
+            has_next: c_int::from(frame.has_next),
             ..WowtypeFrame::default()
         };
         &self.frame
+    }
+
+    /// 跑一个会改会话的调用，出了 panic 就当没处理。
+    fn run(
+        &mut self,
+        what: &str,
+        f: impl FnOnce(&mut Session<'static>) -> Frame,
+    ) -> *const WowtypeFrame {
+        let inner = &mut self.session;
+        match panic::catch_unwind(panic::AssertUnwindSafe(|| f(inner))) {
+            Ok(frame) => self.publish(frame),
+            Err(_) => {
+                set_last_error(&format!("session {what} panicked"));
+                self.current(false)
+            }
+        }
     }
 
     fn text(&mut self, text: &str) -> *const c_char {
@@ -212,9 +323,9 @@ impl WowtypeSession {
                 let preedit = self.session.selected_text() + self.session.remaining();
                 Frame {
                     handled,
-                    commit: None,
                     preedit_cursor: preedit.len(),
                     preedit,
+                    ..Frame::default()
                 }
             }
         };
@@ -267,6 +378,8 @@ pub unsafe extern "C" fn wowtype_session_new(
         frame: WowtypeFrame::default(),
         commit: None,
         preedit: CString::default(),
+        shown_start: 0,
+        last_choice: None,
         text: CString::default(),
     });
     handle.current(false);
@@ -338,15 +451,40 @@ pub unsafe extern "C" fn wowtype_session_key(
         modifiers: raw.modifiers,
         release: raw.release != 0,
         prev_char: char::from_u32(raw.prev_char).filter(|&c| c != '\0'),
+        action: key_action(raw.action),
     };
-    let inner = &mut handle.session;
-    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.key(&key))) {
-        Ok(frame) => handle.publish(frame),
-        Err(_) => {
-            set_last_error("session key panicked");
-            handle.current(false)
-        }
+    handle.run("key", |session| session.key(&key))
+}
+
+/// 选候选框里显示的第 index 个（一页，或展开面板的一屏；鼠标点候选）。序号不对时 handled 为 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_select(
+    session: *mut WowtypeSession,
+    index: usize,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("select", |session| session.select(index))
+}
+
+/// 上一次返回的 frame 里显示的第 index 个候选（0 起，小于 cand_count）。越界或 NULL 返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_candidate(
+    session: *mut WowtypeSession,
+    index: usize,
+) -> *const c_char {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    if index >= handle.frame.cand_count {
+        return ptr::null();
     }
+    let at = handle.shown_start + index;
+    handle
+        .c_candidates()
+        .get(at)
+        .map_or(ptr::null(), |c| c.text.as_ptr())
 }
 
 /// 清空编辑区；commit_pending 非 0 时把已选的词和原始输入放进 frame->commit。
@@ -358,14 +496,7 @@ pub unsafe extern "C" fn wowtype_session_reset(
     let Some(handle) = (unsafe { session.as_mut() }) else {
         return ptr::null();
     };
-    let inner = &mut handle.session;
-    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.reset(commit_pending != 0))) {
-        Ok(frame) => handle.publish(frame),
-        Err(_) => {
-            set_last_error("session reset panicked");
-            handle.current(false)
-        }
-    }
+    handle.run("reset", |session| session.reset(commit_pending != 0))
 }
 
 // ---- 过渡函数：外壳还没挪完时用，挪完以后删掉（见 docs/ABI.md）----
@@ -412,32 +543,50 @@ pub unsafe extern "C" fn wowtype_session_choose(
     let Some(handle) = (unsafe { session.as_mut() }) else {
         return ptr::null();
     };
-    let inner = &mut handle.session;
-    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.choose(index))) {
-        Ok(frame) => handle.publish(frame),
-        Err(_) => {
-            set_last_error("session choose panicked");
-            handle.current(false)
-        }
-    }
+    handle.run("choose", |session| session.choose(index))
 }
 
-/// 上屏已选的词 + 还没选的原始输入，原始输入也记一次选词（回车、打字途中按标点）。
+/// 候选框的状态写进 out（按 out->size 写）。返回 0 成功，-1 参数为 NULL。
 #[no_mangle]
-pub unsafe extern "C" fn wowtype_session_commit_input(
+pub unsafe extern "C" fn wowtype_session_view(
     session: *mut WowtypeSession,
-) -> *const WowtypeFrame {
-    let Some(handle) = (unsafe { session.as_mut() }) else {
-        return ptr::null();
+    out: *mut WowtypeSessionView,
+) -> c_int {
+    let (Some(handle), false) = (unsafe { session.as_mut() }, out.is_null()) else {
+        return -1;
     };
     let inner = &mut handle.session;
-    match panic::catch_unwind(panic::AssertUnwindSafe(|| inner.commit_input())) {
-        Ok(frame) => handle.publish(frame),
-        Err(_) => {
-            set_last_error("session commit panicked");
-            handle.current(false)
-        }
-    }
+    let Ok(view) = panic::catch_unwind(panic::AssertUnwindSafe(|| inner.view())) else {
+        set_last_error("session view panicked");
+        return -1;
+    };
+    let value = WowtypeSessionView {
+        size: 0,
+        page: view.page,
+        cursor: view.cursor,
+        expanded: c_int::from(view.expanded),
+        grid_cursor: view.grid_cursor,
+        generation: handle.session.generation(),
+    };
+    unsafe { write_sized(out, value) };
+    0
+}
+
+/// 上一次返回的 frame 上屏的字是选哪个候选来的，写进 out（按 out->size 写）。
+/// 返回 0 是选候选上屏的；-1：原样上屏输入、没上屏，或参数为 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_last_choice(
+    session: *mut WowtypeSession,
+    out: *mut WowtypeCandidateInfo,
+) -> c_int {
+    let (Some(handle), false) = (unsafe { session.as_mut() }, out.is_null()) else {
+        return -1;
+    };
+    let Some(c) = handle.last_choice.as_ref() else {
+        return -1;
+    };
+    unsafe { write_sized(out, c.info()) };
+    0
 }
 
 /// 往原始输入后面加字（计算器、双拼分号、表情面板搜索词）。
@@ -484,19 +633,7 @@ pub unsafe extern "C" fn wowtype_session_candidate_info(
     let Some(c) = handle.c_candidates().get(index) else {
         return -1;
     };
-    let len = (unsafe { (*out).size } as usize).min(size_of::<WowtypeCandidateInfo>());
-    let info = WowtypeCandidateInfo {
-        size: len as u32,
-        text: c.text.as_ptr(),
-        pinyin: c.pinyin.as_ptr(),
-        consumed: c.consumed,
-        kind: c.kind,
-        commit: c.commit.as_ptr(),
-        emoji: c.emoji.as_ptr(),
-    };
-    unsafe {
-        ptr::copy_nonoverlapping(&info as *const _ as *const u8, out as *mut u8, len);
-    }
+    unsafe { write_sized(out, c.info()) };
     0
 }
 
@@ -553,6 +690,7 @@ mod tests {
             modifiers: 0xffff,
             release: 1,
             prev_char: 0,
+            action: 0,
         };
         let frame = unsafe { &*wowtype_session_key(session, &key) };
         assert_eq!(frame.handled, 1);
@@ -569,7 +707,16 @@ mod tests {
             0
         );
         assert!(unsafe { wowtype_session_choose(ptr::null_mut(), 0) }.is_null());
-        assert!(unsafe { wowtype_session_commit_input(ptr::null_mut()) }.is_null());
+        assert!(unsafe { wowtype_session_select(ptr::null_mut(), 0) }.is_null());
+        assert!(unsafe { wowtype_session_candidate(ptr::null_mut(), 0) }.is_null());
+        assert_eq!(
+            unsafe { wowtype_session_view(ptr::null_mut(), ptr::null_mut()) },
+            -1
+        );
+        assert_eq!(
+            unsafe { wowtype_session_last_choice(ptr::null_mut(), ptr::null_mut()) },
+            -1
+        );
         unsafe { wowtype_session_free(ptr::null_mut()) };
     }
 }

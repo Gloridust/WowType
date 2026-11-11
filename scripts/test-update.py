@@ -60,6 +60,25 @@ class UpdateTests(unittest.TestCase):
             with self.subTest(info=info):
                 self.assertEqual(self.platform(info), (manager, distro, arch, ""))
 
+    def test_arm64_platforms(self):
+        cases = [
+            ({"ID": "ubuntu", "VERSION_ID": "24.04"}, "aarch64", ("apt-get", "ubuntu24.04", "arm64", "")),
+            ({"ID": "debian", "VERSION_ID": "13"}, "arm64", ("apt-get", "debian13", "arm64", "")),
+            ({"ID": "pop", "ID_LIKE": "ubuntu debian", "VERSION_CODENAME": "noble"}, "aarch64",
+             ("apt-get", "ubuntu24.04", "arm64", "")),
+            ({"ID": "fedora", "VERSION_ID": "44"}, "aarch64", ("dnf", "fc44", "aarch64", "")),
+        ]
+        for info, machine, expected in cases:
+            with self.subTest(info=info, machine=machine):
+                self.assertEqual(self.platform(info, machine=machine), expected)
+        # Arch 只有 x86_64 的包；其他架构没有发布包
+        manager, _distro, _arch, reason = self.platform({"ID": "arch"}, machine="aarch64")
+        self.assertEqual(manager, "")
+        self.assertIn("package-arch.sh", reason)
+        manager, _distro, _arch, reason = self.platform({"ID": "ubuntu", "VERSION_ID": "24.04"}, machine="riscv64")
+        self.assertEqual(manager, "")
+        self.assertIn("riscv64", reason)
+
     def test_unsupported_platforms_have_guidance(self):
         cases = [
             {"ID": "ubuntu", "VERSION_ID": "22.04"},
@@ -96,9 +115,9 @@ class UpdateTests(unittest.TestCase):
             info = updater["read_os_release"]()
         self.assertEqual(info, {"ID": "linuxmint", "ID_LIKE": "ubuntu debian", "UBUNTU_CODENAME": "noble"})
 
-    def plan(self, info, assets, installed="0.3.8"):
+    def plan(self, info, assets, installed="0.3.8", machine="x86_64"):
         release = {"version": "0.3.9", "assets": assets}
-        platform = self.platform(info)
+        platform = self.platform(info, machine=machine)
         with patch.dict(updater, update_platform=lambda: platform, package_version=lambda _m: installed):
             return updater["plan_update"](release)
 
@@ -118,6 +137,20 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual(self.plan(info, {"SHA256SUMS": assets["SHA256SUMS"]})[0], [])
         self.assertEqual(self.plan({"ID": "fedora", "VERSION_ID": "43"},
                                   {"wowtype-0.3.9-1.fc44.x86_64.rpm": "x", "SHA256SUMS": "s"})[0], [])
+        # arm64 只认 arm64 的包，不拿 x86_64 的凑数
+        for info, name, other in [
+            ({"ID": "ubuntu", "VERSION_ID": "24.04"}, "wowtype_0.3.9_ubuntu24.04_arm64.deb",
+             "wowtype_0.3.9_ubuntu24.04_amd64.deb"),
+            ({"ID": "fedora", "VERSION_ID": "44"}, "wowtype-0.3.9-1.fc44.aarch64.rpm",
+             "wowtype-0.3.9-1.fc44.x86_64.rpm"),
+        ]:
+            with self.subTest(info=info, arch="aarch64"):
+                assets = {name: "https://example.invalid/arm", other: "https://example.invalid/x86",
+                          "SHA256SUMS": "s"}
+                self.assertEqual(self.plan(info, assets, machine="aarch64")[0], [(name, assets[name])])
+                files, reason = self.plan(info, {other: "x", "SHA256SUMS": "s"}, machine="aarch64")
+                self.assertEqual(files, [])
+                self.assertIn("aarch64" if "fc44" in name else "arm64", reason)
 
     def test_package_query_uses_native_manager(self):
         for manager, output, command, expected in [

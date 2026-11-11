@@ -3,6 +3,7 @@
 //
 // 由 scripts/addon-test.sh 设置好隔离的 XDG 目录和词库后运行。
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
@@ -382,6 +383,35 @@ void runCases(Instance &instance) {
     type(ic.get(), "<down>j");
     check(layout() == CandidateLayoutHint::Horizontal && preedit(ic.get()) == "shi'j",
           "展开后接着打字：收起并照常输入，实际 " + preedit(ic.get()));
+    // 展开后一直按下键走到第二屏：面板跟着翻到光标那一屏；收起后横排候选框也停在光标那一页
+    auto common = [&]() -> CommonCandidateList * {
+        auto list = ic->inputPanel().candidateList();
+        return list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
+    };
+    fresh(ic.get());
+    type(ic.get(), "shi<down>");
+    const int gridRows = common() ? common()->totalSize() : 0;
+    check(gridRows > 7, "shi 展开后超过一屏（" + std::to_string(gridRows) + " 行）");
+    if (gridRows > 7) {
+        type(ic.get(), "<down><down><down><down><down><down><down>");
+        const auto screen = page(ic.get());
+        bool framed = false;
+        for (const auto &row : screen) {
+            framed = framed || row.find("\u3014") != std::string::npos;
+        }
+        check(common() && common()->cursorIndex() >= 0 && common()->currentPage() == 1 && framed,
+              "展开后下移 7 行：面板翻到第二屏，看得到光标：" + join(screen));
+        type(ic.get(), "<esc>");
+        const auto shown = page(ic.get());
+        check(layout() == CandidateLayoutHint::Horizontal && common() &&
+                  common()->cursorIndex() >= 0,
+              "第二屏收起后，横排候选框停在光标那一页：" + join(shown));
+        if (common() && common()->cursorIndex() >= 0) {
+            const std::string cur = shown[static_cast<std::size_t>(common()->cursorIndex())];
+            type(ic.get(), "<sp>");
+            check(ic->committed == cur, "收起后空格选光标处的候选，实际 " + ic->committed);
+        }
+    }
 
     // 空格选光标所在的候选
     fresh(ic.get());
@@ -389,6 +419,262 @@ void runCases(Instance &instance) {
     const auto list = page(ic.get());
     type(ic.get(), "<sp>");
     check(list.size() > 1 && ic->committed == list[1], "右移光标后空格选第二个，实际 " + ic->committed);
+
+    // 翻页和光标的细节（候选列表的页和光标各管各的，挪进会话前先钉住）
+    fresh(ic.get());
+    type(ic.get(), "shi<pgdn>");
+    {
+        const auto p2 = page(ic.get());
+        type(ic.get(), "<sp>");
+        check(!p2.empty() && ic->committed == p2[0], "翻页后空格选这一页第一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        for (std::size_t i = 0; i < p1.size(); ++i) {
+            type(ic.get(), "<right>");
+        }
+        const auto p2 = page(ic.get());
+        auto *list = common();
+        check(list && p2 != p1 && list->cursorIndex() == 0 &&
+                  list->globalCursorIndex() == static_cast<int>(p1.size()),
+              "右键走过这一页最后一个：翻到下一页、光标在第一个");
+        type(ic.get(), "<sp>");
+        check(!p2.empty() && ic->committed == p2[0], "接着空格选下一页第一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi<left>");
+    {
+        auto *list = common();
+        const auto last = page(ic.get());
+        check(list && !list->hasNext() && list->hasPrev() &&
+                  list->cursorIndex() == list->size() - 1,
+              "第一个上按左键：绕到最后一页最后一个");
+        type(ic.get(), "<sp>");
+        check(!last.empty() && ic->committed == last.back(), "空格选最后一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        if (auto *list = common()) {
+            list->next(); // 候选框上的翻页按钮直接调列表
+        }
+        const auto p2 = page(ic.get());
+        type(ic.get(), "1");
+        check(!p2.empty() && p2 != p1 && ic->committed == p2[0],
+              "点翻页按钮以后数字按新的一页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 展开面板翻一屏（36 个）再 Esc 收起：翻到光标那一页，光标看得见
+        type(ic.get(), "<down>");
+        send(ic.get(), Key(FcitxKey_Page_Down));
+        type(ic.get(), "<esc>");
+        auto *list = common();
+        const auto shown = page(ic.get());
+        check(list && list->globalCursorIndex() == 36 && list->cursorIndex() >= 0 &&
+                  list->currentPage() == 36 / list->pageSize(),
+              "展开面板翻屏后收起：停在光标那一页、光标看得见：" + join(shown));
+        const std::string cur = list && list->cursorIndex() >= 0
+                                    ? shown[static_cast<std::size_t>(list->cursorIndex())]
+                                    : std::string();
+        type(ic.get(), "<sp>");
+        check(!cur.empty() && ic->committed == cur, "这时空格选光标处，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi<down>");
+    send(ic.get(), Key(FcitxKey_Page_Down));
+    type(ic.get(), "<esc>");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "2");
+        check(p1.size() > 1 && ic->committed == p1[1], "收起后数字按当前页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<tab>");
+        auto *list = common();
+        check(list && page(ic.get()) == p1 && list->globalCursorIndex() == 1,
+              "Tab（fcitx5 全局的下一个候选）移光标，实际光标 " +
+                  std::to_string(list ? list->globalCursorIndex() : -9));
+        type(ic.get(), "<stab>");
+        check(list && common()->globalCursorIndex() == 0, "Shift+Tab 移回来");
+    }
+    fresh(ic.get());
+    type(ic.get(), "v1-2");
+    check(ic->committed.empty() && preedit(ic.get()) == "v1-2", "V 模式里 - 是减号不翻页：" + preedit(ic.get()));
+    type(ic.get(), "=");
+    check(ic->committed == "-1", "V 模式 = 上屏结果，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    send(ic.get(), Key(FcitxKey_2, KeyState::NumLock));
+    check(!ic->committed.empty(), "带 NumLock 的数字不当选词键，实际上屏 " + ic->committed +
+                                      " 交给应用 " + ic->passed);
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    send(ic.get(), Key(FcitxKey_KP_3));
+    {
+        const auto p1 = page(ic.get());
+        check(ic->committed.size() > 0, "小键盘数字选词，实际 " + ic->committed);
+    }
+    auto horizontalList = [&]() {
+        auto *list = common();
+        return list && list->layoutHint() == CandidateLayoutHint::Horizontal;
+    };
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down><tab>");
+        auto *list = common();
+        check(horizontalList() && page(ic.get()) == p1 && list && list->globalCursorIndex() == 1,
+              "展开后按 Tab：收起，再按全局的下一个候选移光标");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down>");
+        check(send(ic.get(), Key(FcitxKey_Home)) && horizontalList() && page(ic.get()) == p1 &&
+                  ic->committed.empty(),
+              "展开后按 Home：收起、吃掉");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down><right>,");
+        check(p1.size() > 1 && ic->committed == p1[1] + "，",
+              "展开后右移再按逗号：收起，上屏光标处的词和逗号，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<down>");
+        KeyEvent press(ic.get(), Key(FcitxKey_Shift_R), false);
+        ic->keyEvent(press);
+        check(horizontalList() && page(ic.get()) == p1 && ic->committed.empty(),
+              "展开后按下 Shift：收起，不上屏");
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        send(ic.get(), Key(FcitxKey_Right, KeyState::Shift));
+        auto *list = common();
+        check(list && list->globalCursorIndex() == 1, "Shift+右键也移光标");
+        send(ic.get(), Key(FcitxKey_space, KeyState::Shift));
+        check(p1.size() > 1 && ic->committed == p1[1], "Shift+空格选光标处的词，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        if (auto *list = common()) {
+            list->nextCandidate(); // 候选框上滚轮、按钮直接调列表
+        }
+        type(ic.get(), "<sp>");
+        check(p1.size() > 1 && ic->committed == p1[1], "列表 nextCandidate 后空格选第二个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        if (auto *list = common()) {
+            list->prevCandidate();
+        }
+        auto *list = common();
+        const auto last = page(ic.get());
+        check(list && !list->hasNext() && list->cursorIndex() == list->size() - 1,
+              "列表 prevCandidate 从第一个绕到最后一个");
+        type(ic.get(), "<sp>");
+        check(!last.empty() && ic->committed == last.back(), "接着空格选最后一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<pgdn>");
+        if (auto *list = common()) {
+            list->prev();
+        }
+        auto *list = common();
+        check(page(ic.get()) == p1 && list && list->cursorIndex() == 0, "列表 prev 翻回第一页、光标在第一个");
+        type(ic.get(), "2");
+        check(p1.size() > 1 && ic->committed == p1[1], "接着数字按第一页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi<pgdn>");
+    {
+        const auto p2 = page(ic.get());
+        if (auto list = ic->inputPanel().candidateList(); list && list->size() > 1) {
+            list->candidate(1).select(ic.get()); // 鼠标点候选
+        }
+        check(p2.size() > 1 && ic->committed == p2[1], "翻页后点第二个候选，实际 " + ic->committed);
+    }
+
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 一直 PgDn 翻到最后一页：停在最后一页，光标在这页开头，空格选它
+        auto *list = common();
+        int guard = 0;
+        while (list && list->hasNext() && guard++ < 100) {
+            type(ic.get(), "<pgdn>");
+            list = common();
+        }
+        const auto last = page(ic.get());
+        check(list && !list->hasNext() && list->totalPages() > 1 &&
+                  list->currentPage() == list->totalPages() - 1 && list->cursorIndex() == 0,
+              "PgDn 翻到最后一页");
+        type(ic.get(), "<pgdn>");
+        list = common();
+        check(list && list->currentPage() == list->totalPages() - 1, "最后一页再按 PgDn 不动");
+        type(ic.get(), "<sp>");
+        check(!last.empty() && ic->committed == last[0], "最后一页空格选第一个，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 翻页按钮（直接调列表的 next）翻到最后一页
+        auto *list = common();
+        int guard = 0;
+        while (list && list->currentPage() + 2 < list->totalPages() && guard++ < 100) {
+            type(ic.get(), "<pgdn>");
+            list = common();
+        }
+        if (list) {
+            list->next();
+        }
+        list = common();
+        check(list && !list->hasNext() && list->currentPage() == list->totalPages() - 1 &&
+                  list->usedNextBefore(),
+              "列表 next 翻到最后一页");
+        const auto last = page(ic.get());
+        type(ic.get(), "2");
+        check(last.size() > 1 && ic->committed == last[1], "接着数字按最后一页选，实际 " + ic->committed);
+    }
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        // 光标右移跨到下一页：候选框跟着翻页，光标在新一页的第一个
+        auto *list = common();
+        const int size = list ? list->size() : 0;
+        for (int i = 0; i < size; ++i) {
+            type(ic.get(), "<right>");
+        }
+        list = common();
+        const auto p2 = page(ic.get());
+        check(list && list->currentPage() == 1 && list->cursorIndex() == 0,
+              "右键跨页");
+        type(ic.get(), "<sp>");
+        check(!p2.empty() && ic->committed == p2[0], "跨页后空格选新一页第一个，实际 " + ic->committed);
+    }
 
     // 退格删到空，编辑区关闭
     fresh(ic.get());
@@ -611,6 +897,24 @@ void runCases(Instance &instance) {
     type(ic.get(), "<down><sp>");
     check(vertical.size() > 1 && ic->committed == vertical[1],
           "竖排下键选第二个，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "shi");
+    {
+        const auto v1 = page(ic.get());
+        type(ic.get(), "<right>");
+        const auto v2 = page(ic.get());
+        check(!v2.empty() && v2 != v1, "竖排右键翻页：" + join(v2));
+        type(ic.get(), "<left>");
+        check(page(ic.get()) == v1, "竖排左键翻回来");
+        type(ic.get(), "<up>");
+        auto list = ic->inputPanel().candidateList();
+        check(list && list->cursorIndex() == list->size() - 1 && page(ic.get()) != v1,
+              "竖排第一个上按上键：绕到最后一个");
+        type(ic.get(), "<down>");
+        check(page(ic.get()) == v1, "再按下键绕回第一个");
+        type(ic.get(), "<sp>");
+        check(!v1.empty() && ic->committed == v1[0], "空格选第一个，实际 " + ic->committed);
+    }
     fresh(ic.get());
     check(!send(ic.get(), Key(FcitxKey_Alt_R)), "关掉语音后右 Alt 交给应用");
     type(ic.get(), "wdyx<sp>");
@@ -932,6 +1236,13 @@ void runCases(Instance &instance) {
         type(ic.get(), "'");
         check(items.size() > 2 && ic->committed == items[2], "引号选第三个：" + ic->committed);
     }
+    fresh(ic.get());
+    type(ic.get(), "shi<pgdn>");
+    {
+        const auto items = page(ic.get());
+        type(ic.get(), ";");
+        check(items.size() > 1 && ic->committed == items[1], "翻页后分号选这一页第二个：" + ic->committed);
+    }
     std::filesystem::remove(configDir + "/wowtype.conf");
     addon->reloadConfig();
     fresh(ic.get());
@@ -1012,6 +1323,64 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     ic->setCapabilityFlags(CapabilityFlags{});
     fresh(ic.get());
+
+    // 换词库（设置里切到万象就是写 Lexicon=）：reloadConfig 后在后台换，换好前按键照常进编辑区
+    {
+        const std::string dictFile =
+            std::string(std::getenv("XDG_DATA_HOME")) + "/wowtype/dicts/harness/lexicon.tsv";
+        std::filesystem::create_directories(std::filesystem::path(dictFile).parent_path());
+        std::ofstream(dictFile) << "ping guo\t平锅\t1000000\nce shi ci ku\t测试词库\t100\n";
+        // 环境变量 WOWTYPE_LEXICON 优先于配置，测配置时先拿掉
+        const char *envLexicon = std::getenv("WOWTYPE_LEXICON");
+        const std::string savedLexicon = envLexicon ? envLexicon : "";
+        unsetenv("WOWTYPE_LEXICON");
+        std::ofstream(configDir + "/wowtype.conf") << "Lexicon=" << dictFile << "\nEmojiSuggest=False\n";
+        addon->reloadConfig();
+        // 等到候选里出现 word（换词库在后台，最多 30 秒）
+        const auto waitFor = [&ic](const std::string &keys, const std::string &word) {
+            for (int i = 0; i < 300; ++i) {
+                fresh(ic.get());
+                type(ic.get(), keys);
+                const auto shown = page(ic.get());
+                if (std::find(shown.begin(), shown.end(), word) != shown.end()) {
+                    return true;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            return false;
+        };
+        // 先等再拼说明：参数的求值顺序不定，写在一行里 join 可能先于等待执行
+        const bool switched = waitFor("ceshiciku", "测试词库");
+        check(switched, "配置换了词库后用上新词库：" + join(page(ic.get())));
+        fresh(ic.get());
+        // 默认词库里的「苹果」不在了（用户学过的词会跟过来，这里挑一个前面没打过的）
+        type(ic.get(), "pingguo<sp>");
+        check(ic->committed == "平锅", "新词库里 pingguo -> 平锅，实际 " + ic->committed);
+        // 改别的设置不重新载入词库
+        std::ofstream(configDir + "/wowtype.conf")
+            << "Lexicon=" << dictFile << "\nEmojiSuggest=False\nPageSize=6\n";
+        addon->reloadConfig();
+        fresh(ic.get());
+        type(ic.get(), "ceshiciku<sp>");
+        check(ic->committed == "测试词库", "只改别的设置时词库不动，实际 " + ic->committed);
+        // 词库文件被换掉（更新了词库包），路径没变：reloadConfig 时也重新载入
+        std::ofstream(dictFile) << "ping guo\t平锅\t1000000\nce shi ci ku\t测试词库\t100\n"
+                                   "geng xin le\t更新了\t100\n";
+        addon->reloadConfig();
+        const bool reloaded = waitFor("gengxinle", "更新了");
+        check(reloaded, "词库文件更新后重新载入：" + join(page(ic.get())));
+        // 换回来
+        std::filesystem::remove(configDir + "/wowtype.conf");
+        if (!savedLexicon.empty()) {
+            setenv("WOWTYPE_LEXICON", savedLexicon.c_str(), 1);
+        }
+        addon->reloadConfig();
+        // 刚学过「平锅」，它可能还排在前面；只看默认词库里的「苹果」回来了没有
+        const bool restored = waitFor("pingguo", "苹果");
+        check(restored, "去掉 Lexicon 后换回默认词库：" + join(page(ic.get())));
+        fresh(ic.get());
+        std::filesystem::remove_all(std::filesystem::path(dictFile).parent_path());
+    }
 
     ic.reset();
 }

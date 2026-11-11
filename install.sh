@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WowType 一键安装：Ubuntu / Debian、Arch Linux、Fedora（x86_64）。
+# WowType 一键安装：Ubuntu / Debian、Fedora（x86_64、arm64），Arch Linux（x86_64）。
 #
 #   curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 #
@@ -66,7 +66,8 @@ usage() {
 --print-plan  只显示发行版、包管理器和包名，不联网、不安装、不更改配置。
 
 支持 Ubuntu 24.04 / 26.04、Debian 13 及有明确兼容基线的衍生版，
-Arch Linux / EndeavourOS / Garuda / CachyOS，Fedora；预编译包为 x86_64。
+Arch Linux / EndeavourOS / Garuda / CachyOS，Fedora；预编译包有 x86_64，
+deb 和 rpm 另有 arm64（aarch64）。
 Manjaro 请在本机用 scripts/package-arch.sh 构建；NixOS 使用 flake。
 Fedora Atomic 桌面使用 rpm-ostree。其他发行版见 docs/INSTALL.md 的源码构建。
 
@@ -108,8 +109,12 @@ select_platform() {
   [[ "$(uname -s)" == Linux ]] || source_install "WowType 的 fcitx5 插件需要 Linux"
   read_os_release
   machine=${WOWTYPE_ARCH:-$(uname -m)}
-  [[ "$machine" == x86_64 || "$machine" == amd64 ]] ||
-    source_install "当前预编译包仅提供 x86_64；$machine 请从源码构建"
+  # deb 和 rpm 对同一种架构叫法不同：amd64 / x86_64、arm64 / aarch64
+  case "$machine" in
+    x86_64|amd64) deb_arch=amd64; rpm_arch=x86_64 ;;
+    aarch64|arm64) deb_arch=arm64; rpm_arch=aarch64 ;;
+    *) source_install "当前预编译包只有 x86_64 和 arm64；$machine 请从源码构建" ;;
+  esac
   local family=" $ID $ID_LIKE " codename
   if [[ -e /run/ostree-booted || "$VARIANT_ID" == *atomic* ]]; then
     source_install "不可变系统请按说明使用 rpm-ostree 或系统自身的包配置"
@@ -140,6 +145,8 @@ select_platform() {
       if [[ "$family" == *" manjaro "* ]]; then
         source_install "Manjaro 使用独立软件源，请在本机运行 scripts/package-arch.sh 构建，避免 Arch 二进制 ABI 不匹配"
       elif [[ "$family" == *" arch "* || "$ID" == archlinux || "$ID" == endeavouros || "$ID" == garuda || "$ID" == cachyos ]]; then
+        [[ "$rpm_arch" == x86_64 ]] ||
+          source_install "Arch Linux 的预编译包只有 x86_64；$machine 请按说明用 scripts/package-arch.sh 在本机构建"
         distro=archlinux; manager=pacman
       elif [[ -n "$UBUNTU_CODENAME" || "$family" == *" ubuntu "* ]]; then
         codename=${UBUNTU_CODENAME:-$VERSION_CODENAME}
@@ -161,9 +168,9 @@ select_platform() {
 
 package_filename() {
   case "$manager" in
-    apt-get) printf 'wowtype_%s_%s_amd64.deb\n' "$1" "$distro" ;;
+    apt-get) printf 'wowtype_%s_%s_%s.deb\n' "$1" "$distro" "$deb_arch" ;;
     pacman) printf 'wowtype-%s-1-x86_64.pkg.tar.zst\n' "$1" ;;
-    dnf) printf 'wowtype-%s-1.fc%s.x86_64.rpm\n' "$1" "$VERSION_ID" ;;
+    dnf) printf 'wowtype-%s-1.fc%s.%s.rpm\n' "$1" "$VERSION_ID" "$rpm_arch" ;;
   esac
 }
 
@@ -323,7 +330,7 @@ main() {
     warn "设置界面用不了（缺 PyGObject / GTK 4 / libadwaita？），请在「Fcitx 5 配置」里手动添加 WowType"
   elif command -v pgrep >/dev/null && pgrep -x fcitx5 >/dev/null; then
     if [[ -n "${WOWTYPE_NO_RESTART:-}" ]] || ! confirm "fcitx5 正在运行，重启它并把 WowType 加进输入法列表吗？"; then
-      warn "没重启 fcitx5。之后重启它（fcitx5 -r -d）或注销再登录，再在「WowType 设置」第一页点「添加」"
+      warn "没重启 fcitx5。之后重启它（wowtype-config --restart-fcitx）或注销再登录，再在「WowType 设置」第一页点「添加」"
     elif wowtype-config --add-to-group --restart; then
       restarted=1
     else

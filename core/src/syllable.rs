@@ -5,6 +5,8 @@
 //! - 在 WeType 音节表片段的基础上补齐了标准拼音音节，并保留了 WeType 的
 //!   扩展音节：yvan/xvan/jvan/qvan、yve/xve/jve/qve、yvn/xvn/jvn/qvn、
 //!   yv/xv/jv/qv、lve/nve、hng/hm/ng、fiao/nou/nun。
+//! - 补了雾凇词库里用到、标准表没有的 biang（𰻝）、cei（𤭢）、nia（𲰹），
+//!   不然这几个字载入时整条丢掉，打不出来。
 //! - 隔音符 ' 只用来强制切分边界，不进入音节文本。
 //! - 儿化：尾部 r（如 huar）或隔音符后的 r（如 hua'r）会标记前一个音节为儿化。
 
@@ -37,39 +39,40 @@ pub const MAX_SYLLABLE_LEN: usize = 6;
 /// 顺序即音节 ID。新增条目时必须保持有序，单元测试会检查。
 pub const SYLLABLES: &[&str] = &[
     "a", "ai", "an", "ang", "ao", "ba", "bai", "ban", "bang", "bao", "bei", "ben", "beng", "bi",
-    "bian", "biao", "bie", "bin", "bing", "bo", "bu", "ca", "cai", "can", "cang", "cao", "ce",
-    "cen", "ceng", "cha", "chai", "chan", "chang", "chao", "che", "chen", "cheng", "chi", "chong",
-    "chou", "chu", "chua", "chuai", "chuan", "chuang", "chui", "chun", "chuo", "ci", "cong", "cou",
-    "cu", "cuan", "cui", "cun", "cuo", "da", "dai", "dan", "dang", "dao", "de", "dei", "den",
-    "deng", "di", "dia", "dian", "diao", "die", "ding", "diu", "dong", "dou", "du", "duan", "dui",
-    "dun", "duo", "e", "ei", "en", "eng", "er", "fa", "fan", "fang", "fei", "fen", "feng", "fiao",
-    "fo", "fou", "fu", "ga", "gai", "gan", "gang", "gao", "ge", "gei", "gen", "geng", "gong",
-    "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun", "guo", "ha", "hai", "han", "hang",
-    "hao", "he", "hei", "hen", "heng", "hm", "hng", "hong", "hou", "hu", "hua", "huai", "huan",
-    "huang", "hui", "hun", "huo", "ji", "jia", "jian", "jiang", "jiao", "jie", "jin", "jing",
-    "jiong", "jiu", "ju", "juan", "jue", "jun", "jv", "jvan", "jve", "jvn", "ka", "kai", "kan",
-    "kang", "kao", "ke", "kei", "ken", "keng", "kong", "kou", "ku", "kua", "kuai", "kuan", "kuang",
-    "kui", "kun", "kuo", "la", "lai", "lan", "lang", "lao", "le", "lei", "leng", "li", "lia",
-    "lian", "liang", "liao", "lie", "lin", "ling", "liu", "lo", "long", "lou", "lu", "luan", "lun",
-    "luo", "lv", "lve", "ma", "mai", "man", "mang", "mao", "me", "mei", "men", "meng", "mi",
-    "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu", "na", "nai", "nan", "nang",
-    "nao", "ne", "nei", "nen", "neng", "ng", "ni", "nian", "niang", "niao", "nie", "nin", "ning",
-    "niu", "nong", "nou", "nu", "nuan", "nun", "nuo", "nv", "nve", "o", "ou", "pa", "pai", "pan",
-    "pang", "pao", "pei", "pen", "peng", "pi", "pian", "piao", "pie", "pin", "ping", "po", "pou",
-    "pu", "qi", "qia", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong", "qiu", "qu", "quan",
-    "que", "qun", "qv", "qvan", "qve", "qvn", "ran", "rang", "rao", "re", "ren", "reng", "ri",
-    "rong", "rou", "ru", "rua", "ruan", "rui", "run", "ruo", "sa", "sai", "san", "sang", "sao",
-    "se", "sen", "seng", "sha", "shai", "shan", "shang", "shao", "she", "shei", "shen", "sheng",
-    "shi", "shou", "shu", "shua", "shuai", "shuan", "shuang", "shui", "shun", "shuo", "si", "song",
-    "sou", "su", "suan", "sui", "sun", "suo", "ta", "tai", "tan", "tang", "tao", "te", "tei",
-    "teng", "ti", "tian", "tiao", "tie", "ting", "tong", "tou", "tu", "tuan", "tui", "tun", "tuo",
-    "wa", "wai", "wan", "wang", "wei", "wen", "weng", "wo", "wu", "xi", "xia", "xian", "xiang",
-    "xiao", "xie", "xin", "xing", "xiong", "xiu", "xu", "xuan", "xue", "xun", "xv", "xvan", "xve",
-    "xvn", "ya", "yan", "yang", "yao", "ye", "yi", "yin", "ying", "yo", "yong", "you", "yu",
-    "yuan", "yue", "yun", "yv", "yvan", "yve", "yvn", "za", "zai", "zan", "zang", "zao", "ze",
-    "zei", "zen", "zeng", "zha", "zhai", "zhan", "zhang", "zhao", "zhe", "zhei", "zhen", "zheng",
-    "zhi", "zhong", "zhou", "zhu", "zhua", "zhuai", "zhuan", "zhuang", "zhui", "zhun", "zhuo",
-    "zi", "zong", "zou", "zu", "zuan", "zui", "zun", "zuo",
+    "bian", "biang", "biao", "bie", "bin", "bing", "bo", "bu", "ca", "cai", "can", "cang", "cao",
+    "ce", "cei", "cen", "ceng", "cha", "chai", "chan", "chang", "chao", "che", "chen", "cheng",
+    "chi", "chong", "chou", "chu", "chua", "chuai", "chuan", "chuang", "chui", "chun", "chuo",
+    "ci", "cong", "cou", "cu", "cuan", "cui", "cun", "cuo", "da", "dai", "dan", "dang", "dao",
+    "de", "dei", "den", "deng", "di", "dia", "dian", "diao", "die", "ding", "diu", "dong", "dou",
+    "du", "duan", "dui", "dun", "duo", "e", "ei", "en", "eng", "er", "fa", "fan", "fang", "fei",
+    "fen", "feng", "fiao", "fo", "fou", "fu", "ga", "gai", "gan", "gang", "gao", "ge", "gei",
+    "gen", "geng", "gong", "gou", "gu", "gua", "guai", "guan", "guang", "gui", "gun", "guo", "ha",
+    "hai", "han", "hang", "hao", "he", "hei", "hen", "heng", "hm", "hng", "hong", "hou", "hu",
+    "hua", "huai", "huan", "huang", "hui", "hun", "huo", "ji", "jia", "jian", "jiang", "jiao",
+    "jie", "jin", "jing", "jiong", "jiu", "ju", "juan", "jue", "jun", "jv", "jvan", "jve", "jvn",
+    "ka", "kai", "kan", "kang", "kao", "ke", "kei", "ken", "keng", "kong", "kou", "ku", "kua",
+    "kuai", "kuan", "kuang", "kui", "kun", "kuo", "la", "lai", "lan", "lang", "lao", "le", "lei",
+    "leng", "li", "lia", "lian", "liang", "liao", "lie", "lin", "ling", "liu", "lo", "long", "lou",
+    "lu", "luan", "lun", "luo", "lv", "lve", "ma", "mai", "man", "mang", "mao", "me", "mei", "men",
+    "meng", "mi", "mian", "miao", "mie", "min", "ming", "miu", "mo", "mou", "mu", "na", "nai",
+    "nan", "nang", "nao", "ne", "nei", "nen", "neng", "ng", "ni", "nia", "nian", "niang", "niao",
+    "nie", "nin", "ning", "niu", "nong", "nou", "nu", "nuan", "nun", "nuo", "nv", "nve", "o", "ou",
+    "pa", "pai", "pan", "pang", "pao", "pei", "pen", "peng", "pi", "pian", "piao", "pie", "pin",
+    "ping", "po", "pou", "pu", "qi", "qia", "qian", "qiang", "qiao", "qie", "qin", "qing", "qiong",
+    "qiu", "qu", "quan", "que", "qun", "qv", "qvan", "qve", "qvn", "ran", "rang", "rao", "re",
+    "ren", "reng", "ri", "rong", "rou", "ru", "rua", "ruan", "rui", "run", "ruo", "sa", "sai",
+    "san", "sang", "sao", "se", "sen", "seng", "sha", "shai", "shan", "shang", "shao", "she",
+    "shei", "shen", "sheng", "shi", "shou", "shu", "shua", "shuai", "shuan", "shuang", "shui",
+    "shun", "shuo", "si", "song", "sou", "su", "suan", "sui", "sun", "suo", "ta", "tai", "tan",
+    "tang", "tao", "te", "tei", "teng", "ti", "tian", "tiao", "tie", "ting", "tong", "tou", "tu",
+    "tuan", "tui", "tun", "tuo", "wa", "wai", "wan", "wang", "wei", "wen", "weng", "wo", "wu",
+    "xi", "xia", "xian", "xiang", "xiao", "xie", "xin", "xing", "xiong", "xiu", "xu", "xuan",
+    "xue", "xun", "xv", "xvan", "xve", "xvn", "ya", "yan", "yang", "yao", "ye", "yi", "yin",
+    "ying", "yo", "yong", "you", "yu", "yuan", "yue", "yun", "yv", "yvan", "yve", "yvn", "za",
+    "zai", "zan", "zang", "zao", "ze", "zei", "zen", "zeng", "zha", "zhai", "zhan", "zhang",
+    "zhao", "zhe", "zhei", "zhen", "zheng", "zhi", "zhong", "zhou", "zhu", "zhua", "zhuai",
+    "zhuan", "zhuang", "zhui", "zhun", "zhuo", "zi", "zong", "zou", "zu", "zuan", "zui", "zun",
+    "zuo",
 ];
 
 fn bsearch(table: &'static [&'static str], text: &str) -> Option<usize> {
@@ -234,19 +237,51 @@ pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
     Some(need)
 }
 
-pub fn is_valid(text: &str) -> bool {
-    bsearch(SYLLABLES, text).is_some()
+/// 别的写法 -> 表里的写法。
+///
+/// - lüe、nüe 照《汉语拼音方案》也写成 lue、nue（u 上省掉两点不会和别的音节混），
+///   很多人就这么打；表里用 v 表示 ü，所以这里换成 lve、nve。
+/// - j、q、x、y 后面的 ü 写成 u（ju 居、qu 去）。用 v 打（jv、qvan）的人也不少，
+///   雾凇、搜狗都认；表里虽然有 jv、qvan 这些扩展音节，词库却都记在 ju、quan 下面，
+///   以前打 qv、xv、yv 一个候选都没有，jv 还会被纠错成「女」。
+pub fn canonical(text: &str) -> &str {
+    match text {
+        "lue" => "lve",
+        "nue" => "nve",
+        "jv" => "ju",
+        "jvan" => "juan",
+        "jve" => "jue",
+        "jvn" => "jun",
+        "qv" => "qu",
+        "qvan" => "quan",
+        "qve" => "que",
+        "qvn" => "qun",
+        "xv" => "xu",
+        "xvan" => "xuan",
+        "xve" => "xue",
+        "xvn" => "xun",
+        "yv" => "yu",
+        "yvan" => "yuan",
+        "yve" => "yue",
+        "yvn" => "yun",
+        _ => text,
+    }
 }
 
-/// 查音节 ID。
+pub fn is_valid(text: &str) -> bool {
+    bsearch(SYLLABLES, canonical(text)).is_some()
+}
+
+/// 查音节 ID（lue、nue 这样的别的写法也认）。
 pub fn id_of(text: &str) -> Option<SyllableId> {
-    bsearch(SYLLABLES, text).map(|i| i as SyllableId)
+    bsearch(SYLLABLES, canonical(text)).map(|i| i as SyllableId)
 }
 
 /// 把音节拆成声母 + 韵母；零声母音节的声母为空串。
 ///
 /// 返回的字符串都是静态表里的规范形式。
 pub fn split(text: &str) -> Option<(&'static str, &'static str)> {
+    let text = canonical(text);
     if !is_valid(text) {
         return None;
     }
@@ -455,14 +490,12 @@ impl ParsedInput {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError {
     InvalidChar(char),
-    DanglingErhua,
 }
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidChar(c) => write!(f, "非法字符 {c:?}：拼音输入只允许 a-z 和隔音符 '"),
-            Self::DanglingErhua => write!(f, "孤立的儿化标记 r：前面没有可儿化的音节"),
         }
     }
 }
@@ -475,6 +508,7 @@ impl std::error::Error for ParseError {}
 /// - xi'an -> letters=xian, forced=[2]
 /// - hua'r -> letters=hua, erhua_at=[3]
 /// - huar  -> letters=huar（儿化由音节图识别尾部 r）
+/// - r     -> letters=r（前面没有音节时 r 就是普通字母，简拼 r -> 人、日）
 pub fn parse(input: &str) -> Result<ParsedInput, ParseError> {
     let mut letters = Vec::with_capacity(input.len());
     let mut forced_boundaries = Vec::new();
@@ -484,10 +518,9 @@ pub fn parse(input: &str) -> Result<ParsedInput, ParseError> {
         if chunk.is_empty() {
             continue;
         }
-        if chunk == "r" {
-            if letters.is_empty() {
-                return Err(ParseError::DanglingErhua);
-            }
+        // 隔开的一个 r 是儿化标记（hua'r）。前面还没有字母时不是儿化：单独打 r 是简拼，
+        // 以前这里报错，整个输入作废，打 r 一个候选都没有。
+        if chunk == "r" && !letters.is_empty() {
             let pos = letters.len();
             if !erhua_at.contains(&pos) {
                 erhua_at.push(pos);
@@ -550,6 +583,18 @@ mod tests {
         assert!(is_valid("nve"));
         assert!(is_valid("lve"));
         assert!(!is_valid("xiann"));
+        // lüe、nüe 也能写成 lue、nue（https://x.com/so1v3/status/2120415675969896729）
+        assert_eq!(id_of("lue"), id_of("lve"));
+        assert_eq!(id_of("nue"), id_of("nve"));
+        assert_eq!(Syllable::from_text("lue").map(|s| s.text), Some("lve"));
+        assert_eq!(split("nue"), Some(("n", "ve")));
+        // j q x y 后面的 ü 用 v 打：和 u 是同一个音节
+        for (v, u) in [("jv", "ju"), ("qv", "qu"), ("xv", "xu"), ("yv", "yu"), ("qvan", "quan"), ("xve", "xue"), ("jvn", "jun")] {
+            assert_eq!(id_of(v), id_of(u), "{v} 应等于 {u}");
+        }
+        // l、n 后面的 v 不动：lv（绿）和 lu（路）是两个音节
+        assert_ne!(id_of("lv"), id_of("lu"));
+        assert_ne!(id_of("nv"), id_of("nu"));
         assert!(!is_valid("abc"));
         assert!(!is_valid(""));
     }
@@ -558,7 +603,7 @@ mod tests {
     fn extended_syllables() {
         for s in [
             "yvan", "xvan", "jvan", "qvan", "yve", "xve", "jve", "qve", "yvn", "xvn", "jvn", "qvn",
-            "yv", "xv", "jv", "qv", "hng", "hm", "ng", "fiao", "nou", "nun",
+            "yv", "xv", "jv", "qv", "hng", "hm", "ng", "fiao", "nou", "nun", "biang", "cei", "nia",
         ] {
             assert!(is_valid(s), "扩展音节缺失: {s}");
         }
@@ -571,8 +616,9 @@ mod tests {
         assert_eq!(split("an"), Some(("", "an")));
         assert_eq!(split("er"), Some(("", "er")));
         assert_eq!(split("zhuang"), Some(("zh", "uang")));
-        assert_eq!(split("yvan"), Some(("y", "van")));
-        assert_eq!(split("jv"), Some(("j", "v")));
+        // jv、yvan 是 ju、yuan 的别的写法，按表里的写法拆
+        assert_eq!(split("yvan"), Some(("y", "uan")));
+        assert_eq!(split("jv"), Some(("j", "u")));
         assert_eq!(split("hng"), Some(("", "hng")));
     }
 
@@ -597,6 +643,12 @@ mod tests {
     fn parse_rejects_non_lowercase() {
         assert_eq!(parse("Xian"), Err(ParseError::InvalidChar('X')));
         assert_eq!(parse("xi1an"), Err(ParseError::InvalidChar('1')));
-        assert_eq!(parse("r"), Err(ParseError::DanglingErhua));
+    }
+
+    #[test]
+    fn parse_lone_r_is_a_letter() {
+        assert_eq!(parse("r").unwrap().letters, b"r");
+        assert!(parse("r").unwrap().erhua_at.is_empty());
+        assert_eq!(parse("'r").unwrap().letters, b"r");
     }
 }

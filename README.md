@@ -85,7 +85,7 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 
 ### 系统要求
 
-- Linux x86_64，输入法框架 **fcitx5 5.1 或更新**
+- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.1 或更新**。Arch 的安装包只有 x86_64
 - 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
 
@@ -133,17 +133,18 @@ im-config -n fcitx5
 ##### 方式一：安装包
 
 到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
-`wowtype_<版本>_<发行版>_amd64.deb`（`ubuntu24.04`、`ubuntu26.04`、`debian13`），词库已经包含在里面。
-不知道自己是哪个发行版：
+`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu24.04`、`ubuntu26.04`、`debian13`，架构是 `amd64` 或 `arm64`），词库已经包含在里面。
+不知道自己是哪个发行版、哪种架构：
 
 ```bash
 . /etc/os-release && echo "$ID$VERSION_ID"     # 例如 ubuntu24.04
+dpkg --print-architecture                      # amd64 或 arm64
 ```
 
 在下载目录里安装：
 
 ```bash
-sudo apt install ./wowtype_*_amd64.deb
+sudo apt install ./wowtype_*.deb
 ```
 
 `apt` 会顺带装上设置界面要用的 GTK 4 和 libadwaita（`python3-gi`、`gir1.2-gtk-4.0`、`gir1.2-adw-1`）。
@@ -153,7 +154,7 @@ sudo apt install ./wowtype_*_amd64.deb
 
 ###### Fedora
 
-到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.x86_64.rpm`（词库已经在包里），然后：
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `wowtype-<版本>-1.fc<Fedora 版本>.<架构>.rpm`（架构是 `x86_64` 或 `aarch64`，词库已经在包里），然后：
 
 ```bash
 sudo dnf install ./wowtype-*.rpm
@@ -170,8 +171,8 @@ wowtype-config --add-to-group      # 把 WowType 加进 fcitx5 的输入法列�
 ```nix
 # flake.nix
 inputs.wowtype = {
-  url = "github:Gloridust/WowType";
-  inputs.nixpkgs.follows = "nixpkgs";   # 和系统用同一份 fcitx5
+  url = "github:Gloridust/WowType/release";   # 跟正式版；想锁某一版写 github:Gloridust/WowType/v0.3.10
+  inputs.nixpkgs.follows = "nixpkgs";         # 和系统用同一份 fcitx5
 };
 
 # configuration.nix（通过 specialArgs 把 inputs 传进来）
@@ -185,6 +186,7 @@ i18n.inputMethod = {
 `nixos-rebuild switch` 后重新登录，运行 `wowtype-config --add-to-group`（或在 Fcitx 5 配置里添加 WowType）。
 也提供了 overlay：`nixpkgs.overlays = [ inputs.wowtype.overlays.default ];` 之后用 `pkgs.wowtype`。
 home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
+支持 x86_64 和 aarch64；升级：`nix flake update wowtype` 后再 `nixos-rebuild switch`。
 
 ##### 方式二：从源码构建
 
@@ -192,7 +194,7 @@ home-manager 的 `i18n.inputMethod.fcitx5.addons` 用法相同。
 
 #### 第 3 步：把 WowType 加进输入法列表
 
-1. 重启 fcitx5：`fcitx5 -r -d`（或者注销再登录）
+1. 重启 fcitx5：`wowtype-config --restart-fcitx`（或者注销再登录）。KDE Plasma Wayland 下不要用 `fcitx5 -r -d`：新起来的 fcitx5 拿不到 KWin 给的输入法连接，之后新打开的程序里打不了字
 2. 打开 **Fcitx 5 配置**（托盘图标右键 → 配置，或运行 `fcitx5-configtool`）
 3. 在右边「可用输入法」里**取消勾选「仅显示当前语言」**，搜索 `WowType`，点 ← 加到左边
 4. 关掉配置窗口，按 `Ctrl+Space` 切换到 WowType，打 `nihao` 试试
@@ -246,7 +248,7 @@ fcitx5 默认用左 Shift「临时切换输入法」（切到 en 键盘），这
 右 Shift 不受影响。想左 Shift 也给 WowType 用，打开 [WowType 设置](#设置)「输入」页的 **Shift 只给 WowType 用**（只在有冲突时出现）：
 它从 fcitx5 的快捷键里去掉单按的 Shift，之后切别的输入法用 `Ctrl` + `空格`；关掉就原样还给 fcitx5。
 
-中文标点自动转全角（`,` → ，`?` → ？），数字后面的句点保持小数点（`3.14`）；设置「输入 → 标点样式」可以改成半角（英文标点）。`/`、`+`、`"` 这类没有对应中文标点的符号原样上屏；打拼音途中按它们，先上屏当前候选。
+中文标点自动转全角（`,` → ，`?` → ？，`^` → ……，`_` → ——，`$` → ￥，`` ` `` → ·），引号左右交替（`"` → “ ”，`'` → ‘ ’），数字后面的句点保持小数点（`3.14`）；设置「输入 → 标点样式」可以改成半角（英文标点）。`/`、`+`、`=` 这类没有对应中文标点的符号原样上屏；打拼音途中按它们，先上屏当前候选。
 
 ### Emoji 和符号
 
@@ -332,7 +334,7 @@ fcitx5 默认用左 Shift「临时切换输入法」（切到 en 键盘），这
 | 页面 | 能改什么 |
 |---|---|
 | 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
-| 输入 | 拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（12 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong）、按错键自动纠正、繁体字、日期时间、计算器、v + 空格工具栏、剪贴板历史、中英文之间自动加空格、分号引号选第 2/3 个候选 |
+| 输入 | 词库（默认雾凇，可下载切换到[万象](docs/CONFIG.md#可选词库万象拼音)）、拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（12 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong）、按错键自动纠正、繁体字、日期时间、计算器、v + 空格工具栏、剪贴板历史、中英文之间自动加空格、分号引号选第 2/3 个候选 |
 | 表情 | 打字时推荐 emoji、表情面板快捷键 |
 | 语音 | 语音输入开关、语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别结果同时复制到剪贴板、识别模型下没下载 |
 | 翻译 | [互译](#互译)开关、翻成哪种语言、正式语气；本地模型（下载、llama-server、闲置释放）；翻译服务（服务商、地址、Key、模型，可以从服务里挑模型）、测试连接 |
@@ -381,7 +383,8 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 
 | 现象 | 处理 |
 |---|---|
-| 输入法列表里找不到 WowType | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`fcitx5 -r -d` 重启 |
+| 输入法列表里找不到 WowType | 添加时取消勾选「仅显示当前语言」；确认 `/usr/share/fcitx5/inputmethod/wowtype.conf` 存在；`wowtype-config --restart-fcitx` 重启 |
+| KDE Wayland 下已经开着的程序能打字，新打开的程序打不了 | fcitx5 是用 `fcitx5 -r` 或托盘「重新启动」重启的，没经过 KWin。运行 `wowtype-config --restart-fcitx`，或注销再登录 |
 | 某个程序里打不了中文，别的程序可以 | 重启 fcitx5 以后 Chrome / Electron 程序要彻底退出再打开 |
 | 能打，但候选很少、很多常用词没有 | 没找到词库，用的是演示词库。用安装包装的话重装一遍（安装包自带词库）；从源码装的把 `lexicon.tsv` 放进 `~/.local/share/wowtype/` |
 | 第一次切到 WowType 时要等一两秒 | 正常：第一次要载入词库并生成快照，之后约 0.3 秒 |
@@ -454,6 +457,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 ## 致谢
 
 - [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，随安装包一起分发，许可证见 `/usr/share/doc/wowtype/copyright`）
+- [万象拼音 rime_wanxiang](https://github.com/amzxyz/rime_wanxiang)：可选词库（CC BY 4.0，不在安装包里，在设置里下载）
 - [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
 - [Unicode CLDR](https://cldr.unicode.org/)：emoji 的中英文关键词（Unicode License v3）
 - [fcitx5](https://github.com/fcitx/fcitx5)：输入法框架
@@ -462,4 +466,4 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 许可证
 
-代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，可选的万象词库包遵循 CC BY 4.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。

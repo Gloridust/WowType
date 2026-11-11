@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 5
+#define WOWTYPE_ABI_VERSION_MINOR 6
 
 #ifdef __cplusplus
 extern "C" {
@@ -294,7 +294,8 @@ const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
 
-/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习；见 docs/PORTING.md、docs/ABI.md）----
+/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习，1.6 加选词键、翻页和展开面板；
+ * 见 docs/PORTING.md、docs/ABI.md）----
  *
  * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
  * 画编辑区、上屏。会话只能在一个线程里用。
@@ -305,7 +306,9 @@ const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *tex
  *
  * 已经由会话处理的键：字母、隔音符（编辑区不空时）、退格（先撤销最后一次选词，没有选词
  * 才删字母）、Esc（清空）。候选列表（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）
- * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）。 */
+ * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）；空格、回车、数字、
+ * 分号引号选词、V 模式算式、双拼分号、翻页、移动候选、展开面板也由会话处理（1.6 起）。
+ * 还在外壳里的：打字途中的标点（先上屏再出标点）、工具栏、表情面板、互译。 */
 
 typedef struct WowtypeSession WowtypeSession;
 
@@ -314,7 +317,17 @@ typedef struct WowtypeSession WowtypeSession;
 #define WOWTYPE_MOD_CAPS (1u << 1)
 #define WOWTYPE_MOD_CTRL (1u << 2)
 #define WOWTYPE_MOD_ALT (1u << 3)
+#define WOWTYPE_MOD_NUMLOCK (1u << 4) /* 1.6 起：和 CapsLock 一样不影响数字选词 */
 #define WOWTYPE_MOD_SUPER (1u << 6)
+
+/* 平台自己的翻页、移动候选热键（fcitx5 全局设置里的 [Hotkey/PrevPage] 等）或候选框上的
+ * 翻页按钮：外壳翻成动作放进 WowtypeKey.action（1.6 起）。方向键带了动作也照横排竖排的规则走。
+ * keysym 可以是 0（只有动作）。没在打字时动作交给应用。 */
+#define WOWTYPE_KEY_ACTION_NONE 0
+#define WOWTYPE_KEY_ACTION_PREV_PAGE 1
+#define WOWTYPE_KEY_ACTION_NEXT_PAGE 2
+#define WOWTYPE_KEY_ACTION_PREV_CANDIDATE 3
+#define WOWTYPE_KEY_ACTION_NEXT_CANDIDATE 4
 
 /* 一次按键。keysym 是 XKB keysym 的子集（字母、数字、标点、方向、功能键）。
  * size 填 sizeof(WowtypeKey)：以后在末尾加字段，旧外壳没填的字段当 0。 */
@@ -324,7 +337,20 @@ typedef struct {
     uint32_t modifiers; /* WOWTYPE_MOD_* */
     uint32_t release;   /* 0 按下，1 松开 */
     uint32_t prev_char; /* 光标前一个字符（Unicode 码位），不知道给 0 */
+    uint32_t action;    /* WOWTYPE_KEY_ACTION_*（1.6 起） */
 } WowtypeKey;
+
+/* 设置里能选的翻页键（WowtypeSessionConfig.page_keys 的位掩码）。PgUp PgDn 一直能用；
+ * 横排时上下键翻页、竖排时左右键翻页。 */
+#define WOWTYPE_PAGE_KEYS_MINUS (1u << 0)   /* - = */
+#define WOWTYPE_PAGE_KEYS_BRACKET (1u << 1) /* [ ] */
+#define WOWTYPE_PAGE_KEYS_COMMA (1u << 2)   /* , . */
+#define WOWTYPE_PAGE_KEYS_TAB (1u << 3)     /* Shift+Tab Tab */
+
+/* 分号、引号选词（WowtypeSessionConfig.select_keys）。 */
+#define WOWTYPE_SELECT_KEYS_OFF 0
+#define WOWTYPE_SELECT_KEYS_SEMICOLON 1       /* 分号选第 2 个 */
+#define WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE 2 /* 再加引号选第 3 个 */
 
 /* 会话的设置。size 填 sizeof(WowtypeSessionConfig)；外壳没填的字段（size 短）用默认值。
  * 传 NULL 全用默认。双拼开不开看引擎（wowtype_engine_set_shuangpin）。 */
@@ -334,6 +360,10 @@ typedef struct {
     int calculator;     /* V 模式计算器，默认 1（双拼时不开） */
     int date_time;      /* 日期时间候选，默认 1 */
     int emoji_suggest;  /* 打字推荐 emoji，默认 1 */
+    int horizontal;     /* 1.6 起：候选横排（左右键移光标、上下键翻页、下键展开面板），默认 1；
+                         * 0 竖排（上下键移光标、左右键翻页） */
+    uint32_t page_keys; /* 1.6 起：WOWTYPE_PAGE_KEYS_*，默认 WOWTYPE_PAGE_KEYS_MINUS */
+    int select_keys;    /* 1.6 起：WOWTYPE_SELECT_KEYS_*，默认 OFF */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -346,10 +376,10 @@ typedef struct {
                             * nihao 显示成 ni'hao，双拼显示成全拼；没有引擎时是原始输入） */
     int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
     const char *aux;       /* 候选框上方的提示，没有为 NULL（还没用） */
-    int panel;             /* 0 普通 1 展开面板 2 表情面板（还没用，恒为 0） */
-    size_t cand_count;     /* 当前页候选个数（还没用，恒为 0） */
-    int cand_cursor;
-    int has_prev, has_next;
+    int panel;             /* 0 普通一页 1 展开面板（横排按下键，6 列，一屏 6 行）；2 表情面板还没用 */
+    size_t cand_count;     /* 候选框里显示几个（一页，或展开面板的一屏）；用 wowtype_session_candidate 取 */
+    int cand_cursor;       /* 光标在显示的这些里的位置；-1 不在这一页上（翻页按钮翻走以后） */
+    int has_prev, has_next; /* 前面 / 后面还有一页（展开面板是一屏） */
     uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
 } WowtypeFrame;
 
@@ -365,9 +395,15 @@ void wowtype_session_configure(WowtypeSession *session, const WowtypeSessionConf
 const WowtypeFrame *wowtype_session_frame(WowtypeSession *session);
 /* 处理一次按键（按下和松开都给）。session 或 key 为 NULL 时返回 NULL。 */
 const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKey *key);
-/* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时），
- * 和 wowtype_session_commit_input 一样也记一次选词。 */
+/* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法、
+ * 打字途中切英文时，和回车一样），原始输入也记一次选词。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
+/* 点候选（1.6 起）：index 是显示的这些（frame 的 cand_count 个）里的序号。和按数字键一样：
+ * 句首词进已选栈，用完输入就上屏并记选词。序号不对时 handled 为 0。 */
+const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index);
+/* 显示的第 index 个候选的字（1.6 起），index < cand_count，不然返回 NULL。
+ * 在同一会话下一次调用前有效。 */
+const char *wowtype_session_candidate(WowtypeSession *session, size_t index);
 
 /* 过渡：选词键、标点等还在外壳时，外壳用这些读写编辑区、选词。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */
@@ -375,10 +411,8 @@ const char *wowtype_session_remaining(WowtypeSession *session);     /* 还没选
 const char *wowtype_session_selected_text(WowtypeSession *session); /* 已选的词连起来 */
 /* 选第 index 个候选（全部候选里的序号，不分页）：emoji、计算结果、日期时间原样上屏不学习；
  * 句首词进已选栈、记一次选词；其余已选的词 + 它上屏，记选词（分几次选出来的整句也记一次）。
- * 序号不对时 handled 为 0。 */
+ * 序号不对时 handled 为 0。外壳打字途中按标点时，用它把当前候选上屏。 */
 const WowtypeFrame *wowtype_session_choose(WowtypeSession *session, size_t index);
-/* 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。 */
-const WowtypeFrame *wowtype_session_commit_input(WowtypeSession *session);
 /* 往原始输入后面加字（计算器算式、双拼分号、表情面板搜索词）。 */
 void wowtype_session_append(WowtypeSession *session, const char *text);
 /* 光标前已经上屏的字（选了开头的词以后，拿它 + 已选的词当上文给剩下的部分排序）。 */
@@ -402,6 +436,23 @@ size_t wowtype_session_candidate_total(WowtypeSession *session);
 /* 第 index 个候选写进 out（按 out->size 写）。返回 0 成功，-1 越界或参数为 NULL。
  * 字符串在同一会话下一次改了编辑区、上文、引擎或设置的调用前有效。 */
 int wowtype_session_candidate_info(WowtypeSession *session, size_t index, WowtypeCandidateInfo *out);
+/* 过渡（1.6 起）：上一次调用（_key、_select、_choose）上屏的是哪个候选，写进 out。
+ * 返回 0 有，-1 这次上屏的不是候选（回车、没候选时的空格）或没上屏。外壳要它把上屏的 emoji
+ * 记进最近用过、看这次有没有学到新词。 */
+int wowtype_session_last_choice(WowtypeSession *session, WowtypeCandidateInfo *out);
+
+/* 过渡（1.6 起）：fcitx5 外壳的候选框（CommonCandidateList）要整个列表和页码、光标，
+ * 用它和 candidate_info 抄。 */
+typedef struct {
+    uint32_t size;        /* 填 sizeof(WowtypeSessionView) */
+    size_t page;          /* 普通候选框在第几页 */
+    size_t cursor;        /* 普通候选框的光标（全部候选里的序号，可以不在这一页上） */
+    int expanded;         /* 展开面板开着 */
+    size_t grid_cursor;   /* 展开面板的光标（全部候选里的序号） */
+    uint64_t generation;  /* 候选重算过几次：变了就重新抄候选 */
+} WowtypeSessionView;
+/* 返回 0 成功，-1 参数为 NULL。 */
+int wowtype_session_view(WowtypeSession *session, WowtypeSessionView *out);
 
 #ifdef __cplusplus
 }

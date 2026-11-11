@@ -20,14 +20,29 @@
 import argparse
 import os
 import sys
+import unicodedata
 
 # 导出：被多个文件引用的词条只保留最大权重
 Entry = dict
 
 
 def normalize_syllable(s: str) -> str:
-    s = s.strip().lower()
-    return s.replace("\u00fc", "v").replace("u:", "v")
+    """小写、去声调、ü 写成 v。
+
+    万象拼音（rime_wanxiang）的拼音带声调（ā bà、lǜ），雾凇不带，同一套处理两边都适用：
+    NFD 分解后 ü 是 u + 分音符（U+0308），声调是其余的组合符号。
+    """
+    s = s.strip().lower().replace("u:", "v")
+    out = []
+    for ch in unicodedata.normalize("NFD", s):
+        if ch == "\u0308":
+            if out and out[-1] == "u":
+                out[-1] = "v"
+            continue
+        if unicodedata.combining(ch):
+            continue
+        out.append(ch)
+    return "".join(out)
 
 
 def normalize_code(code: str) -> str:
@@ -90,8 +105,10 @@ def resolve_import(name: str, base_dir: str) -> str:
     return os.path.join(base_dir, name)
 
 
-def load_entries(path, seen, use_imports=True):
-    """递归加载一个 .dict.yaml，返回 {(code, text): weight}。"""
+def load_entries(path, seen, use_imports=True, skip=()):
+    """递归加载一个 .dict.yaml，返回 {(code, text): weight}。
+
+    skip：不合并的被引用词库（import_tables 里写的名字，如 dicts/cuoyin）。"""
     abs_path = os.path.abspath(path)
     if abs_path in seen:
         print("跳过循环引用: %s" % abs_path, file=sys.stderr)
@@ -111,11 +128,14 @@ def load_entries(path, seen, use_imports=True):
 
     if use_imports:
         for name in imports:
+            if name in skip:
+                print("跳过被引用词库: %s" % name, file=sys.stderr)
+                continue
             imported = resolve_import(name, base_dir)
             if not os.path.exists(imported):
                 print("找不到被引用词库: %s" % imported, file=sys.stderr)
                 continue
-            for key, weight in load_entries(imported, seen, use_imports).items():
+            for key, weight in load_entries(imported, seen, use_imports, skip).items():
                 if key not in merged or weight > merged[key]:
                     merged[key] = weight
 
@@ -169,8 +189,18 @@ def add_extra_chars(entries, path):
     return added
 
 
-def convert(path, min_weight, out, use_imports=True, extra_chars=()):
-    entries = load_entries(path, set(), use_imports)
+def convert(path, min_weight, out, use_imports=True, skip=(), scale_total=0.0, extra_chars=()):
+    entries = load_entries(path, set(), use_imports, skip)
+    if scale_total > 0:
+        # 核心里有几个按绝对词频定的值（自定义词 500 万、热词 3 万、精确匹配保护 1000），
+        # 是照雾凇的词频定的；别的词库先整体缩放到同样的总词频，这些值才是一个意思。
+        # 在补大字表之前缩放：大字表的频次要保持小于 1
+        total = sum(entries.values())
+        if total > 0:
+            factor = scale_total / total
+            entries = {key: max(1.0, weight * factor) for key, weight in entries.items()}
+            print("词频整体乘 %.4f（总词频 %.0f -> %.0f）" % (factor, total, scale_total),
+                  file=sys.stderr)
     for extra in extra_chars:
         added = add_extra_chars(entries, extra)
         print("大字表 %s：补 %d 个单字读音" % (extra, added), file=sys.stderr)
@@ -206,10 +236,26 @@ columns:
 是\tshi\t70000
 """
 
+SAMPLE_TONED = """---
+name: sample_toned
+...
+绿色\tlǜ sè\t500\t注释列不管
+女儿\tnǚ ér\t200
+略\tlüè\t100
+"""
+
+SAMPLE_SKIPPED = """---
+name: sample_skipped
+...
+秘鲁\tmì lǔ\t100\t秘(bì)鲁
+"""
+
 SAMPLE_MAIN = """---
 name: sample
 import_tables:
   - sample_base
+  - sample_toned
+  - sample_skipped
 columns:
   - text
   - code
@@ -225,8 +271,10 @@ def selftest():
     import tempfile
 
     with tempfile.TemporaryDirectory() as tmp:
-        with open(os.path.join(tmp, "sample_base.dict.yaml"), "w", encoding="utf-8") as f:
-            f.write(SAMPLE_BASE)
+        for name, text in (("sample_base", SAMPLE_BASE), ("sample_toned", SAMPLE_TONED),
+                           ("sample_skipped", SAMPLE_SKIPPED)):
+            with open(os.path.join(tmp, name + ".dict.yaml"), "w", encoding="utf-8") as f:
+                f.write(text)
         main = os.path.join(tmp, "sample.dict.yaml")
         with open(main, "w", encoding="utf-8") as f:
             f.write(SAMPLE_MAIN)
@@ -237,6 +285,18 @@ def selftest():
         assert "de\t的\t120000" in lines, lines
         assert "ni hao\t你好\t100000" in lines, lines
         assert "xi an\t西安\t3000" in lines, lines
+        # 万象的拼音带声调：去掉声调，ü 写成 v
+        assert "lv se\t绿色\t500" in lines, lines
+        assert "nv er\t女儿\t200" in lines, lines
+        assert "lve\t略\t100" in lines, lines
+        assert "mi lu\t秘鲁\t100" in lines, lines
+
+        buf = io.StringIO()
+        convert(main, 0, buf, skip=("sample_skipped",), scale_total=2 * 293800)
+        scaled = [l for l in buf.getvalue().splitlines() if not l.startswith("#")]
+        assert not any("秘鲁" in l for l in scaled), scaled
+        assert "de\t的\t240000" in scaled, scaled
+        assert "ni hao\t你好\t200000" in scaled, scaled
 
         big = os.path.join(tmp, "big.dict.yaml")
         with open(big, "w", encoding="utf-8") as f:
@@ -249,7 +309,13 @@ def selftest():
         assert "hou\t後\t0.9" in lines2, lines2
         assert "hou\t𠯜\t0.7" in lines2, lines2
         assert len(lines2) == len(lines) + 3, "只补缺的单字"
-        print("selftest ok: %d 条（含 import）" % len(lines))
+
+        buf = io.StringIO()
+        convert(main, 0, buf, skip=("sample_skipped",), scale_total=2 * 293800, extra_chars=[big])
+        lines3 = [l for l in buf.getvalue().splitlines() if not l.startswith("#")]
+        assert "de\t的\t240000" in lines3, lines3
+        assert "hou\t㕈\t0.8" in lines3, "缩放不动大字表的频次"
+        print("selftest ok: %d 条（含 import、带声调、跳过、缩放、大字表）" % len(lines))
 
 
 def main():
@@ -257,6 +323,10 @@ def main():
     ap.add_argument("path", nargs="?", help="rime .dict.yaml")
     ap.add_argument("--min-weight", type=float, default=0.0)
     ap.add_argument("--no-import", action="store_true", help="不处理 import_tables")
+    ap.add_argument("--skip-import", action="append", default=[], metavar="NAME",
+                    help="不合并这个被引用词库（import_tables 里的名字），可以写多次")
+    ap.add_argument("--scale-total", type=float, default=0.0, metavar="N",
+                    help="把词频整体缩放到总和为 N（0 不缩放）")
     ap.add_argument(
         "--extra-chars",
         action="append",
@@ -271,7 +341,8 @@ def main():
         return
     if not args.path:
         ap.error("需要 rime .dict.yaml 路径")
-    convert(args.path, args.min_weight, sys.stdout, not args.no_import, args.extra_chars)
+    convert(args.path, args.min_weight, sys.stdout, not args.no_import,
+            tuple(args.skip_import), args.scale_total, args.extra_chars)
 
 
 if __name__ == "__main__":

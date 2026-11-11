@@ -9,11 +9,13 @@
 //! - 候选列表（引擎的候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间），
 //!   编辑区的分音节显示（`nihao` 显示成 `ni hao`，双拼显示成全拼）。
 //!
-//! - 选词（句首词进已选栈，整句上屏）和学习（选词记录、分几次选出来的整句也记一次）。
+//! - 选词（句首词进已选栈，整句上屏）和学习（选词记录、分几次选出来的整句也记一次）；
+//! - 空格、回车、数字、分号引号选词、计算器和双拼分号进编辑区，翻页、移光标和
+//!   横排下键展开的候选面板（页和光标照 fcitx5 的候选列表：各管各的，光标可以不在这一页上）。
 //!
-//! 还没挪的键 [`Session::key`] 返回 `handled = false`，外壳接着用自己的旧逻辑处理。
-//! 空格、数字这些选词键还在外壳里，外壳按全局序号调 [`Session::choose`]；
-//! 计算器、双拼分号、表情面板往编辑区加字用 [`Session::append`]。这些过渡用法挪完以后会删掉。
+//! 还没挪的键 [`Session::key`] 返回 `handled = false`，外壳接着用自己的旧逻辑处理
+//! （打字途中的标点、其他可见字符、吃掉的光标键）。鼠标点候选按全局序号调
+//! [`Session::choose`]，表情面板往编辑区加搜索词用 [`Session::append`]，这些过渡用法挪完以后会删掉。
 
 use crate::datetime::LocalTime;
 use crate::Engine;
@@ -31,8 +33,32 @@ pub mod keysym {
     pub const PAGE_UP: u32 = 0xff55;
     pub const PAGE_DOWN: u32 = 0xff56;
     pub const KP_ENTER: u32 = 0xff8d;
+    pub const ISO_LEFT_TAB: u32 = 0xfe20;
+    pub const KP_MULTIPLY: u32 = 0xffaa;
+    pub const KP_ADD: u32 = 0xffab;
+    pub const KP_SUBTRACT: u32 = 0xffad;
+    pub const KP_DECIMAL: u32 = 0xffae;
+    pub const KP_DIVIDE: u32 = 0xffaf;
+    pub const KP_0: u32 = 0xffb0;
+    pub const KP_9: u32 = 0xffb9;
     pub const SPACE: u32 = 0x20;
+    pub const PERCENT: u32 = 0x25;
     pub const APOSTROPHE: u32 = 0x27;
+    pub const PAREN_LEFT: u32 = 0x28;
+    pub const PAREN_RIGHT: u32 = 0x29;
+    pub const ASTERISK: u32 = 0x2a;
+    pub const PLUS: u32 = 0x2b;
+    pub const COMMA: u32 = 0x2c;
+    pub const MINUS: u32 = 0x2d;
+    pub const PERIOD: u32 = 0x2e;
+    pub const SLASH: u32 = 0x2f;
+    pub const DIGIT_0: u32 = 0x30;
+    pub const DIGIT_9: u32 = 0x39;
+    pub const SEMICOLON: u32 = 0x3b;
+    pub const EQUAL: u32 = 0x3d;
+    pub const BRACKET_LEFT: u32 = 0x5b;
+    pub const BRACKET_RIGHT: u32 = 0x5d;
+    pub const ASCII_CIRCUM: u32 = 0x5e;
 }
 
 /// 修饰键位掩码，和 X11/fcitx5 的 KeyState 取值一样（fcitx5 外壳可以直接传）。
@@ -41,7 +67,20 @@ pub mod modifier {
     pub const CAPS: u32 = 1 << 1;
     pub const CTRL: u32 = 1 << 2;
     pub const ALT: u32 = 1 << 3;
+    pub const NUMLOCK: u32 = 1 << 4;
     pub const SUPER: u32 = 1 << 6;
+}
+
+/// 外壳按平台的全局热键认出来的候选动作（fcitx5 的「上一页」「下一个候选」热键，
+/// 候选框上的翻页按钮）。方向键不走这个，按横排 / 竖排照会话自己的规则。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeyAction {
+    #[default]
+    None,
+    PrevPage,
+    NextPage,
+    PrevCandidate,
+    NextCandidate,
 }
 
 /// 一次按键。
@@ -53,6 +92,8 @@ pub struct Key {
     pub release: bool,
     /// 光标前一个字符，不知道是 None（以后挪标点、小数点时用）。
     pub prev_char: Option<char>,
+    /// 外壳认出来的全局热键（翻页、移光标），没有是 None。
+    pub action: KeyAction,
 }
 
 impl Key {
@@ -78,9 +119,47 @@ impl Key {
         }
     }
 
+    /// 候选框上的翻页按钮、全局热键：不是按键，只带动作。
+    pub fn action(action: KeyAction) -> Self {
+        Self {
+            action,
+            ..Self::default()
+        }
+    }
+
     fn has_command_modifier(&self) -> bool {
         self.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
     }
+
+    /// 数字键（主键盘和小键盘）的值；带了 CapsLock、NumLock 以外的修饰键不算（和 fcitx5 一样）。
+    fn digit(&self) -> Option<usize> {
+        if self.modifiers & !(modifier::CAPS | modifier::NUMLOCK) != 0 {
+            return None;
+        }
+        match self.keysym {
+            k @ keysym::DIGIT_0..=keysym::DIGIT_9 => Some((k - keysym::DIGIT_0) as usize),
+            k @ keysym::KP_0..=keysym::KP_9 => Some((k - keysym::KP_0) as usize),
+            _ => None,
+        }
+    }
+}
+
+/// V 模式计算器认的字符（数字、运算符、括号，小键盘也算；不看修饰键）。
+fn calc_char(sym: u32) -> Option<char> {
+    Some(match sym {
+        keysym::DIGIT_0..=keysym::DIGIT_9 => char::from(b'0' + (sym - keysym::DIGIT_0) as u8),
+        keysym::KP_0..=keysym::KP_9 => char::from(b'0' + (sym - keysym::KP_0) as u8),
+        keysym::PLUS | keysym::KP_ADD => '+',
+        keysym::MINUS | keysym::KP_SUBTRACT => '-',
+        keysym::ASTERISK | keysym::KP_MULTIPLY => '*',
+        keysym::SLASH | keysym::KP_DIVIDE => '/',
+        keysym::PERIOD | keysym::KP_DECIMAL => '.',
+        keysym::PERCENT => '%',
+        keysym::ASCII_CIRCUM => '^',
+        keysym::PAREN_LEFT => '(',
+        keysym::PAREN_RIGHT => ')',
+        _ => return None,
+    })
 }
 
 /// 已经选好、还没上屏的一个词（长句先选开头的词）。
@@ -103,6 +182,66 @@ pub struct Frame {
     pub preedit: String,
     /// 编辑区光标，UTF-8 字节偏移。
     pub preedit_cursor: usize,
+    /// 候选框是普通的一页还是展开的面板。
+    pub panel: Panel,
+    /// 候选框里显示的是全部候选里从 cand_start 起的 cand_count 个（一页，或展开面板的一屏）。
+    pub cand_start: usize,
+    pub cand_count: usize,
+    /// 光标在显示的这些里的位置；不在这一页上是 None（翻页按钮翻走以后会这样）。
+    pub cand_cursor: Option<usize>,
+    pub has_prev: bool,
+    pub has_next: bool,
+}
+
+/// 候选框的样子。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Panel {
+    /// 一页候选（横排或竖排）。
+    #[default]
+    Normal,
+    /// 横排时按下键展开的面板：[`GRID_COLS`] 列，一屏 [`GRID_ROWS`] 行，光标所在行标 1–6。
+    Expanded,
+}
+
+/// 展开面板一行几个候选。
+pub const GRID_COLS: usize = 6;
+/// 展开面板一屏几行。
+pub const GRID_ROWS: usize = 6;
+const GRID_SCREEN: usize = GRID_COLS * GRID_ROWS;
+
+/// 设置里能选的翻页键（[`Config::page_keys`] 的位掩码）。
+pub mod page_keys {
+    /// - =
+    pub const MINUS: u32 = 1 << 0;
+    /// [ ]
+    pub const BRACKET: u32 = 1 << 1;
+    /// , .
+    pub const COMMA: u32 = 1 << 2;
+    /// Shift+Tab Tab
+    pub const TAB: u32 = 1 << 3;
+}
+
+/// 分号、引号选词。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectKeys {
+    #[default]
+    Off,
+    /// 分号选第 2 个。
+    Semicolon,
+    /// 分号选第 2 个、引号选第 3 个。
+    SemicolonQuote,
+}
+
+/// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct View {
+    /// 普通候选框在第几页。
+    pub page: usize,
+    /// 普通候选框的光标（全部候选里的序号，可以不在这一页上）。
+    pub cursor: usize,
+    pub expanded: bool,
+    /// 展开面板的光标（全部候选里的序号）。
+    pub grid_cursor: usize,
 }
 
 /// 会话的设置（外壳从自己的配置里抄过来）。
@@ -116,6 +255,11 @@ pub struct Config {
     pub date_time: bool,
     /// 打字时推荐 emoji（开心 → 😊，八 → 8️⃣）。
     pub emoji_suggest: bool,
+    /// 候选横排（左右键移光标、上下键翻页、下键展开面板）；竖排时上下移光标、左右翻页。
+    pub horizontal: bool,
+    /// 翻页键，[`page_keys`] 的位掩码（PgUp PgDn 一直能用）。
+    pub page_keys: u32,
+    pub select_keys: SelectKeys,
 }
 
 impl Default for Config {
@@ -125,6 +269,9 @@ impl Default for Config {
             calculator: true,
             date_time: true,
             emoji_suggest: true,
+            horizontal: true,
+            page_keys: page_keys::MINUS,
+            select_keys: SelectKeys::Off,
         }
     }
 }
@@ -195,6 +342,15 @@ pub struct Session<'e> {
     fresh: bool,
     /// 每重算一次候选加一（C 接口按它判断要不要重建字符串）。
     generation: u64,
+    /// 候选框：页、光标（全局序号）、展开面板和它的光标。候选重算时回到开头。
+    page: usize,
+    cursor: usize,
+    expanded: bool,
+    grid_cursor: usize,
+    /// 这次调用要上屏的字（frame 取走）。
+    pending: Option<String>,
+    /// 这次调用上屏的字是选哪个候选来的；原样上屏输入时是 None。
+    last_choice: Option<Candidate>,
 }
 
 impl Default for Session<'_> {
@@ -209,6 +365,12 @@ impl Default for Session<'_> {
             candidates: Vec::new(),
             fresh: false,
             generation: 0,
+            page: 0,
+            cursor: 0,
+            expanded: false,
+            grid_cursor: 0,
+            pending: None,
+            last_choice: None,
         }
     }
 }
@@ -278,10 +440,8 @@ impl<'e> Session<'e> {
 
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
+        self.last_choice = None;
         let handled = self.handle_key(key);
-        if handled {
-            self.fresh = false;
-        }
         self.frame(handled)
     }
 
@@ -289,61 +449,417 @@ impl<'e> Session<'e> {
         if key.release || key.has_command_modifier() {
             return false;
         }
+        if self.composing() {
+            if let Some(handled) = self.composing_key(key) {
+                return handled;
+            }
+        }
         let sym = key.keysym;
         if (u32::from(b'a')..=u32::from(b'z')).contains(&sym)
             || (u32::from(b'A')..=u32::from(b'Z')).contains(&sym)
         {
             // 大写字母原样保留：Hello、iPhone 这类英文候选要用到
-            self.input.push(char::from(sym as u8));
+            self.push_input(char::from(sym as u8));
             return true;
         }
-        if !self.composing() {
-            return false;
+        if self.composing() && sym == keysym::APOSTROPHE {
+            // 隔音符（xi'an）；开头的隔音符没有意义
+            self.push_input('\'');
+            return true;
+        }
+        false
+    }
+
+    /// 正在输入时的键（字母、隔音符除外）。Some：处理完了（handled 是里面的值）；
+    /// None：接着当字母、隔音符看，都不是就交给外壳。
+    fn composing_key(&mut self, key: &Key) -> Option<bool> {
+        let sym = key.keysym;
+        // 先把候选算好：候选重算时候选框回到开头，别在读页和光标以后才重算
+        let n = self.candidates().len();
+        if self.expanded {
+            if n == 0 {
+                self.expanded = false;
+            } else if let Some(handled) = self.grid_key(key, n) {
+                return Some(handled);
+            }
         }
         match sym {
-            keysym::APOSTROPHE => {
-                // 隔音符（xi'an）；开头的隔音符没有意义（上面已经排除了）
-                self.input.push('\'');
-                true
-            }
             keysym::BACKSPACE => {
                 // 选过词先撤销最后一次选词，拼音回到编辑区（后面还没选的拼音不动），
                 // 和微信输入法一样；没有选词了才删字母
                 if self.selections.pop().is_none() {
                     self.input.pop();
                 }
+                self.fresh = false;
                 if self.input.is_empty() {
                     self.clear();
                 }
-                true
+                return Some(true);
             }
             keysym::ESCAPE => {
                 self.clear();
-                true
+                return Some(true);
             }
-            _ => false,
+            keysym::SPACE => return Some(self.commit_current()),
+            keysym::RETURN | keysym::KP_ENTER => {
+                // 回车：已选的词 + 原始字母上屏
+                self.commit_input_now();
+                return Some(true);
+            }
+            _ => {}
         }
+        if self.config.calculator && !self.shuangpin() {
+            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
+            if sym == keysym::EQUAL && self.calc_active() && self.input.len() > 1 {
+                // = 上屏计算结果（第一个候选）
+                return Some(self.commit_current());
+            }
+            if let Some(c) = calc_char(sym) {
+                if self.calc_active() {
+                    self.push_input(c);
+                    return Some(true);
+                }
+            }
+        }
+        if let Some(nth) = self.select_key_index(sym) {
+            // 分号选第 2 个、引号选第 3 个；这一页没这么多就什么都不做
+            let (start, len) = self.page_range(n);
+            if nth <= len {
+                self.choose_now(start + nth - 1);
+            }
+            return Some(true);
+        }
+        if let Some(digit) = key.digit() {
+            // 数字按当前页选词
+            let (start, len) = self.page_range(n);
+            if (1..=len).contains(&digit) {
+                self.choose_now(start + digit - 1);
+            }
+            return Some(true);
+        }
+        if sym == keysym::SEMICOLON && self.semicolon_is_key() {
+            // 微软、搜狗、紫光双拼用分号当 ing：等第二个键时分号进编辑区，不当标点
+            self.push_input(';');
+            return Some(true);
+        }
+        if n == 0 {
+            return None;
+        }
+        let arrow = matches!(
+            sym,
+            keysym::UP | keysym::DOWN | keysym::LEFT | keysym::RIGHT
+        );
+        if !arrow && key.action != KeyAction::None {
+            // 全局的翻页、移光标热键：翻不动也吃掉，不让它变成标点把字上屏
+            match key.action {
+                KeyAction::PrevPage => self.prev_page(),
+                KeyAction::NextPage => self.next_page(),
+                KeyAction::PrevCandidate => self.move_cursor(true),
+                KeyAction::NextCandidate => self.move_cursor(false),
+                KeyAction::None => {}
+            }
+            return Some(true);
+        }
+        // 横排时左右键移动候选、上下键翻页；竖排反过来
+        let horizontal = self.config.horizontal;
+        let (prev_key, next_key, prev_page_key, next_page_key) = if horizontal {
+            (keysym::LEFT, keysym::RIGHT, keysym::UP, keysym::DOWN)
+        } else {
+            (keysym::UP, keysym::DOWN, keysym::LEFT, keysym::RIGHT)
+        };
+        if horizontal && sym == keysym::DOWN && n > 1 {
+            // 横排时下键展开候选面板（照微信输入法），光标停在当前选中的词上
+            self.expanded = true;
+            self.grid_cursor = self.cursor;
+            return Some(true);
+        }
+        if sym == prev_key {
+            self.move_cursor(true);
+            return Some(true);
+        }
+        if sym == next_key {
+            self.move_cursor(false);
+            return Some(true);
+        }
+        // 设置里能选的翻页键（- =、[ ]、, .、Shift+Tab Tab）
+        let keys = self.config.page_keys;
+        let shift = key.modifiers & modifier::SHIFT != 0;
+        let tab = keys & page_keys::TAB != 0;
+        let char_prev = (keys & page_keys::MINUS != 0 && sym == keysym::MINUS)
+            || (keys & page_keys::BRACKET != 0 && sym == keysym::BRACKET_LEFT)
+            || (keys & page_keys::COMMA != 0 && sym == keysym::COMMA)
+            || (tab && (sym == keysym::ISO_LEFT_TAB || (sym == keysym::TAB && shift)));
+        let char_next = (keys & page_keys::MINUS != 0 && sym == keysym::EQUAL)
+            || (keys & page_keys::BRACKET != 0 && sym == keysym::BRACKET_RIGHT)
+            || (keys & page_keys::COMMA != 0 && sym == keysym::PERIOD)
+            || (tab && sym == keysym::TAB && !shift);
+        let (has_prev, has_next) = (self.has_prev_page(), self.has_next_page(n));
+        if (sym == keysym::PAGE_UP || sym == prev_page_key || char_prev) && has_prev {
+            self.prev_page();
+            return Some(true);
+        }
+        if (sym == keysym::PAGE_DOWN || sym == next_page_key || char_next) && has_next {
+            self.next_page();
+            return Some(true);
+        }
+        if (char_prev || char_next) && (has_prev || has_next) {
+            // 已经在第一页 / 最后一页：吃掉，不当标点上屏（只有一页时照常当标点）
+            return Some(true);
+        }
+        None
+    }
+
+    /// 展开面板里的键。Some：处理完了；None：收起了面板，接着照常处理这个键。
+    fn grid_key(&mut self, key: &Key, n: usize) -> Option<bool> {
+        let mut cursor = self.grid_cursor.min(n - 1);
+        match key.keysym {
+            keysym::LEFT => cursor = cursor.saturating_sub(1),
+            keysym::RIGHT => {
+                if cursor + 1 < n {
+                    cursor += 1;
+                }
+            }
+            keysym::UP => {
+                if cursor < GRID_COLS {
+                    // 第一行再往上：收起
+                    self.collapse();
+                    return Some(true);
+                }
+                cursor -= GRID_COLS;
+            }
+            keysym::DOWN => {
+                if cursor + GRID_COLS < n {
+                    cursor += GRID_COLS;
+                } else if cursor / GRID_COLS + 1 < n.div_ceil(GRID_COLS) {
+                    cursor = n - 1; // 最后一行不满时落到最后一个
+                }
+            }
+            keysym::PAGE_DOWN | keysym::EQUAL => cursor = (cursor + GRID_SCREEN).min(n - 1),
+            keysym::PAGE_UP | keysym::MINUS => {
+                cursor = if cursor >= GRID_SCREEN {
+                    cursor - GRID_SCREEN
+                } else {
+                    cursor % GRID_COLS
+                };
+            }
+            keysym::ESCAPE => {
+                self.collapse();
+                return Some(true);
+            }
+            keysym::SPACE => {
+                self.choose_now(cursor);
+                return Some(true);
+            }
+            _ => {
+                if let Some(digit) = key.digit() {
+                    // 数字选光标所在行的第几个
+                    if (1..=GRID_COLS).contains(&digit) {
+                        let index = cursor / GRID_COLS * GRID_COLS + digit - 1;
+                        if index < n {
+                            self.choose_now(index);
+                        }
+                    }
+                    return Some(true);
+                }
+                // 打字、退格、回车、标点：先收起，再照常处理
+                self.collapse();
+                return None;
+            }
+        }
+        self.grid_cursor = cursor;
+        Some(true)
+    }
+
+    /// 收起展开面板：光标是面板里的光标，翻到它所在的那一页。
+    fn collapse(&mut self) {
+        self.expanded = false;
+        self.cursor = self.grid_cursor;
+        self.page = self.cursor / self.page_size();
+    }
+
+    fn page_size(&self) -> usize {
+        self.config.page_size.max(1)
+    }
+
+    /// 当前页在全部候选里的起点和个数。
+    fn page_range(&self, n: usize) -> (usize, usize) {
+        let start = self.page * self.page_size();
+        (start, n.saturating_sub(start).min(self.page_size()))
+    }
+
+    /// 光标在当前页的第几个；不在这一页上是 None。
+    fn cursor_on_page(&self) -> Option<usize> {
+        let size = self.page_size();
+        (self.cursor / size == self.page).then_some(self.cursor % size)
+    }
+
+    fn has_prev_page(&self) -> bool {
+        self.page > 0
+    }
+
+    fn has_next_page(&self, n: usize) -> bool {
+        self.page + 1 < n.div_ceil(self.page_size())
+    }
+
+    /// 上一页。光标原来在这一页上的话跟着到新的一页的第一个（和 fcitx5 一样）。
+    fn prev_page(&mut self) {
+        if self.has_prev_page() {
+            let on_page = self.cursor_on_page().is_some();
+            self.page -= 1;
+            if on_page {
+                self.cursor = self.page * self.page_size();
+            }
+        }
+    }
+
+    fn next_page(&mut self) {
+        if self.has_next_page(self.candidates.len()) {
+            let on_page = self.cursor_on_page().is_some();
+            self.page += 1;
+            if on_page {
+                self.cursor = self.page * self.page_size();
+            }
+        }
+    }
+
+    /// 移光标（和 fcitx5 的候选列表一样）：光标不在这一页上时落到这一页的头 / 尾；
+    /// 否则走一格，走过头绕到全部候选的另一头，翻到光标所在的页。
+    fn move_cursor(&mut self, prev: bool) {
+        let n = self.candidates.len();
+        if n == 0 {
+            return;
+        }
+        let (start, len) = self.page_range(n);
+        if len == 0 {
+            return;
+        }
+        if self.cursor_on_page().is_none() {
+            self.cursor = start + if prev { len - 1 } else { 0 };
+            return;
+        }
+        self.cursor = match (prev, self.cursor) {
+            (true, 0) => n - 1,
+            (true, c) => c - 1,
+            (false, c) if c + 1 >= n => 0,
+            (false, c) => c + 1,
+        };
+        self.page = self.cursor / self.page_size();
+    }
+
+    /// 空格：选光标处的候选（光标不在这一页上时选这一页第一个），没有候选就原样上屏。
+    fn commit_current(&mut self) -> bool {
+        let n = self.candidates().len();
+        if n == 0 {
+            self.commit_input_now();
+            return true;
+        }
+        let index = self.page * self.page_size() + self.cursor_on_page().unwrap_or(0);
+        self.choose_now(index.min(n - 1));
+        true
+    }
+
+    /// 分号、引号选第几个；不是选词键是 None。
+    fn select_key_index(&self, sym: u32) -> Option<usize> {
+        match (self.config.select_keys, sym) {
+            (SelectKeys::Off, _) => None,
+            // 微软、搜狗、紫光双拼里分号是 ing 键，不能拿来选词
+            (_, keysym::SEMICOLON) => (!self.shuangpin_semicolon()).then_some(2),
+            (SelectKeys::SemicolonQuote, keysym::APOSTROPHE) => Some(3),
+            _ => None,
+        }
+    }
+
+    fn shuangpin(&self) -> bool {
+        self.engine.is_some_and(|e| e.config().shuangpin)
+    }
+
+    /// 双拼方案拿分号当韵母键。
+    fn shuangpin_semicolon(&self) -> bool {
+        self.engine.is_some_and(|e| {
+            let config = e.config();
+            config.shuangpin && config.shuangpin_scheme.uses_semicolon()
+        })
+    }
+
+    /// 双拼等第二个键（还没选词的部分按了奇数个键）时，分号是韵母键。
+    fn semicolon_is_key(&self) -> bool {
+        self.shuangpin_semicolon()
+            && self.remaining().bytes().filter(|&c| c != b'\'').count() % 2 == 1
+    }
+
+    fn push_input(&mut self, c: char) {
+        self.input.push(c);
+        self.fresh = false;
     }
 
     /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
-    /// 和 [`Session::commit_input`] 一样也记一次选词。
+    /// 和回车一样也记一次选词。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
+        self.last_choice = None;
         if commit_pending && self.composing() {
-            return self.commit_input();
+            self.commit_input_now();
+        } else {
+            self.clear();
         }
-        self.clear();
         self.frame(true)
     }
 
-    /// 现在的编辑区（不处理按键）。
+    /// 现在的编辑区和候选框（不处理按键）。这次调用要上屏的字也在里面。
     pub fn frame(&mut self, handled: bool) -> Frame {
+        let n = self.candidates().len();
         let preedit = self.selected_text() + &self.segmented_remaining();
-        Frame {
+        let mut frame = Frame {
             handled,
-            commit: None,
+            commit: self.pending.take(),
             preedit_cursor: preedit.len(),
             preedit,
+            ..Frame::default()
+        };
+        if n == 0 {
+            return frame;
         }
+        if self.expanded {
+            let cursor = self.grid_cursor.min(n - 1);
+            let start = cursor / GRID_SCREEN * GRID_SCREEN;
+            frame.panel = Panel::Expanded;
+            frame.cand_start = start;
+            frame.cand_count = (n - start).min(GRID_SCREEN);
+            frame.cand_cursor = Some(cursor - start);
+            frame.has_prev = start > 0;
+            frame.has_next = start + GRID_SCREEN < n;
+        } else {
+            let (start, len) = self.page_range(n);
+            frame.cand_start = start;
+            frame.cand_count = len;
+            frame.cand_cursor = self.cursor_on_page();
+            frame.has_prev = self.has_prev_page();
+            frame.has_next = self.has_next_page(n);
+        }
+        frame
+    }
+
+    /// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
+    pub fn view(&mut self) -> View {
+        self.candidates();
+        View {
+            page: self.page,
+            cursor: self.cursor,
+            expanded: self.expanded,
+            grid_cursor: self.grid_cursor,
+        }
+    }
+
+    /// 候选框里显示的候选（一页，或展开面板的一屏）。
+    pub fn shown(&mut self) -> &[Candidate] {
+        let frame = self.frame(false);
+        // frame 会取走要上屏的字；这里只是看，放回去
+        self.pending = frame.commit;
+        &self.candidates[frame.cand_start..frame.cand_start + frame.cand_count]
+    }
+
+    /// 上一次调用上屏的字是选哪个候选来的；原样上屏输入、没上屏是 None。
+    pub fn last_choice(&self) -> Option<&Candidate> {
+        self.last_choice.as_ref()
     }
 
     fn clear(&mut self) {
@@ -353,11 +869,16 @@ impl<'e> Session<'e> {
     }
 
     /// 还没选词那部分输入的候选（全部，不分页）。没有引擎、没在打字时为空。
+    /// 重算时候选框回到第一页、光标在第一个、收起展开面板。
     pub fn candidates(&mut self) -> &[Candidate] {
         if !self.fresh {
             self.candidates = self.compute_candidates();
             self.fresh = true;
             self.generation += 1;
+            self.page = 0;
+            self.cursor = 0;
+            self.expanded = false;
+            self.grid_cursor = 0;
         }
         &self.candidates
     }
@@ -516,20 +1037,37 @@ impl<'e> Session<'e> {
     /// - 句首词（没用完输入）：进已选栈，记一次选词，剩下的接着选；
     /// - 其余：已选的词 + 它上屏，记选词（分几次选出来的整句也记一次，下次能一次打出来）。
     ///
-    /// 序号不对时什么也不做（handled = false）。过渡：选词键挪进来以后外壳改用按页的 select。
+    /// 序号不对时什么也不做（handled = false）。过渡：外壳的鼠标点候选、展开面板点一行用。
     pub fn choose(&mut self, index: usize) -> Frame {
+        self.last_choice = None;
+        let handled = self.choose_now(index);
+        self.frame(handled)
+    }
+
+    /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
+    pub fn select(&mut self, index: usize) -> Frame {
+        self.last_choice = None;
+        let shown = self.frame(false);
+        self.pending = shown.commit;
+        let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
+        self.frame(handled)
+    }
+
+    fn choose_now(&mut self, index: usize) -> bool {
         let Some(chosen) = self.candidates().get(index).cloned() else {
-            return self.frame(false);
+            return false;
         };
         let remaining = self.remaining().len();
         match chosen.kind {
             CandidateKind::Emoji => {
                 let text = self.selected_text() + &chosen.commit;
-                self.finish(text)
+                self.finish(text);
+                self.last_choice = Some(chosen);
             }
             CandidateKind::Plain if chosen.consumed >= remaining => {
                 let text = self.selected_text() + &chosen.text;
-                self.finish(text)
+                self.finish(text);
+                self.last_choice = Some(chosen);
             }
             _ if chosen.consumed < remaining => {
                 // 句首词：先放进已选栈，剩下的拼音继续选
@@ -539,21 +1077,29 @@ impl<'e> Session<'e> {
                     pinyin: chosen.pinyin,
                     bytes: chosen.consumed,
                 });
-                self.frame(true)
             }
-            _ => self.commit_with(&chosen.text, &chosen.pinyin),
+            _ => {
+                self.commit_with(&chosen.text, &chosen.pinyin);
+                self.last_choice = Some(chosen);
+            }
         }
+        true
     }
 
-    /// 上屏已选的词 + 还没选的原始输入（回车、打字途中按标点），原始输入也记一次选词。
-    /// 过渡：回车、标点挪进来以后由 key 处理。
+    /// 上屏已选的词 + 还没选的原始输入，原始输入也记一次选词（和回车、`reset(true)` 一样）。
     pub fn commit_input(&mut self) -> Frame {
+        self.last_choice = None;
+        self.commit_input_now();
+        self.frame(true)
+    }
+
+    fn commit_input_now(&mut self) {
         let tail = self.remaining().to_owned();
-        self.commit_with(&tail, "")
+        self.commit_with(&tail, "");
     }
 
     /// 已选的词 + tail 上屏，记选词，清空。
-    fn commit_with(&mut self, tail: &str, tail_pinyin: &str) -> Frame {
+    fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
         if self.engine.is_some() && !text.is_empty() {
             if !tail.is_empty() {
@@ -571,7 +1117,7 @@ impl<'e> Session<'e> {
                 self.learn(&text, &pinyin);
             }
         }
-        self.finish(text)
+        self.finish(text);
     }
 
     /// 记一次选词。上文和算候选时一样（已上屏的字 + 已选的词）。
@@ -584,13 +1130,10 @@ impl<'e> Session<'e> {
         engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
     }
 
-    /// 上屏 text（空的不上屏），清空编辑区。
-    fn finish(&mut self, text: String) -> Frame {
+    /// 上屏 text（空的不上屏，frame 取走），清空编辑区。
+    fn finish(&mut self, text: String) {
         self.clear();
-        Frame {
-            commit: (!text.is_empty()).then_some(text),
-            ..self.frame(true)
-        }
+        self.pending = (!text.is_empty()).then_some(text);
     }
 
     /// 选了句首词，压进已选栈（测试里不带引擎时用）。
