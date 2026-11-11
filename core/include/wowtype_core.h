@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 6
+#define WOWTYPE_ABI_VERSION_MINOR 7
 
 #ifdef __cplusplus
 extern "C" {
@@ -144,6 +144,7 @@ int wowtype_engine_set_context(WowtypeEngineHandle *engine, const char *text);
 int wowtype_engine_add_user_word(WowtypeEngineHandle *engine, const char *pinyin,
                                  const char *word);
 int wowtype_engine_remove_user_word(WowtypeEngineHandle *engine, const char *word);
+/* 存用户词库，返回 0 成功，-1 失败。1.7 起空的也写（只有注释行），以前空的时候返回 -1。 */
 int wowtype_engine_save_user_dict(WowtypeEngineHandle *engine, const char *path);
 int wowtype_engine_load_user_dict(WowtypeEngineHandle *engine, const char *path);
 /* 自定义词（设置里添加的，custom.tsv：拼音<TAB>词[<TAB>频次]）：整体替换上一次读到的，
@@ -294,7 +295,8 @@ const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
 
-/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习，1.6 加选词键、翻页和展开面板；
+/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习，1.6 加选词键、翻页和展开面板，
+ * 1.7 加 Ctrl+Delete 忘掉学错的词；
  * 见 docs/PORTING.md、docs/ABI.md）----
  *
  * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
@@ -308,6 +310,8 @@ const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *tex
  * 才删字母）、Esc（清空）。候选列表（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）
  * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）；空格、回车、数字、
  * 分号引号选词、V 模式算式、双拼分号、翻页、移动候选、展开面板也由会话处理（1.6 起）。
+ * 打字途中的 Ctrl+Delete、Ctrl+退格、Shift+Delete 忘掉光标处学过的词（1.7 起，frame->forgot）：
+ * 带 Ctrl 的这几个键也要交给会话。
  * 还在外壳里的：打字途中的标点（先上屏再出标点）、工具栏、表情面板、互译。 */
 
 typedef struct WowtypeSession WowtypeSession;
@@ -381,6 +385,8 @@ typedef struct {
     int cand_cursor;       /* 光标在显示的这些里的位置；-1 不在这一页上（翻页按钮翻走以后） */
     int has_prev, has_next; /* 前面 / 后面还有一页（展开面板是一屏） */
     uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
+    int forgot;             /* 1.7 起：这次按键（Ctrl+Delete）让引擎忘掉了一个学过的词，
+                             * 外壳该马上存用户词库和输入习惯（和上屏后存的一样） */
 } WowtypeFrame;
 
 /* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；

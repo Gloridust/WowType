@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <ctime>
 #include <cstdint>
 #include <cstdlib>
@@ -1110,6 +1111,12 @@ uint32_t WowtypeEngine::keyAction(const fcitx::Key &key) const {
 
 void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *state,
                                       const WowtypeFrame *frame) {
+    if (frame && frame->size >= offsetof(WowtypeFrame, forgot) + sizeof(frame->forgot) &&
+        frame->forgot) {
+        // Ctrl+Delete 忘掉了学错的词：马上存，免得 fcitx5 退出前没存上、重启又回来
+        ++unsavedCommits_;
+        maybeSaveUserDict(true);
+    }
     if (frame && frame->commit) {
         // 选候选上屏的：emoji 记进最近用过，emoji、计算结果、日期时间不算学到了词；
         // 原样上屏输入（回车、没候选时的空格）也记一次选词
@@ -2010,7 +2017,17 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 带 Ctrl/Alt/Super 的组合键交给应用或 fcitx 的其他处理器。
+    // 带 Ctrl/Alt/Super 的组合键交给应用或 fcitx 的其他处理器。打字途中的先问会话：
+    // Ctrl+Delete、Ctrl+退格忘掉光标处学错的词（会话不管的照旧交给应用）
+    if (state->composing() && (key.states().test(fcitx::KeyState::Ctrl) ||
+                               key.states().test(fcitx::KeyState::Alt) ||
+                               key.states().test(fcitx::KeyState::Super))) {
+        if (const WowtypeFrame *frame = sessionKey(state, key); frame && frame->handled) {
+            applySessionFrame(ic, state, frame);
+            event.filterAndAccept();
+            return;
+        }
+    }
     if (key.states().test(fcitx::KeyState::Ctrl) ||
         key.states().test(fcitx::KeyState::Alt) ||
         key.states().test(fcitx::KeyState::Super)) {

@@ -21,6 +21,7 @@
 | 1.4 | 0.3.11 | 候选列表和编辑区分音节挪进会话：加 `_set_engine`、`_configure`、`_frame`，`WowtypeSessionConfig` 加 `page_size`、`calculator`、`date_time`、`emoji_suggest`，`frame->preedit` 分好音节；过渡函数加 `_set_context`、`_candidate_total`、`_candidate_info` |
 | 1.5 | 0.3.11 | 选词、整句上屏和学习挪进会话：加 `_choose`（按候选序号选，句首词进已选栈，选完上屏并记选词）、`_commit_input`（已选的词 + 原始输入上屏）；删掉过渡函数 `_selection_count`、`_selection_pinyin`、`_push_selection` |
 | 1.6 | 0.3.11 | 空格、回车、数字、分号引号选词、翻页和展开面板挪进 `_key`：`WowtypeKey` 加 `action`（`WOWTYPE_KEY_ACTION_*`，外壳的全局翻页 / 移光标键），`WowtypeSessionConfig` 加 `horizontal`、`page_keys`（`WOWTYPE_PAGE_KEYS_*`）、`select_keys`（`WOWTYPE_SELECT_KEYS_*`），frame 的 `panel`、`cand_count`、`cand_cursor`、`has_prev`、`has_next` 开始填；加 `_select`（按显示的序号选）、`_candidate`；过渡函数加 `_view`、`_last_choice`，删掉 `_commit_input`（用 `_key` 发回车或 `_reset(s, 1)`） |
+| 1.7 | 0.3.11 | 打字途中 `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete` 忘掉光标处学错的词（会话里处理，带 Ctrl 的这几个键外壳也要交给 `_key`），`WowtypeFrame` 末尾加 `forgot`：1 时外壳马上存用户词库和输入习惯；`wowtype_engine_save_user_dict` 用户词库空的时候也写（只有注释行）、返回 0，以前返回 -1 |
 
 ## 所有权和生命周期
 
@@ -41,7 +42,7 @@
 - 返回指针的函数失败时返回 NULL，返回 `int` 的失败时返回负数（个别函数的约定写在头文件注释里）。
 - 失败原因用 `wowtype_last_error()` 取（线程局部）。
 
-## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加选词键、翻页和展开面板）
+## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加选词键、翻页和展开面板，1.7 加 Ctrl+Delete 忘掉学错的词）
 
 输入行为正在从 fcitx5 外壳一块一块挪进核心（[PORTING.md](PORTING.md) 第 2 步），外壳以后主要依赖这一组。
 
@@ -62,6 +63,7 @@
 | 字母 | 进编辑区（大写原样保留） |
 | `'` | 编辑区不空时进编辑区（隔音符），空的时候不管 |
 | 退格 | 编辑区不空时：有已选词就撤销最后一个，没有就删一个字；删空了清空 |
+| `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete`（1.7） | 编辑区不空时：忘掉光标处的候选（展开面板时是面板的光标）学到的东西（用户词、选词热度、搭配），候选原地重算，编辑区、页和光标不动，`frame->forgot` = 1；没学过的、自定义词、计算结果和 emoji 这类什么也不做，但键照样吃掉（不让应用删掉一个词）。带 Alt、Super 的不算；编辑区空的时候不管 |
 | Esc | 编辑区不空时清空（展开面板时只收起面板） |
 | 空格 | 选光标处的候选（光标不在这一页上时选这一页第一个）；没有候选就原样上屏 |
 | 回车（含小键盘） | 已选的词 + 原始输入上屏，原始输入也记一次选词 |

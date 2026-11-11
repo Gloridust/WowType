@@ -72,6 +72,16 @@ impl UserPairs {
         }
     }
 
+    /// 去掉和 word 有关的搭配（它在前或在后的都去掉），返回去掉了几条。
+    pub fn remove_word(&mut self, word: &str) -> usize {
+        let mut removed = self.map.remove(word).map_or(0, |next| next.len());
+        for next in self.map.values_mut() {
+            removed += usize::from(next.remove(word).is_some());
+        }
+        self.map.retain(|_, next| !next.is_empty());
+        removed
+    }
+
     pub fn len(&self) -> usize {
         self.map.values().map(HashMap::len).sum()
     }

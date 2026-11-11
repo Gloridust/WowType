@@ -273,6 +273,52 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "ka<sp>");
     check(ic->committed == "卡", "ka 空格 -> 卡，实际 " + ic->committed);
+
+    // Ctrl+Delete 忘掉学错的词（#102）：选够三次学进用户词库的词，光标挪到它上面按 Ctrl+Delete，
+    // 编辑区不动，user.tsv 马上重写、里面没有它了
+    fresh(ic.get());
+    type(ic.get(), "ka");
+    {
+        const auto before = page(ic.get());
+        const std::string word = before.size() > 1 ? before[1] : "";
+        for (int i = 0; i < 3 && !word.empty(); ++i) {
+            fresh(ic.get());
+            type(ic.get(), "ka");
+            const auto now = page(ic.get());
+            const auto it = std::find(now.begin(), now.end(), word);
+            if (it == now.end()) {
+                break;
+            }
+            type(ic.get(), std::to_string(it - now.begin() + 1));
+        }
+        fresh(ic.get());
+        type(ic.get(), "ka");
+        const auto learned = page(ic.get());
+        const auto at = std::find(learned.begin(), learned.end(), word);
+        check(!word.empty() && at != learned.end(), "ka 选了三次的 " + word + " 还在第一页：" + join(learned));
+        for (auto i = learned.begin(); i != at && at != learned.end(); ++i) {
+            type(ic.get(), "<right>");
+        }
+        // 先删掉 user.tsv：按完以后它又出现了，说明是忘掉以后马上存的（平时攒 20 次上屏才存）
+        const char *dictPath = std::getenv("WOWTYPE_USER_DICT");
+        std::error_code ec;
+        if (dictPath) {
+            std::filesystem::remove(dictPath, ec);
+        }
+        const bool took = send(ic.get(), Key(FcitxKey_Delete, KeyState::Ctrl));
+        const auto after = page(ic.get());
+        check(took && preedit(ic.get()) == "ka" && ic->committed.empty() && ic->passed.empty() &&
+                  !after.empty(),
+              "Ctrl+Delete 吃掉，编辑区不动：" + preedit(ic.get()) + " / " + join(after));
+        std::ifstream in(dictPath ? dictPath : "");
+        const std::string dict((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        check(dictPath && in.is_open() && dict.find("\t" + word + "\t") == std::string::npos,
+              "忘掉以后马上存了 user.tsv，里面没有 " + word + "：" + dict);
+        type(ic.get(), "<sp>");
+        check(!ic->committed.empty(), "接着按空格照常上屏：" + ic->committed);
+    }
+    fresh(ic.get());
+    check(!send(ic.get(), Key(FcitxKey_Delete, KeyState::Ctrl)), "没在打字时 Ctrl+Delete 交给应用");
     // 单音节不出拆开音节的句首词（dan -> 大）
     fresh(ic.get());
     type(ic.get(), "dan");

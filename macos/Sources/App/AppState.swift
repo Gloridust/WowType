@@ -98,6 +98,12 @@ final class AppState {
         }
     }
 
+    /// Ctrl+Delete 忘掉了学错的词：马上存（不等攒够上屏次数）。
+    func didForget() {
+        commitsSinceSave += 1
+        save()
+    }
+
     func save() {
         guard let engine, commitsSinceSave > 0 else { return }
         commitsSinceSave = 0

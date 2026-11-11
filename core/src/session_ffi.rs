@@ -194,6 +194,8 @@ pub struct WowtypeFrame {
     pub has_prev: c_int,
     pub has_next: c_int,
     pub wake_after_ms: u32,
+    /// 1.7 起：这次调用忘掉了一个学过的词（Ctrl+Delete），外壳该马上存用户词库和输入习惯。
+    pub forgot: c_int,
 }
 
 impl Default for WowtypeFrame {
@@ -211,6 +213,7 @@ impl Default for WowtypeFrame {
             has_prev: 0,
             has_next: 0,
             wake_after_ms: 0,
+            forgot: 0,
         }
     }
 }
@@ -287,6 +290,7 @@ impl WowtypeSession {
                 .unwrap_or(-1),
             has_prev: c_int::from(frame.has_prev),
             has_next: c_int::from(frame.has_next),
+            forgot: c_int::from(frame.forgot),
             ..WowtypeFrame::default()
         };
         &self.frame

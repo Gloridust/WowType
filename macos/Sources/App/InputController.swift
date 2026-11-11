@@ -18,6 +18,7 @@ final class WowTypeInputController: IMKInputController {
         super.init(server: server, delegate: delegate, client: inputClient)
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
+        composer.onForget = { AppState.shared.didForget() }
     }
 
     override func recognizedEvents(_ sender: Any!) -> Int {
