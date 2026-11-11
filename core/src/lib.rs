@@ -1161,9 +1161,15 @@ impl Engine {
                 completion: true,
             },
         );
-        // 不靠补全、纠错就能完整解析：直接用全拼
+        // 不靠补全、纠错就能完整解析：直接用全拼。
+        // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
+        // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
-            return self.query_once(&full, at_ms, fuzzy);
+            let found = self.query_once(&full, at_ms, fuzzy)?;
+            let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
+            if !self.config.jianpin_fallback || any_known {
+                return Ok(found);
+            }
         }
         // 否则简拼（zg、jzm）、全拼混简拼（kyi、yongzwen）与全拼补全/纠错都试，按分数合并
         let mut merged: Vec<Candidate> = Vec::new();
@@ -2847,6 +2853,45 @@ mod tests {
         let e = default_engine();
         let cands = e.input("zg");
         assert!(cands.iter().any(|c| c.text == "中国"), "{:?}", cands);
+    }
+
+    #[test]
+    fn single_letters_and_dead_syllables_still_give_candidates() {
+        // 以前这几种输入一个候选都没有：
+        // - 单独的 r 被当成儿化标记，整个输入报错
+        // - hm 能切成叹词音节，可词库里没有 hm 的词，也不去试简拼
+        // - qv、xv、yv 是扩展音节，词库却记在 qu、xu、yu 下面
+        let e = engine(concat!(
+            "ren\t人\t50000\n",
+            "ri\t日\t30000\n",
+            "hou mian\t后面\t20000\n",
+            "hao ma\t好吗\t10000\n",
+            "qu\t去\t80000\n",
+            "xu yao\t需要\t40000\n",
+            "yu\t与\t30000\n",
+            "ju zi\t句子\t9000\n",
+            "quan bu\t全部\t9000\n",
+            "hua\t花\t9000\n",
+            "lv\t绿\t9000\n",
+            "lu\t路\t9000\n",
+        ));
+        let has = |raw: &str, want: &str| {
+            let c = e.input(raw);
+            assert!(c.iter().any(|c| c.text == want), "{raw} 应有 {want}：{:?}", c.iter().map(|c| &c.text).collect::<Vec<_>>());
+        };
+        has("r", "人");
+        has("r", "日");
+        has("hm", "后面");
+        has("hm", "好吗");
+        has("qv", "去");
+        has("xvyao", "需要");
+        has("yv", "与");
+        has("jvzi", "句子");
+        has("qvanbu", "全部");
+        // 儿化照旧
+        has("hua'r", "花");
+        // lv 还是绿，不变成路
+        assert_eq!(e.input("lv").first().map(|c| c.text.as_str()), Some("绿"));
     }
 
     #[test]
