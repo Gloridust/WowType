@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 5
+#define WOWTYPE_ABI_VERSION_MINOR 6
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,8 +32,24 @@ typedef struct WowtypeCandidates WowtypeCandidates;
 WowtypeEngineHandle *wowtype_engine_new(const char *lexicon_tsv_path,
                                         const char *bigram_tsv_path);
 
+/* 同 wowtype_engine_new，词库快照（.wcache）只写到 cache_dir，不试词库旁边（ABI 1.6 起）。
+ * 词库放在只读或带签名的位置（macOS 的 .app 包、/usr/share）时用它，免得改动签过名的包。
+ * cache_dir 为 NULL 或空串时和 wowtype_engine_new 一样。失败返回 NULL。 */
+WowtypeEngineHandle *wowtype_engine_new_with_cache(const char *lexicon_tsv_path,
+                                                   const char *bigram_tsv_path,
+                                                   const char *cache_dir);
+
 /* 释放引擎。 */
 void wowtype_engine_free(WowtypeEngineHandle *engine);
+
+/* 设置文本（ABI 1.6 起）：和 wowtype.conf 同一种格式（一行 Key=Value，# 开头是注释，[节] 行忽略），
+ * 键名、取值、默认值见 docs/CONFIG.md。没写的键用默认值。
+ * wowtype_config_default_ini 给出全部默认值（静态字符串，不用释放），前端第一次写设置文件用它。
+ * wowtype_engine_configure 把和引擎有关的键用到引擎上：Fuzzy、Fuzzy*、TypoCorrection、Shuangpin、
+ * ShuangpinScheme、Traditional（简繁表要先用 wowtype_engine_load_conversion 载入）；候选上限设成 300。
+ * 返回认不出的行数（键名不认识或取值不合法，按默认值处理），出错返回 -1。 */
+const char *wowtype_config_default_ini(void);
+int wowtype_engine_configure(WowtypeEngineHandle *engine, const char *ini_text);
 
 /* 设置 beam size；成功返回 0，失败返回 -1。 */
 int wowtype_engine_set_beam_size(WowtypeEngineHandle *engine, unsigned int beam_size);
@@ -294,7 +310,8 @@ const char *wowtype_translate_error(const WowtypeTranslator *translator);
 /* 面板上的方向标签（「中→英」「英→中」），按 text 判断；下一次调用前有效。 */
 const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *text);
 
-/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习；见 docs/PORTING.md、docs/ABI.md）----
+/* ---- 输入会话（ABI 1.3 起，1.4 加候选和分音节，1.5 加选词和学习，1.6 加选词键、翻页、标点、
+ * 中英文模式；见 docs/PORTING.md、docs/ABI.md）----
  *
  * 一个输入框一个会话：外壳把平台按键翻成 WowtypeKey 交给会话，按返回的 WowtypeFrame
  * 画编辑区、上屏。会话只能在一个线程里用。
@@ -305,7 +322,44 @@ const char *wowtype_translate_tag(WowtypeTranslator *translator, const char *tex
  *
  * 已经由会话处理的键：字母、隔音符（编辑区不空时）、退格（先撤销最后一次选词，没有选词
  * 才删字母）、Esc（清空）。候选列表（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）
- * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）。 */
+ * 和编辑区分音节也由会话算（1.4 起），选词、上屏和学习也在会话里（1.5 起）。
+ *
+ * 1.6 起外壳可以用 WowtypeSessionConfig.keys 让会话多处理几块按键（默认 0，行为和 1.5 一样）：
+ * - WOWTYPE_SESSION_KEYS_SELECT：空格、回车、数字和小键盘、分号引号选词、翻页键、方向键移动候选、
+ *   展开面板（↓）、计算器的算式字符、双拼的分号键；编辑中吃掉 Home/End/Tab/Delete 这类光标键。
+ *   frame 的 panel、cand_* 和 has_prev/has_next 给出这一屏，外壳照着画候选框。
+ * - WOWTYPE_SESSION_KEYS_PUNCT：标点。没在打字时出中文标点（引号成对、数字后的句点不换），
+ *   打字途中按标点先上屏当前候选再上屏标点（同一个 frame->commit）。
+ * - WOWTYPE_SESSION_KEYS_MODE：单按 Shift（500 毫秒内松开、中间没按别的键）切换中英文，
+ *   英文模式下按键都交给应用；frame->mode 是切换以后的模式。
+ * 打开以后 handled = 0 就是「交给应用」。上文、学习次数攒着存盘、几个输入框共用中英文模式
+ * 这些还是外壳的事（macOS 外壳见 macos/Sources/WowTypeKit/SessionShell.swift）。 */
+
+/* WowtypeSessionConfig.keys 的位。 */
+#define WOWTYPE_SESSION_KEYS_SELECT (1u << 0)
+#define WOWTYPE_SESSION_KEYS_PUNCT (1u << 1)
+#define WOWTYPE_SESSION_KEYS_MODE (1u << 2)
+#define WOWTYPE_SESSION_KEYS_ALL 7
+
+/* WowtypeSessionConfig.select_keys：分号、引号选第 2、3 个候选。 */
+#define WOWTYPE_SELECT_KEYS_OFF 0
+#define WOWTYPE_SELECT_KEYS_SEMICOLON 1
+#define WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE 2
+
+/* WowtypeSessionConfig.shift_toggle：单按哪个 Shift 切换中英文。 */
+#define WOWTYPE_SHIFT_TOGGLE_BOTH 0
+#define WOWTYPE_SHIFT_TOGGLE_LEFT 1
+#define WOWTYPE_SHIFT_TOGGLE_RIGHT 2
+#define WOWTYPE_SHIFT_TOGGLE_OFF 3
+
+/* WowtypeFrame.mode。 */
+#define WOWTYPE_MODE_CHINESE 0
+#define WOWTYPE_MODE_ENGLISH 1
+
+/* WowtypeFrame.panel。 */
+#define WOWTYPE_PANEL_LIST 0
+#define WOWTYPE_PANEL_GRID 1 /* 展开面板：每行 WOWTYPE_GRID_COLS 个 */
+#define WOWTYPE_GRID_COLS 6
 
 typedef struct WowtypeSession WowtypeSession;
 
@@ -324,6 +378,8 @@ typedef struct {
     uint32_t modifiers; /* WOWTYPE_MOD_* */
     uint32_t release;   /* 0 按下，1 松开 */
     uint32_t prev_char; /* 光标前一个字符（Unicode 码位），不知道给 0 */
+    uint32_t pad_;      /* 对齐，填 0 */
+    uint64_t time_ms;   /* 按键时刻（单调时钟，毫秒），单按 Shift 计时用；不知道给 0（1.6 起） */
 } WowtypeKey;
 
 /* 会话的设置。size 填 sizeof(WowtypeSessionConfig)；外壳没填的字段（size 短）用默认值。
@@ -334,23 +390,37 @@ typedef struct {
     int calculator;     /* V 模式计算器，默认 1（双拼时不开） */
     int date_time;      /* 日期时间候选，默认 1 */
     int emoji_suggest;  /* 打字推荐 emoji，默认 1 */
+    /* ---- 1.6 起 ---- */
+    uint32_t keys;       /* WOWTYPE_SESSION_KEYS_*，默认 0 */
+    int vertical;        /* 候选竖排（外壳画候选框用），默认 0 */
+    int select_keys;     /* WOWTYPE_SELECT_KEYS_*，默认 OFF */
+    int shift_toggle;    /* WOWTYPE_SHIFT_TOGGLE_*，默认 BOTH */
+    int page_minus;      /* - = 翻页，默认 1 */
+    int page_bracket;    /* [ ] 翻页，默认 0 */
+    int page_comma;      /* , . 翻页，默认 0 */
+    int page_tab;        /* Shift+Tab Tab 翻页（默认 0：移动候选） */
+    int punct_halfwidth; /* 半角标点，默认 0 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
  * 读 size 之外的字段前先看 size（旧核心给的结构体短）。 */
 typedef struct {
     uint32_t size;
-    int handled;           /* 会话处理了这个键；0 见上面「暂定」 */
+    int handled;           /* 会话处理了这个键；0 见上面「暂定」和 keys */
     const char *commit;    /* 要上屏的字，没有为 NULL */
     const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 还没选的输入（分好音节，
                             * nihao 显示成 ni'hao，双拼显示成全拼；没有引擎时是原始输入） */
     int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
     const char *aux;       /* 候选框上方的提示，没有为 NULL（还没用） */
-    int panel;             /* 0 普通 1 展开面板 2 表情面板（还没用，恒为 0） */
-    size_t cand_count;     /* 当前页候选个数（还没用，恒为 0） */
-    int cand_cursor;
+    int panel;             /* WOWTYPE_PANEL_*；keys 不含 SELECT 时恒为 0 */
+    size_t cand_count;     /* 这一屏候选个数；keys 不含 SELECT 时恒为 0 */
+    int cand_cursor;       /* 光标在这一屏的第几个 */
     int has_prev, has_next;
     uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
+    /* ---- 1.6 起 ---- */
+    size_t cand_offset;    /* 这一屏第一个候选在全部候选里的序号（wowtype_session_candidate_info 用） */
+    int mode;              /* WOWTYPE_MODE_*；keys 不含 MODE 时恒为 0 */
+    int learned;           /* 这次上屏记了选词（外壳攒着次数存用户词库） */
 } WowtypeFrame;
 
 /* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；
@@ -368,6 +438,14 @@ const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKe
 /* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法时），
  * 和 wowtype_session_commit_input 一样也记一次选词。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
+
+/* 鼠标点选这一屏的第 index 个候选（1.6 起，frame->cand_offset 起算）。没有这个候选时 handled 为 0。 */
+const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index);
+/* 换中英文模式（WOWTYPE_MODE_*，外壳在输入框之间同步用，1.6 起）。不认识的取值不改。 */
+void wowtype_session_set_mode(WowtypeSession *session, int mode);
+/* 由设置文本（格式同 wowtype_engine_configure）填会话设置，keys 填进 out->keys（1.6 起）。
+ * out->size 要先填好，按它写。返回认不出的行数，参数为 NULL 时返回 -1。 */
+int wowtype_session_config_parse(const char *ini_text, uint32_t keys, WowtypeSessionConfig *out);
 
 /* 过渡：选词键、标点等还在外壳时，外壳用这些读写编辑区、选词。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */

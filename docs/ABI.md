@@ -20,6 +20,7 @@
 | 1.3 | 0.3.11 | 加输入会话 `wowtype_session_*`（暂定，见下面「输入会话」）：编辑区、已选词栈、字母 / 退格 / Esc |
 | 1.4 | 0.3.11 | 候选列表和编辑区分音节挪进会话：加 `_set_engine`、`_configure`、`_frame`，`WowtypeSessionConfig` 加 `page_size`、`calculator`、`date_time`、`emoji_suggest`，`frame->preedit` 分好音节；过渡函数加 `_set_context`、`_candidate_total`、`_candidate_info` |
 | 1.5 | 0.3.11 | 选词、整句上屏和学习挪进会话：加 `_choose`（按候选序号选，句首词进已选栈，选完上屏并记选词）、`_commit_input`（已选的词 + 原始输入上屏）；删掉过渡函数 `_selection_count`、`_selection_pinyin`、`_push_selection` |
+| 1.6 | 0.3.11 | 选词键、翻页、展开面板、标点、中英文模式进会话，由 `WowtypeSessionConfig.keys`（`WOWTYPE_SESSION_KEYS_*`，默认 0）打开；`WowtypeSessionConfig` 加 `keys`、`vertical`、`select_keys`、`shift_toggle`、`page_*`、`punct_halfwidth`，`WowtypeKey` 加 `time_ms`，`WowtypeFrame` 加 `cand_offset`、`mode`、`learned`；加 `_select`（点这一屏的候选）、`_set_mode`、`_config_parse`。引擎加 `wowtype_engine_new_with_cache`、`wowtype_engine_configure`、`wowtype_config_default_ini` |
 
 ## 所有权和生命周期
 
@@ -40,12 +41,14 @@
 - 返回指针的函数失败时返回 NULL，返回 `int` 的失败时返回负数（个别函数的约定写在头文件注释里）。
 - 失败原因用 `wowtype_last_error()` 取（线程局部）。
 
-## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词）
+## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加按键块）
 
 输入行为正在从 fcitx5 外壳一块一块挪进核心（[PORTING.md](PORTING.md) 第 2 步），外壳以后主要依赖这一组。
 
 - **暂定**：挪完之前，这组函数不在上面「只加不删」的承诺里。标了「过渡」的函数（`wowtype_session_input`、`_remaining`、`_selected_text`、`_append`、`_set_context`、`_candidate_total`、`_candidate_info`、`_choose`、`_commit_input`）是给还没挪完的 fcitx5 外壳用的，挪完就删（`_choose`、`_commit_input` 等空格、回车、数字键挪进 `_key` 以后删，点候选改用草案里的 `_select`）；删的时候次版本加一，写进上面的版本记录。fcitx5 外壳和核心一起发版，不受影响；别的外壳先只用 `_new`、`_set_engine`、`_configure`、`_key`、`_frame`、`_reset`、`_free`。
 - **`handled`**：现在 0 的意思是「会话还不管这个键」，外壳接着用自己的逻辑处理。挪完以后 0 就是「交给应用」。
+- **按键块（`keys`，1.6）**：`WOWTYPE_SESSION_KEYS_SELECT`（空格、回车、数字和小键盘、分号引号、翻页键、方向键、展开面板、计算器算式、双拼分号）、`_PUNCT`（标点）、`_MODE`（单按 Shift、英文模式）。默认 0，行为和 1.5 一样，fcitx5 外壳现在就是 0；macOS 外壳用 `_ALL`，打开的块里 `handled` = 0 就是「交给应用」。打开 SELECT 后 frame 的 `panel`、`cand_offset`、`cand_count`、`cand_cursor`、`has_prev`/`has_next` 是这一屏，候选用 `_candidate_info(cand_offset + i)` 读；`_select(i)` 选这一屏第 i 个。打开 MODE 后 `frame->mode` 是切换后的模式，外壳在输入框之间同步时用 `_set_mode`。上文、学习次数攒着存盘（`frame->learned`）、光标前一个字符（`WowtypeKey.prev_char`）还是外壳记，macOS 的写法见 `macos/Sources/WowTypeKit/SessionShell.swift`，规格是 `core/tests/session_full_keys.rs`。
+- **设置文本（1.6）**：`wowtype_session_config_parse` 从 wowtype.conf 的文本填 `WowtypeSessionConfig`（键名见 [CONFIG.md](CONFIG.md)），外壳不用自己解析。
 - **结构体**：`WowtypeKey`、`WowtypeSessionConfig`、`WowtypeFrame`、`WowtypeCandidateInfo` 第一个字段都是 `size`。外壳填 `sizeof`，核心按它读，缺的字段当 0（`WowtypeSessionConfig` 例外：缺的字段用默认值）；核心返回的 frame 也带 `size`，外壳读新字段前先看它。
 - **所有权**：`wowtype_session_new` 的结果用 `wowtype_session_free` 释放。`_key`、`_reset` 返回的 `WowtypeFrame *`、里面的字符串、过渡函数返回的字符串，都归会话所有，**在同一个会话的下一次调用前有效**（包括松开键那一次），不是线程局部缓冲。要留着就自己拷。
 - **引擎**：候选和分音节要用引擎。`wowtype_session_new` 的 engine 可以传 NULL（词库在后台载入，载入好之前也要能打字，这时没有候选，编辑区是原始输入），载入好了用 `wowtype_session_set_engine` 补上。引擎要比会话活得久（或者先 `set_engine(NULL)`）。双拼开不开看引擎（`wowtype_engine_set_shuangpin`）；会话算候选时会把引擎的上文设成「已上屏的字 + 已选的词」的尾部。

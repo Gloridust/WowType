@@ -101,6 +101,10 @@ WowType 自己读不到系统剪贴板，是从 fcitx5 自带的 clipboard 插�
 ```ini
 CandidateLayout=Horizontal
 PageSize=9
+PageKeysMinusEqual=True
+PageKeysBracket=False
+PageKeysCommaPeriod=False
+PageKeysTab=False
 Fuzzy=False
 FuzzyZh=True
 FuzzyCh=True
@@ -119,6 +123,7 @@ Shuangpin=False
 ShuangpinScheme=Ziranma
 ShiftToggle=Both
 Traditional=False
+PunctuationStyle=Fullwidth
 SelectKeys=Off
 DateTime=True
 Calculator=True
@@ -132,6 +137,7 @@ VoiceKey=Alt_R
 VoiceCopy=False
 EmojiSuggest=True
 EmojiKey=Super+period
+CheckUpdate=True
 Translate=False
 TranslateTarget=en
 TranslateBaseUrl=
@@ -141,13 +147,14 @@ TranslateLocal=False
 TranslateLocalModel=
 TranslateLlamaServer=
 TranslateIdleMinutes=5
-CheckUpdate=True
 ```
 
 | 键 | 取值 |
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
+| `PageKeysMinusEqual`、`PageKeysBracket`、`PageKeysCommaPeriod`、`PageKeysTab` | 打字途中用来翻页的键：`- =`（默认开）、`[ ]`、`, .`、`Shift+Tab Tab`，`True` / `False`。开了以后这些键打字途中不再当标点；已经在第一页/最后一页时吃掉，只有一页时照常当标点 |
+| `PunctuationStyle` | 标点样式：`Fullwidth` 中文标点（数字后的 `.` 仍是小数点）、`Halfwidth` 原样上屏 |
 | `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateLocal`、`CheckUpdate` | `True` / `False` |
 | `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
@@ -163,6 +170,8 @@ CheckUpdate=True
 | `TranslateIdleMinutes` | 本地模型闲置几分钟后释放，0–240，0 表示不自动释放 |
 
 文件不存在、或者少写了哪一项，就用默认值（就是上面这些）。注释要单独写一行（`#` 开头），不能写在值后面。
+
+键名、取值和默认值只在 `core/src/config.rs` 里定义一份（`wowtype_config_default_ini` 给出上面这段默认设置，macOS 版第一次写设置文件用它）；`core/tests/config.rs` 检查它和插件的 `FCITX_CONFIGURATION`、和上面这段文字一致。
 
 下面这些环境变量主要是**调试和测试用**，设了的话**优先于**配置文件（在设置界面里改了也不起作用），平时用不着：
 

@@ -23,6 +23,21 @@ case "$(uname -s)" in
   *)      LIB=libwowtype_core.so;    RUNENV="LD_LIBRARY_PATH=$LIBDIR" ;;
 esac
 
+# 头文件里声明的每个函数都要在库里导出，不然前端链接时才发现（漏了 #[no_mangle] 或改了名）
+HEADER_FUNCS=$(perl -0pe 's{/\*.*?\*/}{}gs; s{//[^\n]*}{}g' "$INCLUDE/wowtype_core.h" \
+  | grep -oE '\bwowtype_[a-z0-9_]+[[:space:]]*\(' | sed -E 's/[[:space:]]*\($//' | sort -u)
+case "$(uname -s)" in
+  Darwin) EXPORTED=$(nm -gU "$LIBDIR/$LIB" | awk '{print $NF}' | sed 's/^_//' | sort -u) ;;
+  *)      EXPORTED=$(nm -D --defined-only "$LIBDIR/$LIB" | awk '{print $NF}' | sort -u) ;;
+esac
+MISSING=$(comm -23 <(echo "$HEADER_FUNCS") <(echo "$EXPORTED"))
+if [[ -n "$MISSING" ]]; then
+  echo "wowtype_core.h 里声明了、$LIB 没导出的函数：" >&2
+  echo "$MISSING" | sed 's/^/  /' >&2
+  exit 1
+fi
+echo "头文件和库一致：$(echo "$HEADER_FUNCS" | wc -l | tr -d ' ') 个函数都已导出"
+
 # 库要放在源文件后面：Ubuntu 默认 --as-needed，放前面会被丢掉
 cc -O2 -I"$INCLUDE" -o /tmp/wowtype_abi_smoke tools/abi_smoke.c -L"$LIBDIR" -lwowtype_core
 S2T="$PWD/core/data/s2t.tsv"

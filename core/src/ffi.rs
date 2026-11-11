@@ -28,7 +28,7 @@ pub(crate) fn set_last_error(message: impl Into<String>) {
     LAST_ERROR.with(|slot| *slot.borrow_mut() = value);
 }
 
-unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
+pub(crate) unsafe fn cstr_to_str<'a>(ptr: *const c_char) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
     }
@@ -75,6 +75,27 @@ pub unsafe extern "C" fn wowtype_engine_new(
     lexicon_tsv_path: *const c_char,
     bigram_tsv_path: *const c_char,
 ) -> *mut WowtypeEngineHandle {
+    unsafe { engine_new_in(lexicon_tsv_path, bigram_tsv_path, None) }
+}
+
+/// 创建引擎，词库快照（.wcache）只写到 cache_dir（NULL/空串时和 wowtype_engine_new 一样）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_new_with_cache(
+    lexicon_tsv_path: *const c_char,
+    bigram_tsv_path: *const c_char,
+    cache_dir: *const c_char,
+) -> *mut WowtypeEngineHandle {
+    let cache_dir = unsafe { cstr_to_str(cache_dir) }
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::Path::new);
+    unsafe { engine_new_in(lexicon_tsv_path, bigram_tsv_path, cache_dir) }
+}
+
+unsafe fn engine_new_in(
+    lexicon_tsv_path: *const c_char,
+    bigram_tsv_path: *const c_char,
+    cache_dir: Option<&std::path::Path>,
+) -> *mut WowtypeEngineHandle {
     let lexicon_path = match unsafe { cstr_to_str(lexicon_tsv_path) } {
         Some(path) if !path.is_empty() => path,
         _ => {
@@ -83,20 +104,25 @@ pub unsafe extern "C" fn wowtype_engine_new(
         }
     };
 
-    let result = (|| -> anyhow::Result<Engine> {
-        let lexicon = MemoryLexicon::from_tsv_path_cached(lexicon_path)?;
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(|| -> anyhow::Result<Engine> {
+        let (lexicon, _) =
+            MemoryLexicon::load_cached_in(std::path::Path::new(lexicon_path), cache_dir)?;
         let lexicon: Arc<dyn Lexicon> = Arc::new(lexicon);
         let lm: Arc<dyn LanguageModel> = match unsafe { cstr_to_str(bigram_tsv_path) } {
             Some(path) if !path.is_empty() => crate::lm::load_lm(path)?,
             _ => Arc::new(BigramLm::default()),
         };
         Ok(Engine::new(lexicon, lm))
-    })();
+    }));
 
     match result {
-        Ok(engine) => Box::into_raw(Box::new(WowtypeEngineHandle { engine })),
-        Err(error) => {
+        Ok(Ok(engine)) => Box::into_raw(Box::new(WowtypeEngineHandle { engine })),
+        Ok(Err(error)) => {
             set_last_error(format!("{error:#}"));
+            ptr::null_mut()
+        }
+        Err(_) => {
+            set_last_error("Rust panic while creating engine");
             ptr::null_mut()
         }
     }
@@ -1059,6 +1085,37 @@ pub unsafe extern "C" fn wowtype_segment_input(
     }
 }
 
+/// 全部默认值的设置文本（静态，不用释放）。
+#[no_mangle]
+pub extern "C" fn wowtype_config_default_ini() -> *const c_char {
+    crate::config::default_ini_c().as_ptr()
+}
+
+/// 把设置文本里和引擎有关的键用到引擎上。返回认不出的行数，出错返回 -1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_configure(
+    engine: *mut WowtypeEngineHandle,
+    ini_text: *const c_char,
+) -> c_int {
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        let Some(handle) = (unsafe { engine.as_mut() }) else {
+            set_last_error("engine is null");
+            return -1;
+        };
+        let Some(text) = (unsafe { cstr_to_str(ini_text) }) else {
+            set_last_error("ini text is null or not utf8");
+            return -1;
+        };
+        let (config, bad) = crate::config::parse(text);
+        crate::config::apply_to_engine(&mut handle.engine, &config);
+        bad.min(c_int::MAX as usize) as c_int
+    }));
+    outcome.unwrap_or_else(|_| {
+        set_last_error("panic in wowtype_engine_configure");
+        -1
+    })
+}
+
 /// 最近一次错误。返回的指针在下一次调用本 API 前有效。
 #[no_mangle]
 pub extern "C" fn wowtype_last_error() -> *const c_char {
@@ -1073,7 +1130,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 5;
+pub const ABI_VERSION_MINOR: c_int = 6;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1084,6 +1141,86 @@ pub extern "C" fn wowtype_version() -> *const c_char {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configure_applies_engine_keys() {
+        let lexicon = CString::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/demo_lexicon.tsv"
+        ))
+        .unwrap();
+        let engine = unsafe { wowtype_engine_new(lexicon.as_ptr(), ptr::null()) };
+        assert!(!engine.is_null());
+        let defaults = wowtype_config_default_ini();
+        assert!(!defaults.is_null());
+        assert_eq!(unsafe { wowtype_engine_configure(engine, defaults) }, 0);
+        assert_eq!(unsafe { &*engine }.engine.config().max_candidates, 300);
+        let text =
+            CString::new("Shuangpin=True\nShuangpinScheme=Xiaohe\nBogus=1\nPageSize=99\n").unwrap();
+        assert_eq!(
+            unsafe { wowtype_engine_configure(engine, text.as_ptr()) },
+            2
+        );
+        let config = unsafe { &*engine }.engine.config();
+        assert!(config.shuangpin);
+        assert_eq!(config.shuangpin_scheme, crate::shuangpin::Scheme::Xiaohe);
+        assert_eq!(
+            unsafe { wowtype_engine_configure(ptr::null_mut(), text.as_ptr()) },
+            -1
+        );
+        assert_eq!(unsafe { wowtype_engine_configure(engine, ptr::null()) }, -1);
+        unsafe { wowtype_engine_free(engine) };
+    }
+
+    #[test]
+    fn new_with_cache_writes_only_into_cache_dir() {
+        let base = std::env::temp_dir().join(format!("wowtype_ffi_cache_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let lex_dir = base.join("app");
+        let cache_dir = base.join("caches");
+        std::fs::create_dir_all(&lex_dir).unwrap();
+        let lexicon = lex_dir.join("lexicon.tsv");
+        std::fs::write(&lexicon, "ni hao\t你好\t100\n").unwrap();
+        let lex_c = CString::new(lexicon.to_str().unwrap()).unwrap();
+        let cache_c = CString::new(cache_dir.to_str().unwrap()).unwrap();
+        for _ in 0..2 {
+            let engine = unsafe {
+                wowtype_engine_new_with_cache(lex_c.as_ptr(), ptr::null(), cache_c.as_ptr())
+            };
+            assert!(!engine.is_null());
+            let input = CString::new("nihao").unwrap();
+            let c = unsafe { wowtype_engine_input(engine, input.as_ptr()) };
+            let first = unsafe { CStr::from_ptr(wowtype_candidates_text(c, 0)) };
+            assert_eq!(first.to_str().unwrap(), "你好");
+            unsafe {
+                wowtype_candidates_free(c);
+                wowtype_engine_free(engine);
+            }
+            assert_eq!(
+                std::fs::read_dir(&lex_dir).unwrap().count(),
+                1,
+                "词库旁边不该写快照"
+            );
+            let snapshots = std::fs::read_dir(&cache_dir)
+                .unwrap()
+                .filter(|e| {
+                    e.as_ref()
+                        .unwrap()
+                        .path()
+                        .extension()
+                        .is_some_and(|x| x == "wcache")
+                })
+                .count();
+            assert_eq!(snapshots, 1);
+        }
+        // cache_dir 为空串时和 wowtype_engine_new 一样
+        let empty = CString::new("").unwrap();
+        let engine =
+            unsafe { wowtype_engine_new_with_cache(lex_c.as_ptr(), ptr::null(), empty.as_ptr()) };
+        assert!(!engine.is_null());
+        unsafe { wowtype_engine_free(engine) };
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     #[test]
     fn ffi_roundtrip() {
@@ -1130,7 +1267,7 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1005);
+        assert_eq!(wowtype_abi_version(), 1006);
     }
 }
 

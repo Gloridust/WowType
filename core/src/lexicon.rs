@@ -46,15 +46,19 @@ fn cache_paths(path: &Path) -> Vec<std::path::PathBuf> {
             std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
         });
     if let Some(base) = base {
-        // 用 FNV-1a 给路径算个短名字，避免不同词库撞在一起
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in path.to_string_lossy().as_bytes() {
-            hash ^= u64::from(*byte);
-            hash = hash.wrapping_mul(0x1000_0000_01b3);
-        }
-        out.push(base.join("wowtype").join(format!("{hash:016x}.wcache")));
+        out.push(base.join("wowtype").join(hashed_cache_name(path)));
     }
     out
+}
+
+/// 缓存目录里的快照文件名：用 FNV-1a 给词库路径算个短名字，避免不同词库撞在一起。
+fn hashed_cache_name(path: &Path) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("{hash:016x}.wcache")
 }
 
 /// 源文件的 (大小, 修改时间秒)。拿不到就不用缓存。
@@ -250,15 +254,24 @@ impl MemoryLexicon {
     /// 55 万词库的 TSV 解析要 1.3 秒，快照能把这部分省掉。快照按
     /// 「源文件大小 + mtime + 格式版本」校验，词库更新后自动重建。
     pub fn from_tsv_path_cached<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let path = path.as_ref();
+        Self::load_cached_in(path.as_ref(), None).map(|(lex, _)| lex)
+    }
+
+    /// 同 [`from_tsv_path_cached`](Self::from_tsv_path_cached)，但给了 `cache_dir` 时快照只放在
+    /// 这个目录里，不再试词库旁边（词库在签过名的 .app 包、/usr/share 里时用）。
+    /// 第二个返回值表示是不是从快照读的。
+    pub fn load_cached_in(path: &Path, cache_dir: Option<&Path>) -> Result<(Self, bool)> {
         let Some((len, mtime)) = source_stamp(path) else {
-            return Self::from_tsv_path(path);
+            return Ok((Self::from_tsv_path(path)?, false));
         };
-        let candidates = cache_paths(path);
+        let candidates = match cache_dir {
+            Some(dir) => vec![dir.join(hashed_cache_name(path))],
+            None => cache_paths(path),
+        };
         for cache in &candidates {
             if let Ok(data) = fs::read(cache) {
                 if let Some(lex) = Self::read_cache(&data, len, mtime) {
-                    return Ok(lex);
+                    return Ok((lex, true));
                 }
             }
         }
@@ -269,7 +282,7 @@ impl MemoryLexicon {
                 break;
             }
         }
-        Ok(lex)
+        Ok((lex, false))
     }
 
     fn write_cache(&self, cache: &Path, src_len: u64, src_mtime: u64) -> Result<()> {
@@ -1269,6 +1282,45 @@ mod tests {
         let second = MemoryLexicon::from_tsv_path_cached(&path).unwrap();
         assert_eq!(second.len(), 3, "源文件更新后应当重新解析");
         cleanup(&path);
+    }
+
+    #[test]
+    fn cache_dir_holds_the_only_snapshot() {
+        // 词库在只读/签名的位置时：快照只写进给定的缓存目录，词库旁边什么也不写
+        let base = std::env::temp_dir().join(format!("wowtype_cachedir_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let lex_dir = base.join("lex");
+        let cache_dir = base.join("cache");
+        std::fs::create_dir_all(&lex_dir).unwrap();
+        let path = lex_dir.join("lexicon.tsv");
+        std::fs::write(&path, "ni hao\t你好\t100\nzhong guo\t中国\t50\n").unwrap();
+
+        let (first, from_cache) = MemoryLexicon::load_cached_in(&path, Some(&cache_dir)).unwrap();
+        assert!(!from_cache, "第一次只能解析 TSV");
+        let beside: Vec<_> = std::fs::read_dir(&lex_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            beside,
+            vec![std::ffi::OsString::from("lexicon.tsv")],
+            "词库旁边不该多出文件"
+        );
+        let snapshots: Vec<_> = std::fs::read_dir(&cache_dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "wcache"))
+            .collect();
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "缓存目录里应当有一份快照: {snapshots:?}"
+        );
+
+        let (second, from_cache) = MemoryLexicon::load_cached_in(&path, Some(&cache_dir)).unwrap();
+        assert!(from_cache, "第二次应当读缓存目录里的快照");
+        assert_eq!(first.entries, second.entries);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

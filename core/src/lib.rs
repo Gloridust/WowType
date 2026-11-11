@@ -8,6 +8,7 @@ pub mod autospace;
 pub mod beam;
 pub mod calc;
 pub mod clipboard;
+pub mod config;
 pub mod convert;
 pub mod datetime;
 pub mod emoji;

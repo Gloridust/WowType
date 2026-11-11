@@ -1,7 +1,7 @@
 /* WowType C ABI 冒烟测试：模拟 fcitx5 插件的调用序列。
  *
  * 覆盖：引擎创建 -> 输入 -> 取候选 -> 记录选词 -> 设置上下文 -> 预测下一词
- *      -> 用户词增删 -> 用户词库持久化。
+ *      -> 用户词增删 -> 用户词库持久化 -> 输入会话（1.3–1.6）。
  */
 #include <stdio.h>
 #include <string.h>
@@ -234,11 +234,77 @@ int main(int argc, char **argv) {
         wowtype_session_free(s);
     }
 
+    /* 设置文本和带缓存目录的引擎（ABI 1.6）：macOS 外壳的启动顺序 */
+    {
+        const char *defaults = wowtype_config_default_ini();
+        check(defaults && strstr(defaults, "PageSize=9\n") != NULL, "config: default ini");
+        check(wowtype_engine_configure(e, defaults) == 0, "config: engine accepts defaults");
+        check(wowtype_engine_configure(e, "Fuzzy=maybe\nNoSuchKey=1\n") == 2, "config: bad lines counted");
+        check(wowtype_engine_configure(NULL, defaults) == -1, "config: NULL engine");
+        check(wowtype_engine_configure(e, "") == 0, "config: back to defaults");
+        WowtypeEngineHandle *cached = wowtype_engine_new_with_cache(lexicon, bigram, "/tmp");
+        check(cached != NULL, "engine_new_with_cache");
+        if (cached) wowtype_engine_free(cached);
+    }
+
+    /* 会话处理选词、翻页、标点、中英文模式（ABI 1.6，keys = ALL） */
+    {
+        WowtypeSessionConfig config;
+        memset(&config, 0, sizeof config);
+        config.size = sizeof config;
+        check(wowtype_session_config_parse("PageSize=3\nSelectKeys=Semicolon\n", WOWTYPE_SESSION_KEYS_ALL,
+                                           &config) == 0 &&
+                  config.keys == WOWTYPE_SESSION_KEYS_ALL && config.page_size == 3 &&
+                  config.select_keys == WOWTYPE_SELECT_KEYS_SEMICOLON && config.page_minus == 1,
+              "session: config_parse");
+        check(wowtype_session_config_parse(NULL, 0, &config) == -1, "session: config_parse NULL");
+        WowtypeSession *s = wowtype_session_new(e, &config);
+        const WowtypeFrame *f = NULL;
+        for (const char *k = "tian"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0, 0, 0};
+            f = wowtype_session_key(s, &key);
+        }
+        check(f && f->panel == WOWTYPE_PANEL_LIST && f->cand_offset == 0 && f->cand_count > 0 &&
+                  f->cand_count <= 3 && f->mode == WOWTYPE_MODE_CHINESE,
+              "session: screen fields");
+        WowtypeCandidateInfo info;
+        memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        check(wowtype_session_candidate_info(s, f->cand_offset, &info) == 0, "session: first on screen");
+        char want[64];
+        snprintf(want, sizeof want, "%s", info.text);
+        WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0, 0, 0};
+        f = wowtype_session_key(s, &space);
+        check(f && f->handled && f->commit && strcmp(f->commit, want) == 0 && f->learned,
+              "session: space commits first candidate");
+        WowtypeKey comma = {sizeof(WowtypeKey), ',', 0, 0, 0, 0, 0};
+        f = wowtype_session_key(s, &comma);
+        check(f && f->handled && f->commit && strcmp(f->commit, "，") == 0, "session: idle punctuation");
+        for (const char *k = "tian"; *k; ++k) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        f = wowtype_session_select(s, 0);
+        check(f && f->handled && f->commit && f->preedit[0] == 0, "session: select");
+        check(!wowtype_session_select(s, 0)->handled, "session: select when idle");
+        WowtypeKey down = {sizeof(WowtypeKey), 0xffe1, 0, 0, 0, 0, 1000};
+        WowtypeKey up = {sizeof(WowtypeKey), 0xffe1, WOWTYPE_MOD_SHIFT, 1, 0, 0, 1100};
+        wowtype_session_key(s, &down);
+        f = wowtype_session_key(s, &up);
+        check(f && f->mode == WOWTYPE_MODE_ENGLISH, "session: shift tap toggles (time_ms)");
+        WowtypeKey a = {sizeof(WowtypeKey), 'a', 0, 0, 0, 0, 0};
+        check(!wowtype_session_key(s, &a)->handled, "session: english mode passes keys");
+        wowtype_session_set_mode(s, WOWTYPE_MODE_CHINESE);
+        check(wowtype_session_key(s, &a)->handled, "session: set_mode back to chinese");
+        wowtype_session_free(s);
+    }
+
     if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {
         fprintf(stderr, "ABI 主版本不一致：库 %d，头文件 %d\n", wowtype_abi_version(),
                 WOWTYPE_ABI_VERSION_MAJOR);
         return 1;
     }
+    check(wowtype_abi_version() % 1000 >= WOWTYPE_ABI_VERSION_MINOR, "abi: library minor >= header minor");
     printf("abi=%d ", wowtype_abi_version());
     printf("version=%s", wowtype_version());
     putchar(10);
