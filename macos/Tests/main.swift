@@ -320,6 +320,48 @@ do {
     check(commits == ["你好", "，"], "上屏回调", "\(commits)")
 }
 
+do {
+    // NSEvent → KeyInput：Control+Delete（Mac 的 Delete 是退格）、Fn+Control+Delete（向前删除）
+    let ctrlBs = translateKeyDown(keyCode: VirtualKey.backspace, characters: "\u{7f}",
+                                  charactersIgnoringModifiers: "\u{7f}", cocoaFlags: 1 << 18)
+    check(ctrlBs == .key(Keysym.backspace, .control), "Control+Delete 是 Ctrl+退格")
+    let ctrlFwd = translateKeyDown(keyCode: VirtualKey.forwardDelete, characters: "\u{f728}",
+                                   charactersIgnoringModifiers: "\u{f728}", cocoaFlags: 1 << 18 | 1 << 23)
+    check(ctrlFwd == .key(Keysym.delete, .control), "Fn+Control+Delete 是 Ctrl+向前删除")
+
+    // 分几次选出来的词（尼 + 号）用一次就学会；学错了光标停在它上面按 Control+Delete 忘掉
+    let (c, client) = fresh()
+    var forgets = 0
+    c.onForget = { forgets += 1 }
+    type(c, "nihao")
+    if let ni = client.page?.texts.firstIndex(of: "尼") {
+        c.select(ni)
+        if let hao = client.page?.texts.firstIndex(of: "号") {
+            c.select(hao)
+        }
+    }
+    check(client.committed == "尼号", "选 尼 再选 号 上屏 尼号", client.committed)
+    client.committed = ""
+    type(c, "nihao")
+    let learned = client.page?.texts ?? []
+    if let at = learned.firstIndex(of: "尼号") {
+        for _ in 0..<at {
+            _ = c.handle(.key(Keysym.right))
+        }
+    }
+    check(learned.contains("尼号") && client.page?.texts[client.page?.cursor ?? 0] == "尼号",
+          "学会以后 nihao 有 尼号，光标挪到它上面", "\(learned)")
+    let marked = client.marked
+    check(c.handle(.key(Keysym.backspace, .control)), "Control+Delete 吃掉")
+    check(forgets == 1 && client.committed.isEmpty && client.marked == marked && c.input == "nihao",
+          "忘掉以后马上存，编辑区不动", "\(forgets) \(client.committed) \(client.marked)")
+    let after = client.page?.texts ?? []
+    let was = learned.firstIndex(of: "尼号") ?? 0
+    check((after.firstIndex(of: "尼号") ?? Int.max) > was, "忘掉以后 尼号 不再排在原来的位置", "\(learned) -> \(after)")
+    _ = c.handle(.key(Keysym.escape))
+    check(!c.handle(.key(Keysym.backspace, .control)), "没在打字时 Control+Delete 交给应用")
+}
+
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
     // 真实词库（补了雾凇大字表）：一个音节的字要列全，yi 有八百多个
     let (c, _) = fresh()

@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use wowtype_core::datetime::LocalTime;
 use wowtype_core::lm::BigramLm;
-use wowtype_core::session::{keysym, CandidateKind, Config, Frame, Key, Panel, Selection, Session};
+use wowtype_core::session::{
+    keysym, modifier, CandidateKind, Config, Frame, Key, Panel, Selection, Session,
+};
 use wowtype_core::{Engine, Lexicon, MemoryLexicon};
 
 /// 按一串键，和 key_harness 的 type() 一样：<sp> <bs> <cr> <esc> 等是特殊键，其余按字符。
@@ -1183,4 +1185,149 @@ fn composed_word_is_learned_after_one_use() {
         "整句不该一次就进词库：{:?}",
         engine.user_words()
     );
+}
+
+fn forget_engine() -> &'static Engine {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str(concat!(
+            "shuang\t双\t9000\n",
+            "shuang\t霜\t500\n",
+            "pin\t拼\t9000\n",
+            "pin\t频\t500\n",
+            "ge\t个\t9000\n",
+            "ge\t阁\t500\n",
+        ))
+        .unwrap(),
+    );
+    Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )))
+}
+
+fn ctrl(keysym: u32) -> Key {
+    Key {
+        keysym,
+        modifiers: modifier::CTRL,
+        ..Key::default()
+    }
+}
+
+/// 学错的词 Ctrl+Delete 忘掉（#102）：用户词库、选词热度都去掉，编辑区不动，候选原地重算。
+#[test]
+fn ctrl_delete_forgets_learned_word() {
+    let engine = forget_engine();
+    let mut session = with(engine);
+    type_keys(&mut session, "shuangpinge");
+    choose_text(&mut session, "霜");
+    choose_text(&mut session, "频");
+    choose_text(&mut session, "阁");
+    assert!(engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"));
+
+    let mut again = with(engine);
+    let before = type_keys(&mut again, "shuangpinge");
+    assert_eq!(
+        texts(&mut again).first().map(String::as_str),
+        Some("霜频阁")
+    );
+    let frame = again.key(&ctrl(keysym::DELETE));
+    assert!(frame.handled);
+    assert!(frame.forgot, "忘掉了要告诉外壳存盘");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, before.preedit, "编辑区不动");
+    assert_eq!(again.input(), "shuangpinge");
+    assert!(frame.cand_count > 0);
+    assert!(
+        !engine.user_words().iter().any(|(_, w, _)| w == "霜频阁"),
+        "{:?}",
+        engine.user_words()
+    );
+    assert_eq!(engine.history_count("霜频阁"), 0);
+    assert_ne!(
+        texts(&mut again).first().map(String::as_str),
+        Some("霜频阁")
+    );
+    // 松开不算
+    let release = Key {
+        release: true,
+        ..ctrl(keysym::DELETE)
+    };
+    assert!(!again.key(&release).handled);
+
+    // 重新打一遍也不是第一个了，接着照常打字
+    let mut retype = with(engine);
+    type_keys(&mut retype, "shuangpinge");
+    assert_ne!(
+        texts(&mut retype).first().map(String::as_str),
+        Some("霜频阁")
+    );
+    let frame = type_keys(&mut retype, "<sp>");
+    assert!(frame.commit.is_some());
+}
+
+/// 词库里本来就有的词：删不掉，学到的加分去掉，回到原来的位置。光标停在原处。
+#[test]
+fn ctrl_delete_resets_system_word_and_keeps_cursor() {
+    let engine = forget_engine();
+    for _ in 0..3 {
+        let mut session = with(engine);
+        type_keys(&mut session, "shuang");
+        choose_text(&mut session, "霜");
+    }
+    assert!(engine.history_count("霜") >= 3);
+    let mut session = with(engine);
+    type_keys(&mut session, "shuang");
+    assert_eq!(texts(&mut session)[0], "霜", "选多了排到前面");
+    // 光标挪到第二个（双），它没学过：什么也不做，但键吃掉
+    let frame = type_keys(&mut session, "<right>");
+    assert_eq!(frame.cand_cursor, Some(1));
+    let frame = session.key(&ctrl(keysym::DELETE));
+    assert!(frame.handled);
+    assert!(!frame.forgot);
+    assert_eq!(frame.cand_cursor, Some(1));
+    assert_eq!(texts(&mut session)[0], "霜");
+    // Ctrl+退格（Mac 笔记本没有向前删除键）忘掉首选
+    type_keys(&mut session, "<left>");
+    let frame = session.key(&ctrl(keysym::BACKSPACE));
+    assert!(frame.handled && frame.forgot);
+    assert_eq!(session.input(), "shuang", "Ctrl+退格不删字母");
+    assert_eq!(texts(&mut session)[0], "双", "回到原来的位置");
+    assert!(
+        texts(&mut session).contains(&"霜".to_string()),
+        "词库里的词还在"
+    );
+    assert_eq!(engine.history_count("霜"), 0);
+    assert!(!engine.user_words().iter().any(|(_, w, _)| w == "霜"));
+}
+
+/// 自定义词不让 Ctrl+Delete 删；没在打字时这些键交给应用。
+#[test]
+fn ctrl_delete_keeps_custom_words_and_idle_is_not_ours() {
+    let engine = forget_engine();
+    engine.lexicon().set_custom_tsv("shuang\t爽\n");
+    let mut session = with(engine);
+    type_keys(&mut session, "shuang");
+    assert_eq!(texts(&mut session)[0], "爽");
+    let frame = session.key(&ctrl(keysym::DELETE));
+    assert!(frame.handled && !frame.forgot);
+    assert_eq!(texts(&mut session)[0], "爽");
+    // Shift+Delete 也认，同样不动自定义词
+    let shift_delete = Key {
+        keysym: keysym::DELETE,
+        modifiers: modifier::SHIFT,
+        ..Key::default()
+    };
+    assert!(session.key(&shift_delete).handled);
+    assert_eq!(texts(&mut session)[0], "爽");
+    // 带 Alt 的不是
+    let ctrl_alt = Key {
+        keysym: keysym::DELETE,
+        modifiers: modifier::CTRL | modifier::ALT,
+        ..Key::default()
+    };
+    assert!(!session.key(&ctrl_alt).handled);
+
+    let mut idle = with(engine);
+    assert!(!idle.key(&ctrl(keysym::DELETE)).handled);
+    assert!(!idle.key(&ctrl(keysym::BACKSPACE)).handled);
 }

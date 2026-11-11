@@ -789,12 +789,10 @@ impl UserLexicon {
         self.rebuild();
     }
 
-    /// 把用户词写成 TSV（与 lexicon 格式一致）。
+    /// 把用户词写成 TSV（与 lexicon 格式一致）。空的也写（只有注释行）：
+    /// 用户把学到的词都删掉以后，旧文件不能留着，不然重启又回来了。
     pub fn save_tsv<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         let words = self.words();
-        if words.is_empty() {
-            bail!("用户词库为空");
-        }
         let mut out = String::from("# 用户词库\n");
         for (pinyin, word, freq) in words {
             out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));

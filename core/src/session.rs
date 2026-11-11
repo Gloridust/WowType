@@ -6,6 +6,7 @@
 //!
 //! - 编辑区里的原始输入、已选词栈（长句先选开头的词）；
 //! - 字母和隔音符进编辑区，退格（先撤销最后一次选词，没有选词了才删字母），Esc 清空；
+//! - Ctrl+Delete（还有 Ctrl+退格、Shift+Delete）忘掉光标处学错的词，候选原地重算；
 //! - 候选列表（引擎的候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间），
 //!   编辑区的分音节显示（`nihao` 显示成 `ni hao`，双拼显示成全拼）。
 //!
@@ -33,6 +34,8 @@ pub mod keysym {
     pub const PAGE_UP: u32 = 0xff55;
     pub const PAGE_DOWN: u32 = 0xff56;
     pub const KP_ENTER: u32 = 0xff8d;
+    pub const KP_DELETE: u32 = 0xff9f;
+    pub const DELETE: u32 = 0xffff;
     pub const ISO_LEFT_TAB: u32 = 0xfe20;
     pub const KP_MULTIPLY: u32 = 0xffaa;
     pub const KP_ADD: u32 = 0xffab;
@@ -127,6 +130,18 @@ impl Key {
         }
     }
 
+    /// 忘掉光标处的候选：Ctrl+Delete、Ctrl+退格（Mac 笔记本没有向前删除键）、Shift+Delete。
+    /// 带 Alt、Super 的不算。
+    fn is_forget(&self) -> bool {
+        let m = self.modifiers & !(modifier::CAPS | modifier::NUMLOCK);
+        let delete = matches!(self.keysym, keysym::DELETE | keysym::KP_DELETE);
+        match m {
+            modifier::CTRL => delete || self.keysym == keysym::BACKSPACE,
+            modifier::SHIFT => delete,
+            _ => false,
+        }
+    }
+
     fn has_command_modifier(&self) -> bool {
         self.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
     }
@@ -191,6 +206,8 @@ pub struct Frame {
     pub cand_cursor: Option<usize>,
     pub has_prev: bool,
     pub has_next: bool,
+    /// 这次调用忘掉了一个学过的词（Ctrl+Delete）：外壳该马上存用户词库和输入习惯。
+    pub forgot: bool,
 }
 
 /// 候选框的样子。
@@ -351,6 +368,8 @@ pub struct Session<'e> {
     pending: Option<String>,
     /// 这次调用上屏的字是选哪个候选来的；原样上屏输入时是 None。
     last_choice: Option<Candidate>,
+    /// 这次调用忘掉了学过的词（frame 取走）。
+    forgot: bool,
 }
 
 impl Default for Session<'_> {
@@ -371,6 +390,7 @@ impl Default for Session<'_> {
             grid_cursor: 0,
             pending: None,
             last_choice: None,
+            forgot: false,
         }
     }
 }
@@ -446,7 +466,14 @@ impl<'e> Session<'e> {
     }
 
     fn handle_key(&mut self, key: &Key) -> bool {
-        if key.release || key.has_command_modifier() {
+        if key.release {
+            return false;
+        }
+        if self.composing() && key.is_forget() {
+            self.forget_current();
+            return true;
+        }
+        if key.has_command_modifier() {
             return false;
         }
         if self.composing() {
@@ -758,6 +785,49 @@ impl<'e> Session<'e> {
         true
     }
 
+    /// 光标处的候选（空格选的那个）：展开面板时是面板的光标。没有候选是 None。
+    fn current_index(&mut self) -> Option<usize> {
+        let n = self.candidates().len();
+        if n == 0 {
+            return None;
+        }
+        let index = if self.expanded {
+            self.grid_cursor
+        } else {
+            self.page * self.page_size() + self.cursor_on_page().unwrap_or(0)
+        };
+        Some(index.min(n - 1))
+    }
+
+    /// Ctrl+Delete：让引擎忘掉光标处的候选（用户词库里的词、选词热度、搭配），
+    /// 候选原地重算，编辑区不动，候选框停在原来的页和位置。只管引擎的词（计算结果、
+    /// emoji、日期时间这类没学过）；什么也没学过、是自定义词时什么也不做。
+    fn forget_current(&mut self) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        let Some(index) = self.current_index() else {
+            return;
+        };
+        let chosen = &self.candidates[index];
+        if chosen.kind != CandidateKind::Word || !engine.forget_word(&chosen.text) {
+            return;
+        }
+        self.forgot = true;
+        let (page, cursor, expanded, grid_cursor) =
+            (self.page, self.cursor, self.expanded, self.grid_cursor);
+        self.fresh = false;
+        let n = self.candidates().len();
+        if n == 0 {
+            return;
+        }
+        let last_page = (n - 1) / self.page_size();
+        self.page = page.min(last_page);
+        self.cursor = cursor.min(n - 1);
+        self.expanded = expanded && n > 1;
+        self.grid_cursor = grid_cursor.min(n - 1);
+    }
+
     /// 分号、引号选第几个；不是选词键是 None。
     fn select_key_index(&self, sym: u32) -> Option<usize> {
         match (self.config.select_keys, sym) {
@@ -811,6 +881,7 @@ impl<'e> Session<'e> {
         let mut frame = Frame {
             handled,
             commit: self.pending.take(),
+            forgot: std::mem::take(&mut self.forgot),
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()
@@ -854,6 +925,7 @@ impl<'e> Session<'e> {
         let frame = self.frame(false);
         // frame 会取走要上屏的字；这里只是看，放回去
         self.pending = frame.commit;
+        self.forgot = frame.forgot;
         &self.candidates[frame.cand_start..frame.cand_start + frame.cand_count]
     }
 
@@ -1049,6 +1121,7 @@ impl<'e> Session<'e> {
         self.last_choice = None;
         let shown = self.frame(false);
         self.pending = shown.commit;
+        self.forgot = shown.forgot;
         let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
         self.frame(handled)
     }

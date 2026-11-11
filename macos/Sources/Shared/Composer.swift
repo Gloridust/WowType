@@ -5,6 +5,8 @@
 // 会话（ABI 1.6 起）管打字途中的全部按键：字母、隔音符、退格、Esc、空格、回车、数字选词、
 // 翻页、移光标、展开面板。候选框照 frame 的 cand_* 画（显示的就是这一页 / 面板的这一屏）。
 // 还在外壳的（docs/PORTING.md 第 4 块挪进会话）：标点，以及打字途中按标点先上屏当前候选。
+// 打字途中按 Control+Delete（Mac 键盘上的 Delete 是退格；有向前删除键或按 Fn+Control+Delete 也行）
+// 忘掉光标处学错的词（ABI 1.7），也是会话管，外壳只在 frame->forgot 时马上存学习数据（onForget）。
 
 import CWowtype
 
@@ -108,6 +110,8 @@ public final class Composer {
     private var recent = ""
     /// 每次上屏后调用（外壳用来定时保存学习数据）。
     public var onCommit: ((String) -> Void)?
+    /// Ctrl+Delete 忘掉了学错的词以后调用（外壳马上存学习数据，免得重启又回来）。
+    public var onForget: (() -> Void)?
 
     public init(engine: Engine?, client: TextClient) {
         self.engine = engine
@@ -158,8 +162,9 @@ public final class Composer {
             return false
         }
         if !key.modifiers.isDisjoint(with: [.control, .option, .command]) {
-            // 快捷键交给应用；打到一半时编辑区留着
-            return false
+            // 打字途中先问会话：Ctrl+Delete、Ctrl+退格忘掉光标处学错的词。
+            // 别的快捷键交给应用，打到一半时编辑区留着
+            return composing && sendToSession(key)
         }
         if !composing {
             return handleIdle(key)
@@ -313,6 +318,9 @@ public final class Composer {
     private func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         if let frame, let commit = frame.pointee.commit {
             insert(String(cString: commit))
+        }
+        if let frame, Int(frame.pointee.size) >= MemoryLayout<WowtypeFrame>.size, frame.pointee.forgot != 0 {
+            onForget?()
         }
         refresh()
     }

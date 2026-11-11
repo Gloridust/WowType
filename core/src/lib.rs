@@ -571,6 +571,29 @@ impl Engine {
         self.lexicon.remove(word)
     }
 
+    /// 忘掉学过的一个词（候选框里 Ctrl+Delete）：用户词库里的这个词、它的选词热度、
+    /// 和它有关的搭配都去掉。词库里本来就有的词删不掉，去掉学到的加分后回到原来的位置。
+    /// 设置里加的自定义词不动。返回是否真的忘掉了什么。
+    pub fn forget_word(&self, word: &str) -> bool {
+        if word.is_empty() || self.lexicon.is_custom(word) {
+            return false;
+        }
+        let mut forgot = self.lexicon.remove(word);
+        if let Ok(mut history) = self.history.write() {
+            forgot |= history.remove(word).is_some();
+        }
+        if let Ok(mut pairs) = self.pairs.write() {
+            forgot |= pairs.remove_word(word) > 0;
+        }
+        // 下一次上屏别再拿刚忘掉的词接搭配
+        if let Ok(mut last) = self.last_word.write() {
+            if *last == word {
+                last.clear();
+            }
+        }
+        forgot
+    }
+
     pub fn user_words(&self) -> Vec<(String, String, f64)> {
         self.lexicon.words()
     }
@@ -2263,6 +2286,37 @@ mod tests {
         assert!(e.remove_user_word("我特"));
         let after = e.input("wowote");
         assert!(!after.iter().any(|c| c.text == "我特"));
+    }
+
+    #[test]
+    fn forget_word_clears_learning_and_saves_empty_dict() {
+        let e = engine("ni hao\t你好\t10\n");
+        e.add_user_word("wo wo te", "我特", 5000.0).unwrap();
+        e.record_selection("我特");
+        e.set_context("我特");
+        e.record_selection("你好");
+        assert_eq!(e.pair_count(), 1, "我特 -> 你好");
+        assert!(e.forget_word("我特"));
+        assert!(e.user_words().is_empty());
+        assert_eq!(e.history_count("我特"), 0);
+        assert_eq!(e.pair_count(), 0, "和它有关的搭配也去掉");
+        assert!(!e.forget_word("我特"), "第二次没东西可忘");
+
+        // 用户词全删光了也要存盘，不然旧的 user.tsv 留着，重启又回来
+        let dir = std::env::temp_dir().join(format!("wowtype-forget-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("user.tsv");
+        std::fs::write(&path, "wo wo te\t我特\t5000\n").unwrap();
+        e.save_user_dict(&path).unwrap();
+        let e2 = engine("ni hao\t你好\t10\n");
+        assert_eq!(e2.load_user_dict(&path).unwrap(), 0);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // 自定义词不忘
+        e.lexicon().set_custom_tsv("ni hao\t妮好\n");
+        e.record_selection("妮好");
+        assert!(!e.forget_word("妮好"));
+        assert_eq!(e.history_count("妮好"), 1);
     }
 
     #[test]
