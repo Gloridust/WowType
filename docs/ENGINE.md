@@ -55,7 +55,7 @@ z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan
 - 表情面板：`wowtype_engine_emoji_search(engine, query)`。拼音先经引擎转成前几个中文候选，再按 CLDR 中文关键词找；
   同时按英文关键词前缀、符号名（`juhao` → 。）找。`cldr.tsv` 由 `scripts/make-emoji.py` 从 Unicode CLDR 生成，
   只收 emoji 15.0 及以前的（新的系统字体可能还画不出来）。
-ASCII 标点会自动转成中文标点（`,` → ，`?` → ？），数字后面的 `.` 是小数点不换（`symbols::punct`，标点样式选半角时一律原样）；`/` 等没收录的原样交给应用。
+ASCII 标点会自动转成中文标点（`,` → ，`?` → ？），数字后面的符号不换，如 `3.14`、`20:22`、`3,000`（`symbols::punct`；标点样式选半角时一律原样）；`/` 等没收录的原样交给应用。
 
 支持**繁体输出**：`--traditional`（插件在设置界面打开，或 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
 `--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），

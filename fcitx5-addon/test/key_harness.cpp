@@ -221,6 +221,17 @@ void runCases(Instance &instance) {
     type(ic.get(), "3.14");
     check(ic->committed.empty() && ic->passed == "3.14", "3.14 原样（小数点不换成句号），实际 上屏「" +
                                                             ic->committed + "」交给应用「" + ic->passed + "」");
+    // 数字后面的其他符号也原样：20:22、3,000、50%
+    for (const char *text : {"20:22", "3,000", "50%"}) {
+        fresh(ic.get());
+        type(ic.get(), text);
+        check(ic->committed.empty() && ic->passed == text,
+              std::string(text) + " 原样（数字后的符号不换成中文标点），实际 上屏「" + ic->committed +
+                  "」交给应用「" + ic->passed + "」");
+    }
+    fresh(ic.get());
+    type(ic.get(), "nihao:");
+    check(ic->committed == "你好：", "汉字后面的冒号还是中文冒号，实际 " + ic->committed);
     fresh(ic.get());
     type(ic.get(), "nihao.");
     check(ic->committed == "你好。", "汉字后面的句点还是句号，实际 " + ic->committed);
