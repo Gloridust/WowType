@@ -42,10 +42,17 @@ if [[ -n "${WOWTYPE_LM_FILE:-}" ]]; then
 else
   curl -fsSL --retry 3 "$LM_URL" | xz -d > "$OUT/words.lm"
 fi
-echo "$LM_SHA256  $OUT/words.lm" | sha256sum -c --quiet || {
-  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256）" >&2
+# 不用 sha256sum -c --quiet：macOS 自带的 sha256sum 不认 --quiet，会误报成哈希不对
+if command -v sha256sum >/dev/null; then
+  ACTUAL=$(sha256sum "$OUT/words.lm")
+else
+  ACTUAL=$(shasum -a 256 "$OUT/words.lm")
+fi
+ACTUAL=${ACTUAL%% *}
+if [[ "$ACTUAL" != "$LM_SHA256" ]]; then
+  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256，实际 $ACTUAL）" >&2
   exit 1
-}
+fi
 
 COMMIT=$(git -C "$RIME" rev-parse HEAD 2>/dev/null || echo unknown)
 DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)

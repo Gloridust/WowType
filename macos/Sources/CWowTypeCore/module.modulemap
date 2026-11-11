@@ -1,0 +1,5 @@
+// 头文件只有 core/include/wowtype_core.h 这一份，这里按相对路径引用。
+module CWowTypeCore [system] {
+    header "../../../core/include/wowtype_core.h"
+    export *
+}

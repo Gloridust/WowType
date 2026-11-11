@@ -1,0 +1,5 @@
+/* 英文系统里显示的名字。build.sh 替换 @BUNDLE_ID@。 */
+"CFBundleName" = "WowType";
+"CFBundleDisplayName" = "WowType";
+"@BUNDLE_ID@" = "WowType";
+"@BUNDLE_ID@.pinyin" = "WowType Pinyin";

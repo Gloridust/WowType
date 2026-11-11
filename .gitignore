@@ -45,3 +45,8 @@ dist/
 
 # onetake 宣发片工作目录（工具与成片都不入库）
 onetake/
+
+# macOS 前端构建产物
+macos/.build/
+macos/.swiftpm/
+macos/build/

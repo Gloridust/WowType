@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  最小权限：输入法不进沙盒（要读 ~/Library/Application Support/WowType），
+  也不用麦克风（这一版核心不带语音）、不用 JIT、不加载别人的库，所以什么都不申请。
+  hardened runtime 由 codesign 的 options runtime 打开。
+-->
+<plist version="1.0">
+<dict/>
+</plist>
