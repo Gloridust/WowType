@@ -1125,6 +1125,69 @@ void runCases(Instance &instance) {
         check(ic->committed == "你好", "仍是中文：" + ic->committed);
     }
     fresh(ic.get());
+    {
+        // #82：认 Shift 松开要看键码。xkb 选项（grp:shifts_toggle 等）或 fcitx5 按输入法布局重新翻译时，
+        // 松开那一下 Shift 已经算按着，同一个键（左 Shift 键码 50）可能翻成 ISO_Next_Group
+        const auto english = [&]() {
+            fresh(ic.get());
+            type(ic.get(), "a");
+            const bool ascii = ic->passed == "a" && preedit(ic.get()).empty();
+            fresh(ic.get());
+            return ascii;
+        };
+        const auto tapCoded = [&](Key down, Key up) {
+            KeyEvent press(ic.get(), down, false);
+            ic->keyEvent(press);
+            KeyEvent release(ic.get(), up, true);
+            return ic->keyEvent(release);
+        };
+        check(tapCoded(Key(FcitxKey_Shift_L, KeyStates(), 50),
+                       Key(FcitxKey_ISO_Next_Group, KeyState::Shift, 50)) &&
+                  english(),
+              "松开时符号变了（同一键码）也算单按 Shift");
+        check(tapCoded(Key(FcitxKey_Shift_R, KeyStates(), 62), Key(FcitxKey_Shift_R, KeyStates(), 62)) &&
+                  !english(),
+              "松开时状态里没带 Shift 也切换（切回中文）");
+        check(!tapCoded(Key(FcitxKey_Shift_L, KeyStates(), 50), Key(FcitxKey_Shift_R, KeyState::Shift, 62)) &&
+                  !english(),
+              "按左 Shift 松右 Shift 不算单按");
+        {
+            KeyEvent release(ic.get(), Key(FcitxKey_Shift_L, KeyState::Shift, 50), true);
+            ic->keyEvent(release);
+        }
+        {
+            // 按住时的自动重复不打断单按
+            KeyEvent press(ic.get(), Key(FcitxKey_Shift_R, KeyStates(), 62), false);
+            ic->keyEvent(press);
+            KeyEvent repeat(ic.get(), Key(FcitxKey_Shift_R, KeyState::Repeat, 62), false);
+            ic->keyEvent(repeat);
+            KeyEvent release(ic.get(), Key(FcitxKey_Shift_R, KeyState::Shift, 62), true);
+            check(ic->keyEvent(release) && english(), "按住 Shift 有自动重复也算单按");
+            tapShift(FcitxKey_Shift_R);
+            check(!english(), "再按一下回中文");
+        }
+        // fcitx5 全局快捷键里任何一项用了单按的 Shift（不只「切换输入法」「临时切换输入法」），
+        // fcitx5 都先把它吃掉，WowType 收不到。设置界面「Shift 只给 WowType 用」要把这几项都清掉。
+        {
+            RawConfig raw;
+            raw.setValueByPath("Hotkey/EnumerateForwardKeys/0", "Shift_R");
+            instance.globalConfig().load(raw, true);
+        }
+        tapShift(FcitxKey_Shift_R);
+        check(instance.inputMethod(ic.get()) != "wowtype" || !english(),
+              "EnumerateForwardKeys=Shift_R 时 fcitx5 先拿走右 Shift");
+        {
+            RawConfig raw;
+            raw.setValueByPath("Hotkey/EnumerateForwardKeys", "");
+            instance.globalConfig().load(raw, true);
+        }
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(instance.inputMethod(ic.get()) == "wowtype" && !english(), "回到 WowType 中文");
+        check(tapShift(FcitxKey_Shift_R) && english(), "清掉以后右 Shift 又归 WowType");
+        tapShift(FcitxKey_Shift_R);
+        check(!english(), "回中文");
+    }
+    fresh(ic.get());
 
     // fcitx5 全局翻页热键（#27）：设成 , . 后打字途中按它们翻页，不上屏标点
     {

@@ -248,6 +248,7 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 fcitx5 默认用左 Shift「临时切换输入法」（切到 en 键盘），这时左 Shift 到不了 WowType：按它只在 WowType 和 en 之间来回，切不到英文和「译」。
 右 Shift 不受影响。想左 Shift 也给 WowType 用，打开 [WowType 设置](#设置)「输入」页的 **Shift 只给 WowType 用**（只在有冲突时出现）：
 它从 fcitx5 的快捷键里去掉单按的 Shift，之后切别的输入法用 `Ctrl` + `空格`；关掉就原样还给 fcitx5。
+fcitx5 的配置文件写不了时（比如 NixOS 用 Home Manager 配 fcitx5，`~/.config/fcitx5` 是只读的），开关下面会提示「只在这次有效」，这时要在 Nix 配置里写，见 [NixOS 安装说明](docs/INSTALL.md#单按-shift-在-nixos-上)。
 
 中文标点自动转全角（`,` → ，`?` → ？，`^` → ……，`_` → ——，`$` → ￥，`` ` `` → ·，`{` `}` → 「」），引号左右交替（`"` → “ ”，`'` → ‘ ’），数字后面的符号保持英文（`3.14`、`20:22`、`3,000`、`50%`）；设置「输入 → 标点样式」可以改成半角（英文标点）。`/`、`+`、`=`、`@`、`#`、`%`、`&`、`*` 这类符号原样上屏；打拼音途中按它们，先上屏当前候选。
 

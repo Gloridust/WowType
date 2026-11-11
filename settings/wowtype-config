@@ -596,10 +596,31 @@ class Fcitx:
 #
 # fcitx5 默认把左 Shift 设成「临时切换输入法」（在当前输入法和排第一的键盘之间来回切），
 # 它先拿到这一下，WowType 就收不到，单按左 Shift 切不了中英文和「译」。
+# fcitx5 全局快捷键里每一项都是这样（instance.cpp 的 keyHandlers），所以几项都要看。
 
 GLOBAL_URI = "fcitx://config/global"
-FCITX_SHIFT_OPTIONS = ("AltTriggerKeys", "TriggerKeys")
-FCITX_OPTION_NAMES = {"AltTriggerKeys": "临时切换输入法", "TriggerKeys": "切换输入法"}
+FCITX_OPTION_NAMES = {
+    "AltTriggerKeys": "临时切换输入法",
+    "TriggerKeys": "切换输入法",
+    "EnumerateForwardKeys": "向前切换输入法",
+    "EnumerateBackwardKeys": "向后切换输入法",
+    "EnumerateGroupForwardKeys": "切换到下一个分组",
+    "EnumerateGroupBackwardKeys": "切换到上一个分组",
+    "ActivateKeys": "激活输入法",
+    "DeactivateKeys": "取消激活输入法",
+}
+FCITX_SHIFT_OPTIONS = tuple(FCITX_OPTION_NAMES)
+# 配置文件里没写这一项时 fcitx5 用的默认值（globalconfig.cpp）
+FCITX_HOTKEY_DEFAULTS = {
+    "AltTriggerKeys": ["Shift_L"],
+    "TriggerKeys": ["Control+space", "Zenkaku_Hankaku", "Hangul"],
+    "EnumerateForwardKeys": [],
+    "EnumerateBackwardKeys": [],
+    "EnumerateGroupForwardKeys": ["Super+space"],
+    "EnumerateGroupBackwardKeys": ["Super+Shift+space"],
+    "ActivateKeys": ["Hangul_Hanja"],
+    "DeactivateKeys": ["Hangul_Romaja"],
+}
 SHIFT_SIDES = {"Both": ("Shift_L", "Shift_R"), "Left": ("Shift_L",), "Right": ("Shift_R",),
                "Off": ()}
 SHIFT_NAMES = {"Shift_L": "左 Shift", "Shift_R": "右 Shift"}
@@ -653,6 +674,72 @@ def with_keys(hotkey, keys):
         if key not in current:
             current.append(key)
     return lists
+
+
+def fcitx_config_files():
+    """fcitx5 找全局配置 config 的顺序：用户目录（SKIP_FCITX_USER_PATH 时跳过），再 XDG_CONFIG_DIRS。"""
+    files = []
+    if os.environ.get("SKIP_FCITX_USER_PATH") not in ("1", "true", "True"):
+        files.append(os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "config"))
+    dirs = os.environ.get("XDG_CONFIG_DIRS") or "/etc/xdg"
+    files += [os.path.join(d, "fcitx5", "config") for d in dirs.split(":") if d]
+    return files
+
+
+def parse_fcitx_hotkey(text):
+    """fcitx5 全局配置文件 → 和 GetConfig 一样的 Hotkey 字典（{选项: {"0": 按键…}}）。
+
+    [Hotkey/选项] 下面的 0=、1=… 是列表；[Hotkey] 里写「选项=」（空）是空列表；
+    都没写的用 fcitx5 的默认值。
+    """
+    sections = {}
+    section = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = sections.setdefault(line[1:-1], {})
+            continue
+        key, sep, value = line.partition("=")
+        if sep and section is not None:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = value[1:-1]
+            section[key.strip()] = value
+    hotkey = {}
+    for option, default in FCITX_HOTKEY_DEFAULTS.items():
+        if f"Hotkey/{option}" in sections:
+            hotkey[option] = dict(sections[f"Hotkey/{option}"])
+        elif option in sections.get("Hotkey", {}):
+            hotkey[option] = ""
+        else:
+            hotkey[option] = {str(i): k for i, k in enumerate(default)}
+    return hotkey
+
+
+def saved_fcitx_hotkey():
+    """fcitx5 下次启动时会用的全局快捷键：(Hotkey 字典, 读的文件或 None)。"""
+    for path in fcitx_config_files():
+        try:
+            with open(path, encoding="utf-8") as f:
+                return parse_fcitx_hotkey(f.read()), path
+        except OSError:
+            continue
+    return parse_fcitx_hotkey(""), None
+
+
+def fcitx_config_hint():
+    """fcitx5 存不了全局配置时，说一下为什么、怎么办。"""
+    user = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5")
+    if os.environ.get("SKIP_FCITX_USER_PATH") in ("1", "true", "True"):
+        why = "设了 SKIP_FCITX_USER_PATH，fcitx5 不读也不存用户配置"
+    elif os.path.realpath(user).startswith("/nix/store/"):
+        why = f"{user} 是 Home Manager 生成的只读目录"
+    else:
+        why = f"fcitx5 没能写进 {user}/config"
+    return (f"{why}，重启 fcitx5 或重新登录后 Shift 又会被拿走。"
+            "NixOS 请在 Nix 配置里写（见安装说明 NixOS 一节）")
 
 
 def shift_side_names(conflicts):
@@ -2741,12 +2828,18 @@ class SettingsWindow(Adw.ApplicationWindow):
             row.handler_block(self.shift_free_handler)
             row.set_active(not conflicts)
             row.handler_unblock(self.shift_free_handler)
+            # 这次让出来了，但 fcitx5 没存进配置文件（下次启动又会拿走）
+            unsaved = (freed and not conflicts and self.fcitx_hotkey is not None
+                       and shift_conflicts(saved_fcitx_hotkey()[0], toggle))
             if conflicts:
                 option = FCITX_OPTION_NAMES[conflicts[0][0]]
                 side = shift_side_names(conflicts)
                 row.set_subtitle(
                     f"{side} 现在被 fcitx5 用来「{option}」（比如切到 en 键盘），WowType 收不到，"
                     f"单按{side} 切不到英文和「译」。打开就让给 WowType")
+                row.add_css_class("wt-warning")
+            elif unsaved:
+                row.set_subtitle(f"只在这次有效：{fcitx_config_hint()}")
                 row.add_css_class("wt-warning")
             else:
                 trigger = key_list(self.fcitx_hotkey.get("TriggerKeys")) if self.fcitx_hotkey else []
@@ -2774,7 +2867,13 @@ class SettingsWindow(Adw.ApplicationWindow):
                 if ok:
                     update_state(fcitx_shift_freed=[list(k) for k in keep])
                     log(f"把 fcitx5 的 {', '.join(f'{o}={k}' for o, k in taken)} 让给 WowType")
-                    self.toast(f"{shift_side_names(taken)} 已经让给 WowType")
+                    saved, path = saved_fcitx_hotkey()
+                    if shift_conflicts(saved, self.values.get("ShiftToggle", "Both")):
+                        # SetConfig 存文件失败也不报错，只改了 fcitx5 内存里的（dbusmodule.cpp）
+                        log(f"fcitx5 没存进配置文件，下次启动读的是 {path or '默认值'}")
+                        self.toast("只在这次有效：fcitx5 存不了配置文件")
+                    else:
+                        self.toast(f"{shift_side_names(taken)} 已经让给 WowType")
                 else:
                     self.toast("没改成：fcitx5 没响应")
                 self.refresh_shift_conflict()

@@ -426,8 +426,9 @@ private:
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。
     bool translateMode_ = false;
-    /// 按下还没松开的 Shift（单按才切换，中间按了别的键就作废）和按下的时刻。
+    /// 按下还没松开的 Shift（单按才切换，中间按了别的键就作废）、它的键码和按下的时刻。
     fcitx::KeySym shiftDown_ = FcitxKey_None;
+    int shiftDownCode_ = 0;
     uint64_t shiftDownAt_ = 0;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
