@@ -544,7 +544,16 @@ class Fcitx:
         self.call("ReloadAddonConfig", GLib.Variant("(s)", ("wowtype",)))
 
     def restart(self, done=None):
-        self.call("Restart", done=lambda value: done and done(value is not None))
+        if not kwin_input_method():
+            self.call("Restart", done=lambda value: done and done(value is not None))
+            return
+
+        # KDE Wayland：D-Bus 的 Restart 不起作用，要经 KWin 重启；要等好几秒，放到线程里
+        def work():
+            ok = restart_fcitx_sync()
+            if done:
+                GLib.idle_add(lambda: done(ok) and False)
+        threading.Thread(target=work, daemon=True).start()
 
     def group_info(self, done):
         """done((组名, 键盘布局, [(输入法, 布局)…]) 或 None)。"""
@@ -731,6 +740,91 @@ def fcitx_knows_wowtype():
     return any(item[0] == "wowtype" for item in value.unpack()[0])
 
 
+KWINRC_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "kwinrc")
+
+
+def _kconfig_tool(name):
+    return shutil.which(f"{name}6") or shutil.which(f"{name}5")
+
+
+def kwin_input_method():
+    """KDE Plasma Wayland 下由 KWin 拉起 fcitx5 时，返回 kwinrc 里 [Wayland] InputMethod 的值，否则 None。
+
+    这种情况下 fcitx5 用的是 KWin 交给它的 WAYLAND_SOCKET（zwp_input_method_v1），
+    fcitx5 认为自己不能重启：D-Bus 的 Restart 什么都不做（Instance::restart 里 canRestart() 为假直接返回）；
+    `fcitx5 -r` 起来的新进程拿不到这个连接，新打开的 Wayland 程序里就打不了字。
+    只能让 KWin 自己再拉起一次。
+    """
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        return None
+    if "KDE" not in os.environ.get("XDG_CURRENT_DESKTOP", "").upper().split(":"):
+        return None
+    tool = _kconfig_tool("kreadconfig")
+    if not tool:
+        return None
+    try:
+        value = subprocess.run([tool, "--file", "kwinrc", "--group", "Wayland", "--key", "InputMethod"],
+                               capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return value if "fcitx" in value.lower() else None
+
+
+def _kwinrc_has_user_input_method():
+    """用户自己的 kwinrc 里有没有写 InputMethod（没有的话值来自 /etc/xdg 等系统默认）。"""
+    try:
+        with open(KWINRC_FILE, encoding="utf-8") as f:
+            section = None
+            for line in f:
+                line = line.strip()
+                if line.startswith("["):
+                    section = line
+                elif section == "[Wayland]" and re.match(r"InputMethod(\[\$[a-z]+\])?\s*=", line):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def restart_fcitx_via_kwin(launcher):
+    """让 fcitx5 退出，再改一下 kwinrc 的 InputMethod（带 --notify）让 KWin 重新拉起它。成功返回 True。"""
+    tool = _kconfig_tool("kwriteconfig")
+    if not tool:
+        return False
+    base = [tool, "--file", "kwinrc", "--group", "Wayland", "--key", "InputMethod", "--notify"]
+    user_value = _kwinrc_has_user_input_method()
+    fcitx_call_sync("Exit")
+    for _ in range(20):  # 最多等 5 秒退出
+        if fcitx_call_sync("CurrentInputMethodGroup", None, "(s)") is None:
+            break
+        time.sleep(0.25)
+    # 先清空（KWin 停掉旧的输入法），再写回去（KWin 重新启动它）。
+    # 写回：原来是用户写的就写回原值；原来来自系统默认就删掉用户这项，回到默认
+    restore = base + ([launcher] if user_value else ["--delete"])
+    try:
+        subprocess.run(base + [""], check=True, timeout=5)
+        time.sleep(0.5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        subprocess.run(restore, check=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    for _ in range(60):  # 最多等 15 秒 fcitx5 起来
+        time.sleep(0.25)
+        if fcitx_call_sync("CurrentInputMethodGroup", None, "(s)") is not None:
+            return True
+    return False
+
+
+def restart_fcitx_sync():
+    """重启 fcitx5。KDE Wayland 下经 KWin 重启，其他环境用 D-Bus 的 Restart。"""
+    launcher = kwin_input_method()
+    if launcher:
+        return restart_fcitx_via_kwin(launcher)
+    return fcitx_call_sync("Restart") is not None
+
+
 def system_keyboard_layout():
     """fcitx5 键盘布局的名字（us、de-nodeadkeys……），从 localectl 读，读不到用 us。"""
     layout = variant = ""
@@ -806,7 +900,7 @@ def add_to_group_cli(restart):
         if not restart:
             print("fcitx5 还没载入 WowType，要先重启 fcitx5")
             return 3
-        fcitx_call_sync("Restart")
+        restart_fcitx_sync()
         for _ in range(60):  # 最多等 15 秒
             time.sleep(0.25)
             known = fcitx_knows_wowtype()
@@ -3299,6 +3393,10 @@ if __name__ == "__main__":
         sys.exit(startup_tasks())
     if "--add-to-group" in sys.argv:
         sys.exit(add_to_group_cli("--restart" in sys.argv))
+    if "--restart-fcitx" in sys.argv:
+        ok = restart_fcitx_sync()
+        print("已重启 fcitx5" if ok else "重启 fcitx5 失败，请注销后重新登录")
+        sys.exit(0 if ok else 1)
     if "--export-log" in sys.argv:
         rest = sys.argv[sys.argv.index("--export-log") + 1:]
         target = rest[0] if rest else os.path.join(os.getcwd(), default_log_name())

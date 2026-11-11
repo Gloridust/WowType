@@ -14,6 +14,13 @@ python3 tools/rime2tsv.py rime_ice.dict.yaml > lexicon.tsv
 cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 ```
 
+`scripts/make-data.sh` 还会用 `--extra-chars cn_dicts/41448.dict.yaml` 补雾凇的大字表（雾凇默认没引入）：
+只加词库里没有的单字读音，频次记成小于 1 的 0.9 / 0.8 / 0.7（基本区 / 扩展 A / 其余）。
+频次小于 1 的单字（`LexEntry::is_rare`）不参与组句、不占前几页，只排在翻页长尾的最后
+（`Lexicon::lookup_common` 不返回它们，束搜索和句首词都用它）——一个音节的字都能翻到
+（hou 97 个、shi 374 个、yi 824 个），整句和前几页和不补时完全一样。
+翻页长尾的顺序：整句同音词、句首词、换一种切法才对得上的句首词（houxuanci 的「后续」= hou xu | an ci）、单字。
+
 引擎支持**半成品输入**：尾部还没成音节时会自动补全（`nih` → 你好，`zhongg` → 中国），
 不会出现"打到一半没有候选"。
 
