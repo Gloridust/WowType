@@ -113,9 +113,28 @@ rejected $'ID=opensuse-tumbleweed\nID_LIKE=suse' '源码' 'openSUSE source guida
 rejected $'ID=rocky\nID_LIKE="rhel centos fedora"\nVERSION_ID=9' '源码' 'RHEL derivative is not treated as Fedora'
 rejected 'ID=alpine' '源码' 'Alpine source guidance'
 
+# arm64：deb 和 rpm 有预编译包，Arch 没有
+arm_plan() { # <os-release> <uname -m> <期望包名> <说明>
+  reset "$1"
+  test_arch=$2
+  local result
+  result=$(run --print-plan) || fail "计划失败：$1 $2"
+  [[ "$result" == *"$3"* ]] || fail "包选择错误：$result"
+  pass "$4"
+}
+arm_plan $'ID=ubuntu\nVERSION_ID="24.04"' aarch64 wowtype_0.3.8_ubuntu24.04_arm64.deb 'Ubuntu 24.04 arm64'
+arm_plan $'ID=debian\nVERSION_ID="13"' arm64 wowtype_0.3.8_debian13_arm64.deb 'Debian 13 arm64 (uname arm64)'
+arm_plan $'ID=fedora\nVERSION_ID=44' aarch64 wowtype-0.3.8-1.fc44.aarch64.rpm 'Fedora aarch64 RPM'
+
 reset 'ID=arch'
 test_arch=aarch64
-if run --print-plan > "$work/output" 2>&1; then fail 'Unexpected aarch64 binary'; fi
+if run --print-plan > "$work/output" 2>&1; then fail 'Unexpected aarch64 Arch binary'; fi
+grep -Fq 'package-arch.sh' "$work/output" || fail 'Missing Arch aarch64 guidance'
+pass 'Arch aarch64 builds locally'
+
+reset $'ID=ubuntu\nVERSION_ID="24.04"'
+test_arch=riscv64
+if run --print-plan > "$work/output" 2>&1; then fail 'Unexpected riscv64 binary'; fi
 grep -Fq '源码' "$work/output" || fail 'Missing architecture guidance'
 pass 'Architecture mismatch rejected'
 

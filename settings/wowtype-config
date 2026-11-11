@@ -1230,12 +1230,16 @@ def update_platform(info=None, machine=None, immutable=None):
         return "", "", "", "不可变系统请使用系统的分层或声明式配置更新（Fedora Atomic 用 rpm-ostree）；" + guide
     if "manjaro" in family:
         return "", "", "", "Manjaro 请用 scripts/package-arch.sh 在本机编包，避免混用 Arch 滚动库；" + guide
-    if machine not in ("x86_64", "amd64"):
-        return "", "", "", f"发布包目前面向 x86_64，{machine} 请从源码构建；{guide}"
+    # deb 和 rpm 对同一种架构叫法不同：amd64 / x86_64、arm64 / aarch64
+    deb_arch, rpm_arch = {"x86_64": ("amd64", "x86_64"), "amd64": ("amd64", "x86_64"),
+                          "aarch64": ("arm64", "aarch64"),
+                          "arm64": ("arm64", "aarch64")}.get(machine, ("", ""))
+    if not deb_arch:
+        return "", "", "", f"发布包只有 x86_64 和 arm64，{machine} 请从源码构建；{guide}"
     if distro == "ubuntu" and version in ("24.04", "26.04"):
-        return "apt-get", "ubuntu" + version, "amd64", ""
+        return "apt-get", "ubuntu" + version, deb_arch, ""
     if distro == "debian" and (version == "13" or version.startswith("13.")):
-        return "apt-get", "debian13", "amd64", ""
+        return "apt-get", "debian13", deb_arch, ""
     # 衍生发行版只有明确声明了兼容基底才套用对应 deb，绝不拿自己的版本号猜。
     if distro not in ("ubuntu", "debian"):
         codename = info.get("UBUNTU_CODENAME", "")
@@ -1243,16 +1247,19 @@ def update_platform(info=None, machine=None, immutable=None):
             codename = info.get("VERSION_CODENAME", "")
         ubuntu = {"noble": "24.04", "resolute": "26.04"}.get(codename)
         if ubuntu:
-            return "apt-get", "ubuntu" + ubuntu, "amd64", ""
+            return "apt-get", "ubuntu" + ubuntu, deb_arch, ""
         codename = info.get("DEBIAN_CODENAME", "")
         if not codename and "debian" in family:
             codename = info.get("VERSION_CODENAME", "")
         if codename == "trixie":
-            return "apt-get", "debian13", "amd64", ""
+            return "apt-get", "debian13", deb_arch, ""
     if family & {"arch", "archlinux", "endeavouros", "garuda", "cachyos"}:
+        if rpm_arch != "x86_64":
+            return "", "", "", (f"Arch Linux 的发布包只有 x86_64，{machine} 请用 "
+                                f"scripts/package-arch.sh 在本机编包；{guide}")
         return "pacman", "archlinux", "x86_64", ""
     if distro == "fedora" and re.fullmatch(r"[0-9]+", version):
-        return "dnf", "fc" + version, "x86_64", ""
+        return "dnf", "fc" + version, rpm_arch, ""
     return "", "", "", f"{distro or '这个发行版'} 请按发行版说明从源码更新；{guide}"
 
 
@@ -1406,7 +1413,7 @@ def plan_update(release):
     else:
         name = f"wowtype-{version}-1.{distro}.{arch}.rpm"
     if name not in release["assets"]:
-        return [], f"这一版没有 {distro} 的安装包，请按安装说明从源码构建，不混用其他发行版的包"
+        return [], f"这一版没有 {distro} {arch} 的安装包，请按安装说明从源码构建，不混用其他发行版的包"
     if "SHA256SUMS" not in release["assets"]:
         return [], "发布页缺少 SHA256SUMS，暂不安装，请到下载页检查"
     reason = "要是提示依赖不满足，先在终端运行 sudo pacman -Syu 升级系统" if manager == "pacman" else ""
@@ -1494,12 +1501,16 @@ def background_check():
         return 0
     state["notified"] = release["tag"]
     write_update_state(state)
+    # NixOS、Manjaro、源码安装等没法一键装，通知里别说「一键安装」
+    manager, _distro, _arch, reason = update_platform()
+    one_click = not reason and package_version(manager) is not None
+    hint = "一键安装" if one_click else "看怎么更新"
     try:
         chosen = subprocess.run(
             ["notify-send", "--app-name=WowType", "--icon=wowtype",
              "--action=open=查看更新", "--action=default=查看更新",
              f"WowType {release['version']} 可以更新了",
-             f"当前是 {current_version()}。打开设置可以看更新内容，一键安装。"],
+             f"当前是 {current_version()}。打开设置可以看更新内容，{hint}。"],
             capture_output=True, text=True, timeout=24 * 3600).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return 0
