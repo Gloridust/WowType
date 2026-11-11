@@ -521,18 +521,15 @@ fn bad_index_is_not_handled() {
 
 #[test]
 fn whole_sentence_is_learned() {
-    // 分几次选出来的整句也记一次选词；选够 3 次（auto_learn_threshold）就收进用户词库
+    // 分两次选出来拼成的四字词，选一次就带拼音收进用户词库（造词，见 record_composed_word）
     let engine = engine();
-    for round in 0..3 {
-        let mut session = with(engine);
-        type_keys(&mut session, "nihaozhongguo");
-        choose_text(&mut session, "你好");
-        assert_eq!(
-            choose_text(&mut session, "中国").commit.as_deref(),
-            Some("你好中国"),
-            "第 {round} 次"
-        );
-    }
+    let mut session = with(engine);
+    type_keys(&mut session, "nihaozhongguo");
+    choose_text(&mut session, "你好");
+    assert_eq!(
+        choose_text(&mut session, "中国").commit.as_deref(),
+        Some("你好中国")
+    );
     let learned = engine.user_words();
     assert!(
         learned
@@ -540,6 +537,76 @@ fn whole_sentence_is_learned() {
             .any(|(pinyin, word, _)| word == "你好中国" && pinyin == "ni hao zhong guo"),
         "整句带拼音收进用户词库：{learned:?}"
     );
+}
+
+const COMPOSE_LEXICON: &str = "\
+shuang\t双\t9000
+shuang\t霜\t500
+pin\t拼\t9000
+pin\t频\t500
+ge\t个\t9000
+ge\t阁\t500
+";
+
+fn compose_engine() -> &'static Engine {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(COMPOSE_LEXICON).unwrap());
+    Box::leak(Box::new(Engine::new(
+        lexicon,
+        Arc::new(BigramLm::default()),
+    )))
+}
+
+#[test]
+fn word_composed_in_three_parts_ranks_first_next_time() {
+    // 「霜」「频」「阁」一个一个挑出来，下次打同样的拼音一个就是霜频阁
+    let engine = compose_engine();
+    let mut session = with(engine);
+    type_keys(&mut session, "shuangpinge");
+    assert_ne!(texts(&mut session)[0], "霜频阁", "没学过时不在第一个");
+    assert_eq!(choose_text(&mut session, "霜").commit, None);
+    assert_eq!(session.remaining(), "pinge");
+    assert_eq!(choose_text(&mut session, "频").commit, None);
+    assert_eq!(session.remaining(), "ge");
+    assert_eq!(
+        choose_text(&mut session, "阁").commit.as_deref(),
+        Some("霜频阁")
+    );
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(pinyin, word, _)| word == "霜频阁" && pinyin == "shuang pin ge"));
+
+    let mut session = with(engine);
+    type_keys(&mut session, "shuangpinge");
+    assert_eq!(texts(&mut session)[0], "霜频阁");
+}
+
+#[test]
+fn long_composed_sentence_still_needs_repeats() {
+    // 超过四个字的不当造词（多半是先选句首词、再选剩下的长句），照常选够 3 次才收
+    let engine = compose_engine();
+    for round in 0..3 {
+        assert!(
+            !engine
+                .user_words()
+                .iter()
+                .any(|(_, word, _)| word == "霜频阁双拼"),
+            "第 {round} 次之前还没收"
+        );
+        let mut session = with(engine);
+        type_keys(&mut session, "shuangpingeshuangpin");
+        for part in ["霜", "频", "阁", "双"] {
+            assert_eq!(choose_text(&mut session, part).commit, None);
+        }
+        assert_eq!(
+            choose_text(&mut session, "拼").commit.as_deref(),
+            Some("霜频阁双拼")
+        );
+    }
+    assert!(engine
+        .user_words()
+        .iter()
+        .any(|(pinyin, word, _)| word == "霜频阁双拼" && pinyin == "shuang pin ge shuang pin"));
 }
 
 #[test]

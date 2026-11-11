@@ -1107,14 +1107,18 @@ impl<'e> Session<'e> {
                 self.learn(tail, tail_pinyin);
             }
             if !self.selections.is_empty() && !tail.is_empty() && !tail_pinyin.is_empty() {
-                // 分几次选出来的整句也记一次，下次能一次打出来
+                // 分几次选出来拼成的词：四个字以内的选一次就收进用户词库（造词），
+                // 更长的照常按次数学（见 Wowtype::record_composed_word）
                 let mut pinyin = String::new();
                 for selection in &self.selections {
                     pinyin.push_str(&selection.pinyin);
                     pinyin.push(' ');
                 }
                 pinyin.push_str(tail_pinyin);
-                self.learn(&text, &pinyin);
+                if let Some(engine) = self.engine {
+                    engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
+                    engine.record_composed_word(&text, &pinyin);
+                }
             }
         }
         self.finish(text);
