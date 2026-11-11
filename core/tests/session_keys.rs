@@ -999,7 +999,13 @@ fn expanded_panel() {
 fn expanded_panel_second_screen() {
     // key_harness：「展开后下移 7 行：面板翻到第二屏」「第二屏收起后，横排候选框停在光标那一页」
     let tsv: String = (0..60u32)
-        .map(|i| format!("shi\t{}\t{}\n", char::from_u32(0x4e00 + i).unwrap(), 9000 - i))
+        .map(|i| {
+            format!(
+                "shi\t{}\t{}\n",
+                char::from_u32(0x4e00 + i).unwrap(),
+                9000 - i
+            )
+        })
         .collect();
     let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
     let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
@@ -1017,7 +1023,10 @@ fn expanded_panel_second_screen() {
     assert!(all.len() > 8 * 6, "要超过 8 行：{}", all.len());
 
     // 一直按下键走到第二屏：面板显示光标那一屏
-    let frame = type_keys(&mut session, "<down><down><down><down><down><down><down><down>");
+    let frame = type_keys(
+        &mut session,
+        "<down><down><down><down><down><down><down><down>",
+    );
     assert_eq!(frame.panel, Panel::Expanded);
     assert_eq!(frame.cand_start, 36);
     assert_eq!(frame.cand_cursor, Some(6));

@@ -420,10 +420,6 @@ void runCases(Instance &instance) {
     check(list.size() > 1 && ic->committed == list[1], "右移光标后空格选第二个，实际 " + ic->committed);
 
     // 翻页和光标的细节（候选列表的页和光标各管各的，挪进会话前先钉住）
-    auto common = [&]() -> CommonCandidateList * {
-        auto list = ic->inputPanel().candidateList();
-        return list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
-    };
     fresh(ic.get());
     type(ic.get(), "shi<pgdn>");
     {
@@ -472,16 +468,20 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "shi");
     {
-        const auto p1 = page(ic.get());
-        // 展开面板翻一屏（36 个）再 Esc 收起：回到第一页，光标不在这一页上
+        // 展开面板翻一屏（36 个）再 Esc 收起：翻到光标那一页，光标看得见
         type(ic.get(), "<down>");
         send(ic.get(), Key(FcitxKey_Page_Down));
         type(ic.get(), "<esc>");
         auto *list = common();
-        check(list && page(ic.get()) == p1 && list->cursorIndex() == -1,
-              "展开面板翻屏后收起：第一页、没有光标");
+        const auto shown = page(ic.get());
+        check(list && list->globalCursorIndex() == 36 && list->cursorIndex() >= 0 &&
+                  list->currentPage() == 36 / list->pageSize(),
+              "展开面板翻屏后收起：停在光标那一页、光标看得见：" + join(shown));
+        const std::string cur = list && list->cursorIndex() >= 0
+                                    ? shown[static_cast<std::size_t>(list->cursorIndex())]
+                                    : std::string();
         type(ic.get(), "<sp>");
-        check(!p1.empty() && ic->committed == p1[0], "这时空格选第一页第一个，实际 " + ic->committed);
+        check(!cur.empty() && ic->committed == cur, "这时空格选光标处，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi<down>");
@@ -490,7 +490,7 @@ void runCases(Instance &instance) {
     {
         const auto p1 = page(ic.get());
         type(ic.get(), "2");
-        check(p1.size() > 1 && ic->committed == p1[1], "收起后数字按第一页选，实际 " + ic->committed);
+        check(p1.size() > 1 && ic->committed == p1[1], "收起后数字按当前页选，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");
