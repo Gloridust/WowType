@@ -451,6 +451,8 @@ private:
     bool voiceShowing_ = false;
     /// 出错提示显示到这个时刻（单调时钟，微秒）。
     uint64_t voiceErrorUntil_ = 0;
+    /// 正在显示的出错提示（浮条要接着发）。
+    std::string voiceErrorText_;
     /// 开始说话时的输入框；结果只往这里上屏。
     fcitx::TrackableObjectReference<fcitx::InputContext> voiceIc_;
     std::unique_ptr<fcitx::EventSourceTime> voiceTimer_;

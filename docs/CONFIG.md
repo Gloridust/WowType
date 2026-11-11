@@ -182,7 +182,7 @@ Lexicon=
 | `WOWTYPE_LM` | 词级语言模型，默认找 `words.lm`（`wowtype-lmbuild` 生成），也认旧的 `前词<TAB>后词<TAB>次数` 文本 |
 | `WOWTYPE_S2T` | 简繁对照表，默认 `/usr/share/wowtype/s2t.tsv` |
 | `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
-| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal` |
+| `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal`（插件和设置界面都认） |
 | `WOWTYPE_NNLM` | 神经语言模型路径，默认 `~/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin` |
 | `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新，也不自动打开默认主题 |
 | `WOWTYPE_LOG` | 日志文件路径，默认 `~/.local/state/wowtype/wowtype.log`；`0` 不写 |
@@ -206,7 +206,7 @@ Lexicon=
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
 | `emoji-recent.txt` | 最近用过的 emoji（表情面板里排最前） |
 | `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
-| `wtlocal/` | 语音模型（第一次用语音时下载，约 130MB）；删了下次用语音会重新下载 |
+| `wtlocal/` | 语音模型（约 130MB），在设置的「语音」页下载或删除；没有它语音输入打不开，按语音键只提示去下载 |
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 

@@ -1753,6 +1753,80 @@ void runVoiceScript(Instance &instance, std::string name,
         });
 }
 
+/// 没下载语音模型时按语音键：只提示去设置里下载，不录音、不下载，松开后提示一会儿自己消失。
+/// 给了 WOWTYPE_VOICE_WAV 时有模型，跳过。
+void runVoiceNoModelCase(Instance &instance, std::function<void()> done) {
+    const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
+    const char *dirEnv = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
+    if ((wav && *wav) || !dirEnv || !*dirEnv) {
+        std::printf("skip 语音·没有模型（给了 WOWTYPE_VOICE_WAV，或没指定模型目录）\n");
+        done();
+        return;
+    }
+    const std::filesystem::path dir = dirEnv;
+    const auto parent = dir.parent_path();
+    // 模型目录旁边有没有下载留下的东西（wtlocal、wtlocal.apk、wtlocal.apk.part、wtlocal.part、wtlocal.tmp）
+    auto listing = [parent]() {
+        std::string names;
+        std::error_code ec;
+        for (const auto &entry : std::filesystem::directory_iterator(parent, ec)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("wtlocal", 0) == 0) {
+                names += name + " ";
+            }
+        }
+        return names;
+    };
+    const std::string before = listing();
+    using Steps = std::vector<std::pair<int, std::function<void(VoiceScript &)>>>;
+    Steps steps{
+        {1,
+         [](VoiceScript &s) {
+             KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R), false);
+             check(s.ic->keyEvent(e), s.name + "：按下右 Alt 被输入法接住");
+             const std::string aux = s.ic->inputPanel().auxUp().toString();
+             check(aux.find("设置") != std::string::npos && aux.find("下载") != std::string::npos,
+                   s.name + "：提示去设置里下载模型，实际 " + aux);
+         }},
+        {5,
+         [](VoiceScript &s) {
+             KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R, KeyState::Alt), true);
+             check(s.ic->keyEvent(e), s.name + "：松开右 Alt 也被接住");
+         }},
+        {10,
+         [](VoiceScript &s) {
+             check(s.ic->inputPanel().auxUp().toString().find("设置") != std::string::npos,
+                   s.name + "：松开后提示还留着，实际 " + s.ic->inputPanel().auxUp().toString());
+         }},
+        {50,
+         [dir, before, listing](VoiceScript &s) {
+             check(s.ic->inputPanel().auxUp().empty(),
+                   s.name + "：几秒后提示消失，实际 " + s.ic->inputPanel().auxUp().toString());
+             check(s.ic->committed.empty(), s.name + "：什么也不上屏，实际 " + s.ic->committed);
+             check(!std::filesystem::exists(dir) && before.empty() && listing().empty(),
+                   s.name + "：没有开始下载，实际有 " + listing());
+             // 提示之后照常打字
+             type(s.ic.get(), "nihao<sp>");
+             check(!s.ic->committed.empty(), s.name + "：之后照常打字，实际 " + s.ic->committed);
+         }},
+        {52,
+         [](VoiceScript &s) {
+             // 提示中途按别的键：提示收起，键照常处理
+             KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R), false);
+             s.ic->keyEvent(e);
+             KeyEvent up(s.ic.get(), Key(FcitxKey_Alt_R, KeyState::Alt), true);
+             s.ic->keyEvent(up);
+             s.ic->committed.clear();
+             type(s.ic.get(), "ni");
+             check(s.ic->inputPanel().auxUp().toString().find("设置") == std::string::npos,
+                   s.name + "：打字时提示收起，实际 " + s.ic->inputPanel().auxUp().toString());
+             type(s.ic.get(), "<esc>");
+             std::printf("语音·没有模型：只提示去设置里下载，没有下载\n");
+         }},
+    };
+    runVoiceScript(instance, "语音·没有模型", steps, done);
+}
+
 void runVoiceCancelCases(Instance &instance, std::function<void()> done) {
     const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
     if (!wav || !*wav) {
@@ -1874,10 +1948,12 @@ int main(int argc, char **argv) {
         runCases(instance);
         runClipboardCase();
         runTranslateCase(instance, [&instance]() {
-            runVoiceCase(instance, [&instance]() {
-                runVoiceCancelCases(instance, [&instance]() {
-                    std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
-                    instance.exit();
+            runVoiceNoModelCase(instance, [&instance]() {
+                runVoiceCase(instance, [&instance]() {
+                    runVoiceCancelCases(instance, [&instance]() {
+                        std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
+                        instance.exit();
+                    });
                 });
             });
         });
