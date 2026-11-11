@@ -91,7 +91,7 @@ pub struct EngineConfig {
     pub fuzzy: bool,
     /// 打开的模糊音分组（`syllable::fuzzy::*` 位掩码），默认平翘舌 + 前后鼻音。
     pub fuzzy_groups: u32,
-    /// 模糊候选的分数惩罚（自然对数），越大越靠后。
+    /// 每用一处模糊音（一个声母或韵母）多出的代价（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
     /// 是否使用双拼。
     pub shuangpin: bool,
@@ -806,7 +806,11 @@ impl Engine {
         };
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if self.config.fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
+            fuzzy_view = FuzzyLexicon::new(
+                self.lexicon.as_ref(),
+                self.config.fuzzy_groups,
+                self.config.fuzzy_penalty,
+            );
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -878,7 +882,11 @@ impl Engine {
         };
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if self.config.fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
+            fuzzy_view = FuzzyLexicon::new(
+                self.lexicon.as_ref(),
+                self.config.fuzzy_groups,
+                self.config.fuzzy_penalty,
+            );
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -1105,44 +1113,14 @@ impl Engine {
     }
 
     /// 单条全拼输入的完整查询（精确 + 可选模糊音）。
+    ///
+    /// 模糊音视图里精确读音和模糊读音都有（模糊词扣 `fuzzy_penalty`），一次搜索就够了，
+    /// 两种读音的词按各自的分数排在一起。
     fn query_plain(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        let exact = self.run_query(normalized, at_ms, false)?;
-        if !self.config.fuzzy {
-            return Ok(exact);
-        }
-        let fuzzy = self.run_query(normalized, at_ms, true)?;
-        if fuzzy.is_empty() {
-            return Ok(exact);
-        }
-        // 精确结果优先；模糊候选统一扣一点分，避免抢在精确命中前面。
-        let mut merged: HashMap<String, Candidate> = HashMap::new();
-        for candidate in exact {
-            merged.insert(candidate.text.clone(), candidate);
-        }
-        for mut candidate in fuzzy {
-            candidate.score -= self.config.fuzzy_penalty;
-            match merged.entry(candidate.text.clone()) {
-                Entry::Vacant(slot) => {
-                    slot.insert(candidate);
-                }
-                Entry::Occupied(mut slot) => {
-                    if candidate.score > slot.get().score {
-                        slot.insert(candidate);
-                    }
-                }
-            }
-        }
-        let mut result: Vec<Candidate> = merged.into_values().collect();
-        result.sort_by(|a, b| {
-            b.score
-                .total_cmp(&a.score)
-                .then_with(|| a.text.cmp(&b.text))
-        });
-        result.truncate(self.config.max_candidates.max(1));
-        Ok(result)
+        self.run_query(normalized, at_ms, self.config.fuzzy)
     }
 
-    /// 跑一次查询；fuzzy=true 时查不到会回退模糊音。
+    /// 跑一次查询；fuzzy=true 时精确读音和模糊音读音的词一起搜。
     ///
     /// 末音节补全（zhongg -> 中国、zhonggu -> 中国）和纠错都做成了音节图里的边，
     /// 一次搜索就能同时给出精确、补全、纠错三类候选。
@@ -1197,10 +1175,14 @@ impl Engine {
     }
 
     fn query_once(&self, graph: &SyllableGraph, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
-        // fuzzy 时用包装视图：精确查不到再退到模糊音。
+        // fuzzy 时用包装视图：精确读音之外再加上模糊音读音的词。
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if fuzzy {
-            fuzzy_view = FuzzyLexicon::new(self.lexicon.as_ref(), self.config.fuzzy_groups);
+            fuzzy_view = FuzzyLexicon::new(
+                self.lexicon.as_ref(),
+                self.config.fuzzy_groups,
+                self.config.fuzzy_penalty,
+            );
             &fuzzy_view
         } else {
             self.lexicon.as_ref()
@@ -2407,6 +2389,106 @@ mod tests {
         // an/ang 和 ian/iang 分开：只开 an/ang 时 xian 不等于 xiang
         e.set_fuzzy_groups(fuzzy::AN);
         assert!(!has(&e, "xianfa", "想法"));
+    }
+
+    /// #93：精确读音本身有词时（zong 有「总」，dan si 有「单丝」），模糊音的词也要列出来、
+    /// 按频次和精确读音的词排在一起。
+    fn fuzzy_rank_engine() -> Engine {
+        engine(concat!(
+            "zong\t总\t3000\n",
+            "zong\t宗\t800\n",
+            "zhong\t中\t20000\n",
+            "si\t四\t3000\n",
+            "si\t似\t2000\n",
+            "shi\t是\t50000\n",
+            "sou\t搜\t1000\n",
+            "shou\t手\t8000\n",
+            "dan\t单\t3000\n",
+            "dan\t但\t5000\n",
+            "dan si\t单丝\t5\n",
+            "dan shi\t但是\t30000\n",
+            "cu\t粗\t1000\n",
+            "chu\t出\t8000\n",
+            "lai\t来\t9000\n",
+            "chu lai\t出来\t20000\n",
+            "ji\t机\t5000\n",
+            "sou ji\t搜集\t800\n",
+            "shou ji\t手机\t20000\n",
+        ))
+    }
+
+    fn position(e: &Engine, input: &str, word: &str) -> Option<usize> {
+        e.input(input).iter().position(|c| c.text == word)
+    }
+
+    #[test]
+    fn fuzzy_competes_with_exact_reading() {
+        let mut e = fuzzy_rank_engine();
+        e.set_typo_correction(false);
+        // 关掉模糊音时照旧只有精确读音
+        assert_eq!(position(&e, "zong", "中"), None);
+        assert_eq!(position(&e, "si", "是"), None);
+        assert_eq!(position(&e, "dansi", "但是"), None);
+        assert_eq!(position(&e, "culai", "出来"), None);
+        e.set_fuzzy(true);
+        // 单音节：模糊音的字也列出来，常用的排在前面
+        assert!(
+            position(&e, "zong", "中").is_some_and(|p| p < 3),
+            "zong 要有 中"
+        );
+        assert!(
+            position(&e, "si", "是").is_some_and(|p| p < 3),
+            "si 要有 是"
+        );
+        assert!(
+            position(&e, "sou", "手").is_some_and(|p| p < 3),
+            "sou 要有 手"
+        );
+        assert_eq!(e.input("zong")[0].text, "总", "差不多常用时精确读音在前");
+        // 两个音节：常用词压过精确读音凑出来的冷门词
+        assert_eq!(e.input("dansi")[0].text, "但是");
+        assert_eq!(e.input("culai")[0].text, "出来");
+        assert_eq!(e.input("souji")[0].text, "手机");
+        // 精确读音的词还在
+        assert!(position(&e, "dansi", "单丝").is_some());
+        assert!(position(&e, "souji", "搜集").is_some());
+    }
+
+    #[test]
+    fn fuzzy_competes_with_exact_reading_shuangpin() {
+        use crate::shuangpin::Scheme;
+        let mut e = fuzzy_rank_engine();
+        e.set_shuangpin(true);
+        e.set_shuangpin_scheme(Scheme::Xiaohe);
+        // 小鹤：zs = zong，sz = sou，si = si，culd = cu lai，djsi = dan si
+        assert_eq!(position(&e, "zs", "中"), None);
+        assert_eq!(position(&e, "djsi", "但是"), None);
+        e.set_fuzzy(true);
+        assert!(position(&e, "zs", "中").is_some_and(|p| p < 3));
+        assert!(position(&e, "si", "是").is_some_and(|p| p < 3));
+        assert!(position(&e, "sz", "手").is_some_and(|p| p < 3));
+        assert_eq!(e.input("djsi")[0].text, "但是");
+        assert_eq!(e.input("culd")[0].text, "出来");
+        assert_eq!(e.input("szji")[0].text, "手机");
+    }
+
+    #[test]
+    fn fuzzy_penalty_counts_each_rule() {
+        // 用的模糊音越多扣得越多：dan shi 一处，dang shi 两处
+        let mut e = engine("dan shi\t但是\t1000\ndang shi\t当时\t1000\n");
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        let c = e.input("dansi");
+        let at = |w: &str| c.iter().position(|x| x.text == w);
+        assert!(at("但是").unwrap() < at("当时").unwrap());
+        // 同一个音节里声母、韵母各算一处：san -> shan 一处，san -> shang 两处
+        let mut e = engine("dai san\t带伞\t1000\ndai shan\t带山\t1000\ndai shang\t带上\t1000\n");
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        let c = e.input("daisan");
+        let at = |w: &str| c.iter().position(|x| x.text == w);
+        assert!(at("带伞").unwrap() < at("带山").unwrap());
+        assert!(at("带山").unwrap() < at("带上").unwrap());
     }
 
     #[test]

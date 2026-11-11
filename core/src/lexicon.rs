@@ -666,36 +666,70 @@ impl Lexicon for MemoryLexicon {
     }
 }
 
-/// 给束搜索用的视图：精确查不到时回退到模糊音。
+/// 给束搜索用的视图：精确读音之外，再加上模糊音读音的词。
+///
+/// 以前只在精确读音一个词都没有时才退到模糊音，可 zong、si、dan si 这些本身就有词
+/// （总、四、单丝），模糊音永远轮不到，打不出中、是、但是（#93）。
+/// 现在模糊音读音和精确读音一起参与组句、排序，只是每个模糊词的代价多 `penalty`
+/// （自然对数），差不多常用时精确读音在前。
 pub struct FuzzyLexicon<'a> {
     inner: &'a dyn Lexicon,
     groups: u32,
+    penalty: f64,
 }
 
 impl<'a> FuzzyLexicon<'a> {
-    /// groups：打开的模糊音分组（`syllable::fuzzy::*` 位掩码）。
-    pub fn new(inner: &'a dyn Lexicon, groups: u32) -> Self {
-        Self { inner, groups }
+    /// groups：打开的模糊音分组（`syllable::fuzzy::*` 位掩码）；penalty：模糊词多出的代价。
+    pub fn new(inner: &'a dyn Lexicon, groups: u32, penalty: f64) -> Self {
+        Self {
+            inner,
+            groups,
+            penalty,
+        }
+    }
+
+    /// 精确结果后面接上只有模糊音才对得上的词：每用一处模糊音代价多 penalty（频次打折）。
+    fn with_fuzzy(
+        &self,
+        query: &[SyllableQuery],
+        mut found: Vec<LexEntry>,
+        common: bool,
+    ) -> Vec<LexEntry> {
+        let penalty = self.penalty.max(0.0);
+        for mut entry in self.inner.lookup_fuzzy(query, self.groups) {
+            if common && entry.is_rare() {
+                continue;
+            }
+            // 用了几处模糊音：san -> shang 是声母、韵母各一处
+            let used: u32 = entry
+                .keys
+                .iter()
+                .zip(query)
+                .map(|(k, q)| match q {
+                    SyllableQuery::Full { id, .. } => {
+                        crate::syllable::fuzzy_groups_between(*id, k.id).map_or(0, u32::count_ones)
+                    }
+                    SyllableQuery::Jianpin { .. } => 0,
+                })
+                .sum();
+            // lookup_fuzzy 也返回读音完全相同的词，精确那份已经有了
+            if used == 0 {
+                continue;
+            }
+            entry.freq *= (-penalty * f64::from(used)).exp();
+            found.push(entry);
+        }
+        found
     }
 }
 
 impl Lexicon for FuzzyLexicon<'_> {
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
-        let exact = self.inner.lookup(query);
-        if !exact.is_empty() {
-            return exact;
-        }
-        self.inner.lookup_fuzzy(query, self.groups)
+        self.with_fuzzy(query, self.inner.lookup(query), false)
     }
 
     fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
-        let exact = self.inner.lookup_common(query);
-        if !exact.is_empty() {
-            return exact;
-        }
-        let mut fuzzy = self.inner.lookup_fuzzy(query, self.groups);
-        fuzzy.retain(|e| !e.is_rare());
-        fuzzy
+        self.with_fuzzy(query, self.inner.lookup_common(query), true)
     }
 
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {

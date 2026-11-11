@@ -31,6 +31,9 @@ z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan
 模糊索引只建一份：按「全部分组都打开」归并声母、韵母（`syllable::fuzzy_key`），查到以后再用
 `fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了（n 和 r 都归到 l，但 n/r 本身不算一组，会被过滤掉）。
 改开关不用重建 55 万词的索引。
+模糊读音和精确读音一起参与组句、排序，不是精确读音没词才退过去：`zong` 也列出「中」，
+`dansi` 首选「但是」而不是「单丝」。每用一处模糊音（一个声母或韵母）代价多 `fuzzy_penalty`（默认 2.5），
+差不多常用时精确读音在前。
 
 支持**日期时间**、**计算器**（`core/src/datetime.rs`、`core/src/calc.rs`）：
 - `wowtype_datetime_candidates(key, 年, 月, 日, 时, 分, 秒, 星期)`：key 是 `riqi`、`rq`、`shijian`、`sj`、`xingqi`、`date`、`time`
