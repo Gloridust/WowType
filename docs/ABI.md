@@ -20,6 +20,7 @@
 | 1.3 | 0.3.11 | 加输入会话 `wowtype_session_*`（暂定，见下面「输入会话」）：编辑区、已选词栈、字母 / 退格 / Esc |
 | 1.4 | 0.3.11 | 候选列表和编辑区分音节挪进会话：加 `_set_engine`、`_configure`、`_frame`，`WowtypeSessionConfig` 加 `page_size`、`calculator`、`date_time`、`emoji_suggest`，`frame->preedit` 分好音节；过渡函数加 `_set_context`、`_candidate_total`、`_candidate_info` |
 | 1.5 | 0.3.11 | 选词、整句上屏和学习挪进会话：加 `_choose`（按候选序号选，句首词进已选栈，选完上屏并记选词）、`_commit_input`（已选的词 + 原始输入上屏）；删掉过渡函数 `_selection_count`、`_selection_pinyin`、`_push_selection` |
+| 1.6 | 0.3.11 | 空格、回车、数字、分号引号选词、翻页和展开面板挪进 `_key`：`WowtypeKey` 加 `action`（`WOWTYPE_KEY_ACTION_*`，外壳的全局翻页 / 移光标键），`WowtypeSessionConfig` 加 `horizontal`、`page_keys`（`WOWTYPE_PAGE_KEYS_*`）、`select_keys`（`WOWTYPE_SELECT_KEYS_*`），frame 的 `panel`、`cand_count`、`cand_cursor`、`has_prev`、`has_next` 开始填；加 `_select`（按显示的序号选）、`_candidate`；过渡函数加 `_view`、`_last_choice`，删掉 `_commit_input`（用 `_key` 发回车或 `_reset(s, 1)`） |
 
 ## 所有权和生命周期
 
@@ -40,12 +41,13 @@
 - 返回指针的函数失败时返回 NULL，返回 `int` 的失败时返回负数（个别函数的约定写在头文件注释里）。
 - 失败原因用 `wowtype_last_error()` 取（线程局部）。
 
-## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词）
+## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加选词键、翻页和展开面板）
 
 输入行为正在从 fcitx5 外壳一块一块挪进核心（[PORTING.md](PORTING.md) 第 2 步），外壳以后主要依赖这一组。
 
-- **暂定**：挪完之前，这组函数不在上面「只加不删」的承诺里。标了「过渡」的函数（`wowtype_session_input`、`_remaining`、`_selected_text`、`_append`、`_set_context`、`_candidate_total`、`_candidate_info`、`_choose`、`_commit_input`）是给还没挪完的 fcitx5 外壳用的，挪完就删（`_choose`、`_commit_input` 等空格、回车、数字键挪进 `_key` 以后删，点候选改用草案里的 `_select`）；删的时候次版本加一，写进上面的版本记录。fcitx5 外壳和核心一起发版，不受影响；别的外壳先只用 `_new`、`_set_engine`、`_configure`、`_key`、`_frame`、`_reset`、`_free`。
-- **`handled`**：现在 0 的意思是「会话还不管这个键」，外壳接着用自己的逻辑处理。挪完以后 0 就是「交给应用」。
+- **暂定**：挪完之前，这组函数不在上面「只加不删」的承诺里。标了「过渡」的函数（`wowtype_session_input`、`_remaining`、`_selected_text`、`_append`、`_set_context`、`_candidate_total`、`_candidate_info`、`_choose`、`_view`、`_last_choice`）是给还没挪完的 fcitx5 外壳用的，挪完就删（`_choose` 现在只给标点上屏首选和鼠标点候选用，标点挪进来、点候选改用 `_select` 以后删；`_view`、`_last_choice` 是外壳照会话摆候选框、上屏后记 emoji 用的，候选框整个由 frame 驱动以后删）；删的时候次版本加一，写进上面的版本记录。fcitx5 外壳和核心一起发版，不受影响；别的外壳先只用 `_new`、`_set_engine`、`_configure`、`_key`、`_frame`、`_candidate`、`_select`、`_reset`、`_free`。
+- **`handled`**：现在 0 的意思是「会话还不管这个键」，外壳接着用自己的逻辑处理。挪完以后 0 就是「交给应用」。还在外壳里的：标点、工具栏、表情面板、中 / 英 / 译和互译、语音键。
+- **候选框**（1.6）：frame 的 `cand_count` 是候选框里显示的个数（一页，或展开面板的一屏），`cand_cursor` 是光标在里面的位置（光标不在这一页上时是 -1），`has_prev` / `has_next` 是还能不能往前 / 往后翻，`panel` 说现在是普通候选框还是展开面板；显示的第 i 个用 `wowtype_session_candidate(s, i)` 取，点它用 `wowtype_session_select(s, i)`。
 - **结构体**：`WowtypeKey`、`WowtypeSessionConfig`、`WowtypeFrame`、`WowtypeCandidateInfo` 第一个字段都是 `size`。外壳填 `sizeof`，核心按它读，缺的字段当 0（`WowtypeSessionConfig` 例外：缺的字段用默认值）；核心返回的 frame 也带 `size`，外壳读新字段前先看它。
 - **所有权**：`wowtype_session_new` 的结果用 `wowtype_session_free` 释放。`_key`、`_reset` 返回的 `WowtypeFrame *`、里面的字符串、过渡函数返回的字符串，都归会话所有，**在同一个会话的下一次调用前有效**（包括松开键那一次），不是线程局部缓冲。要留着就自己拷。
 - **引擎**：候选和分音节要用引擎。`wowtype_session_new` 的 engine 可以传 NULL（词库在后台载入，载入好之前也要能打字，这时没有候选，编辑区是原始输入），载入好了用 `wowtype_session_set_engine` 补上。引擎要比会话活得久（或者先 `set_engine(NULL)`）。双拼开不开看引擎（`wowtype_engine_set_shuangpin`）；会话算候选时会把引擎的上文设成「已上屏的字 + 已选的词」的尾部。
@@ -60,12 +62,21 @@
 | 字母 | 进编辑区（大写原样保留） |
 | `'` | 编辑区不空时进编辑区（隔音符），空的时候不管 |
 | 退格 | 编辑区不空时：有已选词就撤销最后一个，没有就删一个字；删空了清空 |
-| Esc | 编辑区不空时清空 |
+| Esc | 编辑区不空时清空（展开面板时只收起面板） |
+| 空格 | 选光标处的候选（光标不在这一页上时选这一页第一个）；没有候选就原样上屏 |
+| 回车（含小键盘） | 已选的词 + 原始输入上屏，原始输入也记一次选词 |
+| 数字（含小键盘，不带 Shift 等修饰键） | 选这一页的第几个；这一页没这么多也吃掉 |
+| `;` `'`（`select_keys`） | 选这一页第 2、3 个；微软、搜狗、紫光双拼里 `;` 是韵母键，不拿来选词，等第二个键时进编辑区 |
+| V 模式的数字、运算符 | 进编辑区；`=` 上屏计算结果 |
+| 方向键 | 横排：左右移光标（整个列表首尾相接，跨页时跟着翻页），上下翻页，下键展开面板（两个以上候选）；竖排：上下移光标，左右翻页 |
+| PgUp / PgDn、`page_keys` 里的键 | 翻页；`- =`、`[ ]`、`, .`、`Tab` 翻不动时吃掉（不当标点上屏），只有一页时不管 |
+| `action` | 外壳认出来的全局翻页 / 移光标键，有候选时照做，翻不动也吃掉 |
+| 展开面板 | 6×6 一屏；方向键移光标，第一行再按上收起，PgUp / PgDn、`- =` 一次一屏，数字选光标那一行的第几个，空格选光标处，Esc 收起；别的键先收起再照常处理。收起后停在光标那一页 |
 
 | 其他 | 会话做什么 |
 |---|---|
 | 候选 | 引擎的候选，加上：首选是整句时推荐一个 emoji（插第 3 个）；第一页里的数字字后面跟按键 emoji（八 → 8️⃣）；没选过词时打 riqi / shijian / xingqi 在首选后面插日期时间（双拼看首选的拼音）；V 模式（`v` + 算式，双拼不开）候选是结果和「算式=结果」 |
 | 编辑区 | 已选的词 + 剩余部分分好音节（`nihao` → `ni'hao`，双拼显示成全拼）；没有引擎时是原始输入 |
-| 选词（`_choose`） | 候选没用完输入：进已选栈，记一次选词，候选换成剩下的；用完了：已选的词 + 这个候选上屏，记选词（带拼音，选够次数收进用户词库），分几次选出来的整句也记一次；emoji 和日期时间、计算结果这类候选只上屏不记；序号不对 `handled` = 0 |
-| 上屏输入（`_commit_input`，`_reset` 带 commit_pending 也一样） | 已选的词 + 原始输入上屏（回车、切输入法、打到一半切英文），原始输入也记一次选词；什么也没打就不上屏 |
+| 选词（`_select`、`_choose`） | 候选没用完输入：进已选栈，记一次选词，候选换成剩下的；用完了：已选的词 + 这个候选上屏，记选词（带拼音，选够次数收进用户词库），分几次选出来的整句也记一次；emoji 和日期时间、计算结果这类候选只上屏不记；序号不对 `handled` = 0；`_select` 的序号是候选框里显示的（一页，或展开面板的一屏），`_choose` 是整个列表的 |
+| 上屏输入（回车，`_reset` 带 commit_pending 也一样） | 已选的词 + 原始输入上屏（回车、切输入法、打到一半切英文），原始输入也记一次选词；什么也没打就不上屏 |
 | 学习的上文 | 记选词前把引擎的上文设成算候选时那个（已上屏的字 + 已选的词的尾部） |

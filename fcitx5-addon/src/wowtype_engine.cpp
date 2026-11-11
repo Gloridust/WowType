@@ -339,44 +339,6 @@ std::string shownText(const std::string &text) {
     return out;
 }
 
-/// V 模式计算器认的字符（数字、运算符、括号），小键盘也算。不是的话返回 0。
-char calcChar(const fcitx::Key &key) {
-    const auto sym = key.sym();
-    if (sym >= FcitxKey_0 && sym <= FcitxKey_9) {
-        return static_cast<char>('0' + (sym - FcitxKey_0));
-    }
-    if (sym >= FcitxKey_KP_0 && sym <= FcitxKey_KP_9) {
-        return static_cast<char>('0' + (sym - FcitxKey_KP_0));
-    }
-    switch (sym) {
-    case FcitxKey_plus:
-    case FcitxKey_KP_Add:
-        return '+';
-    case FcitxKey_minus:
-    case FcitxKey_KP_Subtract:
-        return '-';
-    case FcitxKey_asterisk:
-    case FcitxKey_KP_Multiply:
-        return '*';
-    case FcitxKey_slash:
-    case FcitxKey_KP_Divide:
-        return '/';
-    case FcitxKey_period:
-    case FcitxKey_KP_Decimal:
-        return '.';
-    case FcitxKey_percent:
-        return '%';
-    case FcitxKey_asciicircum:
-        return '^';
-    case FcitxKey_parenleft:
-        return '(';
-    case FcitxKey_parenright:
-        return ')';
-    default:
-        return 0;
-    }
-}
-
 class WowtypeCandidateWord final : public fcitx::CandidateWord {
 public:
     WowtypeCandidateWord(WowtypeEngine *engine, WowtypeState *state,
@@ -512,11 +474,15 @@ public:
     /// 表情面板开着时，原始输入就是搜索词。
     WowtypeSession *session_;
     std::vector<WowtypeCandidate> candidates_;
-    /// 下键展开的候选面板；gridCursor_ 是光标所在候选的全局下标。
+    /// 展开的面板（普通候选下键展开，或表情面板）；gridCursor_ 是光标所在候选的全局下标。
+    /// 普通候选的这些（连同下面的页码、光标）是会话的候选框状态的拷贝，见 syncView。
     bool expanded_ = false;
     std::size_t gridCursor_ = 0;
-    /// 收起面板后普通候选列表的光标位置（刷新候选时归零）。
+    /// 普通候选列表的页码和光标（全局下标，可以不在这一页上）；工具栏也用 panelCursor_。
+    std::size_t panelPage_ = 0;
     std::size_t panelCursor_ = 0;
+    /// candidates_ 抄的是会话第几次重算的候选（WowtypeSessionView.generation）。
+    uint64_t candGeneration_ = UINT64_MAX;
     /// 表情面板开着：会话的原始输入是搜索词（可以为空）。
     bool emojiPanel_ = false;
     /// 表情面板是从工具栏的「符号」打开的：没有搜索词时列全部符号。
@@ -548,14 +514,15 @@ public:
         wowtype_session_reset(session_, 0);
         wowtype_session_append(session_, text.c_str());
     }
-    /// 交给会话处理一个按下的键，会话处理了返回 true。先用 WowtypeEngine::sessionKey 同步引擎和设置。
-    bool sessionKey(const fcitx::Key &key) {
+    /// 交给会话处理一个按下的键（keysym 为 0 时只有动作）。先用 WowtypeEngine::sessionKey
+    /// 同步引擎和设置。返回的 frame 归会话，下一次调会话前有效。
+    const WowtypeFrame *sessionKey(uint32_t keysym, uint32_t modifiers, uint32_t action) {
         WowtypeKey raw{};
         raw.size = sizeof(raw);
-        raw.keysym = static_cast<uint32_t>(key.sym());
-        raw.modifiers = static_cast<uint32_t>(key.states());
-        const WowtypeFrame *frame = wowtype_session_key(session_, &raw);
-        return frame && frame->handled;
+        raw.keysym = keysym;
+        raw.modifiers = modifiers;
+        raw.action = action;
+        return wowtype_session_key(session_, &raw);
     }
     void clear() {
         emojiPanel_ = false;
@@ -563,11 +530,76 @@ public:
         tool_ = WowtypeTool::None;
         wowtype_session_reset(session_, 0);
         candidates_.clear();
+        candGeneration_ = UINT64_MAX;
         expanded_ = false;
         gridCursor_ = 0;
+        panelPage_ = 0;
         panelCursor_ = 0;
     }
 };
+
+namespace {
+
+/// 普通候选的列表：翻页、移动光标交给会话，再照会话的页码和光标摆好自己。
+/// 键盘上的翻页键由会话直接处理；这里接的是鼠标点翻页按钮、滚轮，和直接调候选列表的。
+class WowtypeSessionList final : public fcitx::CommonCandidateList {
+public:
+    explicit WowtypeSessionList(WowtypeState *state) : state_(state) {}
+
+    void prev() override { act(WOWTYPE_KEY_ACTION_PREV_PAGE); }
+    void next() override { act(WOWTYPE_KEY_ACTION_NEXT_PAGE); }
+    void prevCandidate() override { act(WOWTYPE_KEY_ACTION_PREV_CANDIDATE); }
+    void nextCandidate() override { act(WOWTYPE_KEY_ACTION_NEXT_CANDIDATE); }
+    void setPage(int page) override {
+        if (mirroring_) {
+            // mirror 里调的 CommonCandidateList::next() 会走到这里：只摆自己，不再翻会话
+            CommonCandidateList::setPage(page);
+            return;
+        }
+        for (int guard = 0; guard < 1000 && page != currentPage(); ++guard) {
+            const int before = currentPage();
+            act(page < before ? WOWTYPE_KEY_ACTION_PREV_PAGE : WOWTYPE_KEY_ACTION_NEXT_PAGE);
+            if (currentPage() == before) {
+                break;
+            }
+        }
+    }
+
+    /// 照会话的页码和光标摆好（页码往后翻一页时用 next()，fcitx5 记得「用过下一页」）。
+    void mirror(std::size_t page, std::size_t cursor) {
+        mirroring_ = true;
+        const int target = static_cast<int>(page);
+        if (target != currentPage() && target >= 0 && target < totalPages()) {
+            if (target == currentPage() + 1) {
+                CommonCandidateList::next();
+            } else {
+                CommonCandidateList::setPage(target);
+            }
+        }
+        if (static_cast<int>(cursor) < totalSize()) {
+            setGlobalCursorIndex(static_cast<int>(cursor));
+        }
+        mirroring_ = false;
+    }
+
+private:
+    void act(uint32_t action) {
+        state_->sessionKey(0, 0, action);
+        WowtypeSessionView view{};
+        view.size = sizeof(view);
+        if (wowtype_session_view(state_->session_, &view) != 0) {
+            return;
+        }
+        state_->panelPage_ = view.page;
+        state_->panelCursor_ = view.cursor;
+        mirror(view.page, view.cursor);
+    }
+
+    WowtypeState *state_;
+    bool mirroring_ = false;
+};
+
+} // namespace
 
 WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     : instance_(instance),
@@ -748,7 +780,6 @@ void WowtypeEngine::applyConfig() {
         shuangpinScheme_ = env;
         shuangpin_ = true;
     }
-    shuangpinSemicolon_ = wowtype_shuangpin_uses_semicolon(shuangpinScheme_.c_str()) == 1;
     shiftToggle_ = *config_.shiftToggle;
     if (const char *env = std::getenv("WOWTYPE_SHIFT_TOGGLE"); env && *env) {
         const std::string name = env;
@@ -858,7 +889,6 @@ void WowtypeEngine::applyCoreSettings() {
     if (wowtype_engine_set_shuangpin_scheme(core_, shuangpinScheme_.c_str()) != 0) {
         WLOG_W() << "WowType: 不认识双拼方案 " << shuangpinScheme_ << "，用自然码";
         wowtype_engine_set_shuangpin_scheme(core_, "ziranma");
-        shuangpinSemicolon_ = false;
     }
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
     if (traditional_ && !conversionLoaded_) {
@@ -1024,7 +1054,7 @@ void WowtypeEngine::commitInput(fcitx::InputContext *ic, WowtypeState *state) {
     if (!ic) {
         return;
     }
-    finishCommit(ic, state, wowtype_session_commit_input(state->session_), true);
+    finishCommit(ic, state, wowtype_session_reset(state->session_, 1), true);
 }
 
 void WowtypeEngine::syncSession(WowtypeState *state) {
@@ -1036,25 +1066,124 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.calculator = calculator_ ? 1 : 0;
     config.date_time = dateTime_ ? 1 : 0;
     config.emoji_suggest = emojiSuggest_ ? 1 : 0;
+    config.horizontal = horizontal_ ? 1 : 0;
+    config.page_keys = (pageMinus_ ? WOWTYPE_PAGE_KEYS_MINUS : 0u) |
+                       (pageBracket_ ? WOWTYPE_PAGE_KEYS_BRACKET : 0u) |
+                       (pageComma_ ? WOWTYPE_PAGE_KEYS_COMMA : 0u) |
+                       (pageTab_ ? WOWTYPE_PAGE_KEYS_TAB : 0u);
+    config.select_keys = selectKeys_ == WowtypeSelectKeys::Semicolon ? WOWTYPE_SELECT_KEYS_SEMICOLON
+                         : selectKeys_ == WowtypeSelectKeys::SemicolonQuote
+                             ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
+                             : WOWTYPE_SELECT_KEYS_OFF;
     wowtype_session_configure(state->session_, &config);
 }
 
-bool WowtypeEngine::sessionKey(WowtypeState *state, const fcitx::Key &key) {
+const WowtypeFrame *WowtypeEngine::sessionKey(WowtypeState *state, const fcitx::Key &key,
+                                              uint32_t action) {
+    coreReady();
     syncSession(state);
-    return state->sessionKey(key);
+    return state->sessionKey(static_cast<uint32_t>(key.sym()),
+                             static_cast<uint32_t>(key.states()), action);
+}
+
+uint32_t WowtypeEngine::keyAction(const fcitx::Key &key) const {
+    const auto sym = key.sym();
+    if (sym == FcitxKey_Up || sym == FcitxKey_Down || sym == FcitxKey_Left ||
+        sym == FcitxKey_Right) {
+        return WOWTYPE_KEY_ACTION_NONE;
+    }
+    const auto &global = instance_->globalConfig();
+    if (key.checkKeyList(global.defaultPrevPage())) {
+        return WOWTYPE_KEY_ACTION_PREV_PAGE;
+    }
+    if (key.checkKeyList(global.defaultNextPage())) {
+        return WOWTYPE_KEY_ACTION_NEXT_PAGE;
+    }
+    if (key.checkKeyList(global.defaultPrevCandidate())) {
+        return WOWTYPE_KEY_ACTION_PREV_CANDIDATE;
+    }
+    if (key.checkKeyList(global.defaultNextCandidate())) {
+        return WOWTYPE_KEY_ACTION_NEXT_CANDIDATE;
+    }
+    return WOWTYPE_KEY_ACTION_NONE;
+}
+
+void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *state,
+                                      const WowtypeFrame *frame) {
+    if (frame && frame->commit) {
+        // 选候选上屏的：emoji 记进最近用过，emoji、计算结果、日期时间不算学到了词；
+        // 原样上屏输入（回车、没候选时的空格）也记一次选词
+        WowtypeCandidateInfo info{};
+        info.size = sizeof(info);
+        const bool chosen = wowtype_session_last_choice(state->session_, &info) == 0;
+        const int kind = chosen ? info.kind : WOWTYPE_CAND_WORD;
+        const std::string emoji = chosen && info.emoji ? info.emoji : "";
+        finishCommit(ic, state, frame, kind == WOWTYPE_CAND_WORD);
+        if (kind == WOWTYPE_CAND_EMOJI) {
+            rememberEmoji(emoji);
+        }
+        updateInputPanel(ic, state);
+        return;
+    }
+    if (!state->composing()) {
+        state->clear();
+        updateInputPanel(ic, state);
+        return;
+    }
+    const bool wasExpanded = state->expanded_;
+    const bool recopied = syncView(state);
+    if (recopied || wasExpanded || state->expanded_) {
+        updateInputPanel(ic, state);
+        return;
+    }
+    // 只是翻页、挪光标：原地摆好候选框
+    if (auto *list = dynamic_cast<WowtypeSessionList *>(ic->inputPanel().candidateList().get())) {
+        list->mirror(state->panelPage_, state->panelCursor_);
+        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+    } else {
+        updateInputPanel(ic, state);
+    }
+}
+
+bool WowtypeEngine::syncView(WowtypeState *state) {
+    WowtypeSessionView view{};
+    view.size = sizeof(view);
+    if (wowtype_session_view(state->session_, &view) != 0) {
+        return false;
+    }
+    const bool recopy = view.generation != state->candGeneration_;
+    if (recopy) {
+        refreshCandidates(state);
+    }
+    state->candGeneration_ = view.generation;
+    state->panelPage_ = view.page;
+    state->panelCursor_ = view.cursor;
+    state->expanded_ = view.expanded != 0 && !state->candidates_.empty();
+    state->gridCursor_ = view.grid_cursor;
+    return recopy;
 }
 
 void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     state->candidates_.clear();
+    state->candGeneration_ = UINT64_MAX;
     state->expanded_ = false;
     state->gridCursor_ = 0;
+    state->panelPage_ = 0;
     state->panelCursor_ = 0;
     if (state->remaining().empty() || !coreReady()) {
         return;
     }
     // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）由会话算，
-    // 翻页和选词键还在外壳，先整个抄过来；选词按这份拷贝的序号调会话
+    // fcitx5 的候选框要整个列表，抄一份过来；点候选按这份拷贝的序号调会话
     syncSession(state);
+    WowtypeSessionView view{};
+    view.size = sizeof(view);
+    if (wowtype_session_view(state->session_, &view) == 0) {
+        state->candGeneration_ = view.generation;
+        state->panelPage_ = view.page;
+        state->panelCursor_ = view.cursor;
+        state->gridCursor_ = view.grid_cursor;
+    }
     const std::size_t total = wowtype_session_candidate_total(state->session_);
     state->candidates_.reserve(total);
     for (std::size_t i = 0; i < total; ++i) {
@@ -1576,7 +1705,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
     if (state->expanded_ && !state->candidates_.empty()) {
         fillGridPanel(panel, state);
     } else if (!state->candidates_.empty()) {
-        auto candidates = std::make_unique<fcitx::CommonCandidateList>();
+        auto candidates = std::make_unique<WowtypeSessionList>(state);
         candidates->setLayoutHint(horizontal_
                                       ? fcitx::CandidateLayoutHint::Horizontal
                                       : fcitx::CandidateLayoutHint::Vertical);
@@ -1591,10 +1720,9 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
             candidates->append<WowtypeCandidateWord>(this, state, i,
                                                     state->candidates_[i].text);
         }
-        // 展开面板里走到后面再收起时，光标可能不在第一页：翻到光标那一页
-        const std::size_t cursor = std::min(state->panelCursor_, state->candidates_.size() - 1);
-        candidates->setPage(static_cast<int>(cursor / pageSize_));
-        candidates->setGlobalCursorIndex(static_cast<int>(cursor));
+        // 页码和光标照会话的（展开面板里走到后面再收起时，会话翻到光标那一页）
+        candidates->mirror(state->panelPage_,
+                           std::min(state->panelCursor_, state->candidates_.size() - 1));
         panel.setCandidateList(std::move(candidates));
     }
 
@@ -1797,13 +1925,11 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
 }
 
 void WowtypeEngine::commitCurrent(fcitx::InputContext *ic, WowtypeState *state) {
-    if (auto list = ic->inputPanel().candidateList(); list && list->size() > 0) {
-        const int cursor = list->cursorIndex();
-        list->candidate(cursor >= 0 && cursor < list->size() ? cursor : 0).select(ic);
-        return;
+    // 和按空格一样：上屏光标处的候选，没有候选时上屏原始输入
+    const WowtypeFrame *frame = sessionKey(state, fcitx::Key(FcitxKey_space));
+    if (frame && frame->handled) {
+        applySessionFrame(ic, state, frame);
     }
-    commitInput(ic, state);
-    updateInputPanel(ic, state);
 }
 
 void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
@@ -1892,184 +2018,29 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     }
 
     if (state->composing()) {
-        if (state->expanded_ && handleGridKey(ic, state, key)) {
+        // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字）
+        // （互译模式下不开：工具栏选的字会绕过攒着的原文直接上屏）
+        if (sym == FcitxKey_space && !state->expanded_ && toolbar_ && !shuangpin_ &&
+            !translating(ic) && state->input() == "v" && !state->hasSelections()) {
+            openTool(ic, state, WowtypeTool::Menu);
             event.filterAndAccept();
             return;
         }
-        if (sym == FcitxKey_BackSpace || sym == FcitxKey_Escape) {
-            // 退格（先撤销最后一次选词，没有选词了才删字母）、Esc（清空）由会话处理
-            sessionKey(state, key);
-            if (!state->composing()) {
-                state->clear();
-            }
-            if (sym == FcitxKey_BackSpace) {
-                refreshCandidates(state);
-            }
+        // 字母、隔音符、退格、Esc、空格、回车、数字、分号引号选词、V 模式算式、双拼分号、
+        // 翻页、移动候选、展开面板都由会话处理。fcitx5 全局设置里的翻页、移动候选热键
+        // （[Hotkey/PrevPage] 等，比如 , . 翻页）翻成动作一起交给会话：按了就算翻不动也吃掉，
+        // 不让它变成标点把字上屏
+        const bool wasExpanded = state->expanded_;
+        const WowtypeFrame *frame = sessionKey(state, key, keyAction(key));
+        if (frame && frame->handled) {
+            applySessionFrame(ic, state, frame);
+            event.filterAndAccept();
+            return;
+        }
+        if (wasExpanded) {
+            // 展开面板里按了会话不管的键（标点、Home……）：面板已经收起，重画再照常处理
+            syncView(state);
             updateInputPanel(ic, state);
-            event.filterAndAccept();
-            return;
-        }
-        if (sym == FcitxKey_space) {
-            // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字）
-            // （互译模式下不开：工具栏选的字会绕过攒着的原文直接上屏）
-            if (toolbar_ && !shuangpin_ && !translating(ic) && state->input() == "v" &&
-                !state->hasSelections()) {
-                openTool(ic, state, WowtypeTool::Menu);
-                event.filterAndAccept();
-                return;
-            }
-            commitCurrent(ic, state);
-            event.filterAndAccept();
-            return;
-        }
-        if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter) {
-            // 回车：已选的词 + 原始字母上屏
-            commitInput(ic, state);
-            updateInputPanel(ic, state);
-            event.filterAndAccept();
-            return;
-        }
-        if (calculator_ && !shuangpin_) {
-            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
-            if (sym == FcitxKey_equal && calcActive(state) && state->input().size() > 1) {
-                // = 上屏计算结果（第一个候选）
-                commitCurrent(ic, state);
-                event.filterAndAccept();
-                return;
-            }
-            if (const char c = calcChar(key); c != 0 && calcActive(state)) {
-                state->append(std::string(1, c));
-                refreshCandidates(state);
-                updateInputPanel(ic, state);
-                event.filterAndAccept();
-                return;
-            }
-        }
-        if (const int nth = selectKeyIndex(sym); nth > 0) {
-            // 分号选第 2 个、引号选第 3 个（设置里打开时）；没这么多候选就什么都不做
-            if (auto list = ic->inputPanel().candidateList(); list && nth <= list->size()) {
-                list->candidate(nth - 1).select(ic);
-            }
-            event.filterAndAccept();
-            return;
-        }
-        if (key.isDigit()) {
-            // 数字按当前页选词
-            const int digit = key.digit();
-            if (auto list = ic->inputPanel().candidateList(); list && digit >= 1 &&
-                                                              digit <= list->size()) {
-                list->candidate(digit - 1).select(ic);
-            }
-            event.filterAndAccept();
-            return;
-        }
-
-        // 微软、搜狗、紫光双拼用分号当 ing：等第二个键时分号进编辑区，不当标点
-        if (sym == FcitxKey_semicolon && semicolonIsKey(state)) {
-            state->append(";");
-            refreshCandidates(state);
-            updateInputPanel(ic, state);
-            event.filterAndAccept();
-            return;
-        }
-
-        // fcitx5 全局设置里的翻页、移动候选热键（[Hotkey/PrevPage] 等，比如 , . 翻页）。
-        // 按了就算翻不动也吃掉，不让它变成标点把字上屏。方向键（fcitx 默认上下翻页）
-        // 照横排/竖排走下面自己的规则（横排下键展开候选面板）。
-        const bool arrow = sym == FcitxKey_Up || sym == FcitxKey_Down ||
-                           sym == FcitxKey_Left || sym == FcitxKey_Right;
-        if (auto list = ic->inputPanel().candidateList();
-            !arrow && list && list->size() > 0) {
-            const auto &global = instance_->globalConfig();
-            auto *pageable = list->toPageable();
-            auto *movable = list->toCursorMovable();
-            bool matched = true;
-            if (key.checkKeyList(global.defaultPrevPage())) {
-                if (pageable && pageable->hasPrev()) {
-                    pageable->prev();
-                }
-            } else if (key.checkKeyList(global.defaultNextPage())) {
-                if (pageable && pageable->hasNext()) {
-                    pageable->next();
-                }
-            } else if (key.checkKeyList(global.defaultPrevCandidate())) {
-                if (movable) {
-                    movable->prevCandidate();
-                }
-            } else if (key.checkKeyList(global.defaultNextCandidate())) {
-                if (movable) {
-                    movable->nextCandidate();
-                }
-            } else {
-                matched = false;
-            }
-            if (matched) {
-                event.filterAndAccept();
-                ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-                return;
-            }
-        }
-
-        // 候选翻页/移动。fcitx5 的 CandidateList 没有 keyEvent，
-        // 引擎需要自己把按键映射到 prev/next/prevCandidate/nextCandidate。
-        if (auto list = ic->inputPanel().candidateList(); list && list->size() > 0) {
-            auto *pageable = list->toPageable();
-            auto *movable = list->toCursorMovable();
-            // 横排时左右键移动候选、上下键翻页；竖排反过来
-            const bool horizontal = horizontal_;
-            const auto prevKey = horizontal ? FcitxKey_Left : FcitxKey_Up;
-            const auto nextKey = horizontal ? FcitxKey_Right : FcitxKey_Down;
-            const auto prevPageKey = horizontal ? FcitxKey_Up : FcitxKey_Left;
-            const auto nextPageKey = horizontal ? FcitxKey_Down : FcitxKey_Right;
-            bool handled = false;
-            if (horizontal && sym == FcitxKey_Down && state->candidates_.size() > 1) {
-                // 横排时下键展开候选面板（照微信输入法），光标停在当前选中的词上
-                int cursor = list->cursorIndex();
-                if (auto *common = dynamic_cast<fcitx::CommonCandidateList *>(list.get())) {
-                    cursor = common->globalCursorIndex();
-                }
-                state->expanded_ = true;
-                state->gridCursor_ = cursor > 0 ? static_cast<std::size_t>(cursor) : 0;
-                updateInputPanel(ic, state);
-                event.filterAndAccept();
-                return;
-            }
-            if (movable && sym == prevKey) {
-                movable->prevCandidate();
-                handled = true;
-            } else if (movable && sym == nextKey) {
-                movable->nextCandidate();
-                handled = true;
-            } else if (pageable) {
-                // 设置里能选的翻页键（- =、[ ]、, .、Shift+Tab Tab）
-                const bool shift = key.states().test(fcitx::KeyState::Shift);
-                const bool tabPrev =
-                    pageTab_ && (sym == FcitxKey_ISO_Left_Tab || (sym == FcitxKey_Tab && shift));
-                const bool tabNext = pageTab_ && sym == FcitxKey_Tab && !shift;
-                const bool charPrev = (pageMinus_ && sym == FcitxKey_minus) ||
-                                      (pageBracket_ && sym == FcitxKey_bracketleft) ||
-                                      (pageComma_ && sym == FcitxKey_comma) || tabPrev;
-                const bool charNext = (pageMinus_ && sym == FcitxKey_equal) ||
-                                      (pageBracket_ && sym == FcitxKey_bracketright) ||
-                                      (pageComma_ && sym == FcitxKey_period) || tabNext;
-                if ((sym == FcitxKey_Page_Up || sym == prevPageKey || charPrev) &&
-                    pageable->hasPrev()) {
-                    pageable->prev();
-                    handled = true;
-                } else if ((sym == FcitxKey_Page_Down || sym == nextPageKey || charNext) &&
-                           pageable->hasNext()) {
-                    pageable->next();
-                    handled = true;
-                } else if ((charPrev || charNext) && (pageable->hasPrev() || pageable->hasNext())) {
-                    // 已经在第一页/最后一页：吃掉，不当标点上屏（只有一页时照常当标点）
-                    handled = true;
-                }
-            }
-            if (handled) {
-                event.filterAndAccept();
-                ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-                return;
-            }
         }
 
         // 打字途中按标点：先上屏当前候选，再上屏标点（全角样式是中文标点）
@@ -2128,10 +2099,13 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     }
 
-    // 字母（大写原样保留，Hello、iPhone 要用到）和隔音符（xi'an）进编辑区，由会话处理
-    if (sessionKey(state, key)) {
-        refreshCandidates(state);
-        updateInputPanel(ic, state);
+    // 没在打字时，字母（大写原样保留，Hello、iPhone 要用到）开始编辑区，由会话处理
+    // （打字途中的键上面已经交给过会话了，会话不管的交给应用）
+    if (state->composing()) {
+        return;
+    }
+    if (const WowtypeFrame *frame = sessionKey(state, key); frame && frame->handled) {
+        applySessionFrame(ic, state, frame);
         event.filterAndAccept();
     }
 }
@@ -2216,51 +2190,6 @@ std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
 std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
                                             fcitx::InputContext & /*ic*/) {
     return translateMode_ ? "译" : asciiMode_ ? "英" : "";
-}
-
-int WowtypeEngine::selectKeyIndex(fcitx::KeySym sym) const {
-    if (selectKeys_ == WowtypeSelectKeys::Off) {
-        return 0;
-    }
-    if (sym == FcitxKey_semicolon) {
-        // 微软、搜狗、紫光双拼里分号是 ing 键，不能拿来选词
-        return shuangpin_ && shuangpinSemicolon_ ? 0 : 2;
-    }
-    if (sym == FcitxKey_apostrophe && selectKeys_ == WowtypeSelectKeys::SemicolonQuote) {
-        return 3;
-    }
-    return 0;
-}
-
-bool WowtypeEngine::calcActive(WowtypeState *state) const {
-    if (!calculator_ || shuangpin_ || state->hasSelections()) {
-        return false;
-    }
-    const std::string buffer = state->input();
-    if (buffer.empty() || buffer[0] != 'v') {
-        return false;
-    }
-    for (std::size_t i = 1; i < buffer.size(); ++i) {
-        const char c = buffer[i];
-        if (!((c >= '0' && c <= '9') || std::string_view("+-*/%^.()").find(c) !=
-                                            std::string_view::npos)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-bool WowtypeEngine::semicolonIsKey(WowtypeState *state) const {
-    if (!shuangpin_ || !shuangpinSemicolon_ || !state->composing()) {
-        return false;
-    }
-    std::size_t keys = 0;
-    for (const char c : state->remaining()) {
-        if (c != '\'') {
-            ++keys;
-        }
-    }
-    return keys % 2 == 1;
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。

@@ -75,7 +75,7 @@ const WowtypeFrame *wowtype_session_reset(WowtypeSession *s, int commit_pending)
 void wowtype_session_free(WowtypeSession *s);
 ```
 
-> 已经落地的部分（ABI 1.5）以 `core/include/wowtype_core.h` 为准，和上面的草案有几处不同：`WowtypeKey`、`WowtypeSessionConfig` 也以 `size` 开头，`release` 是 `uint32_t`；`wowtype_session_new` 的 `engine` 可以传 NULL，载入好了用 `wowtype_session_set_engine` 补上，设置用 `wowtype_session_configure` 改；`wowtype_session_select`（点候选）和 `wowtype_session_tick`（定时器）还没加，等翻页和互译挪进来时再加（现在点候选、按数字键是过渡函数 `wowtype_session_choose`，按的是整个候选列表的序号，不是当前页的）；另有几个标了「过渡」的函数，挪完删。规则见 [ABI.md](ABI.md)「输入会话」。
+> 已经落地的部分（ABI 1.6）以 `core/include/wowtype_core.h` 为准，和上面的草案有几处不同：`WowtypeKey`、`WowtypeSessionConfig` 也以 `size` 开头，`release` 是 `uint32_t`，`WowtypeKey` 多一个 `action`（外壳把 fcitx5 全局的翻页 / 移光标快捷键翻成动作传进来）；`wowtype_session_new` 的 `engine` 可以传 NULL，载入好了用 `wowtype_session_set_engine` 补上，设置用 `wowtype_session_configure` 改；`wowtype_session_select`（点候选，序号是当前页里的）、`wowtype_session_candidate` 和 frame 里的 `cand_count`、`cand_cursor`、`has_prev`、`has_next` 1.6 加上了，`wowtype_session_tick`（定时器）还没加，等互译挪进来时再加；另有几个标了「过渡」的函数，挪完删。规则见 [ABI.md](ABI.md)「输入会话」。
 
 要点：
 
@@ -137,6 +137,6 @@ macos/           macOS 外壳：IMK 输入法 + 设置窗口 + 打包脚本
 4. **补齐**：展开面板、表情、互译、设置窗口、打包和更新。
 5. **语音**：cpal 采集 + 小窗浮条。
 
-进度：第 1 步做完了（ABI 1.0）。第 2 步的第一块（ABI 1.3）：`core/src/session.rs` 和 `wowtype_session_*` 建好了，编辑区的原始输入、已选词栈、字母 / 隔音符 / 退格 / Esc 挪进了会话，fcitx5 外壳改成调会话，对应按键测试在 `core/tests/session_keys.rs`。第二块（ABI 1.4）：候选列表（含计算器、emoji 推荐、数字按键 emoji、日期时间）和编辑区分音节挪进了会话，fcitx5 外壳先把候选整个抄过去。第三块（ABI 1.5）：选词、整句上屏和学习挪进了会话（`wowtype_session_choose`、`_commit_input`），外壳只管把按键翻成序号、上屏以后记上文和存用户词库。接下来按这个顺序挪：翻页、选词键（空格、回车、数字、分号引号）、展开面板 → 标点和小数点 → 中 / 英 / 译 和单按 Shift → 互译 → 语音键 → 表情面板和工具栏。
+进度：第 1 步做完了（ABI 1.0）。第 2 步的第一块（ABI 1.3）：`core/src/session.rs` 和 `wowtype_session_*` 建好了，编辑区的原始输入、已选词栈、字母 / 隔音符 / 退格 / Esc 挪进了会话，fcitx5 外壳改成调会话，对应按键测试在 `core/tests/session_keys.rs`。第二块（ABI 1.4）：候选列表（含计算器、emoji 推荐、数字按键 emoji、日期时间）和编辑区分音节挪进了会话，fcitx5 外壳先把候选整个抄过去。第三块（ABI 1.5）：选词、整句上屏和学习挪进了会话（`wowtype_session_choose`、`_commit_input`），外壳只管把按键翻成序号、上屏以后记上文和存用户词库。第四块（ABI 1.6）：空格、回车、数字、分号引号选词、翻页（含 fcitx5 全局翻页键）和展开面板挪进了会话（`_key`、`_select`），外壳的候选框照会话的页码和光标摆，`_commit_input` 删掉。接下来按这个顺序挪：标点和小数点 → 中 / 英 / 译 和单按 Shift → 互译 → 语音键 → 表情面板和工具栏。
 
 第 1 步可以马上做；第 3 步可以在第 2 步挪完「编辑区 + 选词 + 翻页」这几块之后就开始，不用等全部挪完。
