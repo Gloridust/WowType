@@ -50,7 +50,7 @@ constexpr const char *kSystemDataDir = WOWTYPE_SYSTEM_DATA_DIR;
 constexpr std::size_t kGridCols = 6;
 constexpr std::size_t kGridRows = 6;
 /// 候选总数上限（约 33 页 × 9 个）。
-constexpr unsigned int kMaxCandidates = 300;
+constexpr unsigned int kMaxCandidates = 1000;
 /// 上下文只保留尾部这么多字节：bigram 特征只看紧邻的上文。
 constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
@@ -1343,6 +1343,8 @@ void WowtypeEngine::fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state)
     for (std::size_t i = 0; i < n; ++i) {
         list->append<WowtypeToolWord>(this, state, i, state->candidates_[i].text);
     }
+    // setGlobalCursorIndex 只设光标、不翻页：先翻到光标那一页，不然光标走到后面几页时看不到
+    list->setPage(static_cast<int>(state->panelCursor_ / kToolPageSize));
     list->setGlobalCursorIndex(static_cast<int>(state->panelCursor_));
     panel.setCandidateList(std::move(list));
 }
@@ -1612,7 +1614,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
             candidates->append<WowtypeCandidateWord>(this, state, i,
                                                     state->candidates_[i].text);
         }
-        // 页码和光标照会话的（收起展开面板后回到第一页，光标可能不在这一页上）
+        // 页码和光标照会话的（展开面板里走到后面再收起时，会话翻到光标那一页）
         candidates->mirror(state->panelPage_,
                            std::min(state->panelCursor_, state->candidates_.size() - 1));
         panel.setCandidateList(std::move(candidates));
@@ -1668,6 +1670,8 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
             list->append<WowtypeGridRow>(this, state, r, line);
         }
     }
+    // 先翻到光标所在的那一屏（setGlobalCursorIndex 不翻页），下键走到第 7 行以后才看得到
+    list->setPage(static_cast<int>(cursorRow / kGridRows));
     list->setGlobalCursorIndex(static_cast<int>(cursorRow));
     panel.setCandidateList(std::move(list));
 }

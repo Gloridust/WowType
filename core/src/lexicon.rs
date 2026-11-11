@@ -93,6 +93,16 @@ pub struct LexEntry {
     pub initials: Vec<u8>,
 }
 
+impl LexEntry {
+    /// 生僻字：频次不到 1 的单字（大字表补进来的读音，见 tools/rime2tsv.py --extra-chars）。
+    ///
+    /// 它们不参与组句、不占前几页，只在翻页的长尾里列出来，保证一个音节的字都找得到。
+    /// 一个音节动辄几百个这样的字（yi 有六百多），让束搜索每一步都去排它们会慢很多。
+    pub fn is_rare(&self) -> bool {
+        self.freq < 1.0 && self.word.chars().count() == 1
+    }
+}
+
 /// 全拼音节键。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SyllableKey {
@@ -114,6 +124,13 @@ pub trait Lexicon: Send + Sync {
     /// 返回所有权值而非引用：这样「基础词库 + 用户词库」可以合并返回，
     /// 也能在运行时安全地增删用户词。命中数很小，克隆成本可接受。
     fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry>;
+
+    /// 同 [`Lexicon::lookup`]，但不要生僻字（[`LexEntry::is_rare`]）。组句用这个。
+    fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let mut found = self.lookup(query);
+        found.retain(|e| !e.is_rare());
+        found
+    }
 
     /// 模糊音查询（z/zh、an/ang 等）。groups 是打开的分组（`syllable::fuzzy::*` 位掩码）。
     /// 默认不支持。
@@ -200,11 +217,21 @@ impl MemoryLexicon {
             keys: keys.clone(),
             initials: initials.clone(),
         });
-        self.full_index.entry(keys.clone()).or_default().push(idx);
-        self.jianpin_index
-            .entry(initials.clone())
-            .or_default()
-            .push(idx);
+        let rare = self.entries[idx].is_rare();
+        let entries = &self.entries;
+        // 每组里生僻字（LexEntry::is_rare）排在最后，lookup_common 读到它们就停
+        let push = |list: &mut Vec<usize>| {
+            list.push(idx);
+            if !rare {
+                let mut at = list.len() - 1;
+                while at > 0 && entries[list[at - 1]].is_rare() {
+                    list.swap(at - 1, at);
+                    at -= 1;
+                }
+            }
+        };
+        push(self.full_index.entry(keys.clone()).or_default());
+        push(self.jianpin_index.entry(initials.clone()).or_default());
         let mut hash = KEY_HASH_SEED;
         for key in keys.iter().take(keys.len().saturating_sub(1)) {
             hash = key_hash_step(hash, *key);
@@ -468,8 +495,18 @@ impl MemoryLexicon {
     }
 }
 
-impl Lexicon for MemoryLexicon {
-    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+impl MemoryLexicon {
+    /// 索引里每组的生僻字都排在最后（见 add_entry），不要它们时只取前面那段。
+    fn without_rare<'a>(&self, idxs: &'a [usize], skip_rare: bool) -> &'a [usize] {
+        if skip_rare {
+            &idxs[..idxs.partition_point(|&i| !self.entries[i].is_rare())]
+        } else {
+            idxs
+        }
+    }
+
+    fn lookup_impl(&self, query: &[SyllableQuery], skip_rare: bool) -> Vec<LexEntry> {
+        let take = |&i: &usize| self.entries[i].clone();
         if query.is_empty() {
             return Vec::new();
         }
@@ -492,7 +529,12 @@ impl Lexicon for MemoryLexicon {
             return self
                 .full_index
                 .get(&key)
-                .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
+                .map(|idxs| {
+                    self.without_rare(idxs, skip_rare)
+                        .iter()
+                        .map(take)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -507,7 +549,12 @@ impl Lexicon for MemoryLexicon {
             return self
                 .jianpin_index
                 .get(&key)
-                .map(|idxs| idxs.iter().map(|&i| self.entries[i].clone()).collect())
+                .map(|idxs| {
+                    self.without_rare(idxs, skip_rare)
+                        .iter()
+                        .map(take)
+                        .collect()
+                })
                 .unwrap_or_default();
         }
 
@@ -518,12 +565,23 @@ impl Lexicon for MemoryLexicon {
         self.jianpin_index
             .get(&initials)
             .map(|idxs| {
-                idxs.iter()
+                self.without_rare(idxs, skip_rare)
+                    .iter()
                     .filter(|&&i| entry_matches(&self.entries[i], query))
-                    .map(|&i| self.entries[i].clone())
+                    .map(take)
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+impl Lexicon for MemoryLexicon {
+    fn lookup(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        self.lookup_impl(query, false)
+    }
+
+    fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        self.lookup_impl(query, true)
     }
 
     fn has_longer(&self, query: &[SyllableQuery]) -> bool {
@@ -614,6 +672,16 @@ impl Lexicon for FuzzyLexicon<'_> {
             return exact;
         }
         self.inner.lookup_fuzzy(query, self.groups)
+    }
+
+    fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let exact = self.inner.lookup_common(query);
+        if !exact.is_empty() {
+            return exact;
+        }
+        let mut fuzzy = self.inner.lookup_fuzzy(query, self.groups);
+        fuzzy.retain(|e| !e.is_rare());
+        fuzzy
     }
 
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
@@ -867,6 +935,14 @@ impl Lexicon for UserLexicon {
         let mut result = self.base.lookup(query);
         if let Ok(snapshot) = self.snapshot.read() {
             result.extend(snapshot.lookup(query));
+        }
+        result
+    }
+
+    fn lookup_common(&self, query: &[SyllableQuery]) -> Vec<LexEntry> {
+        let mut result = self.base.lookup_common(query);
+        if let Ok(snapshot) = self.snapshot.read() {
+            result.extend(snapshot.lookup_common(query));
         }
         result
     }

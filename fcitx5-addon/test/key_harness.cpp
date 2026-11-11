@@ -382,6 +382,35 @@ void runCases(Instance &instance) {
     type(ic.get(), "<down>j");
     check(layout() == CandidateLayoutHint::Horizontal && preedit(ic.get()) == "shi'j",
           "展开后接着打字：收起并照常输入，实际 " + preedit(ic.get()));
+    // 展开后一直按下键走到第二屏：面板跟着翻到光标那一屏；收起后横排候选框也停在光标那一页
+    auto common = [&]() -> CommonCandidateList * {
+        auto list = ic->inputPanel().candidateList();
+        return list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
+    };
+    fresh(ic.get());
+    type(ic.get(), "shi<down>");
+    const int gridRows = common() ? common()->totalSize() : 0;
+    check(gridRows > 7, "shi 展开后超过一屏（" + std::to_string(gridRows) + " 行）");
+    if (gridRows > 7) {
+        type(ic.get(), "<down><down><down><down><down><down><down>");
+        const auto screen = page(ic.get());
+        bool framed = false;
+        for (const auto &row : screen) {
+            framed = framed || row.find("\u3014") != std::string::npos;
+        }
+        check(common() && common()->cursorIndex() >= 0 && common()->currentPage() == 1 && framed,
+              "展开后下移 7 行：面板翻到第二屏，看得到光标：" + join(screen));
+        type(ic.get(), "<esc>");
+        const auto shown = page(ic.get());
+        check(layout() == CandidateLayoutHint::Horizontal && common() &&
+                  common()->cursorIndex() >= 0,
+              "第二屏收起后，横排候选框停在光标那一页：" + join(shown));
+        if (common() && common()->cursorIndex() >= 0) {
+            const std::string cur = shown[static_cast<std::size_t>(common()->cursorIndex())];
+            type(ic.get(), "<sp>");
+            check(ic->committed == cur, "收起后空格选光标处的候选，实际 " + ic->committed);
+        }
+    }
 
     // 空格选光标所在的候选
     fresh(ic.get());
