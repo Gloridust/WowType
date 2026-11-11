@@ -92,9 +92,14 @@ pub fn fullwidth_punct(ascii: char) -> Option<&'static str> {
         '>' => "》",
         '\\' => "、",
         '~' => "～",
+        '`' => "·",
+        '^' => "……",
+        '_' => "——",
+        '"' => "“",
+        '\'' => "‘",
         '@' => "＠",
         '#' => "＃",
-        '$' => "＄",
+        '$' => "￥",
         '%' => "％",
         '&' => "＆",
         '*' => "＊",
@@ -121,7 +126,36 @@ pub fn punct(ascii: char, style: PunctStyle, prev: Option<char>) -> Option<&'sta
     if ascii == '.' && prev.is_some_and(|c| c.is_ascii_digit()) {
         return None;
     }
+    if ascii == '"' || ascii == '\'' {
+        return Some(quote(ascii, prev));
+    }
     fullwidth_punct(ascii)
+}
+
+thread_local! {
+    /// 双引号、单引号各自上一次给的是不是左引号。
+    static QUOTE_OPEN: std::cell::Cell<[bool; 2]> = const { std::cell::Cell::new([false; 2]) };
+}
+
+/// 引号左右交替：“……” ‘……’。光标前是空白或左括号时一定给左引号。
+fn quote(ascii: char, prev: Option<char>) -> &'static str {
+    let (slot, open, close) = if ascii == '"' {
+        (0, "“", "”")
+    } else {
+        (1, "‘", "’")
+    };
+    QUOTE_OPEN.with(|state| {
+        let mut opened = state.get();
+        let want_open = prev.is_some_and(|c| c.is_whitespace() || "(（[【<《{「『".contains(c))
+            || !opened[slot];
+        opened[slot] = want_open;
+        state.set(opened);
+        if want_open {
+            open
+        } else {
+            close
+        }
+    })
 }
 
 /// 按拼音或中文名前缀检索符号。
@@ -174,6 +208,36 @@ mod tests {
         assert_eq!(punct('.', Fullwidth, Some('a')), Some("。"));
         // 只管句点：数字后面的逗号还是中文逗号
         assert_eq!(punct(',', Fullwidth, Some('3')), Some("，"));
+    }
+
+    /// 主流输入法的写法：Shift+6 省略号、Shift+- 破折号、Shift+4 人民币符号、` 间隔号。
+    /// 反馈见 https://x.com/so1v3/status/2120415675969896729
+    #[test]
+    fn maps_ellipsis_dash_yuan_and_middle_dot() {
+        use PunctStyle::*;
+        assert_eq!(punct('^', Fullwidth, None), Some("……"));
+        assert_eq!(punct('_', Fullwidth, None), Some("——"));
+        assert_eq!(punct('$', Fullwidth, None), Some("￥"));
+        assert_eq!(punct('`', Fullwidth, None), Some("·"));
+        assert_eq!(punct('^', Halfwidth, None), None);
+    }
+
+    #[test]
+    fn quotes_alternate_left_and_right() {
+        use PunctStyle::*;
+        // 各测试跑在自己的线程里，引号状态是线程内的
+        assert_eq!(punct('"', Fullwidth, None), Some("“"));
+        assert_eq!(punct('"', Fullwidth, Some('好')), Some("”"));
+        assert_eq!(punct('"', Fullwidth, Some('。')), Some("“"));
+        // 单引号单独记
+        assert_eq!(punct('\'', Fullwidth, None), Some("‘"));
+        assert_eq!(punct('"', Fullwidth, Some('好')), Some("”"));
+        assert_eq!(punct('\'', Fullwidth, None), Some("’"));
+        // 光标前是空白或左括号：一定是左引号
+        assert_eq!(punct('"', Fullwidth, None), Some("“"));
+        assert_eq!(punct('"', Fullwidth, Some(' ')), Some("“"));
+        assert_eq!(punct('"', Fullwidth, Some('（')), Some("“"));
+        assert_eq!(punct('"', Halfwidth, None), None);
     }
 
     #[test]
