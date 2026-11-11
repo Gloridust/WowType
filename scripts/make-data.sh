@@ -40,12 +40,26 @@ LM_SHA256=42cb7c4a7cededa29b1a9ff105530085529fefff96535cc051341ebd51605dbe
 if [[ -n "${WOWTYPE_LM_FILE:-}" ]]; then
   cp "$WOWTYPE_LM_FILE" "$OUT/words.lm"
 else
-  curl -fsSL --retry 3 "$LM_URL" | xz -d > "$OUT/words.lm"
+  # macOS 默认没有 xz，用 python3 自带的 lzma 解
+  if command -v xz >/dev/null; then
+    curl -fsSL --retry 3 "$LM_URL" | xz -d > "$OUT/words.lm"
+  else
+    curl -fsSL --retry 3 "$LM_URL" |
+      python3 -c 'import lzma, shutil, sys; shutil.copyfileobj(lzma.open(sys.stdin.buffer), sys.stdout.buffer)' \
+      > "$OUT/words.lm"
+  fi
 fi
-echo "$LM_SHA256  $OUT/words.lm" | sha256sum -c --quiet || {
-  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256）" >&2
+# 不用 sha256sum -c：macOS 的 sha256sum 是 BSD 版，不认 -c --quiet；python3 两边都有
+actual=$(python3 -c 'import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for block in iter(lambda: f.read(1 << 20), b""):
+        h.update(block)
+print(h.hexdigest())' "$OUT/words.lm")
+if [[ "$actual" != "$LM_SHA256" ]]; then
+  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256，实际 $actual）" >&2
   exit 1
-}
+fi
 
 COMMIT=$(git -C "$RIME" rev-parse HEAD 2>/dev/null || echo unknown)
 DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)
