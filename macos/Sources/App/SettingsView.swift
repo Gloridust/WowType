@@ -1,8 +1,9 @@
 // 设置窗口的界面（SwiftUI，macOS 12 起）。
 //
 // 页面、分组、文字照 Linux 的设置界面（settings/wowtype-config 的 build_general / build_input / build_emoji /
-// build_words），选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能（工具栏、剪贴板历史、
-// 语音、表情面板、互译、检查更新）不列出来，它们在 wowtype.conf 里的键原样留着。
+// build_words），名字和顺序两边一样，选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能
+// （语音、检查更新）不列出来，它们在 wowtype.conf 里的键原样留着。
+// 每行一个标题，副标题最多一行；说明、注意事项、例子、来源、许可放进 ⓘ（InfoButton）或「更多选项」折叠里。
 // 样子也照 Linux：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片。
 
 import AppKit
@@ -85,6 +86,7 @@ struct SettingsView: View {
         case .general: GeneralPage(model: model)
         case .input: InputPage(model: model)
         case .emoji: EmojiPage(model: model)
+        case .translate: TranslatePage(model: model)
         case .words: WordsPage(model: model)
         }
     }
@@ -189,38 +191,39 @@ private struct GeneralPage: View {
             PickerRow(title: "排列方向", selection: $model.config.horizontal,
                       options: [("横排", true), ("竖排", false)])
             RowDivider()
-            StepperRow(title: "每页个数", subtitle: "用数字键 1–9 选词", value: $model.config.pageSize, range: 3...9)
+            StepperRow(title: "每页个数", value: $model.config.pageSize, range: 3...9)
             RowDivider()
-            ExpanderRow(title: "翻页键", subtitle: "Page Up / Page Down 和方向键一直能翻页；下面的可以另外打开") {
+            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down 和方向键") {
                 SwitchRow(title: "- 和 =", isOn: $model.config.pageKeysMinus)
                 RowDivider()
-                SwitchRow(title: "[ 和 ]", subtitle: "打开后打字途中 [ ] 不再出【】", isOn: $model.config.pageKeysBracket)
+                SwitchRow(title: "[ 和 ]", subtitle: "打字途中不再出【】", isOn: $model.config.pageKeysBracket)
                 RowDivider()
-                SwitchRow(title: ", 和 .", subtitle: "打开后打字途中逗号句号用来翻页，要先选词再打标点",
-                          isOn: $model.config.pageKeysComma)
+                SwitchRow(title: ", 和 .", subtitle: "打字途中要先选词再打标点", isOn: $model.config.pageKeysComma)
                 RowDivider()
                 SwitchRow(title: "Shift+Tab 和 Tab", isOn: $model.config.pageKeysTab)
             }
         }
         PrefGroup("外观") {
-            StepperRow(title: "候选字号", subtitle: "候选框里字的大小（磅），下一次打字时生效",
-                       value: $model.config.candidateFontSize, range: 10...40)
+            StepperRow(title: "候选字号", value: $model.config.candidateFontSize, range: 10...40)
         }
-        PrefGroup("小技巧") {
-            ActionRow(title: "简拼", subtitle: "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持")
+        PrefGroup("帮助") {
+            ExpanderRow(title: "小技巧") {
+                ActionRow(title: "简拼", subtitle: "bjdx → 北京大学，zhch → 支持")
+                RowDivider()
+                ActionRow(title: "长句分段选", subtitle: "先选开头的词，剩下的接着选")
+                RowDivider()
+                ActionRow(title: "忘掉学错的词", subtitle: "光标移到候选上，按 Control+Delete")
+                RowDivider()
+                ActionRow(title: "搜符号", subtitle: "表情面板里打 gou → ✓、youjiantou → →")
+                RowDivider()
+                ActionRow(title: "互译", subtitle: "单按 Shift 切到「译」，打中文出外文")
+            }
             RowDivider()
-            ActionRow(title: "长句分段选", subtitle: "第一个候选不对时，先选开头的词，剩下的接着选")
-            RowDivider()
-            ActionRow(title: "忘掉学错的词", subtitle: "打字时把光标移到学错的候选上，按 Control+Delete")
-        }
-        PrefGroup("问题反馈") {
-            ActionRow(title: "打开数据目录", subtitle: "设置文件、自定义词、学到的词都在这里",
-                      action: { NSWorkspace.shared.open(model.supportDir) }) {
+            ActionRow(title: "打开数据目录", action: { NSWorkspace.shared.open(model.supportDir) }) {
                 Image(systemName: "folder").foregroundColor(.secondary)
             }
             RowDivider()
-            ActionRow(title: "提交问题", subtitle: "到 GitHub 上告诉我们哪里不好用",
-                      action: { NSWorkspace.shared.open(issuesURL) }) {
+            ActionRow(title: "提交问题", action: { NSWorkspace.shared.open(issuesURL) }) {
                 Image(systemName: "arrow.up.right.square").foregroundColor(.secondary)
             }
         }
@@ -245,74 +248,108 @@ private struct InputPage: View {
     @Environment(\.palette) private var palette
 
     var body: some View {
-        PrefGroup("词库", description: "换词库后几秒内生效，你加的词和输入法学到的习惯都还在。") {
-            RadioRow(title: "雾凇拼音（默认）", subtitle: "约 89 万条，在安装包里，跟着 WowType 一起更新",
-                     selected: model.config.lexicon.isEmpty) { model.config.lexicon = "" }
+        PrefGroup("词库", info: "换词库几秒后生效，自定义词和学到的习惯都会保留。\n\n"
+                  + "雾凇拼音在安装包里，跟着 WowType 一起更新。\n\n"
+                  + "万象拼音词更多，比雾凇多占约 300 MB 内存；从 amzxyz/rime_wanxiang（CC BY 4.0）转换，只用了它的词条。"
+                  + "装在 ~/Library/Application Support/WowType/dicts/wanxiang。",
+                  links: [("万象拼音项目主页", URL(string: "https://github.com/amzxyz/rime_wanxiang")!)]) {
+            RadioRow(title: "雾凇拼音（默认）", subtitle: "约 89 万条", selected: model.lexiconKind == .rimeIce) {
+                model.useRimeIce()
+            }
+            .disabled(model.lexiconBusy)
             RowDivider()
-            RadioRow(title: "自己的词库文件", subtitle: lexiconSubtitle, subtitleColor: lexiconColor,
-                     selected: !model.config.lexicon.isEmpty) {
-                if model.config.lexicon.isEmpty { model.chooseLexicon() }
+            RadioRow(title: "万象拼音", subtitle: wanxiangSubtitle, selected: model.lexiconKind == .wanxiang) {
+                if model.lexiconKind != .wanxiang { model.useWanxiang() }
+            } trailing: {
+                if !model.lexiconBusy {
+                    // 发布页上没有万象包时不显示「下载」（和 Linux 一样，可以从文件安装）
+                    let noAsset = model.release != nil && model.release?.wanxiang == nil
+                    if (model.wanxiangVersion == nil || model.wanxiangUpdate != nil) && !noAsset {
+                        Button(model.wanxiangVersion == nil ? "下载" : "更新") { model.installWanxiang() }
+                    }
+                    IconButton(symbol: "folder", help: "从文件安装") { model.chooseWanxiangFile() }
+                    if model.wanxiangVersion != nil && model.lexiconKind != .wanxiang {
+                        IconButton(symbol: "trash", help: "删除万象拼音") { model.removeWanxiang() }
+                    }
+                }
+            }
+            .disabled(model.lexiconBusy)
+            RowDivider()
+            RadioRow(title: "自定义词库", subtitle: lexiconSubtitle, subtitleColor: lexiconColor,
+                     selected: model.lexiconKind == .custom) {
+                if model.lexiconKind != .custom { model.chooseLexicon() }
             } trailing: {
                 Button("选择…") { model.chooseLexicon() }
             }
+            .disabled(model.lexiconBusy)
         }
+        .onAppear { model.checkRelease() }
 
         PrefGroup("输入方式") {
-            RadioRow(title: "拼音输入", subtitle: "全拼，也可以只打声母：bjdx → 北京大学",
-                     selected: !model.config.shuangpin) { model.config.shuangpin = false }
+            RadioRow(title: "拼音输入", subtitle: "全拼，也能只打声母", selected: !model.config.shuangpin) {
+                model.config.shuangpin = false
+            }
             RowDivider()
-            RadioRow(title: "双拼输入", subtitle: "每个字两个键，编辑区显示成全拼",
-                     selected: model.config.shuangpin) { model.config.shuangpin = true }
-            RowDivider()
-            PickerRow(title: "双拼方案", selection: $model.config.shuangpinScheme, options: schemeOptions)
-                .disabled(!model.config.shuangpin)
+            RadioRow(title: "双拼输入", subtitle: "每个字打两个键", selected: model.config.shuangpin) {
+                model.config.shuangpin = true
+            }
+            if model.config.shuangpin {
+                RowDivider()
+                PickerRow(title: "双拼方案", selection: $model.config.shuangpinScheme, options: schemeOptions)
+            }
         }
 
-        PrefGroup("中英文切换", description: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
-                  + "打到一半切英文，打的字母原样上屏。") {
+        PrefGroup("中英文切换", info: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
+                  + "打到一半切英文，已经打的字母原样上屏。") {
             PickerRow(title: "切换键", selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
         }
 
         PrefGroup("拼音") {
-            ExpanderRow(title: "模糊音", subtitle: "打开后选哪几组音不分，比如 n 和 l 分不清就打开 n = l",
-                        enabled: $model.config.fuzzy) {
+            ExpanderRow(title: "模糊音", subtitle: "比如 n 和 l 不分", enabled: $model.config.fuzzy) {
                 ForEach(fuzzyGroups.indices, id: \.self) { i in
                     if i > 0 { RowDivider() }
                     SwitchRow(title: fuzzyGroups[i].0, isOn: $model.config[dynamicMember: fuzzyGroups[i].1])
                 }
             }
             RowDivider()
-            SwitchRow(title: "按错键自动纠正", subtitle: "比如 zhognguo 也能打出「中国」（全拼时）",
-                      isOn: $model.config.typoCorrection)
+            SwitchRow(title: "按错键自动纠正", subtitle: "zhognguo → 中国（全拼时）", isOn: $model.config.typoCorrection)
             RowDivider()
-            SwitchRow(title: "繁体字", subtitle: "候选词转成繁体", isOn: $model.config.traditional)
+            SwitchRow(title: "繁体字", isOn: $model.config.traditional)
             RowDivider()
-            SwitchRow(title: "更多生僻字",
-                      subtitle: "候选里也列出极少用的生僻字。系统自带的字体有些显示不了，会是方块，要先装能显示它们的字体（比如花园明朝）",
+            SwitchRow(title: "更多生僻字", subtitle: "要装能显示它们的字体，比如花园明朝",
+                      info: "候选里也列出极少用的生僻字。系统自带的字体有些显示不了，会是方块。",
                       isOn: $model.config.rareExtChars)
             RowDivider()
-            PickerRow(title: "标点样式", subtitle: "打中文时标点用中文的（，。）还是英文的（, .）。数字后面的符号总是英文的（3.14）",
+            PickerRow(title: "标点样式", info: "数字后面的符号总是半角的，比如 3.14。",
                       selection: $model.config.halfwidthPunct, options: [("全角 ，。", false), ("半角 , .", true)])
         }
 
         PrefGroup("快捷输入") {
-            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi，候选里会多出今天的日期、现在的时间",
-                      isOn: $model.config.dateTime)
+            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi", isOn: $model.config.dateTime)
             RowDivider()
-            SwitchRow(title: "计算器", subtitle: "先打 v 再打算式，比如 v1+2*3 出 7，按空格用结果（双拼时不可用）",
+            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时不可用" : "v1+2*3 → 7",
                       isOn: $model.config.calculator)
                 .disabled(model.config.shuangpin)
             RowDivider()
-            PickerRow(title: "分号、引号选词", subtitle: "按 ; 选第 2 个候选，按 ' 选第 3 个。用引号选词后，引号不能再用来隔开拼音",
+            SwitchRow(title: "工具栏",
+                      subtitle: model.config.shuangpin ? "双拼时不可用" : "打 v 再按空格：剪贴板、常用语、符号、表情",
+                      isOn: $model.config.toolbar)
+                .disabled(model.config.shuangpin)
+            RowDivider()
+            SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
+                      info: "给工具栏里的「剪贴板」用，最多记 20 条，切走输入法就清空。"
+                          + "密码管理器标了「不要记」的不记，没标的密码会被记下并显示出来。",
+                      isOn: $model.config.clipboardHistory)
+            RowDivider()
+            PickerRow(title: "分号、引号选词", info: "用引号选词后，引号不能再用来隔开拼音（xi'an）。",
                       selection: $model.config.selectKeys,
                       options: [("不用", .off), ("分号选第 2 个", .semicolon), ("分号选第 2 个、引号选第 3 个", .semicolonQuote)])
             RowDivider()
-            SwitchRow(title: "以词定字", subtitle: "只想要词里的一个字时用：打拼音时按 [ 取第一个字，按 ] 取最后一个字（nihao 按 [ → 你）",
-                      isOn: $model.config.pickChar)
+            SwitchRow(title: "以词定字", subtitle: "按 [ 取第一个字，按 ] 取最后一个字", isOn: $model.config.pickChar)
             RowDivider()
-            ExpanderRow(title: "中英文之间自动加空格",
-                        subtitle: "你好Mac → 你好 Mac、第5章 → 第 5 章。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用",
+            ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
+                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
                         enabled: $model.config.autoSpace) {
                 SwitchRow(title: "汉字和英文字母之间", isOn: $model.config.autoSpaceLetters)
                 RowDivider()
@@ -329,16 +366,29 @@ private struct InputPage: View {
         return shuangpinSchemes + [("其他（\(current)）", current)]
     }
 
-    private var lexiconSubtitle: String {
-        let path = model.config.lexicon
-        if path.isEmpty {
-            return "每行：拼音<TAB>词<TAB>频次"
+    /// 和 Linux 设置里的一样：装了的版本、有没有新版、下载进度
+    private var wanxiangSubtitle: String {
+        if let progress = model.lexiconProgress {
+            return progress
         }
-        return model.customLexiconMissing ? "\(path) 不在，现在用的是自带的词库" : path
+        if let version = model.wanxiangVersion {
+            return "已下载 \(version)" + (model.wanxiangUpdate.map { "，有新版 \($0)" } ?? "")
+        }
+        if let release = model.release, release.wanxiang == nil {
+            return "暂时没有下载包，可以从文件安装"
+        }
+        return "约 170 万条，要下载约 20 MB"
+    }
+
+    /// 没选时不写（文件格式在选文件的对话框里说）
+    private var lexiconSubtitle: String? {
+        guard model.lexiconKind == .custom else { return nil }
+        let path = model.config.lexicon
+        return model.customLexiconMissing ? "找不到 \(path)，现在用的是雾凇拼音" : path
     }
 
     private var lexiconColor: Color? {
-        model.customLexiconMissing ? palette.warning : nil
+        model.lexiconKind == .custom && model.customLexiconMissing ? palette.warning : nil
     }
 }
 
@@ -349,9 +399,212 @@ private struct EmojiPage: View {
 
     var body: some View {
         PrefGroup("表情") {
-            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」这类词时，第三个候选是对应的 emoji",
+            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」时，第 3 个候选是 emoji",
                       isOn: $model.config.emojiSuggest)
+            RowDivider()
+            PickerRow(title: "表情面板快捷键",
+                      info: "按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
+                          + "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。\n\n"
+                          + "Command 组合键多半被程序的菜单先拿走，所以用 Control。",
+                      selection: emojiKey, options: emojiKeyOptions)
         }
+    }
+
+    /// 键名同 wowtype.conf 的 EmojiKey；空串是不用快捷键
+    private var emojiKey: Binding<String> {
+        Binding(get: { model.config.emojiKey?.name ?? "" },
+                set: { model.config.emojiKey = $0.isEmpty ? nil : Shortcut(name: $0) })
+    }
+
+    private var emojiKeyOptions: [(String, String)] {
+        let options = [("Control + .", "Control+period"), ("Control + ;", "Control+semicolon"),
+                       ("Control + Shift + E", "Control+Shift+E"), ("不用快捷键", "")]
+        let current = emojiKey.wrappedValue
+        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+    }
+}
+
+// MARK: 翻译
+
+/// 和 Linux 设置里的一样：名字、接口地址、模型框空着时建议的模型。列表在 Shared/Config.swift，
+/// 按键测试对照 spec/config.json
+private let translateProviders = WowtypeConfig.translateProviders
+
+private let translateLanguages = WowtypeConfig.translateLanguages
+
+private struct TranslatePage: View {
+    @ObservedObject var model: SettingsModel
+    @State private var key = ""
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        PrefGroup("互译", info: "单按 Shift 切到「译」，照常打中文，停一下就翻成外文。"
+                  + "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。") {
+            SwitchRow(title: "互译", subtitle: translateStatus, isOn: $model.config.translate)
+            RowDivider()
+            PickerRow(title: "翻译成", info: "中文翻成这种语言；这种语言（和别的外文）翻成中文。",
+                      selection: $model.config.translateTarget, options: translateLanguages)
+            RowDivider()
+            SwitchRow(title: "正式语气", subtitle: "默认是聊天的口吻", isOn: $model.config.translateFormal)
+            RowDivider()
+            PickerRow(title: "用什么翻译",
+                      subtitle: model.config.translateLocal
+                          ? "不联网、不用账号，打的字不出这台电脑；一句话等 1–3 秒"
+                          : "填你自己的翻译接口（DeepSeek、通义千问、Ollama……），要联网",
+                      selection: $model.config.translateLocal,
+                      options: [("本地模型（离线）", true), ("自定义翻译服务", false)])
+        }
+        if model.config.translateLocal {
+            localGroup
+        } else {
+            serviceGroup
+        }
+    }
+
+    /// 「互译」那一行的状态（和 Linux 设置一样）：还差什么、Shift 关掉了切不到「译」、怎么切
+    private var translateStatus: String {
+        let ready = model.config.translateLocal
+            ? model.localPlan.ready
+            : !model.config.translateBaseUrl.isEmpty && !model.config.translateModel.isEmpty
+        if !ready {
+            return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
+        }
+        if model.config.shiftToggle == .off {
+            return "「输入」页关掉了 Shift 切换，切不到「译」"
+        }
+        return "单按 Shift：中 → 英 → 译 → 中"
+    }
+
+    private var serviceGroup: some View {
+        PrefGroup("翻译服务", info: "选一家服务商，填它给你的 Key，再挑一个模型。翻译要等服务回话，"
+                  + "名字里带 mini、flash、turbo 的小模型更快。\n\n"
+                  + "隐私：只在切到「译」时把打的字发给你选的服务，密码框里不翻译；WowType 自己不经手、不收集。"
+                  + "Key 只存在这台电脑上（~/Library/Application Support/WowType/translate.key，只有你能读）。") {
+            PickerRow(title: "服务商", selection: provider, options: translateProviders.map { ($0.name, $0.name) })
+            RowDivider()
+            TextRow(title: "接口地址", placeholder: "https://…/v1", text: trimmed(\.translateBaseUrl))
+            RowDivider()
+            HStack(spacing: 8) {
+                RowLabel(title: "API Key", subtitle: model.translateKeySet ? "已设置（不显示）" : "本机服务可以不填")
+                SecureField(model.translateKeySet ? "换一个" : "粘贴 Key", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                    .onSubmit(saveKey)
+                Button("保存", action: saveKey)
+                    .disabled(key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if model.translateKeySet {
+                    Button("删除") { model.setTranslateKey("") }
+                }
+            }
+            .rowPadding()
+            RowDivider()
+            TextRow(title: "模型", placeholder: suggestedModel.isEmpty ? "服务商给的模型名" : suggestedModel,
+                    text: trimmed(\.translateModel))
+        }
+    }
+
+    /// 选了本地模型：一行状态（下载 / 进度 / 已就绪），别的都收进「更多选项」；说明和许可在组标题旁的 ⓘ
+    private var localGroup: some View {
+        PrefGroup("离线翻译模型", info: "腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。"
+                  + "找不到 llama-server 时一起下载 llama.cpp 官方的（MIT 许可）。\n\n" + LocalModel.terms,
+                  links: [("许可协议全文", URL(string: LocalModel.license)!)]) {
+            LocalModelRow(model: model)
+            RowDivider()
+            ExpanderRow(title: "更多选项") {
+                TextRow(title: "模型文件", placeholder: "留空用数据目录里的", text: trimmed(\.translateLocalModel))
+                RowDivider()
+                TextRow(title: "llama-server", subtitle: model.localServerSummary, placeholder: "留空自动找",
+                        text: trimmed(\.translateLlamaServer))
+                RowDivider()
+                StepperRow(title: "闲置几分钟后释放内存", subtitle: "0 表示一直留着",
+                           value: $model.config.translateIdleMinutes, range: 0...240)
+                if model.localDeletable {
+                    RowDivider()
+                    ActionRow(title: "删除模型", info: "连同 WowType 下载的 llama-server 一起删；Homebrew 装的、"
+                              + "自己写了位置的模型不动。") {
+                        Button("删除") { model.removeLocalModel() }
+                            .disabled(model.localBusy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 服务商：接口地址是哪家的就选哪家；换服务商时填上它的地址，模型框空着就填上建议的模型
+    private var provider: Binding<String> {
+        Binding(get: {
+            let url = model.config.translateBaseUrl
+            return translateProviders.first { !$0.url.isEmpty && $0.url == url }?.name ?? translateProviders.last!.name
+        }, set: { name in
+            guard let p = translateProviders.first(where: { $0.name == name }), !p.url.isEmpty else { return }
+            model.config.translateBaseUrl = p.url
+            if model.config.translateModel.isEmpty {
+                model.config.translateModel = p.model
+            }
+        })
+    }
+
+    private var suggestedModel: String {
+        translateProviders.first { $0.url == model.config.translateBaseUrl }?.model ?? ""
+    }
+
+    private func trimmed(_ path: WritableKeyPath<WowtypeConfig, String>) -> Binding<String> {
+        Binding(get: { model.config[keyPath: path] },
+                set: { model.config[keyPath: path] = $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+    }
+
+    private func saveKey() {
+        let value = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        model.setTranslateKey(value)
+        key = ""
+    }
+}
+
+/// 本地模型那一行：没下载给「下载」和大小，下载中给进度和「取消」，好了写「已就绪」。
+private struct LocalModelRow: View {
+    @ObservedObject var model: SettingsModel
+    @Environment(\.palette) private var palette
+
+    var body: some View {
+        let plan = model.localPlan
+        HStack(spacing: 10) {
+            RowLabel(title: "翻译模型", subtitle: problem(plan), subtitleColor: palette.warning)
+            if let progress = model.localProgress {
+                ProgressView(value: Double(progress.percent), total: 100)
+                    .frame(width: 90)
+                Text(status(progress))
+                    .monospacedDigit()
+                    .foregroundColor(.secondary)
+                Button("取消") { model.cancelLocalDownload() }
+            } else if plan.ready {
+                Label("已就绪", systemImage: "checkmark.circle.fill")
+                    .foregroundColor(Palette.green)
+            } else if plan.canDownload {
+                Text("要下载 \(LocalModel.sizeText(plan.bytes))")
+                    .foregroundColor(.secondary)
+                Button("下载") { model.downloadLocalModel() }
+            }
+        }
+        .rowPadding()
+    }
+
+    private func status(_ progress: LocalModelInstaller.Progress) -> String {
+        switch progress.stage {
+        case .connecting: return "正在连接…"
+        case .model, .llama: return "下载中 \(progress.percent)%"
+        case .unpacking: return "正在安装…"
+        }
+    }
+
+    /// 只在有问题时写一行：上次没下完的原因、llama-server 下载不了
+    private func problem(_ plan: LocalModel.Plan) -> String? {
+        if model.localBusy { return nil }
+        if let error = model.localError { return error }
+        guard plan.llamaUnavailable else { return nil }
+        return model.config.translateLlamaServer.isEmpty
+            ? "还差 llama-server：要 macOS 13.3 以上才能下载，或者自己装 llama.cpp"
+            : "「更多选项」里写的 llama-server 不在"
     }
 }
 
@@ -363,9 +616,9 @@ private struct WordsPage: View {
     @Environment(\.palette) private var palette
 
     var body: some View {
-        PrefGroup("添加自定义词", description: "人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总是排在候选第一个，"
-                  + "简拼也能打出来。编码也可以是 mail、addr 这类字母，正好打这几个字母时出现。"
-                  + "词里写 \\n 表示换行，比如「四川省\\n宜宾市」。") {
+        PrefGroup("添加自定义词", info: "人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总排在候选第一个，"
+                  + "简拼也能打出来。\n\n编码按词自动填好拼音，多音字请检查；也可以是 mail、addr 这类字母，"
+                  + "正好打这几个字母时出现。\n\n词里写 \\n 表示换行，比如「四川省\\n宜宾市」。") {
             EntryRow(label: "词") {
                 TextField("要加的词", text: $model.newWord)
                     .focused($wordFocused)
@@ -373,7 +626,7 @@ private struct WordsPage: View {
             }
             RowDivider()
             EntryRow(label: "编码") {
-                TextField("拼音（自动填好，多音字请检查）或字母", text: $model.newCode)
+                TextField("拼音或字母", text: $model.newCode)
                     .foregroundColor(model.codeIsInvalid ? .red : .primary)
                     .onSubmit(add)
                 Button(action: add) {
@@ -389,7 +642,7 @@ private struct WordsPage: View {
             }
         }
 
-        PrefGroup(model.words.isEmpty ? "我的词" : "我的词（\(model.words.count)）") {
+        PrefGroup(model.words.isEmpty ? "已添加" : "已添加（\(model.words.count)）") {
             let shown = model.shownWords
             if shown.isEmpty {
                 ActionRow(title: model.words.isEmpty ? "还没有自定义词" : "没找到", dim: true)
@@ -405,12 +658,8 @@ private struct WordsPage: View {
                     SearchField(text: $model.search)
                         .frame(width: 160)
                 }
-                Button(action: model.importWords) { Image(systemName: "square.and.arrow.down").foregroundColor(.secondary) }
-                    .buttonStyle(.borderless)
-                    .help("从文件导入")
-                Button(action: model.exportWords) { Image(systemName: "square.and.arrow.up").foregroundColor(.secondary) }
-                    .buttonStyle(.borderless)
-                    .help("导出到文件")
+                IconButton(symbol: "square.and.arrow.down", help: "从文件导入", action: model.importWords)
+                IconButton(symbol: "square.and.arrow.up", help: "导出到文件", action: model.exportWords)
             }
         }
     }
@@ -437,9 +686,7 @@ private struct WordRow: View {
                     .foregroundColor(.secondary)
             }
             Spacer(minLength: 12)
-            Button(action: remove) { Image(systemName: "trash").foregroundColor(.secondary) }
-                .buttonStyle(.borderless)
-                .help("删除")
+            IconButton(symbol: "trash", help: "删除", action: remove)
         }
         .rowPadding()
     }
@@ -465,18 +712,75 @@ private struct SearchField: View {
 }
 
 // MARK: 分组和行（照 libadwaita 的 PreferencesGroup / ActionRow / SwitchRow / ComboRow / ExpanderRow）
+//
+// 页面上只放标题和最多一行的副标题。说明、注意事项、例子、来源、许可这类放进 ⓘ：
+//   - 组：PrefGroup("词库", info: "…", links: [("项目主页", url)]) { … }，ⓘ 在组标题右边
+//   - 行：SwitchRow / PickerRow / RadioRow / ActionRow / ExpanderRow 的 info: "…"，ⓘ 在开关、下拉框前面
+//   - 别的地方：InfoButton("…", links: […]) 直接放
+// Linux 那边对应的是 SettingsWindow.info_button / add_info（settings/wowtype-config）。
+
+/// ⓘ 小按钮，点开弹出说明文字（可以选中拷贝），links 是说明下面的链接。
+private struct InfoButton: View {
+    let text: String
+    var links: [(String, URL)] = []
+    @State private var shown = false
+
+    init(_ text: String, links: [(String, URL)] = []) {
+        self.text = text
+        self.links = links
+    }
+
+    var body: some View {
+        Button { shown.toggle() } label: {
+            Image(systemName: "info.circle")
+                .foregroundColor(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("说明")
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(text)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(links.indices, id: \.self) { i in
+                    Link(links[i].0, destination: links[i].1)
+                }
+            }
+            .font(.callout)
+            .padding(14)
+            .frame(width: 300, alignment: .leading)
+        }
+    }
+}
+
+/// 只有图标的小按钮（从文件安装、删除、导入导出），鼠标停上去显示 help
+private struct IconButton: View {
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) { Image(systemName: symbol).foregroundColor(.secondary) }
+            .buttonStyle(.borderless)
+            .help(help)
+    }
+}
 
 private struct PrefGroup<Content: View, Trailing: View>: View {
     let title: String
     let description: String?
+    let info: String?
+    let links: [(String, URL)]
     @ViewBuilder let content: Content
     @ViewBuilder let trailing: Trailing
     @Environment(\.palette) private var palette
 
-    init(_ title: String, description: String? = nil, @ViewBuilder content: () -> Content,
-         @ViewBuilder trailing: () -> Trailing) {
+    init(_ title: String, description: String? = nil, info: String? = nil, links: [(String, URL)] = [],
+         @ViewBuilder content: () -> Content, @ViewBuilder trailing: () -> Trailing) {
         self.title = title
         self.description = description
+        self.info = info
+        self.links = links
         self.content = content()
         self.trailing = trailing()
     }
@@ -489,6 +793,9 @@ private struct PrefGroup<Content: View, Trailing: View>: View {
                     .foregroundColor(palette.heading)
                 Spacer()
                 trailing
+                if let info {
+                    InfoButton(info, links: links)
+                }
             }
             if let description {
                 Text(description)
@@ -506,8 +813,10 @@ private struct PrefGroup<Content: View, Trailing: View>: View {
 }
 
 private extension PrefGroup where Trailing == EmptyView {
-    init(_ title: String, description: String? = nil, @ViewBuilder content: () -> Content) {
-        self.init(title, description: description, content: content, trailing: { EmptyView() })
+    init(_ title: String, description: String? = nil, info: String? = nil, links: [(String, URL)] = [],
+         @ViewBuilder content: () -> Content) {
+        self.init(title, description: description, info: info, links: links, content: content,
+                  trailing: { EmptyView() })
     }
 }
 
@@ -549,6 +858,7 @@ private struct RowLabel: View {
 private struct ActionRow<Trailing: View>: View {
     let title: String
     var subtitle: String?
+    var info: String?
     var dim = false
     var action: (() -> Void)?
     @ViewBuilder var trailing: Trailing
@@ -556,6 +866,7 @@ private struct ActionRow<Trailing: View>: View {
     var body: some View {
         HStack(spacing: 12) {
             RowLabel(title: title, subtitle: subtitle, dim: dim)
+            if let info { InfoButton(info) }
             trailing
         }
         .rowPadding()
@@ -565,20 +876,22 @@ private struct ActionRow<Trailing: View>: View {
 }
 
 private extension ActionRow where Trailing == EmptyView {
-    init(title: String, subtitle: String? = nil, dim: Bool = false) {
-        self.init(title: title, subtitle: subtitle, dim: dim, action: nil, trailing: { EmptyView() })
+    init(title: String, subtitle: String? = nil, info: String? = nil, dim: Bool = false) {
+        self.init(title: title, subtitle: subtitle, info: info, dim: dim, action: nil, trailing: { EmptyView() })
     }
 }
 
 private struct SwitchRow: View {
     let title: String
     var subtitle: String?
+    var info: String?
     @Binding var isOn: Bool
     @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         HStack(spacing: 12) {
             RowLabel(title: title, subtitle: subtitle)
+            if let info { InfoButton(info) }
             Toggle("", isOn: $isOn)
                 .labelsHidden()
                 .toggleStyle(.switch)
@@ -593,12 +906,14 @@ private struct SwitchRow: View {
 private struct PickerRow<Value: Hashable>: View {
     let title: String
     var subtitle: String?
+    var info: String?
     @Binding var selection: Value
     let options: [(String, Value)]
 
     var body: some View {
         HStack(spacing: 12) {
             RowLabel(title: title, subtitle: subtitle)
+            if let info { InfoButton(info) }
             Picker("", selection: $selection) {
                 ForEach(options.indices, id: \.self) { i in
                     Text(options[i].0).tag(options[i].1)
@@ -635,6 +950,7 @@ private struct RadioRow<Trailing: View>: View {
     let title: String
     var subtitle: String?
     var subtitleColor: Color?
+    var info: String?
     let selected: Bool
     let action: () -> Void
     @ViewBuilder var trailing: Trailing
@@ -646,6 +962,7 @@ private struct RadioRow<Trailing: View>: View {
                 .font(.system(size: 16))
                 .foregroundColor(selected ? Palette.green : .secondary)
             RowLabel(title: title, subtitle: subtitle, subtitleColor: subtitleColor)
+            if let info { InfoButton(info) }
             trailing
         }
         .rowPadding()
@@ -655,24 +972,28 @@ private struct RadioRow<Trailing: View>: View {
 }
 
 private extension RadioRow where Trailing == EmptyView {
-    init(title: String, subtitle: String? = nil, selected: Bool, action: @escaping () -> Void) {
-        self.init(title: title, subtitle: subtitle, subtitleColor: nil, selected: selected, action: action,
+    init(title: String, subtitle: String? = nil, info: String? = nil, selected: Bool, action: @escaping () -> Void) {
+        self.init(title: title, subtitle: subtitle, subtitleColor: nil, info: info, selected: selected, action: action,
                   trailing: { EmptyView() })
     }
 }
 
 /// 可以展开的一行。带开关时（模糊音、自动加空格）：开关打开就展开，关上就收起、不能展开（和 libadwaita 一样）。
+/// 不带开关的当「更多选项」「小技巧」这类折叠用。
 private struct ExpanderRow<Content: View>: View {
     let title: String
     var subtitle: String?
+    var info: String?
     var enabled: Binding<Bool>?
     @ViewBuilder var content: Content
     @State private var expanded = false
     @Environment(\.palette) private var palette
 
-    init(title: String, subtitle: String? = nil, enabled: Binding<Bool>? = nil, @ViewBuilder content: () -> Content) {
+    init(title: String, subtitle: String? = nil, info: String? = nil, enabled: Binding<Bool>? = nil,
+         @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.info = info
         self.enabled = enabled
         self.content = content()
     }
@@ -683,6 +1004,7 @@ private struct ExpanderRow<Content: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 RowLabel(title: title, subtitle: subtitle)
+                if let info { InfoButton(info) }
                 if let enabled {
                     Toggle("", isOn: Binding(get: { enabled.wrappedValue }, set: { on in
                         enabled.wrappedValue = on
@@ -712,6 +1034,23 @@ private struct ExpanderRow<Content: View>: View {
                     .background(palette.nested)
             }
         }
+    }
+}
+
+private struct TextRow: View {
+    let title: String
+    var subtitle: String?
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            RowLabel(title: title, subtitle: subtitle)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 280)
+        }
+        .rowPadding()
     }
 }
 

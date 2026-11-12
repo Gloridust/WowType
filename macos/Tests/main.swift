@@ -16,6 +16,8 @@ final class FakeClient: TextClient {
     var marked = ""
     var markedCursor = 0
     var page: CandidatePage?
+    /// false：像开着安全输入的密码框，不翻译
+    var allowsTranslation = true
 
     func insertText(_ text: String) {
         committed += text
@@ -436,7 +438,7 @@ do {
     FuzzyZh=False
       TypoCorrection = False
     Shuangpin=True
-    ShuangpinScheme=xiaohe
+    ShuangpinScheme=Xiaohe
     ShiftToggle=Right
     PunctuationStyle=Halfwidth
     SelectKeys=SemicolonQuote
@@ -455,7 +457,10 @@ do {
     check(!c.horizontal && c.pageSize == 9, "竖排；每页个数超出 3–9 取 9；[分组] 里的不算", "\(c.pageSize)")
     check(c.fuzzy && c.fuzzyGroups == (1 | 2 | 4 | 64 | 128 | 256 | 512 | 1024) & ~1 | 8, "模糊音分组", "\(c.fuzzyGroups)")
     check(!c.typoCorrection, "键值两边的空格不算")
-    check(c.shuangpin && c.shuangpinScheme == "Xiaohe", "双拼方案不分大小写", c.shuangpinScheme)
+    check(c.shuangpin && c.shuangpinScheme == "Xiaohe", "双拼方案", c.shuangpinScheme)
+    // 和 fcitx5 一样区分大小写，认不出的回到默认（三端一样，见 spec/config.json 的 readRules）
+    check(WowtypeConfig.parse("ShuangpinScheme=xiaohe").shuangpinScheme == "Ziranma"
+          && WowtypeConfig.parse("ShuangpinScheme=Dvorak").shuangpinScheme == "Ziranma", "双拼方案写错、大小写不对用默认")
     check(c.shiftToggle == .right && c.halfwidthPunct && c.selectKeys == .semicolonQuote, "枚举值")
     check(c.pageKeys == 2, "翻页键", "\(c.pageKeys)")
     check(c.autoSpaceFlags == 1, "自动空格只加字母", "\(c.autoSpaceFlags)")
@@ -630,7 +635,13 @@ do {
     all.halfwidthPunct = true
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
-    all.emojiKey = Shortcut(name: "Control+semicolon")
+    all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.translateTarget = "ja"
+    all.translateBaseUrl = "http://127.0.0.1:11434/v1"
+    all.translateModel = "qwen 2.5"
+    all.translateLocalModel = "/Users/me/模型/HY-MT.gguf"
+    all.translateLlamaServer = "/opt/homebrew/bin/llama-server"
+    all.translateIdleMinutes = 30
     check(WowtypeConfig.keys.allSatisfy { all.value(forKey: $0) != d.value(forKey: $0) }, "每一项都改了")
     for (name, base) in [("模板", nil), ("空文件", ""), ("只有注释", "# 我的设置\n")] as [(String, String?)] {
         let out = all.serialized(into: base)
@@ -822,6 +833,8 @@ do {
     let e = WowtypeConfig.parse("Toolbar=False\nClipboardHistory=True\nEmojiKey=Control+Shift+E")
     check(!e.toolbar && e.clipboardHistory, "Toolbar、ClipboardHistory")
     check(e.emojiKey?.matches(.char("E", [.control, .shift])) == true, "Control+Shift+E：按下时 macOS 给大写也认")
+    check(e.emojiKey?.name == "Control+Shift+E" && Shortcut(name: "Control+Shift+e")?.name == "Control+Shift+E"
+          && Shortcut(name: "Control+e")?.name == "Control+e", "按着 Shift 的字母写回时是大写（和 fcitx5、设置里的预设一样）")
     check(e.emojiKey?.matches(.char("e", [.control])) == false, "少了 Shift 不算")
     check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
     check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
@@ -1076,6 +1089,671 @@ withConfig({ $0.horizontal = false }) { c, client in
     type(c, "shi")
     check(client.page?.vertical == true, "设置竖排时候选框竖着画")
 }
+
+// MARK: 互译
+
+/// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
+final class FakeTranslator: TranslationBackend {
+    var isReady = true
+    weak var owner: AnyObject?
+    var started: [String] = []
+    var cancels = 0
+    var snapshot = TranslateSnapshot(phase: .idle)
+
+    func start(_ text: String) {
+        if snapshot.source == text && (snapshot.phase == .running || snapshot.phase == .done) {
+            return
+        }
+        started.append(text)
+        snapshot = TranslateSnapshot(phase: .running, source: text)
+    }
+
+    func cancel() {
+        cancels += 1
+        snapshot = TranslateSnapshot(phase: .idle)
+    }
+
+    func poll() -> TranslateSnapshot { snapshot }
+
+    func tag(for text: String) -> String { "中→英" }
+
+    func stream(_ text: String) { snapshot.text = text }
+
+    func finish(_ text: String) {
+        snapshot.text = text
+        snapshot.phase = .done
+    }
+
+    func fail(_ error: String) {
+        snapshot.phase = .error
+        snapshot.error = error
+    }
+}
+
+final class FakeClock {
+    var now = 100.0
+}
+
+final class Counter {
+    var count = 0
+}
+
+struct TranslateRig {
+    let c: Composer
+    let client: FakeClient
+    let t: FakeTranslator
+    let clock: FakeClock
+    /// onTranslatePoll 叫了几次（外壳这时开始定时 poll）
+    let pollRequests: Counter
+
+    /// 过了 seconds 秒，外壳的定时器 poll 一次。
+    @discardableResult
+    func tick(_ seconds: Double = 0.05) -> Bool {
+        clock.now += seconds
+        return c.pollTranslation()
+    }
+
+    var status: String { client.page?.translate?.status ?? "" }
+    var source: String { client.page?.translate?.source ?? "" }
+}
+
+/// 打开互译、切到「译」的输入框。
+func translateRig(_ change: (inout WowtypeConfig) -> Void = { _ in }) -> TranslateRig {
+    var config = WowtypeConfig()
+    config.translate = true
+    change(&config)
+    let (c, client) = fresh()
+    let t = FakeTranslator()
+    let clock = FakeClock()
+    let requests = Counter()
+    c.clock = { clock.now }
+    c.onTranslatePoll = { requests.count += 1 }
+    c.setTranslator(t)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    return TranslateRig(c: c, client: client, t: t, clock: clock, pollRequests: requests)
+}
+
+do {
+    // 设置：键名、默认值和 Linux 一样
+    let d = WowtypeConfig()
+    check(!d.translate && d.translateTarget == "en" && d.translateBaseUrl.isEmpty && d.translateModel.isEmpty
+          && !d.translateFormal && d.translateLocal && d.translateLocalModel.isEmpty
+          && d.translateLlamaServer.isEmpty && d.translateIdleMinutes == 5,
+          "互译默认关、译成英文、默认用本地模型")
+    // 0.3.10 及以前的文件没有 TranslateLocal：填了翻译接口的接着用接口（三端一样，见 spec/config.json）
+    let old = "Translate=True\nTranslateBaseUrl=https://api.deepseek.com/v1\nTranslateModel=deepseek-chat\n"
+    check(!WowtypeConfig.parse(old).translateLocal, "旧文件填了接口、没写 TranslateLocal：用接口")
+    check(WowtypeConfig.parse("Translate=True\nTranslateBaseUrl=\n").translateLocal, "没填接口：用本地模型")
+    check(WowtypeConfig.parse(old + "TranslateLocal=True\n").translateLocal, "写了 TranslateLocal 就照写的")
+    check(WowtypeConfig.parse(old).serialized(into: old) == old, "旧文件读进来没改：一个字都不动")
+    var keepLocal = WowtypeConfig.parse("Translate=True\n")
+    keepLocal.translateBaseUrl = "https://api.example.com/v1"
+    let keepLocalText = keepLocal.serialized(into: "Translate=True\n")
+    check(keepLocalText.contains("\nTranslateLocal=True\n") && WowtypeConfig.parse(keepLocalText).translateLocal,
+          "填了接口又要用本地模型：TranslateLocal=True 要写进文件，不然读回来成了 False", keepLocalText)
+    var useService = WowtypeConfig.parse(old)
+    useService.translateBaseUrl = ""
+    let useServiceText = useService.serialized(into: old)
+    check(useServiceText.contains("\nTranslateLocal=False\n") && !WowtypeConfig.parse(useServiceText).translateLocal,
+          "清空接口但还选着服务：TranslateLocal=False 要写进文件", useServiceText)
+    let c = WowtypeConfig.parse("""
+    Translate=True
+    TranslateTarget=ja
+    TranslateBaseUrl=https://api.example.com/v1
+    TranslateModel="gpt-4o-mini"
+    TranslateFormal=True
+    TranslateLocal=True
+    TranslateLocalModel=~/models/hy.gguf
+    TranslateLlamaServer=/opt/homebrew/bin/llama-server
+    TranslateIdleMinutes=999
+    """)
+    check(c.translate && c.translateTarget == "ja" && c.translateBaseUrl == "https://api.example.com/v1"
+          && c.translateModel == "gpt-4o-mini" && c.translateFormal, "互译的各项", "\(c.translateTarget) \(c.translateModel)")
+    check(c.translateLocal && c.translateLocalModel == "~/models/hy.gguf"
+          && c.translateLlamaServer == "/opt/homebrew/bin/llama-server" && c.translateIdleMinutes == 240,
+          "本地模型的各项；闲置分钟数超出 0–240 取 240", "\(c.translateIdleMinutes)")
+    check(WowtypeConfig.parse("TranslateTarget=klingon").translateTarget == "en", "不认识的语言保持 en")
+    check(WowtypeConfig.template().contains("TranslateBaseUrl=") && !WowtypeConfig.template().contains("TranslateKey="),
+          "设置模板里有互译的项，没有 Key")
+}
+
+do {
+    // Shift：中 → 英 → 译 → 中；没打开互译、翻译器没配好时只在中英之间切
+    let r = translateRig()
+    r.c.switchMode(to: .chinese)
+    r.c.toggleMode()
+    check(r.c.mode == .english, "中 → 英")
+    r.c.toggleMode()
+    check(r.c.mode == .translate && r.c.translating, "英 → 译")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "译 → 中")
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 2.0)
+    check(r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1) && r.c.mode == .translate, "单按两次 Shift 到译")
+
+    r.t.isReady = false
+    r.c.toggleMode()
+    r.c.toggleMode()
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "翻译器没配好：英 → 中，切不到译", "\(r.c.mode)")
+
+    let off = translateRig { $0.translate = false }
+    check(off.c.mode == .chinese && !off.c.translateAvailable, "设置里没打开互译：切不到译")
+    off.c.toggleMode()
+    off.c.toggleMode()
+    check(off.c.mode == .chinese, "没打开互译：英 → 中")
+
+    let (plain, _) = fresh()
+    plain.switchMode(to: .translate)
+    check(plain.mode == .chinese, "没有翻译器切不到译")
+}
+
+do {
+    // 打的字攒成原文，不上屏；停 0.5 秒才发请求，译文边出边写在编辑区，回车上屏译文
+    let r = translateRig()
+    type(r.c, "nihao")
+    check(r.client.marked.isEmpty && r.source == "ni'hao", "译：拼音在候选框顶上，编辑区留给译文",
+          "\(r.client.marked) / \(r.source)")
+    check(r.client.page?.translate?.title == "中→英 互译：" && r.client.page?.texts.first == "你好",
+          "候选框顶上是方向，下面照常是候选", "\(r.client.page?.translate?.title ?? "")")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.c.translateSource == "你好" && r.source == "你好",
+          "选的词进原文，不上屏", "\(r.client.committed) / \(r.c.translateSource)")
+    check(r.pollRequests.count == 1 && r.status == "翻译中…", "原文变了叫外壳开始轮询",
+          "\(r.pollRequests.count) \(r.status)")
+    check(r.tick(0.2) && r.t.started.isEmpty, "0.5 秒内不发请求")
+    check(r.tick(0.35) && r.t.started == ["你好"], "停够 0.5 秒发请求", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hel" && r.client.markedCursor == 3, "译文边出边写在编辑区", r.client.marked)
+    r.t.finish("Hello")
+    check(!r.tick(), "译完了就不用再轮询")
+    check(r.client.marked == "Hello" && r.status == "回车上屏 · Shift+回车上屏原文 · Esc 清空",
+          "译完提示怎么上屏", "\(r.client.marked) / \(r.status)")
+    check(r.c.handle(.key(Keysym.returnKey)), "回车吃掉")
+    check(r.client.committed == "Hello" && r.c.translateSource.isEmpty && r.client.marked.isEmpty && r.client.page == nil,
+          "回车上屏译文，清空原文和候选框", r.client.committed)
+    check(!r.c.handle(.key(Keysym.returnKey)), "原文空了回车交给应用")
+}
+
+do {
+    // 句末标点立刻发；还没译完按回车（空格也一样）等译好了自动上屏
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char("."))
+    check(r.c.translateSource == "你好。" && r.client.committed.isEmpty, "标点也进原文", r.c.translateSource)
+    r.tick(0.01)
+    check(r.t.started == ["你好。"], "句末标点不等 0.5 秒", "\(r.t.started)")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.status == "翻译中…好了就上屏", "没译完按空格先等着", r.status)
+    check(r.tick(), "等着时接着轮询")
+    r.t.finish("Hello.")
+    check(!r.tick() && r.client.committed == "Hello." && r.c.translateSource.isEmpty, "译好了自动上屏", r.client.committed)
+}
+
+do {
+    // Shift+回车上屏原文；Esc 清空；退格删原文最后一个字、重新等 0.5 秒
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    _ = r.c.handle(.key(Keysym.returnKey, .shift))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty, "Shift+回车上屏原文", r.client.committed)
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    let cancels = r.t.cancels
+    check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
+          && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
+    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.finish("Hello good")
+    r.tick()
+    check(r.c.handle(.key(Keysym.backspace)) && r.c.translateSource == "你好", "退格删原文最后一个字", r.c.translateSource)
+    check(r.client.marked == "Hello good" && r.status == "翻译中…", "原文改了、新译文出来前留着上一句",
+          "\(r.client.marked) / \(r.status)")
+    r.tick(0.6)
+    check(r.t.started.last == "你好", "停一下重新翻", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hello good", "新译文比上一句短时先不换", r.client.marked)
+    r.t.finish("Hello")
+    r.tick()
+    check(r.client.marked == "Hello", "译完了换成新的", r.client.marked)
+}
+
+do {
+    // 数字和 / + 进原文（3.14 的点原样）；方向键、Tab 吃掉；快捷键交给应用
+    let r = translateRig()
+    for ch in "3.14/2" {
+        check(r.c.handle(.char(ch)), "\(ch) 进原文")
+    }
+    check(r.c.translateSource == "3.14/2" && r.client.committed.isEmpty, "数字、点、斜杠进原文", r.c.translateSource)
+    check(r.c.handle(.key(Keysym.left)) && r.c.handle(.key(Keysym.tab)), "方向键、Tab 吃掉（原文里没有光标）")
+    check(!r.c.handle(.char("c", .command)) && r.c.translateSource == "3.14/2", "Command+C 交给应用")
+    check(r.c.hasPendingText && !r.c.isComposing, "攒着原文时外壳也要吃掉别的键")
+}
+
+do {
+    // 出错：候选框底下写原因，回车重试
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.status == "翻译失败：连不上服务器（回车重试）" && r.client.marked.isEmpty,
+          "出错写在底下", r.status)
+    _ = r.c.handle(.key(Keysym.returnKey))
+    check(r.t.started == ["你好", "你好"] && r.status == "翻译中…好了就上屏", "回车重试", "\(r.t.started) \(r.status)")
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.client.committed.isEmpty && r.status.hasSuffix("（回车重试）"), "又出错就不等了", r.status)
+}
+
+do {
+    // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese && r.client.committed == "你好" && r.c.isComposing && r.client.marked == "hao",
+          "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
+    check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
+
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏
+    let s = translateRig()
+    type(s.c, "nihao")
+    _ = s.c.handle(.char(" "))
+    type(s.c, "hao")
+    s.c.commitComposition()
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil, "切走时原文原样上屏",
+          s.client.committed)
+
+    // 设置里关掉互译：离开「译」
+    let u = translateRig()
+    type(u.c, "nihao")
+    _ = u.c.handle(.char(" "))
+    var config = u.c.config
+    config.translate = false
+    u.c.apply(config)
+    check(u.c.mode == .chinese && u.client.committed == "你好" && u.c.translateSource.isEmpty,
+          "关掉互译时原文上屏、回到中文", u.client.committed)
+
+    // 失去焦点：拼音和原文都丢掉
+    let v = translateRig()
+    type(v.c, "nihao")
+    _ = v.c.handle(.char(" "))
+    v.c.cancel()
+    check(v.client.committed.isEmpty && !v.c.hasPendingText, "cancel 丢掉原文")
+}
+
+do {
+    // 密码框（安全输入）里照常打中文，不往外发
+    let r = translateRig()
+    r.client.allowsTranslation = false
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty && r.t.started.isEmpty && !r.c.translating,
+          "不能翻译的输入框直接上屏", r.client.committed)
+}
+
+do {
+    // 两个输入框共用一个翻译器：清空自己的原文不取消别人的请求
+    let r = translateRig()
+    let (other, _) = fresh()
+    var config = WowtypeConfig()
+    config.translate = true
+    other.setTranslator(r.t)
+    other.apply(config)
+    other.switchMode(to: .translate)
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    other.cancel()
+    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+}
+
+/// 文件的权限位。
+func fileMode(_ path: String) -> Int {
+    var info = stat()
+    return stat(path, &info) == 0 ? Int(info.st_mode) & 0o777 : -1
+}
+
+do {
+    // API Key 文件：0600，一行；空串删掉；手动建的权限太宽时收紧
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).key"
+    check(TranslateKeyFile.write("  sk-test-123 \n", to: path), "写 Key")
+    check(TranslateKeyFile.read(path) == "sk-test-123" && fileMode(path) == 0o600, "Key 文件 0600，去掉空白",
+          "\(fileMode(path))")
+    check(TranslateKeyFile.write("", to: path) && access(path, F_OK) != 0, "空串删掉 Key 文件")
+    check(TranslateKeyFile.read(path).isEmpty, "没有 Key 文件读出空串")
+    writeFile(path, "sk-loose\n")
+    chmod(path, 0o644)
+    TranslateKeyFile.tighten(path)
+    check(fileMode(path) == 0o600 && TranslateKeyFile.read(path) == "sk-loose", "权限太宽的收紧", "\(fileMode(path))")
+    unlink(path)
+}
+
+do {
+    // 核心的翻译器：没填服务时没配好；本地模型看模型文件在不在
+    let t = Translator()
+    var config = WowtypeConfig()
+    config.translate = true
+    config.translateLocal = false
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(!t.isReady, "没填服务、没选本地模型：没配好")
+    config.translateBaseUrl = "http://127.0.0.1:1/v1"
+    config.translateModel = "m"
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(t.isReady, "填了地址和模型：配好了")
+    config.translateLocal = true
+    let model = "/tmp/wowtype-macos-harness-\(getpid()).gguf"
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(!t.isReady, "本地模型文件不在：没配好")
+    writeFile(model, "GGUF")
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(t.isReady && !t.localRunning, "TranslateLocalModel 留空用默认路径（第一次翻译时才起 llama-server）")
+    config.translateLocalModel = model
+    t.configure(config, keyFile: "", defaultLocalModel: "/nonexistent.gguf")
+    check(t.isReady, "写了模型路径用它")
+    unlink(model)
+    check(t.tag(for: "你好") == "中→英" && t.tag(for: "hello") == "英→中", "方向标签", t.tag(for: "hello"))
+}
+
+/// 本机的假翻译服务（OpenAI 格式，流式）。不起线程：测试循环里每次 service() 接一个连接、
+/// 读完请求、一次把 SSE 回完。
+final class FakeTranslateServer {
+    private let fd: Int32
+    let port: UInt16
+    var requests: [String] = []
+    var status = "200 OK"
+    var chunks: [String] = []
+
+    init?() {
+        #if canImport(Glibc)
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #else
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        #endif
+        guard fd >= 0 else { return nil }
+        var addr = sockaddr_in()
+        #if !canImport(Glibc)
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, size) == 0 && listen(fd, 8) == 0 && getsockname(fd, $0, &size) == 0
+            }
+        }
+        guard ok else {
+            close(fd)
+            return nil
+        }
+        self.fd = fd
+        port = UInt16(bigEndian: addr.sin_port)
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    }
+
+    deinit {
+        close(fd)
+    }
+
+    var baseURL: String { "http://127.0.0.1:\(port)/v1" }
+
+    static func sse(_ delta: String) -> String {
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\(delta)\"}}]}\n\n"
+    }
+
+    func service() {
+        let conn = accept(fd, nil, nil)
+        guard conn >= 0 else { return }
+        defer { close(conn) }
+        // macOS 上接进来的连接继承了非阻塞，改回阻塞，最多等 5 秒
+        _ = fcntl(conn, F_SETFL, fcntl(conn, F_GETFL) & ~O_NONBLOCK)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var bytes: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = recv(conn, &buffer, buffer.count, 0)
+            if n <= 0 { break }
+            bytes.append(contentsOf: buffer[0..<n])
+            // 请求头完了（空行）、请求体也够 Content-Length 了就不读了
+            guard let headEnd = (0..<max(bytes.count - 3, 0)).first(where: { bytes[$0..<$0 + 4] == [13, 10, 13, 10] })
+            else { continue }
+            let head = String(decoding: bytes[..<headEnd], as: UTF8.self)
+            let length = head.split(separator: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int(String($0.split(separator: ":")[1]).trimmingWhitespace()) } ?? 0
+            if bytes.count - (headEnd + 4) >= length { break }
+        }
+        requests.append(String(decoding: bytes, as: UTF8.self))
+        let type = status.hasPrefix("200") ? "text/event-stream" : "application/json"
+        let response = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nConnection: close\r\n\r\n" + chunks.joined()
+        let out = Array(response.utf8)
+        _ = out.withUnsafeBytes { send(conn, $0.baseAddress, $0.count, 0) }
+    }
+}
+
+func haveCurl() -> Bool {
+    let path = getenv("PATH").map { String(cString: $0) } ?? "/usr/bin:/bin"
+    return path.split(separator: ":").contains { access("\($0)/curl", X_OK) == 0 }
+}
+
+/// 一直轮询（外壳的定时器）直到 done 返回 true，最多 15 秒。
+func waitTranslation(_ c: Composer, _ server: FakeTranslateServer, until done: () -> Bool) -> Bool {
+    let deadline = monotonicSeconds() + 15
+    while monotonicSeconds() < deadline {
+        server.service()
+        c.pollTranslation()
+        if done() { return true }
+        usleep(20_000)
+    }
+    return false
+}
+
+if !haveCurl() {
+    print("skip 互译走真的翻译器（没有 curl）")
+} else if let server = FakeTranslateServer() {
+    // 走核心的翻译器（curl）连本机的假服务：Key、模型、语言照设置发，译文流式写进编辑区
+    signal(SIGPIPE, SIG_IGN)
+    let keyPath = "/tmp/wowtype-macos-harness-\(getpid()).translate.key"
+    TranslateKeyFile.write("sk-test-123", to: keyPath)
+    var config = WowtypeConfig()
+    config.translate = true
+    config.translateLocal = false
+    config.translateBaseUrl = server.baseURL
+    config.translateModel = "test-model"
+    config.translateTarget = "ja"
+    let translator = Translator()
+    translator.configure(config, keyFile: keyPath, defaultLocalModel: "")
+    let (c, client) = fresh()
+    c.setTranslator(translator)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    check(c.mode == .translate, "真的翻译器：切到译")
+    server.chunks = [FakeTranslateServer.sse("また"), FakeTranslateServer.sse("明日"), "data: [DONE]\n\n"]
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    check(client.page?.translate?.title == "中→日 互译：", "方向标签照设置的语言", client.page?.translate?.title ?? "")
+    let done = waitTranslation(c, server) { client.page?.translate?.status.hasPrefix("回车上屏") == true }
+    check(done && client.marked == "また明日", "流式译文写进编辑区",
+          "\(client.marked) / \(client.page?.translate?.status ?? "")")
+    let request = server.requests.first ?? ""
+    check(request.hasPrefix("POST /v1/chat/completions") && request.contains("Authorization: Bearer sk-test-123"),
+          "请求带 Key", String(request.prefix(200)))
+    check(request.contains("\"model\":\"test-model\"") && request.contains("Japanese") && request.contains("你好。"),
+          "请求里有模型、目标语言、原文")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "また明日" && !c.hasPendingText, "回车上屏译文", client.committed)
+
+    // 服务出错：底下写原因
+    server.status = "401 Unauthorized"
+    server.chunks = ["{\"error\":{\"message\":\"bad key\"}}"]
+    type(c, "hao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    let failed = waitTranslation(c, server) { client.page?.translate?.status.hasSuffix("（回车重试）") == true }
+    check(failed && client.page?.translate?.status.contains("bad key") == true, "服务出错写原因",
+          client.page?.translate?.status ?? "")
+    check(server.requests.count == 2, "连了两次假服务", "\(server.requests.count)")
+    unlink(keyPath)
+} else {
+    check(false, "起假翻译服务")
+}
+
+// MARK: 本地翻译模型（和 Linux 设置的 download_model / install_llama_server 一样）
+
+do {
+    let arm = LocalModel.llamaAsset(machine: "arm64", os: (14, 0))
+    check(arm?.name == "llama-b12110-bin-macos-arm64.tar.gz" && arm?.size == 16_650_691
+          && arm?.url == "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz",
+          "Apple 芯片用 arm64 的官方包", "\(String(describing: arm))")
+    let intel = LocalModel.llamaAsset(machine: "x86_64", os: (13, 3))
+    check(intel?.name == "llama-b12110-bin-macos-x64.tar.gz" && intel?.size == 12_388_601, "Intel Mac 用 x64 的包",
+          "\(String(describing: intel))")
+    check([arm, intel].allSatisfy { $0?.sha256.count == 64 && $0?.sha256 == $0?.sha256.lowercased() }, "钉了 SHA256")
+    check(LocalModel.llamaAsset(machine: "arm64", os: (13, 2)) == nil && LocalModel.llamaAsset(machine: "x86_64", os: (12, 7)) == nil,
+          "macOS 13.3 以下没有能下载的 llama-server")
+    check(LocalModel.llamaAsset(machine: "ppc", os: (26, 0)) == nil, "不认识的 CPU 没有")
+    check(LocalModel.size == 1_133_080_512 && LocalModel.sha256.count == 64 && LocalModel.url.hasSuffix("/" + LocalModel.fileName),
+          "模型钉了大小和 SHA256")
+    // 和 Linux 设置钉的是同一个模型、同一个 llama.cpp 构建（规格目录旁边就是 settings/）
+    let specDir = getenv("WOWTYPE_SPEC_DIR").map { String(cString: $0) } ?? "spec"
+    if let linux = readFile(specDir + "/../settings/wowtype-config") {
+        check(linux.contains("\"\(LocalModel.sha256)\"") && linux.contains("LOCAL_MODEL_SIZE = \(LocalModel.size)")
+              && linux.contains("LOCAL_MODEL_FILE = \"\(LocalModel.fileName)\"")
+              && linux.contains("LLAMA_BUILD = \"\(LocalModel.llamaBuild)\""),
+              "模型的 SHA256、大小和 llama.cpp 构建号和 Linux 的 wowtype-config 一样")
+    } else {
+        print("skip 对照 Linux 的模型校验值（没找到 settings/wowtype-config）")
+    }
+
+    // 缺什么下什么
+    let all = LocalModel.plan(modelExists: false, serverFound: false, customServer: false, asset: arm)
+    check(all.wantModel && all.wantLlama && !all.ready && all.bytes == LocalModel.size + 16_650_691, "都没有：两样一起下",
+          "\(all)")
+    let model = LocalModel.plan(modelExists: false, serverFound: true, customServer: false, asset: arm)
+    check(model.wantModel && !model.wantLlama && model.bytes == LocalModel.size, "有 llama-server（Homebrew）只下模型", "\(model)")
+    let llama = LocalModel.plan(modelExists: true, serverFound: false, customServer: false, asset: arm)
+    check(!llama.wantModel && llama.wantLlama && llama.bytes == 16_650_691 && llama.canDownload, "只差 llama-server", "\(llama)")
+    check(LocalModel.plan(modelExists: true, serverFound: true, customServer: false, asset: nil).ready, "都有了：已就绪")
+    let old = LocalModel.plan(modelExists: true, serverFound: false, customServer: false, asset: nil)
+    check(old.llamaUnavailable && !old.canDownload && !old.ready, "系统太旧：下载不了 llama-server", "\(old)")
+    let custom = LocalModel.plan(modelExists: false, serverFound: false, customServer: true, asset: arm)
+    check(custom.wantModel && !custom.wantLlama && custom.llamaUnavailable && custom.bytes == LocalModel.size,
+          "自己写了 llama-server 的位置：不替它下载", "\(custom)")
+
+    // 和 Linux 设置的 human_size 一样：f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+    check(LocalModel.sizeText(LocalModel.size + 16_650_691) == "1.15 GB", "大小写成 1.15 GB（和 Linux 一样）",
+          LocalModel.sizeText(LocalModel.size + 16_650_691))
+    check(LocalModel.sizeText(16_650_691) == "17 MB" && LocalModel.sizeText(1_950_000_000) == "1.95 GB"
+          && LocalModel.sizeText(2_004_000_000) == "2.00 GB" && LocalModel.sizeText(1_133_080_512) == "1.13 GB",
+          "MB 取整、GB 留两位小数（和 Linux 一样）")
+    check(LocalModel.percent(42, of: 100) == 42 && LocalModel.percent(5, of: 0) == 0 && LocalModel.percent(300, of: 200) == 100,
+          "百分比")
+
+    // 续传：带 Range 请求后看服务回什么
+    check(LocalModel.resume(status: 206, have: 100, contentRange: "bytes 100-199/200") == .append, "206：接着写")
+    check(LocalModel.resume(status: 206, have: 100, contentRange: "bytes 0-199/200") == .fail(status: 206),
+          "206 但不是从 .part 末尾开始：不接")
+    check(LocalModel.resume(status: 200, have: 100) == .restart && LocalModel.resume(status: 200, have: 0) == .restart,
+          "200：服务不支持续传，从头下")
+    check(LocalModel.resume(status: 416, have: 100) == .complete, "416：.part 已经完整，只差校验")
+    check(LocalModel.resume(status: 416, have: 0) == .fail(status: 416) && LocalModel.resume(status: 404, have: 0) == .fail(status: 404),
+          "别的状态码算出错")
+
+    // 官方包里只要 llama-server 和动态库，不往外写
+    check(LocalModel.llamaEntry("llama-b12110/llama-server") == "llama-server"
+          && LocalModel.llamaEntry("./llama-b12110/libggml-metal.0.29.0.dylib") == "libggml-metal.0.29.0.dylib"
+          && LocalModel.llamaEntry("llama-b12110/libllama.dylib") == "libllama.dylib", "要 llama-server 和 lib*.dylib")
+    check(["llama-b12110/llama-cli", "llama-b12110/LICENSE", "llama-b12110/", "llama-server", "../llama-server",
+           "/llama-server", "llama-b12110/sub/libx.dylib", "-x/llama-server", "../libx.dylib"]
+          .allSatisfy { LocalModel.llamaEntry($0) == nil }, "别的程序、子目录、带 .. 的不要")
+    check(LocalModel.safeLinkTarget("libllama.0.9.0.dylib"), "链接指向同目录的文件")
+    check(!LocalModel.safeLinkTarget("../evil.dylib") && !LocalModel.safeLinkTarget("/usr/lib/libz.dylib")
+          && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
+}
+
+// MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）
+
+do {
+    check(LexiconPack.assetVersion("wowtype-data-wanxiang-2026.11.12.0.tar.gz") == "2026.11.12.0", "认出万象包和版本")
+    check(LexiconPack.assetVersion("wowtype-data-wanxiang-latest.tar.gz") == nil
+          && LexiconPack.assetVersion("wowtype-data-wanxiang-1.0.zip") == nil
+          && LexiconPack.assetVersion("wowtype-data-rime-ice-2026.10.31.2.tar.gz") == nil
+          && LexiconPack.assetVersion("wowtype-data-wanxiang-1.0/../x.tar.gz") == nil, "别的文件不认")
+    let pick = LexiconPack.pickAsset(["SHA256SUMS", "wowtype-data-wanxiang-2026.9.1.tar.gz",
+                                      "wowtype-data-wanxiang-2026.10.31.2.tar.gz", "wowtype-data-wanxiang-2026.10.31.tar.gz"])
+    check(pick?.version == "2026.10.31.2", "好几个包取版本最大的", "\(String(describing: pick))")
+    check(LexiconPack.pickAsset(["SHA256SUMS", "wowtype_0.3.10_debian13_amd64.deb"]) == nil, "没有万象包")
+    check(LexiconPack.compareVersions("2026.10.31.2", "2026.10.31") > 0 && LexiconPack.compareVersions("2026.9.1", "2026.10.1") < 0
+          && LexiconPack.compareVersions("1.0", "1") > 0, "版本按数字段比（和 Linux 一样，段多的大）")
+
+    let name = "wowtype-data-wanxiang-1.tar.gz"
+    let digest = String(repeating: "ab", count: 32)
+    if case .success(let sums) = LexiconPack.checksums("\(digest.uppercased())  \(name)\nffff  other\n", wanted: [name]) {
+        check(sums[name] == digest, "SHA256SUMS 取到校验值（转小写）")
+    } else {
+        check(false, "SHA256SUMS 取到校验值（转小写）")
+    }
+    if case .success(let sums) = LexiconPack.checksums("\(digest) *\(name)\r\n", wanted: [name]) {
+        check(sums[name] == digest, "二进制模式的 * 和 CRLF")
+    } else {
+        check(false, "二进制模式的 * 和 CRLF")
+    }
+    for (text, what) in [("\(digest)  \(name)\n\(digest)  \(name)\n", "重复"), ("bad  \(name)\n", "无效"),
+                         ("\(digest)  other.tar.gz\n", "缺失")] {
+        if case .failure = LexiconPack.checksums(text, wanted: [name]) {
+            check(true, "SHA256SUMS 的条目\(what)：不装")
+        } else {
+            check(false, "SHA256SUMS 的条目\(what)：不装")
+        }
+    }
+
+    check(LexiconPack.entryName("./lexicon.tsv") == "lexicon.tsv" && LexiconPack.entryName("VERSION") == "VERSION"
+          && LexiconPack.entryName("./") == "" && LexiconPack.entryName(".") == "", "包里认的条目")
+    check(LexiconPack.entryName("../lexicon.tsv") == nil && LexiconPack.entryName("/etc/passwd") == nil
+          && LexiconPack.entryName("dicts/lexicon.tsv") == nil && LexiconPack.entryName("evil.sh") == nil, "别的条目不认")
+
+    let dir = "/tmp/wowtype-macos-harness-\(getpid())-pack"
+    mkdir(dir, 0o755)
+    let lexicon = dir + "/lexicon.tsv"
+    writeFile(lexicon, "# 注释\n\nni hao\t你好\t100\nzhong guo\t中国\n")
+    check({ if case .success(2) = LexiconPack.checkLexicon(at: lexicon, minimum: 2) { return true }; return false }(),
+          "lexicon.tsv 数条数（注释、空行不算）")
+    check({ if case .failure = LexiconPack.checkLexicon(at: lexicon, minimum: 3) { return true }; return false }(),
+          "条数太少不装")
+    writeFile(lexicon, "ni hao 你好\n")
+    check({ if case .failure = LexiconPack.checkLexicon(at: lexicon, minimum: 1) { return true }; return false }(),
+          "没有 TAB 的不装")
+    check({ if case .failure = LexiconPack.checkLexicon(at: dir + "/none.tsv", minimum: 1) { return true }; return false }(),
+          "没有 lexicon.tsv 不装")
+    check(LexiconPack.installedVersion(folder: dir) == "?", "没有 VERSION 是 ?")
+    writeFile(dir + "/VERSION", "2026.11.12.0\n")
+    check(LexiconPack.installedVersion(folder: dir) == "2026.11.12.0", "读 VERSION")
+    unlink(lexicon)
+    check(LexiconPack.installedVersion(folder: dir) == nil, "没有 lexicon.tsv 算没装")
+    unlink(dir + "/VERSION")
+    rmdir(dir)
+}
+
+// MARK: 设置契约（spec/config.json、spec/lexicon-pack.json；Linux 两端在 scripts/test-config-contract.py 对照）
+
+checkConfigContract()
+checkLexiconPackContract()
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
     // 真实词库（补了雾凇大字表）：一个音节的字要列全，yi 有八百多个

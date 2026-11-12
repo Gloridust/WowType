@@ -4,6 +4,7 @@
 // 横排一行「1 是  2 十 …」，竖排（设置里 CandidateLayout=Vertical、v + 空格的工具栏）一行一个。
 // 展开面板（横排按下键）和表情面板一行 6 个排成网格：光标所在行浅绿底、标 1–6（数字选这一行的第几个），
 // 光标处的词绿底白字，翻页箭头在右下角。工具栏、表情面板在候选上方多一行灰色的提示。
+// 互译时候选上面多一行「中→英 互译：」+ 原文，下面多一行状态（灰色小字）；没有候选时只有这两行。
 
 import AppKit
 
@@ -71,6 +72,8 @@ struct CandidateLayout {
     static let arrowRowHeight: CGFloat = 16
     /// 提示和候选之间
     static let auxGap: CGFloat = 3
+    /// 互译的原文最多显示这么多个字（太长只留后面的）
+    static let maxSourceLength = 40
 
     let textFont: NSFont
     let labelFont: NSFont
@@ -85,6 +88,9 @@ struct CandidateLayout {
     private(set) var arrows: (prev: NSRect, next: NSRect)?
     let hasPrev: Bool
     let hasNext: Bool
+    /// 互译：候选上面那行（标题 + 原文）和下面那行（状态）的位置；不在互译时 nil
+    private(set) var header: (title: String, source: String, origin: NSPoint)?
+    private(set) var footer: (text: String, origin: NSPoint)?
 
     init(page: CandidatePage, fontSize: CGFloat) {
         textFont = .systemFont(ofSize: fontSize)
@@ -100,16 +106,14 @@ struct CandidateLayout {
             auxFrame = frame
             top = frame.maxY + Self.auxGap
         }
-        if page.texts.isEmpty {
+        if let translate = page.translate {
+            layOutTranslate(page, translate, top: top)
+        } else if page.texts.isEmpty {
             // 只有提示（剪贴板还没有记录、表情没找到）
             let bottom = auxFrame.map { $0.maxY } ?? top
             size = NSSize(width: Self.inset.width, height: bottom + Self.inset.height)
-        } else if page.expanded {
-            layOutGrid(page, top: top)
-        } else if page.vertical {
-            layOutColumn(page, top: top)
         } else {
-            layOutRow(page, top: top)
+            layOutCandidates(page, top: top)
         }
         // 提示比候选宽时框跟着宽
         if let auxFrame {
@@ -117,7 +121,52 @@ struct CandidateLayout {
         }
     }
 
+    /// 互译：先摆标题和原文，候选往下挪，最后摆状态，框的宽度取最宽的那行
+    private mutating func layOutTranslate(_ page: CandidatePage, _ translate: TranslatePanel, top: CGFloat) {
+        let source = translate.source.count > Self.maxSourceLength
+            ? "…" + translate.source.suffix(Self.maxSourceLength) : translate.source
+        let left = Self.inset.width + Self.cellPadding.width
+        let headerSize = headerContent(title: translate.title, source: source, titleColor: .clear,
+                                       textColor: .clear).size()
+        header = (translate.title, source, NSPoint(x: left, y: top + Self.cellPadding.height))
+        var bottom = top + ceil(headerSize.height) + Self.cellPadding.height * 2
+        var width = left + ceil(headerSize.width) + Self.cellPadding.width
+        if !page.texts.isEmpty {
+            layOutCandidates(page, top: bottom + Self.spacing)
+            bottom = size.height - Self.inset.height
+            width = max(width, size.width - Self.inset.width)
+        }
+        if !translate.status.isEmpty {
+            let status = footerContent(translate.status, color: .clear).size()
+            footer = (translate.status, NSPoint(x: left, y: bottom + Self.spacing))
+            bottom += Self.spacing + ceil(status.height) + Self.cellPadding.height
+            width = max(width, left + ceil(status.width) + Self.cellPadding.width)
+        }
+        size = NSSize(width: width + Self.inset.width, height: bottom + Self.inset.height)
+    }
+
+    private mutating func layOutCandidates(_ page: CandidatePage, top: CGFloat) {
+        if page.expanded {
+            layOutGrid(page, top: top)
+        } else if page.vertical {
+            layOutColumn(page, top: top)
+        } else {
+            layOutRow(page, top: top)
+        }
+    }
+
+    /// 互译那一行：「中→英 互译：」用序号的颜色和字号，原文用候选的。
+    func headerContent(title: String, source: String, titleColor: NSColor, textColor: NSColor) -> NSAttributedString {
+        let out = NSMutableAttributedString(string: title, attributes: [.font: labelFont, .foregroundColor: titleColor])
+        out.append(NSAttributedString(string: source, attributes: [.font: textFont, .foregroundColor: textColor]))
+        return out
+    }
+
     func auxContent(_ text: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: color])
+    }
+
+    func footerContent(_ text: String, color: NSColor) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: color])
     }
 
@@ -250,6 +299,13 @@ final class CandidateView: NSView {
 
         if let aux = layout.aux, let frame = layout.auxFrame {
             layout.auxContent(aux, color: theme.label).draw(at: frame.origin)
+        }
+        if let header = layout.header {
+            layout.headerContent(title: header.title, source: header.source, titleColor: theme.label,
+                                 textColor: theme.text).draw(at: header.origin)
+        }
+        if let footer = layout.footer {
+            layout.footerContent(footer.text, color: theme.label).draw(at: footer.origin)
         }
         if let row = layout.row {
             theme.row.setFill()

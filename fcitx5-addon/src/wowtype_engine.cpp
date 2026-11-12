@@ -611,7 +611,9 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     instance_->inputContextManager().registerProperty("wowtype", &factory_);
     WLOG_I() << "WowType " << WOWTYPE_ADDON_VERSION << " 启动（fcitx5 " << fcitx::Instance::version()
              << "）";
-    fcitx::readAsIni(config_, kConfigFile);
+    fcitx::RawConfig raw;
+    fcitx::readAsIni(raw, kConfigFile);
+    loadWowtypeConfig(config_, raw);
     // 全量词库载入要几百毫秒，放后台，别卡住 fcitx 启动
     lexicon_ = wantedLexicon_ = resolveLexicon(*config_.lexicon);
     lexiconStamp_ = fileStamp(lexicon_);
@@ -754,7 +756,9 @@ void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
 void WowtypeEngine::reloadConfig() {
     // 文件里没写的项回到默认值（设置界面删掉一项就是想恢复默认）
     config_ = WowtypeConfig();
-    fcitx::readAsIni(config_, kConfigFile);
+    fcitx::RawConfig raw;
+    fcitx::readAsIni(raw, kConfigFile);
+    loadWowtypeConfig(config_, raw);
     applyConfig();
     wantedLexicon_ = resolveLexicon(*config_.lexicon);
     maybeSwitchLexicon();

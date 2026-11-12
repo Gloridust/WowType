@@ -1,8 +1,10 @@
 // 设置：~/Library/Application Support/WowType/wowtype.conf。
 //
-// 键名、取值、默认值和 Linux 的 ~/.config/fcitx5/conf/wowtype.conf 一样（fcitx5-addon/src/wowtype_engine.h
-// 的 WowtypeConfig，说明见 docs/CONFIG.md），一份配置两边都能用。文件不存在、少写了哪一项就用默认值；
-// 不认识的键（语音、互译这些 macOS 还没有的）不管。只有 EmojiKey 的默认值不一样（见 Shortcut）。
+// 键名、取值、默认值和 Linux 的 ~/.config/fcitx5/conf/wowtype.conf 一样，一份配置两边都能用。
+// 以 spec/config.json 为准（设置契约，说明见 docs/CONFIG.md）：改键名、默认值、范围、可选值要先改规格，
+// macos/test.sh 对照。文件不存在、少写了哪一项就用默认值；
+// 不认识的键（语音这些 macOS 还没有的）不管。只有 EmojiKey 的默认值不一样（见 Shortcut）。
+// 互译的 API Key 不在这里（这个文件谁都能读），在同一个目录的 translate.key（0600，见 TranslateKeyFile）。
 // 设置窗口用 serialized / merged 写回去，只改认识的键，别的行原样留着。
 //
 // 不依赖 Foundation / AppKit：按键测试在 Linux 上也编。
@@ -25,6 +27,30 @@ public struct WowtypeConfig: Equatable {
 
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
+
+    /// 互译语言：设置窗口里的名字、配置文件里的代码（和 Linux 的 WowtypeTranslateTarget、
+    /// 设置界面的 TRANSLATE_LANGUAGES、核心的 translate::LANGUAGES 一样）。
+    public static let translateLanguages: [(String, String)] = [
+        ("英语", "en"), ("日语", "ja"), ("韩语", "ko"), ("法语", "fr"), ("德语", "de"), ("西班牙语", "es"),
+        ("俄语", "ru"), ("葡萄牙语", "pt"), ("意大利语", "it"), ("越南语", "vi"), ("泰语", "th"),
+        ("印尼语", "id"), ("阿拉伯语", "ar"),
+    ]
+
+    public static let translateTargets = translateLanguages.map { $0.1 }
+
+    /// 常见的 OpenAI 格式翻译服务：名字、接口地址、模型框空着时建议的模型（和 Linux 设置的 TRANSLATE_PROVIDERS 一样）。
+    /// 最后一项是自己填地址。
+    public static let translateProviders: [(name: String, url: String, model: String)] = [
+        ("OpenAI", "https://api.openai.com/v1", ""),
+        ("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+        ("通义千问（阿里云百炼）", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen-plus"),
+        ("Kimi（月之暗面）", "https://api.moonshot.cn/v1", "moonshot-v1-8k"),
+        ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        ("硅基流动", "https://api.siliconflow.cn/v1", ""),
+        ("OpenRouter", "https://openrouter.ai/api/v1", ""),
+        ("Ollama（本机）", "http://127.0.0.1:11434/v1", ""),
+        ("其他（自己填地址）", "", ""),
+    ]
 
     public var horizontal = true
     public var pageSize = 9
@@ -71,6 +97,22 @@ public struct WowtypeConfig: Equatable {
     public var lexicon = ""
     /// 候选字号（磅），只有 macOS 有：Linux 上字号跟着 fcitx5 主题
     public var candidateFontSize = 17
+    /// 互译（Shift 在 中 → 英 → 译 之间切）
+    public var translate = false
+    public var translateTarget = "en"
+    /// 翻译服务（OpenAI 格式，如 https://api.openai.com/v1）和模型
+    public var translateBaseUrl = ""
+    public var translateModel = ""
+    /// 译文用正式语气（默认聊天口吻）
+    public var translateFormal = false
+    /// 用本地模型（HY-MT），默认是。配置文件里没写这一项、又填了 TranslateBaseUrl 时是 False（见 parse，三端一样）
+    public var translateLocal = true
+    /// 本地模型文件，留空用数据目录下 models/HY-MT1.5-1.8B-Q4_K_M.gguf
+    public var translateLocalModel = ""
+    /// llama-server 的路径，留空自己找
+    public var translateLlamaServer = ""
+    /// 本地模型闲置几分钟后释放内存，0–240，0 不释放
+    public var translateIdleMinutes = 5
 
     public init() {}
 
@@ -121,6 +163,7 @@ public struct WowtypeConfig: Equatable {
     public static func parse(_ text: String) -> WowtypeConfig {
         var config = WowtypeConfig()
         var inGroup = false
+        var sawTranslateLocal = false
         // Swift 把 \r\n 当成一个字符，用 isNewline 才认得出 Windows 换行
         for raw in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
             let line = trim(Substring(raw))
@@ -137,8 +180,19 @@ public struct WowtypeConfig: Equatable {
             let key = trim(line[..<eq])
             let value = unquote(trim(line[line.index(after: eq)...]))
             config.setValue(value, forKey: key)
+            sawTranslateLocal = sawTranslateLocal || key == "TranslateLocal"
+        }
+        if !sawTranslateLocal {
+            config.translateLocal = impliedTranslateLocal(baseUrl: config.translateBaseUrl)
         }
         return config
+    }
+
+    /// 文件里没写 TranslateLocal 时它是什么：0.3.10 及以前没有这一项，已经填好翻译接口（TranslateBaseUrl）的
+    /// 接着用接口（False），没填的用默认的本地模型。三端一样（插件的 loadWowtypeConfig、Linux 设置的 read_config），
+    /// 见 spec/config.json。
+    static func impliedTranslateLocal(baseUrl: String) -> Bool {
+        baseUrl.allSatisfy { $0 == " " || $0 == "\t" || $0 == "\r" || $0 == "\n" }
     }
 
     /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
@@ -150,6 +204,8 @@ public struct WowtypeConfig: Equatable {
         "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShiftToggle", "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
+        "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
+        "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
 
     /// 开关类的键（True / False）
@@ -164,6 +220,7 @@ public struct WowtypeConfig: Equatable {
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
+        "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateLocal": \.translateLocal,
     ]
 
     /// 按文件里的写法改一项。不认识的键、认不出的值不管（保持原值）。
@@ -178,13 +235,16 @@ public struct WowtypeConfig: Equatable {
         case "PageSize":
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
         case "ShuangpinScheme":
-            if !value.isEmpty { shuangpinScheme = matchName(value, WowtypeConfig.shuangpinSchemes) ?? value }
+            if let v = matchName(value, WowtypeConfig.shuangpinSchemes) { shuangpinScheme = v }
         case "ShiftToggle":
             if let v = matchName(value, ShiftToggle.allCases.map(\.rawValue)) { shiftToggle = ShiftToggle(rawValue: v)! }
         case "PunctuationStyle":
             if let v = matchName(value, ["Fullwidth", "Halfwidth"]) { halfwidthPunct = v == "Halfwidth" }
         case "SelectKeys":
             if let v = matchName(value, SelectKeys.allCases.map(\.rawValue)) { selectKeys = SelectKeys(rawValue: v)! }
+        case "Lexicon": lexicon = value
+        case "CandidateFontSize":
+            if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
         case "EmojiKey":
             // 留空是不用快捷键；写错了保持默认
             if value.isEmpty {
@@ -192,9 +252,14 @@ public struct WowtypeConfig: Equatable {
             } else if let key = Shortcut(name: value) {
                 emojiKey = key
             }
-        case "Lexicon": lexicon = value
-        case "CandidateFontSize":
-            if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
+        case "TranslateTarget":
+            if let v = matchName(value, WowtypeConfig.translateTargets) { translateTarget = v }
+        case "TranslateBaseUrl": translateBaseUrl = value
+        case "TranslateModel": translateModel = value
+        case "TranslateLocalModel": translateLocalModel = value
+        case "TranslateLlamaServer": translateLlamaServer = value
+        case "TranslateIdleMinutes":
+            if let n = Int(value) { translateIdleMinutes = min(max(n, 0), 240) }
         default:
             break
         }
@@ -215,6 +280,12 @@ public struct WowtypeConfig: Equatable {
         case "Lexicon": return lexicon
         case "CandidateFontSize": return String(candidateFontSize)
         case "EmojiKey": return emojiKey?.name ?? ""
+        case "TranslateTarget": return translateTarget
+        case "TranslateBaseUrl": return translateBaseUrl
+        case "TranslateModel": return translateModel
+        case "TranslateLocalModel": return translateLocalModel
+        case "TranslateLlamaServer": return translateLlamaServer
+        case "TranslateIdleMinutes": return String(translateIdleMinutes)
         default: return nil
         }
     }
@@ -222,7 +293,7 @@ public struct WowtypeConfig: Equatable {
     /// 把设置写进配置文件的原文，返回新的原文。
     ///
     /// 只动认识的键：值读出来已经一样的那行原样不动（大小写、引号、两边的空格都留着），不一样的只换 = 后面的值。
-    /// 注释、空行、不认识的键（语音、互译这些 macOS 还没有的）、[分组] 原样留着，所以 Linux 拷过来的文件
+    /// 注释、空行、不认识的键（语音这些 macOS 还没有的）、[分组] 原样留着，所以 Linux 拷过来的文件
     /// 改完拿回 Linux 照样能用。文件里没有、又不是默认值的键补在最后一个设置后面（[分组] 前面）。
     /// text 是 nil 或空的（还没有文件）时从带说明的模板开始。
     public func serialized(into text: String?) -> String {
@@ -270,9 +341,11 @@ public struct WowtypeConfig: Equatable {
             lines[i] = String(line[..<start]) + quote(wanted) + (cr ? "\r" : "")
         }
 
-        let defaults = WowtypeConfig()
+        // 文件里没有的键读出来是默认值；TranslateLocal 没写时跟着 TranslateBaseUrl 走（见 parse），按读回来的值比
+        var implied = WowtypeConfig()
+        implied.translateLocal = WowtypeConfig.impliedTranslateLocal(baseUrl: translateBaseUrl)
         let missing = WowtypeConfig.keys.compactMap { key -> String? in
-            guard !seen.contains(key), let v = value(forKey: key), v != defaults.value(forKey: key) else {
+            guard !seen.contains(key), let v = value(forKey: key), v != implied.value(forKey: key) else {
                 return nil
             }
             return key + "=" + quote(v) + (crlf ? "\r" : "")
@@ -376,6 +449,29 @@ public struct WowtypeConfig: Equatable {
         # 词库文件（拼音<TAB>词<TAB>频次），留空用自带的雾凇词库；文件不在也用自带的
         Lexicon=
 
+        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切）。
+        # 「译」里打的中文攒在候选框里，停 0.5 秒发去翻译，回车上屏译文。打的字会发给下面的服务。
+        Translate=\(b(d.translate))
+        # 译成哪种语言：en 英、ja 日、ko 韩、fr 法、de 德、es 西、ru 俄、pt 葡、it 意、vi 越、th 泰、id 印尼、ar 阿
+        TranslateTarget=\(d.translateTarget)
+        # 翻译服务（OpenAI 格式的 chat/completions），如 https://api.openai.com/v1；本机的 Ollama 是 http://127.0.0.1:11434/v1
+        # API Key 不写在这里：菜单里「设置互译 API Key…」，存在同一个目录的 translate.key（只有自己能读）
+        TranslateBaseUrl=
+        TranslateModel=
+        # 译文用正式语气（默认聊天口吻）
+        TranslateFormal=\(b(d.translateFormal))
+        # 用本地模型（腾讯 HY-MT 1.5 1.8B，离线）翻译，默认 True；False 用上面的服务。
+        # 删掉这一行时：上面填了 TranslateBaseUrl 就当 False（以前的设置照旧用服务），没填就是 True。
+        # 模型和运行它的 llama-server 在设置窗口「翻译」页一键下载，放在数据目录的 models/ 和 llama/
+        # （模型不是开源许可，不适用于欧盟、英国和韩国，见 docs/CONFIG.md）
+        TranslateLocal=\(b(d.translateLocal))
+        # 模型文件的位置，留空用 models/HY-MT1.5-1.8B-Q4_K_M.gguf
+        TranslateLocalModel=
+        # llama-server 的位置，留空先用设置里下载的，再在 /opt/homebrew/bin、/usr/local/bin 等处找
+        TranslateLlamaServer=
+        # 本地模型闲置几分钟后释放内存，0–240，0 不释放
+        TranslateIdleMinutes=\(d.translateIdleMinutes)
+
         """
     }
 }
@@ -428,15 +524,16 @@ private func quote(_ value: String) -> String {
     return out + "\""
 }
 
-/// 枚举值不分大小写（fcitx5 写的是 Horizontal，手写 horizontal 也认）；不认识返回 nil，保持默认。
+/// 枚举值区分大小写，和 fcitx5 一样（horizontal 不认）；不认识返回 nil，保持默认。三端一样，见 spec/config.json。
 private func matchName(_ value: String, _ names: [String]) -> String? {
-    names.first { $0.lowercased() == value.lowercased() }
+    names.contains(value) ? value : nil
 }
 
+/// 开关只认 True / False，和 fcitx5 一样；别的写法（true、1、yes）保持默认。
 private func setBool(_ target: inout Bool, _ value: String) {
-    switch value.lowercased() {
-    case "true", "1", "yes", "on": target = true
-    case "false", "0", "no", "off": target = false
+    switch value {
+    case "True": target = true
+    case "False": target = false
     default: break
     }
 }
