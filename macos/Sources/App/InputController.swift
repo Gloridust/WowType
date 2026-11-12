@@ -116,8 +116,9 @@ final class WowTypeInputController: IMKInputController {
         item.isEnabled = false
         menu.addItem(item)
         menu.addItem(.separator())
-        for (title, action) in [("编辑设置（wowtype.conf）…", #selector(openConfig)),
-                                ("编辑自定义词（custom.tsv）…", #selector(openCustomWords)),
+        // 设置窗口是另一个进程（SettingsApp）；直接改文件的入口在设置窗口的「文件」菜单里
+        for (title, action) in [("WowType 设置…", #selector(openSettings)),
+                                ("自定义词…", #selector(openCustomWords)),
                                 ("打开数据目录", #selector(openDataFolder))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
             entry.target = self
@@ -126,12 +127,12 @@ final class WowTypeInputController: IMKInputController {
         return menu
     }
 
-    @objc private func openConfig() {
-        AppState.shared.openConfigFile()
+    @objc private func openSettings() {
+        SettingsApp.open()
     }
 
     @objc private func openCustomWords() {
-        AppState.shared.openCustomWordsFile()
+        SettingsApp.open(page: .words)
     }
 
     @objc private func openDataFolder() {

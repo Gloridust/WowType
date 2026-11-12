@@ -10,6 +10,9 @@
 	<string>WowType</string>
 	<key>CFBundleExecutable</key>
 	<string>WowType</string>
+	<!-- 设置窗口（WowType --settings）在程序坞里的图标，build.sh 生成；菜单栏里的图标是下面的 menu.pdf -->
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>io.github.gloridust.inputmethod.WowType</string>
 	<key>CFBundleInfoDictionaryVersion</key>
