@@ -15,7 +15,7 @@ use crate::ffi::{set_last_error, WowtypeEngineHandle};
 use crate::symbols::PunctStyle;
 use crate::session::{
     Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys, Session,
-    ShiftToggle,
+    ShiftToggle, Tool,
 };
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
@@ -123,6 +123,18 @@ impl crate::session::TranslateBackend for CBackend {
     }
 }
 
+pub const WOWTYPE_PANEL_NORMAL: c_int = 0;
+pub const WOWTYPE_PANEL_EXPANDED: c_int = 1;
+pub const WOWTYPE_PANEL_EMOJI: c_int = 2;
+pub const WOWTYPE_PANEL_TOOL: c_int = 3;
+
+pub const WOWTYPE_TOOL_NONE: c_int = 0;
+pub const WOWTYPE_TOOL_MENU: c_int = 1;
+pub const WOWTYPE_TOOL_CLIPBOARD: c_int = 2;
+pub const WOWTYPE_TOOL_PHRASES: c_int = 3;
+pub const WOWTYPE_TOOL_SYMBOLS: c_int = 4;
+pub const WOWTYPE_TOOL_EMOJI: c_int = 5;
+
 pub const WOWTYPE_MODE_CHINESE: c_int = 0;
 pub const WOWTYPE_MODE_ENGLISH: c_int = 1;
 pub const WOWTYPE_MODE_TRANSLATE: c_int = 2;
@@ -198,6 +210,10 @@ pub struct WowtypeSessionConfig {
     pub shift_tap_ms: u32,
     /// 1.10 起：单按 Shift 的循环里有「译」。
     pub translate_mode: c_int,
+    /// 1.10 起：只打一个 v 再按空格打开工具栏，默认 1。
+    pub toolbar: c_int,
+    /// 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0。
+    pub clipboard_history: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -227,6 +243,8 @@ impl Default for WowtypeSessionConfig {
             },
             shift_tap_ms: config.shift_tap_ms,
             translate_mode: c_int::from(config.translate_mode),
+            toolbar: c_int::from(config.toolbar),
+            clipboard_history: c_int::from(config.clipboard_history),
         }
     }
 }
@@ -268,6 +286,9 @@ impl WowtypeSessionConfig {
                 self.shift_tap_ms
             },
             translate_mode: self.translate_mode != 0,
+            // 旧外壳没填这一项（size 短，读出来是 0）时按默认开着
+            toolbar: self.toolbar != 0 || (self.size as usize) <= std::mem::offset_of!(Self, toolbar),
+            clipboard_history: self.clipboard_history != 0,
         }
     }
 }
@@ -421,6 +442,8 @@ pub struct WowtypeSession {
     text: CString,
     /// 互译要画的四段字（原文、译文、标题、提示）。
     translate: [CString; 4],
+    /// 候选框上方的提示（工具栏、表情面板）。
+    aux: CString,
     /// 外壳给的翻译器（函数表或核心的翻译器），会话借用它。
     backend: Option<Box<dyn crate::session::TranslateBackend>>,
 }
@@ -471,8 +494,10 @@ impl WowtypeSession {
             preedit: self.preedit.as_ptr(),
             preedit_cursor: frame.preedit_cursor.try_into().unwrap_or(c_int::MAX),
             panel: match frame.panel {
-                Panel::Normal => 0,
-                Panel::Expanded => 1,
+                Panel::Normal => WOWTYPE_PANEL_NORMAL,
+                Panel::Expanded => WOWTYPE_PANEL_EXPANDED,
+                Panel::Emoji => WOWTYPE_PANEL_EMOJI,
+                Panel::Tool => WOWTYPE_PANEL_TOOL,
             },
             cand_count: frame.cand_count,
             cand_cursor: frame
@@ -488,6 +513,10 @@ impl WowtypeSession {
             wake_after_ms: frame.wake_after_ms,
             ..WowtypeFrame::default()
         };
+        if !frame.aux.is_empty() {
+            self.aux = to_c(&frame.aux);
+            self.frame.aux = self.aux.as_ptr();
+        }
         if let Some(view) = &frame.translate {
             self.translate = [
                 to_c(&view.source),
@@ -548,7 +577,7 @@ impl WowtypeSession {
     fn c_candidates(&mut self) -> &[CCandidate] {
         let inner = &mut self.session;
         let computed = panic::catch_unwind(panic::AssertUnwindSafe(|| {
-            inner.candidates();
+            inner.display_candidates();
         }));
         if computed.is_err() {
             set_last_error("session panicked");
@@ -558,7 +587,7 @@ impl WowtypeSession {
         if self.session.generation() != self.c_generation {
             self.c_candidates = self
                 .session
-                .candidates()
+                .display_candidates()
                 .iter()
                 .map(CCandidate::new)
                 .collect();
@@ -595,6 +624,7 @@ pub unsafe extern "C" fn wowtype_session_new(
         last_choice: None,
         text: CString::default(),
         translate: Default::default(),
+        aux: CString::default(),
         backend: None,
     });
     handle.current(false);
@@ -808,6 +838,66 @@ pub unsafe extern "C" fn wowtype_session_commit_text(
     let text = unsafe { arg(text) };
     let prev = char::from_u32(prev_char).filter(|&c| c != '\0');
     handle.run("commit_text", |session| session.commit_text(&text, prev))
+}
+
+/// 表情面板快捷键（外壳按自己的设置认出来）：开着就关上；打了一半的拼音拿来当搜索词。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_toggle_emoji_panel(
+    session: *mut WowtypeSession,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("toggle_emoji_panel", |session| session.toggle_emoji_panel())
+}
+
+/// 打开工具栏的一页或表情面板（`WOWTYPE_TOOL_*`，外壳的菜单、按钮用；v + 空格会话自己开）。
+/// `WOWTYPE_TOOL_NONE` 关上。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_open_tool(
+    session: *mut WowtypeSession,
+    tool: c_int,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    let tool = match tool {
+        WOWTYPE_TOOL_MENU => Some(Tool::Menu),
+        WOWTYPE_TOOL_CLIPBOARD => Some(Tool::Clipboard),
+        WOWTYPE_TOOL_PHRASES => Some(Tool::Phrases),
+        WOWTYPE_TOOL_SYMBOLS => Some(Tool::Emoji { symbols: true }),
+        WOWTYPE_TOOL_EMOJI => Some(Tool::Emoji { symbols: false }),
+        _ => None,
+    };
+    handle.run("open_tool", |session| match tool {
+        Some(tool) => session.open_tool(tool),
+        None => session.close_panel(),
+    })
+}
+
+/// 开着的面板，`WOWTYPE_TOOL_*`（没开是 NONE）。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_open_panel(session: *const WowtypeSession) -> c_int {
+    let Some(handle) = (unsafe { session.as_ref() }) else {
+        return WOWTYPE_TOOL_NONE;
+    };
+    match handle.session.open_panel() {
+        None => WOWTYPE_TOOL_NONE,
+        Some(Tool::Menu) => WOWTYPE_TOOL_MENU,
+        Some(Tool::Clipboard) => WOWTYPE_TOOL_CLIPBOARD,
+        Some(Tool::Phrases) => WOWTYPE_TOOL_PHRASES,
+        Some(Tool::Emoji { symbols: true }) => WOWTYPE_TOOL_SYMBOLS,
+        Some(Tool::Emoji { symbols: false }) => WOWTYPE_TOOL_EMOJI,
+    }
+}
+
+/// 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用；读进已有的）。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_recent_emoji_path(path: *const c_char) {
+    let path = unsafe { arg(path) };
+    if !path.is_empty() {
+        crate::recent_emoji::set_path(&path);
+    }
 }
 
 /// 攒着的原文（互译），没有是空串。在同一个会话下一次调用前有效。（1.10 起）
