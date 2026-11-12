@@ -114,7 +114,7 @@ DEFAULTS = {
     "TranslateBaseUrl": "",
     "TranslateModel": "",
     "TranslateFormal": "False",
-    "TranslateLocal": "False",
+    "TranslateLocal": "True",
     "TranslateLocalModel": "",
     "TranslateLlamaServer": "",
     "TranslateIdleMinutes": "5",
@@ -302,6 +302,10 @@ def read_config():
             values[key] = value.strip().strip('"')
         elif line.strip():
             extra.append(line)
+    # 0.3.10 及以前没有 TranslateLocal：已经填好翻译接口的，接着用接口（设置里默认是本地模型）
+    if not any(line.partition("=")[0].strip() == "TranslateLocal" for line in lines) \
+            and values["TranslateBaseUrl"].strip():
+        values["TranslateLocal"] = "False"
     return values, extra
 
 
@@ -1923,18 +1927,128 @@ LOCAL_MODEL_TERMS = ("HY-MT 用的是《腾讯混元社区许可协议》：不�
 MODELS_DIR = os.path.join(DATA_DIR, "models")
 
 
+TRANSLATE_ENGINES = [
+    ("本地模型（离线）", "不联网、不用账号，打的字不出这台电脑；一句话等 1–3 秒"),
+    ("自定义翻译服务", "填你自己的翻译接口（DeepSeek、通义千问、Ollama……），要联网"),
+]
+
+
 def local_model_path(values):
     custom = values.get("TranslateLocalModel", "").strip()
     return os.path.expanduser(custom) if custom else os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
 
 
-def find_llama_server(setting=""):
-    """llama-server 在哪：写了路径就看路径，只写名字（或空着）就在 PATH 里找。找不到返回 None。"""
+# llama-server：系统里没有时从 llama.cpp 官方发布页下载（MIT 许可）。钉死一个构建和它的 SHA256，
+# 要换版本就改这里。包里按 CPU 带了多份内核，运行时自己挑；需要 glibc 2.34 以上。
+LLAMA_BUILD = "b12110"
+LLAMA_ASSETS = {
+    "x86_64": ("ubuntu-x64", 23051958,
+               "368227edcc229be5f9bed16a2223d79b5e41d0ac2e19bcf5825e82291c060e55"),
+    "aarch64": ("ubuntu-arm64", 18723578,
+                "4758b51335e37b4346251f2687d64841ff1c07ecb27fc46323945bb2ec9c44d2"),
+}
+LLAMA_PAGE = "https://github.com/ggml-org/llama.cpp"
+# 和核心 llama::downloaded_server 对着：$XDG_DATA_HOME/wowtype/llama/llama-server
+LLAMA_DIR = os.path.join(DATA_DIR, "llama")
+
+
+def llama_asset(machine=None, nixos=None):
+    """这台机器能用的官方包：（下载地址, 大小, sha256）。没有合适的返回 None。
+
+    NixOS 跑不了官方二进制（没有 /lib64/ld-linux），要在系统配置里装 llama-cpp。"""
+    machine = os.uname().machine if machine is None else machine
+    nixos = os.path.exists("/etc/NIXOS") if nixos is None else nixos
+    if nixos or machine not in LLAMA_ASSETS:
+        return None
+    name, size, sha256 = LLAMA_ASSETS[machine]
+    url = os.environ.get("WOWTYPE_LLAMA_URL") or (
+        f"{LLAMA_PAGE}/releases/download/{LLAMA_BUILD}/llama-{LLAMA_BUILD}-bin-{name}.tar.gz")
+    return url, size, os.environ.get("WOWTYPE_LLAMA_SHA256") or sha256
+
+
+def downloaded_llama_server(root=None):
+    path = os.path.join(root or LLAMA_DIR, "llama-server")
+    return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
+
+
+def find_llama_server(setting="", downloaded=None):
+    """llama-server 在哪：写了路径就看路径；只写名字（或空着）先在 PATH 里找，再看设置里下载的
+    那份。找不到返回 None。和核心 LocalConfig::server_path 一个顺序。"""
     name = setting.strip() or "llama-server"
     if "/" in name:
         path = os.path.expanduser(name)
         return path if os.path.isfile(path) and os.access(path, os.X_OK) else None
-    return shutil.which(name)
+    return shutil.which(name) or (downloaded_llama_server() if downloaded is None else downloaded)
+
+
+def unpack_llama(archive, root):
+    """把官方包解到 root（先解到 root.new，能跑了再换上去）。只要 llama-server 和它的动态库。
+
+    包里的路径、链接都查一遍，不往目录外面写。llama-server 跑不起来（缺系统库、glibc 太旧）时
+    抛 ValueError，带上它报的错。"""
+    import tarfile
+    fresh = root + ".new"
+    shutil.rmtree(fresh, ignore_errors=True)
+    os.makedirs(fresh)
+    try:
+        with tarfile.open(archive, "r:gz") as tar:
+            for member in tar:
+                name = os.path.basename(member.name)
+                parts = member.name.split("/")
+                if ".." in parts or member.name.startswith("/") or len(parts) != 2:
+                    continue  # 只要顶层目录下的文件
+                wanted = name == "llama-server" or (name.startswith("lib") and ".so" in name)
+                if not wanted:
+                    continue
+                target = os.path.join(fresh, name)
+                if member.issym():
+                    if "/" in member.linkname or member.linkname in ("", ".", ".."):
+                        raise ValueError(f"包里的链接不对：{member.name}")
+                    os.symlink(member.linkname, target)
+                elif member.isfile():
+                    with tar.extractfile(member) as src, open(target, "wb") as out:
+                        shutil.copyfileobj(src, out)
+                    os.chmod(target, 0o755)
+        server = os.path.join(fresh, "llama-server")
+        if not os.path.isfile(server):
+            raise ValueError("包里没有 llama-server")
+        try:
+            run = subprocess.run([server, "--version"], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise ValueError(f"llama-server 跑不起来：{e}") from e
+        if run.returncode != 0:
+            lines = (run.stderr or run.stdout).strip().splitlines()
+            raise ValueError("llama-server 跑不起来：" + (lines[-1] if lines else f"退出码 {run.returncode}"))
+        with open(os.path.join(fresh, "VERSION"), "w", encoding="utf-8") as f:
+            f.write(LLAMA_BUILD + "\n")
+        shutil.rmtree(root, ignore_errors=True)
+        os.replace(fresh, root)
+    except (tarfile.TarError, EOFError) as e:
+        raise ValueError(f"包解不开：{e}") from e
+    finally:
+        shutil.rmtree(fresh, ignore_errors=True)
+    return os.path.join(root, "llama-server")
+
+
+def install_llama_server(progress=None, cancelled=None, root=None, asset=None):
+    """下载官方包、校验、解到 LLAMA_DIR。返回 llama-server 的路径。
+
+    这台机器没有合适的包、校验不过、跑不起来抛 ValueError；网络出错抛 OSError。"""
+    asset = asset or llama_asset()
+    if not asset:
+        raise ValueError("这台机器没有现成的 llama-server 可以下载，请自己装 llama.cpp")
+    url, _size, sha256 = asset
+    root = root or LLAMA_DIR
+    archive = root + ".tar.gz"
+    download_model(archive, url, sha256, progress=progress, cancelled=cancelled)
+    try:
+        return unpack_llama(archive, root)
+    finally:
+        os.unlink(archive)
+
+
+def remove_llama_server(root=None):
+    shutil.rmtree(root or LLAMA_DIR, ignore_errors=True)
 
 
 class DownloadCancelled(Exception):
@@ -2011,23 +2125,135 @@ def download_model_cli(accepted):
         if input("接受这份许可并下载？[y/N] ").strip().lower() not in ("y", "yes"):
             return 1
     dest = os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
-    if os.path.isfile(dest):
-        print(f"已经有了：{dest}")
-        return 0
 
     def progress(done, total):
         text = f"{human_size(done)} / {human_size(total)}" if total else human_size(done)
         print(f"\r下载中 {text}   ", end="", flush=True)
     try:
-        download_model(dest, progress=progress)
+        if os.path.isfile(dest):
+            print(f"模型已经有了：{dest}")
+        else:
+            download_model(dest, progress=progress)
+            print(f"\n模型好了：{dest}")
+        if server := find_llama_server(read_config().get("TranslateLlamaServer", "")):
+            print(f"llama-server：{server}")
+        elif llama_asset():
+            print(f"系统里没有 llama-server，从 {LLAMA_PAGE} 下载 {LLAMA_BUILD}")
+            print(f"\nllama-server 好了：{install_llama_server(progress=progress)}")
+        else:
+            print("系统里没有 llama-server，这台机器也没有现成的可以下载，请自己装 llama.cpp")
+            return 1
     except (OSError, ValueError) as e:
         print(f"\n没下完：{e}（再跑一次会接着下）")
         return 1
     except KeyboardInterrupt:
         print("\n已暂停，再跑一次会接着下")
         return 130
-    print(f"\n好了：{dest}")
     return 0
+
+
+def llama_self_test():
+    """unpack_llama / install_llama_server：只留 llama-server 和动态库、不往外写、跑不起来就不装。"""
+    import io
+    import tarfile
+    import tempfile
+
+    def pack(path, files, links=()):
+        with tarfile.open(path, "w:gz") as tar:
+            for name, body in files:
+                info = tarfile.TarInfo(name)
+                info.size = len(body)
+                info.mode = 0o755
+                tar.addfile(info, io.BytesIO(body))
+            for name, to in links:
+                info = tarfile.TarInfo(name)
+                info.type = tarfile.SYMTYPE
+                info.linkname = to
+                tar.addfile(info)
+
+    ok = b"#!/bin/sh\necho version: test\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "llama")
+        archive = os.path.join(tmp, "a.tar.gz")
+        pack(archive, [("llama-x/llama-server", ok), ("llama-x/libllama.so.0.9", b"lib"),
+                       ("llama-x/llama-cli", ok), ("llama-x/../../evil", b"x"),
+                       ("llama-x/sub/libdeep.so", b"x")],
+             [("llama-x/libllama.so", "libllama.so.0.9")])
+        server = unpack_llama(archive, root)
+        assert server == downloaded_llama_server(root)
+        assert sorted(os.listdir(root)) == ["VERSION", "libllama.so", "libllama.so.0.9", "llama-server"]
+        assert os.readlink(os.path.join(root, "libllama.so")) == "libllama.so.0.9"
+        assert not os.path.exists(os.path.join(tmp, "evil")) and not os.path.exists(root + ".new")
+        assert find_llama_server("", downloaded=server) in (shutil.which("llama-server"), server)
+        # 跑不起来的不装，原来那份留着
+        pack(archive, [("llama-x/llama-server", b"#!/bin/sh\necho 'libgomp.so.1: not found' >&2\nexit 127\n")])
+        try:
+            unpack_llama(archive, root)
+            raise AssertionError("跑不起来的 llama-server 不该装上")
+        except ValueError as e:
+            assert "libgomp" in str(e), e
+        assert downloaded_llama_server(root) == server and not os.path.exists(root + ".new")
+        for bad in ([("llama-x/readme", b"x")], None):
+            if bad is None:
+                with open(archive, "wb") as f:
+                    f.write(b"not a tarball")
+            else:
+                pack(archive, bad)
+            try:
+                unpack_llama(archive, root)
+                raise AssertionError("坏包不该装上")
+            except ValueError:
+                pass
+        # 指到目录外面的链接
+        pack(archive, [("llama-x/llama-server", ok)], [("llama-x/libx.so", "../../etc/passwd")])
+        try:
+            unpack_llama(archive, root)
+            raise AssertionError("链接指到外面")
+        except ValueError:
+            pass
+        # 整条路：下载、校验、解包；校验不对不装
+        pack(archive, [("llama-x/llama-server", ok)])
+        good = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+        url = "file://" + urllib.request.pathname2url(archive)
+        fresh = os.path.join(tmp, "fresh")
+        assert install_llama_server(root=fresh, asset=(url, 0, good)) == downloaded_llama_server(fresh)
+        assert not os.path.exists(fresh + ".tar.gz")
+        remove_llama_server(fresh)
+        assert downloaded_llama_server(fresh) is None
+        try:
+            install_llama_server(root=fresh, asset=(url, 0, "0" * 64))
+            raise AssertionError("校验不对")
+        except ValueError:
+            pass
+        assert downloaded_llama_server(fresh) is None
+    assert llama_asset("x86_64", False)[0].endswith(f"llama-{LLAMA_BUILD}-bin-ubuntu-x64.tar.gz") \
+        or os.environ.get("WOWTYPE_LLAMA_URL")
+    assert llama_asset("x86_64", True) is None and llama_asset("riscv64", False) is None
+    assert llama_asset("aarch64", False)[2] == (
+        os.environ.get("WOWTYPE_LLAMA_SHA256") or LLAMA_ASSETS["aarch64"][2])
+
+
+def translate_engine_self_test():
+    """默认本地模型；0.3.10 的配置（没有 TranslateLocal、填了接口）接着用接口。"""
+    global CONFIG_FILE
+    import tempfile
+    saved = CONFIG_FILE
+    with tempfile.TemporaryDirectory() as tmp:
+        CONFIG_FILE = os.path.join(tmp, "wowtype.conf")
+        try:
+            assert read_config()[0]["TranslateLocal"] == "True"  # 没有配置文件
+            for text, local in (("Translate=True\nTranslateBaseUrl=https://api.example.com/v1\n", "False"),
+                                ("Translate=True\nTranslateBaseUrl=\n", "True"),
+                                ("TranslateBaseUrl=https://a/v1\nTranslateLocal=True\n", "True"),
+                                ("TranslateLocal=False\n", "False")):
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    f.write(text)
+                assert read_config()[0]["TranslateLocal"] == local, text
+            values, extra = read_config()
+            write_config(values, extra)  # 写回去以后这一项是明确的，不再靠推断
+            assert "TranslateLocal=False" in open(CONFIG_FILE, encoding="utf-8").read()
+        finally:
+            CONFIG_FILE = saved
 
 
 def download_self_test():
@@ -2738,13 +2964,13 @@ class SettingsWindow(Adw.ApplicationWindow):
         feedback = Adw.PreferencesGroup(title="问题反馈")
         export_row = Adw.ActionRow(
             title="导出日志",
-            subtitle="出问题时导出来，附在 GitHub issue 里；不含你打过的字和自定义词")
+            subtitle="出问题时导出来发给我们；里面没有你打过的字和自定义词")
         export_button = Gtk.Button(label="导出…", valign=Gtk.Align.CENTER)
         export_button.connect("clicked", self.on_export_log)
         export_row.add_suffix(export_button)
         export_row.set_activatable_widget(export_button)
         feedback.add(export_row)
-        issue_row = Adw.ActionRow(title="提交问题", subtitle="在 GitHub 上新建 issue")
+        issue_row = Adw.ActionRow(title="提交问题", subtitle="到 GitHub 上告诉我们哪里不好用")
         issue_row.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
         issue_row.set_activatable(True)
         issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
@@ -2757,7 +2983,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def build_lexicon(self):
         group = Adw.PreferencesGroup(
             title="词库",
-            description="换了以后输入法在后台重新载入，几秒内生效；自定义词、学到的词和输入习惯两边通用。")
+            description="换词库后几秒内生效，你加的词和输入法学到的习惯都还在。")
         self.lexicon_busy = False
         self.lexicon_updating = False
         self.rime_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
@@ -2790,9 +3016,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         source = Adw.ActionRow(
             title="万象拼音的来源",
             subtitle=GLib.markup_escape_text(
-                "amzxyz/rime_wanxiang，CC BY 4.0。词条更多，词频来自万象；"
-                "WowType 只用它的词条（去掉声调、统一词频量级），不用它的 .gram 语法模型，"
-                "语言模型还是 WowType 自己的。比雾凇多占约 300 MB 内存。"))
+                "另一套词库，词更多，比雾凇多占约 300 MB 内存。"
+                "来自 amzxyz/rime_wanxiang（CC BY 4.0），WowType 只用了它的词条。"))
         source.add_suffix(Gtk.LinkButton(uri=WANXIANG_PAGE, label="项目主页",
                                          valign=Gtk.Align.CENTER))
         group.add(source)
@@ -2990,7 +3215,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             pinyin.add(self.make_switch(key, title, subtitle))
         self.punct_names = [name for _, name in PUNCT_STYLES]
         self.punct_row = Adw.ComboRow(
-            title="标点样式", subtitle="中文状态下打的标点：全角是中文标点，半角是英文标点。数字后面的句点仍是小数点（3.14）",
+            title="标点样式", subtitle="打中文时标点用中文的（，。）还是英文的（, .）。数字后面的符号总是英文的（3.14）",
             model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
         current = self.values.get("PunctuationStyle", "Fullwidth")
         self.punct_row.set_selected(
@@ -3003,9 +3228,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         extras = Adw.PreferencesGroup(title="快捷输入")
         extras.add(self.make_switch(
             "DateTime", "日期和时间",
-            "打 riqi、shijian、xingqi（或 date、time），首选后面给出当前日期、时间的几种写法"))
+            "打 riqi、shijian、xingqi，候选里会多出今天的日期、现在的时间"))
         self.calc_row = self.make_switch(
-            "Calculator", "计算器", "v 开头打算式，比如 v1+2*3 得 7，按空格或 = 上屏（双拼时不可用）")
+            "Calculator", "计算器", "先打 v 再打算式，比如 v1+2*3 出 7，按空格用结果（双拼时不可用）")
         self.calc_row.set_sensitive(self.values["Shuangpin"] != "True")
         extras.add(self.calc_row)
         self.toolbar_row = self.make_switch(
@@ -3015,12 +3240,12 @@ class SettingsWindow(Adw.ApplicationWindow):
         extras.add(self.toolbar_row)
         extras.add(self.make_switch(
             "ClipboardHistory", "记录剪贴板历史",
-            "给工具栏的「剪贴板」用：最多 20 条，只在内存里，重启 fcitx5 就清空。"
-            "从密码管理器复制的密码也会被记下、明文显示（fcitx5 不告诉输入法哪条是密码）"))
+            "给工具栏里的「剪贴板」用，最多记 20 条，重启输入法就清空。"
+            "注意：复制过的密码也会被记下并显示出来"))
         self.select_names = [name for _, name in SELECT_KEYS]
         self.select_row = Adw.ComboRow(
             title="分号、引号选词",
-            subtitle="打开引号选词后，引号不再当隔音符；用分号当韵母的双拼方案里分号不选词",
+            subtitle="按 ; 选第 2 个候选，按 ' 选第 3 个。用引号选词后，引号不能再用来隔开拼音",
             model=Gtk.StringList.new([label for label, _ in SELECT_KEYS]))
         current = self.values.get("SelectKeys", "Off")
         self.select_row.set_selected(
@@ -3030,12 +3255,12 @@ class SettingsWindow(Adw.ApplicationWindow):
         extras.add(self.select_row)
         extras.add(self.make_switch(
             "PickChar", "以词定字",
-            "打拼音时按 [ 上屏光标处候选的第一个字、] 上屏最后一个字（nihao [ → 你）。"
-            "翻页键用 [ ] 时不起作用"))
+            "只想要词里的一个字时用：打拼音时按 [ 取第一个字，按 ] 取最后一个字"
+            "（nihao 按 [ → 你）"))
         auto_space = Adw.ExpanderRow(
             title="中英文之间自动加空格",
-            subtitle="你好Linux → 你好 Linux、第5章 → 第 5 章。只在读得到光标前文字的输入框里生效"
-                     "（终端等不支持），密码、网址、邮箱输入框不加",
+            subtitle="你好Linux → 你好 Linux、第5章 → 第 5 章。终端等少数程序里不起作用，"
+                     "密码、网址、邮箱输入框不加",
             show_enable_switch=True)
         auto_space.set_enable_expansion(self.values["AutoSpace"] == "True")
         auto_space.connect("notify::enable-expansion", lambda r, _p: self.set_value(
@@ -3325,7 +3550,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         group.add(self.key_row)
         copy_row = self.make_switch(
             "VoiceCopy", "同时复制到剪贴板",
-            "说完的话上屏后也放进剪贴板，方便贴到别处。要装 wl-clipboard（X11 下是 xclip 或 xsel）")
+            "说的话打出来后也放进剪贴板，方便贴到别处（要系统装了 wl-clipboard 或 xclip）")
         self.switches["Voice"].bind_property("active", copy_row, "sensitive",
                                              GObject.BindingFlags.SYNC_CREATE)
         group.add(copy_row)
@@ -3465,9 +3690,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         page = self.new_page()
         intro = Adw.PreferencesGroup(
             title="互译",
-            description="单按 Shift 在「中 → 英 → 译」之间切换。切到「译」照常打中文，原文在候选框里，"
-                        "译文边翻边写进输入框；回车上屏译文，Shift+回车上屏原文，Esc 清空。"
-                        "打的是外文就翻成中文。")
+            description="单按 Shift 切到「译」，照常打中文，停一下就翻成外文。"
+                        "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。")
         self.translate_row = self.make_switch("Translate", "互译", None)
         self.translate_row.connect("notify::active", self.on_translate_toggled)
         intro.add(self.translate_row)
@@ -3487,8 +3711,8 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         service = Adw.PreferencesGroup(
             title="翻译服务",
-            description="填任何 OpenAI 格式（chat/completions）的接口。打字时要等它翻译，"
-                        "挑又小又快的模型，比如各家的 mini、flash、turbo 版。")
+            description="选一家服务商，填它给你的 Key，再挑一个模型。翻译要等服务回话，"
+                        "名字里带 mini、flash、turbo 的小模型更快。")
         self.provider_row = Adw.ComboRow(
             title="服务商", model=Gtk.StringList.new([name for name, _, _ in TRANSLATE_PROVIDERS]))
         self.provider_syncing = True
@@ -3524,114 +3748,154 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.test_button.connect("clicked", self.on_test_translate)
         self.test_row.add_suffix(self.test_button)
         service.add(self.test_row)
+        privacy = Adw.ActionRow(
+            title="隐私",
+            subtitle=GLib.markup_escape_text(
+                "只在切到「译」时把打的字发给你选的服务，密码框里不翻译；WowType 自己不经手、不收集。"
+                f"Key 只存在这台电脑上（{_home(TRANSLATE_KEY_FILE)}）"))
+        service.add(privacy)
         self.service_group = service
-        page.add(self.build_local_translate())
-        page.add(service)
 
-        privacy = Adw.PreferencesGroup(title="隐私")
-        privacy.add(Adw.ActionRow(
-            title="打的字会发给你填的服务",
-            subtitle="只在切到「译」时发送，密码框里不翻译。WowType 自己不经手、不收集这些内容。"
-                     "用本地模型时不出这台电脑。"))
-        privacy.add(Adw.ActionRow(
-            title="Key 只存在本机",
-            subtitle=GLib.markup_escape_text(f"{_home(TRANSLATE_KEY_FILE)}，只有你自己能读")))
-        page.add(privacy)
-        self.refresh_translate_status()
+        # 用什么翻译：下拉菜单，默认本地模型；选「自定义」才出现填接口的地方
+        self.engine_row = Adw.ComboRow(
+            title="用什么翻译",
+            model=Gtk.StringList.new([label for label, _ in TRANSLATE_ENGINES]))
+        self.engine_row.set_selected(0 if self.values["TranslateLocal"] == "True" else 1)
+        self.engine_row.connect("notify::selected", self.on_translate_engine_changed)
+        intro.add(self.engine_row)
+        self.local_group = self.build_local_translate()
+        page.add(self.local_group)
+        page.add(service)
+        self.refresh_local_translate()
         return page
+
+    def translate_local_selected(self):
+        return self.engine_row.get_selected() == 0
+
+    def on_translate_engine_changed(self, row, _param):
+        self.set_value("TranslateLocal", "True" if row.get_selected() == 0 else "False")
+        self.refresh_local_translate()
 
     def build_local_translate(self):
         group = Adw.PreferencesGroup(
-            title="本地模型（离线）",
-            description="用腾讯混元的翻译模型 HY-MT 1.5 1.8B，在这台电脑上翻译，不联网、不用 Key。"
-                        f"模型 {human_size(LOCAL_MODEL_SIZE)}，翻译时占 1.5 GB 左右内存，一句话要等 1–3 秒；"
-                        "闲置一会儿就释放。需要装 llama.cpp 的 llama-server。")
-        self.local_row = self.make_switch("TranslateLocal", "用本地模型翻译",
-                                          "打开后不用下面的翻译服务")
-        self.local_row.connect("notify::active", lambda *_a: self.refresh_local_translate())
-        group.add(self.local_row)
-
-        self.local_model_row = Adw.ActionRow(title="模型文件")
+            title="离线翻译模型",
+            description="腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。")
+        self.local_model_row = Adw.ActionRow(title="翻译模型")
         self.local_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
         self.local_download.add_css_class("suggested-action")
         self.local_download.connect("clicked", self.on_local_download)
         self.local_model_row.add_suffix(self.local_download)
         self.local_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                       tooltip_text="删掉模型文件")
+                                       tooltip_text="删掉下载的模型")
         self.local_delete.add_css_class("flat")
         self.local_delete.connect("clicked", self.on_local_delete)
         self.local_model_row.add_suffix(self.local_delete)
         group.add(self.local_model_row)
         self.local_cancel = None
+        self.local_stage = "model"
 
-        self.llama_row = Adw.EntryRow(title="llama-server（留空在 PATH 里找）", show_apply_button=False)
-        self.llama_row.set_text(self.values["TranslateLlamaServer"])
-        self.llama_row.connect("changed", lambda row: (
-            self.set_value("TranslateLlamaServer", row.get_text().strip()),
-            self.refresh_local_translate()))
-        group.add(self.llama_row)
-        self.llama_status = Adw.ActionRow(title="llama-server")
-        group.add(self.llama_status)
+        terms = Adw.ActionRow(title="许可", subtitle="模型属于腾讯，不适用于欧盟、英国和韩国境内；"
+                                                   "下载时要同意它的许可协议")
+        terms.add_suffix(Gtk.LinkButton(uri=LOCAL_MODEL_LICENSE, label="协议全文",
+                                        valign=Gtk.Align.CENTER))
+        group.add(terms)
 
+        # 一般用不着的放进折叠项
+        more = Adw.ExpanderRow(title="更多选项")
         idle = Adw.SpinRow.new_with_range(0, 240, 1)
-        idle.set_title("闲置几分钟后释放内存")
-        idle.set_subtitle("0 表示一直留着（关掉互译或退出输入法时才释放）")
+        idle.set_title("不用几分钟后释放内存")
+        idle.set_subtitle("0 表示一直留着，再翻译时不用重新载入")
         try:
             idle.set_value(int(self.values["TranslateIdleMinutes"]))
         except ValueError:
             idle.set_value(5)
         idle.connect("notify::value", lambda row, _p: self.set_value(
             "TranslateIdleMinutes", str(int(row.get_value()))))
-        group.add(idle)
-
-        terms = Adw.ActionRow(title="许可", subtitle=GLib.markup_escape_text(LOCAL_MODEL_TERMS))
-        link = Gtk.LinkButton(uri=LOCAL_MODEL_LICENSE, label="协议全文", valign=Gtk.Align.CENTER)
-        terms.add_suffix(link)
-        group.add(terms)
-        self.refresh_local_translate()
+        more.add_row(idle)
+        self.llama_status = Adw.ActionRow(title="运行模型的程序（llama-server）")
+        more.add_row(self.llama_status)
+        self.llama_row = Adw.EntryRow(title="自己指定 llama-server 的位置（一般不用填）",
+                                      show_apply_button=False)
+        self.llama_row.set_text(self.values["TranslateLlamaServer"])
+        self.llama_row.connect("changed", lambda row: (
+            self.set_value("TranslateLlamaServer", row.get_text().strip()),
+            self.refresh_local_translate()))
+        more.add_row(self.llama_row)
+        group.add(more)
         return group
 
     def local_ready(self):
         return os.path.isfile(local_model_path(self.values)) and bool(
             find_llama_server(self.values["TranslateLlamaServer"]))
 
+    def local_missing(self):
+        """还差什么没下载：（要不要模型, 要不要 llama-server, 一共多少字节）。
+
+        llama-server 只在系统里没有、这台机器又有现成的官方包时才算。"""
+        want_model = not os.path.isfile(local_model_path(self.values))
+        asset = llama_asset()
+        want_llama = bool(asset) and not find_llama_server(self.values["TranslateLlamaServer"])
+        size = (LOCAL_MODEL_SIZE if want_model else 0) + (asset[1] if want_llama else 0)
+        return want_model, want_llama, size
+
     def refresh_local_translate(self):
-        if not hasattr(self, "llama_status"):
+        if not hasattr(self, "local_group"):
             return
+        local = self.translate_local_selected()
+        self.engine_row.set_subtitle(TRANSLATE_ENGINES[0 if local else 1][1])
+        self.local_group.set_visible(local)
+        self.service_group.set_visible(not local)
         path = local_model_path(self.values)
         downloading = self.local_cancel is not None
+        server = find_llama_server(self.values["TranslateLlamaServer"])
+        mine = downloaded_llama_server()
+        want_model, want_llama, size = self.local_missing()
         if downloading:
             pass  # 进度由下载线程更新
-        elif os.path.isfile(path):
+        elif not want_model and server:
             self.local_model_row.set_subtitle(GLib.markup_escape_text(
-                f"已下载：{_home(path)}（{human_size(os.path.getsize(path))}）"))
+                f"已下载，可以用了（{human_size(os.path.getsize(path))}）"))
+        elif not want_model and want_llama:
+            self.local_model_row.set_subtitle(GLib.markup_escape_text(
+                f"模型有了，还差运行它的程序（{human_size(size)}），点下载补上"))
+        elif not want_model:
+            self.local_model_row.set_subtitle(
+                "模型有了，但这台电脑上没有运行它的程序，要先装 llama.cpp，见「更多选项」")
         else:
             self.local_model_row.set_subtitle(GLib.markup_escape_text(
-                f"还没下载（{human_size(LOCAL_MODEL_SIZE)}，来自 Hugging Face）"))
-        exists = os.path.isfile(path)
+                f"还没下载，要下载 {human_size(size)}"))
         self.local_download.set_label("取消" if downloading else "下载")
-        self.local_download.set_visible(downloading or not exists)
-        self.local_delete.set_visible(exists and not downloading
-                                      and not self.values["TranslateLocalModel"])
-        server = find_llama_server(self.values["TranslateLlamaServer"])
-        if server:
-            self.llama_status.set_subtitle(GLib.markup_escape_text(f"找到了：{server}"))
-        else:
+        self.local_download.set_visible(downloading or want_model or want_llama)
+        self.local_delete.set_visible(
+            not downloading and not self.values["TranslateLocalModel"]
+            and (os.path.isfile(path) or bool(mine)))
+        if server and server == mine:
             self.llama_status.set_subtitle(GLib.markup_escape_text(
-                "没找到。Debian / Ubuntu：sudo apt install llama.cpp；其他发行版装 llama.cpp 包，"
-                "或者从 github.com/ggml-org/llama.cpp 的发布页下载，在上面填 llama-server 的路径"))
-        if hasattr(self, "service_group"):
-            self.service_group.set_sensitive(not self.local_row.get_active())
+                f"WowType 下载的：{_home(server)}（llama.cpp {LLAMA_BUILD}）"))
+        elif server:
+            self.llama_status.set_subtitle(GLib.markup_escape_text(f"用系统里装的：{server}"))
+        elif llama_asset():
+            self.llama_status.set_subtitle("还没有，下载模型时一起下载")
+        else:
+            self.llama_status.set_subtitle(
+                "没找到，这台电脑也没有现成的可以下载。请装发行版的 llama.cpp 包"
+                "（NixOS：pkgs.llama-cpp），或者在下面填它的位置")
         self.refresh_translate_status()
 
     def on_local_download(self, _button):
         if self.local_cancel is not None:
             self.local_cancel.set()
             return
+        want_model, want_llama, size = self.local_missing()
+        if not want_model:
+            self.start_local_download()  # 只差 llama-server，不用再确认模型的许可
+            return
+        extra = ("同时下载运行模型的程序 llama-server（llama.cpp 官方发布，MIT 许可）。"
+                 if want_llama else "")
         dialog = Adw.AlertDialog(
-            heading="下载 HY-MT 翻译模型？",
-            body=f"{LOCAL_MODEL_TERMS}\n\n文件 {human_size(LOCAL_MODEL_SIZE)}，下载完会校验 SHA256。"
-                 "点「同意并下载」表示你接受这份许可。")
+            heading="下载离线翻译模型？",
+            body=f"一共 {human_size(size)}，下载完会校验文件。{extra}\n\n"
+                 f"{LOCAL_MODEL_TERMS}\n\n点「同意并下载」表示你接受这份许可。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("accept", "同意并下载")
         dialog.set_response_appearance("accept", Adw.ResponseAppearance.SUGGESTED)
@@ -3643,22 +3907,32 @@ class SettingsWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def start_local_download(self):
+        """把还差的都下了：模型，和系统里没有时的 llama-server。进度都显示在「翻译模型」那一行。"""
         dest = os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
+        want_model, want_llama, _size = self.local_missing()
+        if self.local_cancel is not None or not (want_model or want_llama):
+            return
         cancel = threading.Event()
         self.local_cancel = cancel
         self.local_model_row.set_subtitle("正在连接…")
         self.refresh_local_translate()
-        log(f"开始下载本地翻译模型到 {_home(dest)}")
+        log("开始下载：" + "、".join(
+            name for name, want in (("本地翻译模型", want_model), ("llama-server", want_llama)) if want))
 
-        def progress(done, total):
-            text = (f"正在下载：{human_size(done)} / {human_size(total)}（{done * 100 // total}%）"
-                    if total else f"正在下载：{human_size(done)}")
-            GLib.idle_add(self.local_model_row.set_subtitle, text)
+        def progress_of(what):
+            def progress(done, total):
+                text = (f"正在下载{what}：{human_size(done)} / {human_size(total)}（{done * 100 // total}%）"
+                        if total else f"正在下载{what}：{human_size(done)}")
+                GLib.idle_add(self.local_model_row.set_subtitle, text)
+            return progress
 
         def work():
             error = None
             try:
-                download_model(dest, progress=progress, cancelled=cancel.is_set)
+                if want_model:
+                    download_model(dest, progress=progress_of("模型"), cancelled=cancel.is_set)
+                if want_llama:
+                    install_llama_server(progress=progress_of("运行程序"), cancelled=cancel.is_set)
             except DownloadCancelled:
                 error = "已暂停，再点下载会接着下"
             except ValueError as e:
@@ -3671,22 +3945,26 @@ class SettingsWindow(Adw.ApplicationWindow):
     def local_download_done(self, error):
         self.local_cancel = None
         if error:
-            log(f"本地翻译模型没下完：{error}")
+            log(f"本地翻译没下完：{error}")
             self.toast(error)
         else:
-            log("本地翻译模型下载完成，校验通过")
-            self.toast("模型下载好了")
-            self.fcitx.reload()
+            log("本地翻译下载完成，校验通过")
+            self.toast("下载好了，可以用离线翻译了" if self.local_ready() else "模型下载好了")
+        self.fcitx.reload()
         self.refresh_local_translate()
 
     def on_local_delete(self, _button):
+        """删掉下载的模型和 WowType 自己下载的 llama-server（系统里装的不动）。"""
         path = local_model_path(self.values)
+        freed = os.path.getsize(path) if os.path.isfile(path) else 0
         try:
-            os.unlink(path)
+            if freed:
+                os.unlink(path)
         except OSError as e:
             self.toast(f"删不掉：{e.strerror}")
         else:
-            self.toast(f"已删除，空出 {human_size(LOCAL_MODEL_SIZE)}")
+            remove_llama_server()
+            self.toast(f"已删除，空出 {human_size(freed)}" if freed else "已删除")
             self.fcitx.reload()
         self.refresh_local_translate()
 
@@ -3827,7 +4105,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                   if s not in {bare_shift(k) for _o, k in conflicts}]
         if not self.translate_ready():
             self.translate_row.set_subtitle(
-                "先下载本地模型、装好 llama-server，Shift 才切得到「译」"
+                "先在下面下载翻译模型，Shift 才切得到「译」"
                 if self.values.get("TranslateLocal") == "True"
                 else "先填好下面的翻译服务，Shift 才切得到「译」")
         elif toggle == "Off":
@@ -4438,6 +4716,8 @@ if __name__ == "__main__":
         assert font_with_size("Noto Sans CJK SC Bold 12", 16) == "Noto Sans CJK SC Bold 16"
         assert font_with_size("", 13) == "Sans 13"
         download_self_test()
+        llama_self_test()
+        translate_engine_self_test()
         voice_model_self_test()
         lexicon_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」
