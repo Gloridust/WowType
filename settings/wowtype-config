@@ -767,6 +767,51 @@ GNOME_THEME_EXT = "wowtype-theme@gloridust.github.io"
 KIMPANEL_EXT = "kimpanel@kde.org"
 
 
+KIMPANEL_SCHEMA = "org.gnome.shell.extensions.kimpanel"
+# 候选字号的范围和两边的默认值（fcitx5 经典界面 Sans 10，kimpanel Sans 11）
+FONT_SIZE_RANGE = (8, 32)
+CLASSICUI_DEFAULT_FONT = "Sans 10"
+KIMPANEL_DEFAULT_FONT = "Sans 11"
+
+
+def kimpanel_settings():
+    """Input Method Panel 扩展的 gsettings（GNOME 上候选框的字体在这里）；没装时 None。
+
+    扩展装在用户目录时 schema 不在系统里，要从扩展的 schemas 目录读。
+    """
+    source = Gio.SettingsSchemaSource.get_default()
+    schema = source.lookup(KIMPANEL_SCHEMA, True) if source else None
+    if schema is None:
+        for base in (os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "gnome-shell", "extensions"),
+                     "/usr/share/gnome-shell/extensions"):
+            directory = os.path.join(base, KIMPANEL_EXT, "schemas")
+            if not os.path.exists(os.path.join(directory, "gschemas.compiled")):
+                continue
+            try:
+                local = Gio.SettingsSchemaSource.new_from_directory(directory, source, False)
+            except GLib.Error:
+                continue
+            schema = local.lookup(KIMPANEL_SCHEMA, False)
+            if schema is not None:
+                break
+    if schema is None or not schema.has_key("font"):
+        return None
+    return Gio.Settings.new_full(schema, None, None)
+
+
+def font_size(font, default):
+    """「Sans 11」「Noto Sans CJK SC Bold 12」里的字号（磅）；没写字号时 default。"""
+    size = Pango.FontDescription.from_string(font or "").get_size() / Pango.SCALE
+    return size if size > 0 else default
+
+
+def font_with_size(font, size):
+    """字体换成 size 号，字体名和粗细不变：「Sans Bold 11」+ 14 →「Sans Bold 14」。"""
+    desc = Pango.FontDescription.from_string(font or "Sans")
+    desc.set_size(int(round(size * Pango.SCALE)))
+    return desc.to_string()
+
+
 def gnome_shell_settings():
     """GNOME Shell 的 gsettings（不是 GNOME 返回 None）。"""
     if "GNOME" not in os.environ.get("XDG_CURRENT_DESKTOP", "").upper():
@@ -2580,6 +2625,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         self.refresh_status()
         self.refresh_theme()
+        self.refresh_font()
         self.refresh_shift_conflict()
         self.release = None
         self.update_files = []
@@ -2670,6 +2716,12 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.theme_row.set_sensitive(False)  # 读到 fcitx5 的当前主题再打开
         self.theme_handler = self.theme_row.connect("notify::active", self.on_theme_toggled)
         look.add(self.theme_row)
+        self.font_row = Adw.SpinRow.new_with_range(*FONT_SIZE_RANGE, 1)
+        self.font_row.set_title("候选字号")
+        self.font_row.set_subtitle("候选框里字的大小（磅），改了马上生效")
+        self.font_row.set_sensitive(False)  # 读到现在的字号再打开
+        self.font_handler = self.font_row.connect("notify::value", self.on_font_size_changed)
+        look.add(self.font_row)
         page.add(look)
 
         tips = Adw.PreferencesGroup(title="小技巧")
@@ -3071,6 +3123,43 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.theme_row.handler_unblock(self.theme_handler)
             self.theme_row.set_sensitive(True)
         self.fcitx.get_config(CLASSICUI_URI, done)
+
+    def kimpanel_in_use(self):
+        """GNOME 上候选框是 Input Method Panel 扩展画的（扩展开着）。"""
+        shell = gnome_shell_settings()
+        return shell is not None and KIMPANEL_EXT in shell.get_strv("enabled-extensions")
+
+    def refresh_font(self):
+        """候选字号：GNOME 上读 Input Method Panel 扩展的，别的桌面读 fcitx5 经典界面的。"""
+        self.kimpanel = kimpanel_settings()
+        self.classicui_font = None
+
+        def done(config):
+            if config is not None:
+                self.classicui_font = config.get("Font") or CLASSICUI_DEFAULT_FONT
+            if self.kimpanel is not None and self.kimpanel_in_use():
+                size = font_size(self.kimpanel.get_string("font"), 11)
+            elif self.classicui_font is not None:
+                size = font_size(self.classicui_font, 10)
+            else:
+                self.font_row.set_subtitle("没检测到 fcitx5，启动 fcitx5 后再来设置")
+                return
+            self.font_row.handler_block(self.font_handler)
+            self.font_row.set_value(size)
+            self.font_row.handler_unblock(self.font_handler)
+            self.font_row.set_sensitive(True)
+        self.fcitx.get_config(CLASSICUI_URI, done)
+
+    def on_font_size_changed(self, row, _param):
+        size = row.get_value()
+        # 两边都改：换桌面、关掉扩展以后字号也一样
+        if self.classicui_font is not None:
+            self.classicui_font = font_with_size(self.classicui_font, size)
+            self.fcitx.set_config(CLASSICUI_URI, {"Font": self.classicui_font})
+        if self.kimpanel is not None:
+            self.kimpanel.set_string(
+                "font", font_with_size(self.kimpanel.get_string("font") or KIMPANEL_DEFAULT_FONT, size))
+        log(f"候选字号改成 {size:g}")
 
     def on_theme_toggled(self, row, _param):
         on = row.get_active()
@@ -4340,6 +4429,11 @@ if __name__ == "__main__":
                 print(f"\n没装好：{e}")
                 sys.exit(1)
     if "--self-test" in sys.argv:
+        assert font_size("Sans 11", 10) == 11 and font_size("Sans", 10) == 10
+        assert font_size("Noto Sans CJK SC Bold 12.5", 10) == 12.5
+        assert font_with_size("Sans 10", 14) == "Sans 14"
+        assert font_with_size("Noto Sans CJK SC Bold 12", 16) == "Noto Sans CJK SC Bold 16"
+        assert font_with_size("", 13) == "Sans 13"
         download_self_test()
         voice_model_self_test()
         lexicon_self_test()
