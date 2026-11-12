@@ -187,4 +187,26 @@ mod tests {
         let conv = Converter::from_tsv_str("么\t麼\n㐷\t傌\n叁\t參參\n").unwrap();
         assert_eq!(conv.convert("叁么"), "參參麼");
     }
+
+    #[test]
+    fn bundled_table_disambiguates_phrases() {
+        let conv = Converter::from_tsv_str(include_str!("../data/s2t.tsv")).unwrap();
+        assert!(conv.phrase_len() > 0, "core/data/s2t.tsv 没有词组");
+        for (s, t) in [
+            ("头发", "頭髮"),
+            ("干净", "乾淨"),
+            ("干部", "幹部"),
+            ("皇后", "皇后"),
+            ("后来", "後來"),
+            ("公里", "公里"),
+            ("里面", "裏面"),
+            ("一只", "一隻"),
+            ("只是", "只是"),
+            // 短词组不能吃掉后面词的字：断发 / 发展
+            ("不断发展", "不斷發展"),
+            ("被发现", "被發現"),
+        ] {
+            assert_eq!(conv.convert(s), t, "{s}");
+        }
+    }
 }
