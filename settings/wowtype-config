@@ -89,6 +89,7 @@ DEFAULTS = {
     "FuzzyUan": "True",
     "FuzzyUn": "False",
     "TypoCorrection": "True",
+    "RareExtChars": "False",
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
     "ShiftToggle": "Both",
@@ -2983,6 +2984,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         for key, title, subtitle in (
             ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」（全拼时）"),
             ("Traditional", "繁体字", "候选词转成繁体"),
+            ("RareExtChars", "更多生僻字",
+             "候选里也列出 CJK 扩展 B 区以后的字。常见字体没有这些字，要先装能显示的字体（比如 fonts-hanazono），不然是方块"),
         ):
             pinyin.add(self.make_switch(key, title, subtitle))
         self.punct_names = [name for _, name in PUNCT_STYLES]

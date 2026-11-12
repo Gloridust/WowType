@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 8
+#define WOWTYPE_ABI_VERSION_MINOR 9
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +43,10 @@ int wowtype_engine_set_max_candidates(WowtypeEngineHandle *engine, unsigned int 
 
 /* 开关按错键纠错（相邻键、两键按反、多按/漏按），默认开。返回 0 成功。 */
 int wowtype_engine_set_typo_correction(WowtypeEngineHandle *engine, int on);
+
+/* 是否也出 CJK 扩展 B 区及以后的单字（ABI 1.9 起），默认不出：常见中文字体都没有这些字，
+ * 列出来是方块。通用规范汉字表里的扩展区字和含这些字的词不受影响。返回 0 成功。 */
+int wowtype_engine_set_rare_ext_chars(WowtypeEngineHandle *engine, int on);
 
 /* 载入英文词表（每行一个词，或 rime 的 en.dict.yaml）。
  * 载入后输入已知英文词（hello、github）时英文排在前面。返回累计词条数，失败返回 -1。 */

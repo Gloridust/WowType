@@ -418,6 +418,11 @@ impl Engine {
         self.config.typo_correction = on;
     }
 
+    /// 是否也出 CJK 扩展 B 区及以后的单字（默认不出，常见字体显示不了；通用规范汉字表里的照常）。
+    pub fn set_rare_ext_chars(&mut self, on: bool) {
+        self.config.beam.rare_ext_chars = on;
+    }
+
     /// 开关双拼。
     pub fn set_shuangpin(&mut self, on: bool) {
         self.config.shuangpin = on;
@@ -2097,26 +2102,35 @@ mod tests {
         let mut e = engine(concat!(
             "shi\t是\t9000\nshi\t十\t8000\nshi\t时\t7000\n",
             "shi shi\t事实\t5000\n",
-            "shi\t𬤊\t0.7\nshi\t䊓\t0.8\nshi\t戠\t0.9\n",
+            "shi\t𠯜\t0.7\nshi\t䊓\t0.8\nshi\t戠\t0.9\n",
         ));
         e.set_max_candidates(1000);
+        // 默认不列扩展 B 区以后的字（常见字体显示成方块），基本区、扩展 A 照常
+        let texts: Vec<String> = e.input("shi").into_iter().map(|c| c.text).collect();
+        assert!(!texts.iter().any(|t| t == "𠯜"), "{texts:?}");
+        assert!(
+            texts.iter().any(|t| t == "䊓") && texts.iter().any(|t| t == "戠"),
+            "{texts:?}"
+        );
+
+        e.set_rare_ext_chars(true);
         let list = e.input("shi");
         let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(texts.first(), Some(&"是"), "{texts:?}");
         let at = |t: &str| texts.iter().position(|x| *x == t);
-        for ch in ["是", "十", "时", "戠", "䊓", "𬤊"] {
+        for ch in ["是", "十", "时", "戠", "䊓", "𠯜"] {
             assert!(at(ch).is_some(), "{ch} 要列出来：{texts:?}");
         }
         assert!(at("时") < at("戠"), "常用字在前：{texts:?}");
         assert!(
-            at("戠") < at("䊓") && at("䊓") < at("𬤊"),
+            at("戠") < at("䊓") && at("䊓") < at("𠯜"),
             "基本区、扩展 A、扩展 B：{texts:?}"
         );
 
         let list = e.input("shishi");
         let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
         assert_eq!(texts.first(), Some(&"事实"), "{texts:?}");
-        let rare = ['𬤊', '䊓', '戠'];
+        let rare = ['𠯜', '䊓', '戠'];
         for c in &list {
             if c.text.chars().count() > 1 {
                 assert!(
@@ -2125,11 +2139,30 @@ mod tests {
                 );
             }
         }
-        assert!(texts.contains(&"𬤊"), "第一个音节的字也要列全：{texts:?}");
+        assert!(texts.contains(&"𠯜"), "第一个音节的字也要列全：{texts:?}");
 
         // 简拼不带生僻字
         let texts: Vec<String> = e.input("sh").into_iter().map(|c| c.text).collect();
-        assert!(!texts.iter().any(|t| t == "𬤊"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "𠯜"), "{texts:?}");
+    }
+
+    #[test]
+    fn ext_chars_hidden_by_char_not_by_freq() {
+        // 通用规范汉字表里的扩展区字（𬭩）照常出；别的扩展区单字不管频次多少都藏（万象词库
+        // 把它们记成普通单字）；含这些字的词不受影响
+        let mut e = engine(concat!(
+            "yang\t氧\t9000\nyang\t𬭩\t0.7\nyang\t𪦲\t600\n",
+            "an kang\t𩽾𩾌\t50\n",
+        ));
+        e.set_max_candidates(100);
+        let texts: Vec<String> = e.input("yang").into_iter().map(|c| c.text).collect();
+        assert!(texts.iter().any(|t| t == "𬭩"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "𪦲"), "{texts:?}");
+        let texts: Vec<String> = e.input("ankang").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("𩽾𩾌"), "{texts:?}");
+        e.set_rare_ext_chars(true);
+        let texts: Vec<String> = e.input("yang").into_iter().map(|c| c.text).collect();
+        assert!(texts.iter().any(|t| t == "𪦲"), "{texts:?}");
     }
 
     #[test]

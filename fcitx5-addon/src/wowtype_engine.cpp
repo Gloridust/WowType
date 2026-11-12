@@ -848,6 +848,7 @@ void WowtypeEngine::applyConfig() {
         autoSpaceFlags_ = static_cast<int>(std::strtol(env, nullptr, 0)) & 3;
     }
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
+    rareExt_ = envOr("WOWTYPE_RARE_EXT", *config_.rareExt);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
     shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
     if (const char *env = std::getenv("WOWTYPE_SHUANGPIN_SCHEME"); env && *env) {
@@ -940,7 +941,7 @@ void WowtypeEngine::applyConfig() {
     }
 
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
-             << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 双拼=" << shuangpin_
+             << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 扩展区生僻字=" << rareExt_ << " 双拼=" << shuangpin_
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
@@ -967,6 +968,7 @@ void WowtypeEngine::applyCoreSettings() {
         wowtype_engine_set_shuangpin_scheme(core_, "ziranma");
     }
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
+    wowtype_engine_set_rare_ext_chars(core_, rareExt_ ? 1 : 0);
     if (traditional_ && !conversionLoaded_) {
         const std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
         const int loaded =

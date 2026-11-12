@@ -49,6 +49,10 @@ pub struct BeamConfig {
     /// 末尾没打完的音节由补全处理（woxiangch -> 我想吃），补全按缺了几个字母扣分，
     /// 比这里更准；这里只在补全也凑不出来时兜底。
     pub tail_abbrev_cost: f64,
+    /// 也出 CJK 扩展 B 区及以后的单字（[`crate::lexicon::LexEntry::is_ext_char`]）。
+    ///
+    /// 默认关：常见的中文字体（Noto CJK、思源、苹方）都没有这些字，列出来只是一排方块。
+    pub rare_ext_chars: bool,
 }
 
 impl Default for BeamConfig {
@@ -66,6 +70,7 @@ impl Default for BeamConfig {
             max_typos_per_word: 1,
             abbrev_cost: 2.0,
             tail_abbrev_cost: 4.0,
+            rare_ext_chars: false,
         }
     }
 }
@@ -481,11 +486,14 @@ fn collect_dfs(
         let jianpin = abbrev > 0;
         // 生僻字只给打全了、没纠错的全拼（shi 列全 shi 的字）；sh、s 这种简拼和补全不带它们，
         // 不然每打一个声母都要排几千个字
-        let entries = if rare && !jianpin && edge.completion == 0 && edge_typos == 0 {
+        let mut entries = if rare && !jianpin && edge.completion == 0 && edge_typos == 0 {
             lexicon.lookup(keys)
         } else {
             lexicon.lookup_common(keys)
         };
+        if !config.rare_ext_chars && keys.len() == 1 {
+            entries.retain(|e| !e.is_ext_char());
+        }
         let pinyin = if entries.is_empty() {
             String::new()
         } else {

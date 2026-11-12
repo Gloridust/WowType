@@ -455,6 +455,20 @@ pub unsafe extern "C" fn wowtype_engine_set_typo_correction(
     0
 }
 
+/// 是否也出 CJK 扩展 B 区及以后的单字（ABI 1.9 起，默认不出；通用规范汉字表里的照常）。返回 0 成功，-1 失败。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_rare_ext_chars(
+    engine: *mut WowtypeEngineHandle,
+    on: c_int,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_rare_ext_chars(on != 0);
+    0
+}
+
 /// 载入英文词表（每行一个词，或 rime 的 en.dict.yaml），返回累计词条数；失败返回 -1。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_load_english(
@@ -1073,7 +1087,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 8;
+pub const ABI_VERSION_MINOR: c_int = 9;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1130,7 +1144,7 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1008);
+        assert_eq!(wowtype_abi_version(), 1009);
     }
 }
 
