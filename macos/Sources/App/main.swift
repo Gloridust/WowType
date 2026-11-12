@@ -68,8 +68,20 @@ if arguments.count > 1 {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppState.shared.save()
+        AppState.shared.shutdownTranslator()
     }
 }
+
+// 被 kill（install.sh 换新版本、注销）时也存学习数据，停掉本地翻译模型的 llama-server（它是子进程，
+// 不停就一直占着 1.5 GB 内存）
+signal(SIGTERM, SIG_IGN)
+let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+terminationSource.setEventHandler {
+    AppState.shared.save()
+    AppState.shared.shutdownTranslator()
+    exit(0)
+}
+terminationSource.resume()
 
 guard let connection = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String,
       let bundleID = Bundle.main.bundleIdentifier

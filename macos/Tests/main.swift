@@ -16,6 +16,8 @@ final class FakeClient: TextClient {
     var marked = ""
     var markedCursor = 0
     var page: CandidatePage?
+    /// false：像开着安全输入的密码框，不翻译
+    var allowsTranslation = true
 
     func insertText(_ text: String) {
         committed += text
@@ -637,6 +639,512 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     check(client.committed == "你好", "换了引擎照常打字", client.committed)
+}
+
+// MARK: 互译
+
+/// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
+final class FakeTranslator: TranslationBackend {
+    var isReady = true
+    weak var owner: AnyObject?
+    var started: [String] = []
+    var cancels = 0
+    var snapshot = TranslateSnapshot(phase: .idle)
+
+    func start(_ text: String) {
+        if snapshot.source == text && (snapshot.phase == .running || snapshot.phase == .done) {
+            return
+        }
+        started.append(text)
+        snapshot = TranslateSnapshot(phase: .running, source: text)
+    }
+
+    func cancel() {
+        cancels += 1
+        snapshot = TranslateSnapshot(phase: .idle)
+    }
+
+    func poll() -> TranslateSnapshot { snapshot }
+
+    func tag(for text: String) -> String { "中→英" }
+
+    func stream(_ text: String) { snapshot.text = text }
+
+    func finish(_ text: String) {
+        snapshot.text = text
+        snapshot.phase = .done
+    }
+
+    func fail(_ error: String) {
+        snapshot.phase = .error
+        snapshot.error = error
+    }
+}
+
+final class FakeClock {
+    var now = 100.0
+}
+
+final class Counter {
+    var count = 0
+}
+
+struct TranslateRig {
+    let c: Composer
+    let client: FakeClient
+    let t: FakeTranslator
+    let clock: FakeClock
+    /// onTranslatePoll 叫了几次（外壳这时开始定时 poll）
+    let pollRequests: Counter
+
+    /// 过了 seconds 秒，外壳的定时器 poll 一次。
+    @discardableResult
+    func tick(_ seconds: Double = 0.05) -> Bool {
+        clock.now += seconds
+        return c.pollTranslation()
+    }
+
+    var status: String { client.page?.translate?.status ?? "" }
+    var source: String { client.page?.translate?.source ?? "" }
+}
+
+/// 打开互译、切到「译」的输入框。
+func translateRig(_ change: (inout WowtypeConfig) -> Void = { _ in }) -> TranslateRig {
+    var config = WowtypeConfig()
+    config.translate = true
+    change(&config)
+    let (c, client) = fresh()
+    let t = FakeTranslator()
+    let clock = FakeClock()
+    let requests = Counter()
+    c.clock = { clock.now }
+    c.onTranslatePoll = { requests.count += 1 }
+    c.setTranslator(t)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    return TranslateRig(c: c, client: client, t: t, clock: clock, pollRequests: requests)
+}
+
+do {
+    // 设置：键名、默认值和 Linux 一样
+    let d = WowtypeConfig()
+    check(!d.translate && d.translateTarget == "en" && d.translateBaseUrl.isEmpty && d.translateModel.isEmpty
+          && !d.translateFormal && !d.translateLocal && d.translateLocalModel.isEmpty
+          && d.translateLlamaServer.isEmpty && d.translateIdleMinutes == 5,
+          "互译默认关、译成英文、不用本地模型（文件里没写 TranslateLocal 时和 Linux 一样是 False）")
+    let c = WowtypeConfig.parse("""
+    Translate=True
+    TranslateTarget=JA
+    TranslateBaseUrl=https://api.example.com/v1
+    TranslateModel="gpt-4o-mini"
+    TranslateFormal=True
+    TranslateLocal=True
+    TranslateLocalModel=~/models/hy.gguf
+    TranslateLlamaServer=/opt/homebrew/bin/llama-server
+    TranslateIdleMinutes=999
+    """)
+    check(c.translate && c.translateTarget == "ja" && c.translateBaseUrl == "https://api.example.com/v1"
+          && c.translateModel == "gpt-4o-mini" && c.translateFormal, "互译的各项", "\(c.translateTarget) \(c.translateModel)")
+    check(c.translateLocal && c.translateLocalModel == "~/models/hy.gguf"
+          && c.translateLlamaServer == "/opt/homebrew/bin/llama-server" && c.translateIdleMinutes == 240,
+          "本地模型的各项；闲置分钟数超出 0–240 取 240", "\(c.translateIdleMinutes)")
+    check(WowtypeConfig.parse("TranslateTarget=klingon").translateTarget == "en", "不认识的语言保持 en")
+    check(WowtypeConfig.template().contains("TranslateBaseUrl=") && !WowtypeConfig.template().contains("TranslateKey="),
+          "设置模板里有互译的项，没有 Key")
+}
+
+do {
+    // Shift：中 → 英 → 译 → 中；没打开互译、翻译器没配好时只在中英之间切
+    let r = translateRig()
+    r.c.switchMode(to: .chinese)
+    r.c.toggleMode()
+    check(r.c.mode == .english, "中 → 英")
+    r.c.toggleMode()
+    check(r.c.mode == .translate && r.c.translating, "英 → 译")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "译 → 中")
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 2.0)
+    check(r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1) && r.c.mode == .translate, "单按两次 Shift 到译")
+
+    r.t.isReady = false
+    r.c.toggleMode()
+    r.c.toggleMode()
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "翻译器没配好：英 → 中，切不到译", "\(r.c.mode)")
+
+    let off = translateRig { $0.translate = false }
+    check(off.c.mode == .chinese && !off.c.translateAvailable, "设置里没打开互译：切不到译")
+    off.c.toggleMode()
+    off.c.toggleMode()
+    check(off.c.mode == .chinese, "没打开互译：英 → 中")
+
+    let (plain, _) = fresh()
+    plain.switchMode(to: .translate)
+    check(plain.mode == .chinese, "没有翻译器切不到译")
+}
+
+do {
+    // 打的字攒成原文，不上屏；停 0.5 秒才发请求，译文边出边写在编辑区，回车上屏译文
+    let r = translateRig()
+    type(r.c, "nihao")
+    check(r.client.marked.isEmpty && r.source == "ni'hao", "译：拼音在候选框顶上，编辑区留给译文",
+          "\(r.client.marked) / \(r.source)")
+    check(r.client.page?.translate?.title == "中→英 互译：" && r.client.page?.texts.first == "你好",
+          "候选框顶上是方向，下面照常是候选", "\(r.client.page?.translate?.title ?? "")")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.c.translateSource == "你好" && r.source == "你好",
+          "选的词进原文，不上屏", "\(r.client.committed) / \(r.c.translateSource)")
+    check(r.pollRequests.count == 1 && r.status == "翻译中…", "原文变了叫外壳开始轮询",
+          "\(r.pollRequests.count) \(r.status)")
+    check(r.tick(0.2) && r.t.started.isEmpty, "0.5 秒内不发请求")
+    check(r.tick(0.35) && r.t.started == ["你好"], "停够 0.5 秒发请求", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hel" && r.client.markedCursor == 3, "译文边出边写在编辑区", r.client.marked)
+    r.t.finish("Hello")
+    check(!r.tick(), "译完了就不用再轮询")
+    check(r.client.marked == "Hello" && r.status == "回车上屏 · Shift+回车上屏原文 · Esc 清空",
+          "译完提示怎么上屏", "\(r.client.marked) / \(r.status)")
+    check(r.c.handle(.key(Keysym.returnKey)), "回车吃掉")
+    check(r.client.committed == "Hello" && r.c.translateSource.isEmpty && r.client.marked.isEmpty && r.client.page == nil,
+          "回车上屏译文，清空原文和候选框", r.client.committed)
+    check(!r.c.handle(.key(Keysym.returnKey)), "原文空了回车交给应用")
+}
+
+do {
+    // 句末标点立刻发；还没译完按回车（空格也一样）等译好了自动上屏
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char("."))
+    check(r.c.translateSource == "你好。" && r.client.committed.isEmpty, "标点也进原文", r.c.translateSource)
+    r.tick(0.01)
+    check(r.t.started == ["你好。"], "句末标点不等 0.5 秒", "\(r.t.started)")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.status == "翻译中…好了就上屏", "没译完按空格先等着", r.status)
+    check(r.tick(), "等着时接着轮询")
+    r.t.finish("Hello.")
+    check(!r.tick() && r.client.committed == "Hello." && r.c.translateSource.isEmpty, "译好了自动上屏", r.client.committed)
+}
+
+do {
+    // Shift+回车上屏原文；Esc 清空；退格删原文最后一个字、重新等 0.5 秒
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    _ = r.c.handle(.key(Keysym.returnKey, .shift))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty, "Shift+回车上屏原文", r.client.committed)
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    let cancels = r.t.cancels
+    check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
+          && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
+    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.finish("Hello good")
+    r.tick()
+    check(r.c.handle(.key(Keysym.backspace)) && r.c.translateSource == "你好", "退格删原文最后一个字", r.c.translateSource)
+    check(r.client.marked == "Hello good" && r.status == "翻译中…", "原文改了、新译文出来前留着上一句",
+          "\(r.client.marked) / \(r.status)")
+    r.tick(0.6)
+    check(r.t.started.last == "你好", "停一下重新翻", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hello good", "新译文比上一句短时先不换", r.client.marked)
+    r.t.finish("Hello")
+    r.tick()
+    check(r.client.marked == "Hello", "译完了换成新的", r.client.marked)
+}
+
+do {
+    // 数字和 / + 进原文（3.14 的点原样）；方向键、Tab 吃掉；快捷键交给应用
+    let r = translateRig()
+    for ch in "3.14/2" {
+        check(r.c.handle(.char(ch)), "\(ch) 进原文")
+    }
+    check(r.c.translateSource == "3.14/2" && r.client.committed.isEmpty, "数字、点、斜杠进原文", r.c.translateSource)
+    check(r.c.handle(.key(Keysym.left)) && r.c.handle(.key(Keysym.tab)), "方向键、Tab 吃掉（原文里没有光标）")
+    check(!r.c.handle(.char("c", .command)) && r.c.translateSource == "3.14/2", "Command+C 交给应用")
+    check(r.c.hasPendingText && !r.c.isComposing, "攒着原文时外壳也要吃掉别的键")
+}
+
+do {
+    // 出错：候选框底下写原因，回车重试
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.status == "翻译失败：连不上服务器（回车重试）" && r.client.marked.isEmpty,
+          "出错写在底下", r.status)
+    _ = r.c.handle(.key(Keysym.returnKey))
+    check(r.t.started == ["你好", "你好"] && r.status == "翻译中…好了就上屏", "回车重试", "\(r.t.started) \(r.status)")
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.client.committed.isEmpty && r.status.hasSuffix("（回车重试）"), "又出错就不等了", r.status)
+}
+
+do {
+    // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese && r.client.committed == "你好" && r.c.isComposing && r.client.marked == "hao",
+          "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
+    check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
+
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏
+    let s = translateRig()
+    type(s.c, "nihao")
+    _ = s.c.handle(.char(" "))
+    type(s.c, "hao")
+    s.c.commitComposition()
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil, "切走时原文原样上屏",
+          s.client.committed)
+
+    // 设置里关掉互译：离开「译」
+    let u = translateRig()
+    type(u.c, "nihao")
+    _ = u.c.handle(.char(" "))
+    var config = u.c.config
+    config.translate = false
+    u.c.apply(config)
+    check(u.c.mode == .chinese && u.client.committed == "你好" && u.c.translateSource.isEmpty,
+          "关掉互译时原文上屏、回到中文", u.client.committed)
+
+    // 失去焦点：拼音和原文都丢掉
+    let v = translateRig()
+    type(v.c, "nihao")
+    _ = v.c.handle(.char(" "))
+    v.c.cancel()
+    check(v.client.committed.isEmpty && !v.c.hasPendingText, "cancel 丢掉原文")
+}
+
+do {
+    // 密码框（安全输入）里照常打中文，不往外发
+    let r = translateRig()
+    r.client.allowsTranslation = false
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty && r.t.started.isEmpty && !r.c.translating,
+          "不能翻译的输入框直接上屏", r.client.committed)
+}
+
+do {
+    // 两个输入框共用一个翻译器：清空自己的原文不取消别人的请求
+    let r = translateRig()
+    let (other, _) = fresh()
+    var config = WowtypeConfig()
+    config.translate = true
+    other.setTranslator(r.t)
+    other.apply(config)
+    other.switchMode(to: .translate)
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    other.cancel()
+    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+}
+
+/// 文件的权限位。
+func fileMode(_ path: String) -> Int {
+    var info = stat()
+    return stat(path, &info) == 0 ? Int(info.st_mode) & 0o777 : -1
+}
+
+do {
+    // API Key 文件：0600，一行；空串删掉；手动建的权限太宽时收紧
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).key"
+    check(TranslateKeyFile.write("  sk-test-123 \n", to: path), "写 Key")
+    check(TranslateKeyFile.read(path) == "sk-test-123" && fileMode(path) == 0o600, "Key 文件 0600，去掉空白",
+          "\(fileMode(path))")
+    check(TranslateKeyFile.write("", to: path) && access(path, F_OK) != 0, "空串删掉 Key 文件")
+    check(TranslateKeyFile.read(path).isEmpty, "没有 Key 文件读出空串")
+    writeFile(path, "sk-loose\n")
+    chmod(path, 0o644)
+    TranslateKeyFile.tighten(path)
+    check(fileMode(path) == 0o600 && TranslateKeyFile.read(path) == "sk-loose", "权限太宽的收紧", "\(fileMode(path))")
+    unlink(path)
+}
+
+do {
+    // 核心的翻译器：没填服务时没配好；本地模型看模型文件在不在
+    let t = Translator()
+    var config = WowtypeConfig()
+    config.translate = true
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(!t.isReady, "没填服务、没选本地模型：没配好")
+    config.translateBaseUrl = "http://127.0.0.1:1/v1"
+    config.translateModel = "m"
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(t.isReady, "填了地址和模型：配好了")
+    config.translateLocal = true
+    let model = "/tmp/wowtype-macos-harness-\(getpid()).gguf"
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(!t.isReady, "本地模型文件不在：没配好")
+    writeFile(model, "GGUF")
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(t.isReady && !t.localRunning, "TranslateLocalModel 留空用默认路径（第一次翻译时才起 llama-server）")
+    config.translateLocalModel = model
+    t.configure(config, keyFile: "", defaultLocalModel: "/nonexistent.gguf")
+    check(t.isReady, "写了模型路径用它")
+    unlink(model)
+    check(t.tag(for: "你好") == "中→英" && t.tag(for: "hello") == "英→中", "方向标签", t.tag(for: "hello"))
+}
+
+/// 本机的假翻译服务（OpenAI 格式，流式）。不起线程：测试循环里每次 service() 接一个连接、
+/// 读完请求、一次把 SSE 回完。
+final class FakeTranslateServer {
+    private let fd: Int32
+    let port: UInt16
+    var requests: [String] = []
+    var status = "200 OK"
+    var chunks: [String] = []
+
+    init?() {
+        #if canImport(Glibc)
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #else
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        #endif
+        guard fd >= 0 else { return nil }
+        var addr = sockaddr_in()
+        #if !canImport(Glibc)
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, size) == 0 && listen(fd, 8) == 0 && getsockname(fd, $0, &size) == 0
+            }
+        }
+        guard ok else {
+            close(fd)
+            return nil
+        }
+        self.fd = fd
+        port = UInt16(bigEndian: addr.sin_port)
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    }
+
+    deinit {
+        close(fd)
+    }
+
+    var baseURL: String { "http://127.0.0.1:\(port)/v1" }
+
+    static func sse(_ delta: String) -> String {
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\(delta)\"}}]}\n\n"
+    }
+
+    func service() {
+        let conn = accept(fd, nil, nil)
+        guard conn >= 0 else { return }
+        defer { close(conn) }
+        // macOS 上接进来的连接继承了非阻塞，改回阻塞，最多等 5 秒
+        _ = fcntl(conn, F_SETFL, fcntl(conn, F_GETFL) & ~O_NONBLOCK)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var bytes: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = recv(conn, &buffer, buffer.count, 0)
+            if n <= 0 { break }
+            bytes.append(contentsOf: buffer[0..<n])
+            // 请求头完了（空行）、请求体也够 Content-Length 了就不读了
+            guard let headEnd = (0..<max(bytes.count - 3, 0)).first(where: { bytes[$0..<$0 + 4] == [13, 10, 13, 10] })
+            else { continue }
+            let head = String(decoding: bytes[..<headEnd], as: UTF8.self)
+            let length = head.split(separator: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int(String($0.split(separator: ":")[1]).trimmingWhitespace()) } ?? 0
+            if bytes.count - (headEnd + 4) >= length { break }
+        }
+        requests.append(String(decoding: bytes, as: UTF8.self))
+        let type = status.hasPrefix("200") ? "text/event-stream" : "application/json"
+        let response = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nConnection: close\r\n\r\n" + chunks.joined()
+        let out = Array(response.utf8)
+        _ = out.withUnsafeBytes { send(conn, $0.baseAddress, $0.count, 0) }
+    }
+}
+
+func haveCurl() -> Bool {
+    let path = getenv("PATH").map { String(cString: $0) } ?? "/usr/bin:/bin"
+    return path.split(separator: ":").contains { access("\($0)/curl", X_OK) == 0 }
+}
+
+/// 一直轮询（外壳的定时器）直到 done 返回 true，最多 15 秒。
+func waitTranslation(_ c: Composer, _ server: FakeTranslateServer, until done: () -> Bool) -> Bool {
+    let deadline = monotonicSeconds() + 15
+    while monotonicSeconds() < deadline {
+        server.service()
+        c.pollTranslation()
+        if done() { return true }
+        usleep(20_000)
+    }
+    return false
+}
+
+if !haveCurl() {
+    print("skip 互译走真的翻译器（没有 curl）")
+} else if let server = FakeTranslateServer() {
+    // 走核心的翻译器（curl）连本机的假服务：Key、模型、语言照设置发，译文流式写进编辑区
+    signal(SIGPIPE, SIG_IGN)
+    let keyPath = "/tmp/wowtype-macos-harness-\(getpid()).translate.key"
+    TranslateKeyFile.write("sk-test-123", to: keyPath)
+    var config = WowtypeConfig()
+    config.translate = true
+    config.translateBaseUrl = server.baseURL
+    config.translateModel = "test-model"
+    config.translateTarget = "ja"
+    let translator = Translator()
+    translator.configure(config, keyFile: keyPath, defaultLocalModel: "")
+    let (c, client) = fresh()
+    c.setTranslator(translator)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    check(c.mode == .translate, "真的翻译器：切到译")
+    server.chunks = [FakeTranslateServer.sse("また"), FakeTranslateServer.sse("明日"), "data: [DONE]\n\n"]
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    check(client.page?.translate?.title == "中→日 互译：", "方向标签照设置的语言", client.page?.translate?.title ?? "")
+    let done = waitTranslation(c, server) { client.page?.translate?.status.hasPrefix("回车上屏") == true }
+    check(done && client.marked == "また明日", "流式译文写进编辑区",
+          "\(client.marked) / \(client.page?.translate?.status ?? "")")
+    let request = server.requests.first ?? ""
+    check(request.hasPrefix("POST /v1/chat/completions") && request.contains("Authorization: Bearer sk-test-123"),
+          "请求带 Key", String(request.prefix(200)))
+    check(request.contains("\"model\":\"test-model\"") && request.contains("Japanese") && request.contains("你好。"),
+          "请求里有模型、目标语言、原文")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "また明日" && !c.hasPendingText, "回车上屏译文", client.committed)
+
+    // 服务出错：底下写原因
+    server.status = "401 Unauthorized"
+    server.chunks = ["{\"error\":{\"message\":\"bad key\"}}"]
+    type(c, "hao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    let failed = waitTranslation(c, server) { client.page?.translate?.status.hasSuffix("（回车重试）") == true }
+    check(failed && client.page?.translate?.status.contains("bad key") == true, "服务出错写原因",
+          client.page?.translate?.status ?? "")
+    check(server.requests.count == 2, "连了两次假服务", "\(server.requests.count)")
+    unlink(keyPath)
+} else {
+    check(false, "起假翻译服务")
 }
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {

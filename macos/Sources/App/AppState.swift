@@ -1,4 +1,4 @@
-// 进程里只有一份的东西：词库（后台载入）、设置、数据目录、定时保存学习数据。
+// 进程里只有一份的东西：词库（后台载入）、设置、数据目录、定时保存学习数据、互译的翻译器。
 
 import AppKit
 
@@ -17,6 +17,9 @@ final class AppState {
     /// wowtype.conf 的内容（键名同 Linux）。改了以后 configGeneration 加一，输入控制器照着重新设置会话。
     private(set) var config = WowtypeConfig()
     private(set) var configGeneration = 0
+    /// 互译的翻译器：设置里第一次打开 Translate 时建，之后一直留着（和 Linux 一样），所有输入框共用。
+    /// 本地模型的 llama-server 也只有这一个，第一次翻译时才起
+    private(set) var translator: Translator?
     /// 正在用的词库文件，和它载入时的 (大小, 修改时间)
     private var lexiconInUse: String?
     private var lexiconStamp: FileStamp?
@@ -55,6 +58,21 @@ final class AppState {
     var configPath: String { supportDir.appendingPathComponent("wowtype.conf").path }
     /// 自定义词（常用语），格式同 Linux 的 ~/.local/share/wowtype/custom.tsv
     var customWordsPath: String { supportDir.appendingPathComponent("custom.tsv").path }
+    /// 互译的 API Key（一行，0600），同 Linux 的 ~/.config/wowtype/translate.key；不写进 wowtype.conf
+    var translateKeyPath: String { supportDir.appendingPathComponent("translate.key").path }
+    /// 本地翻译模型，设置里 TranslateLocalModel 留空时用（同 Linux 的 ~/.local/share/wowtype/models/）
+    var localModelPath: String {
+        supportDir.appendingPathComponent("models/HY-MT1.5-1.8B-Q4_K_M.gguf").path
+    }
+
+    /// 设置里没填 TranslateLlamaServer 时去哪找 llama-server：输入法是系统启动的，PATH 里只有
+    /// /usr/bin 这些，Homebrew 装的 llama.cpp 要自己找。都没有时交给核心（PATH、~/.local/share/wowtype/llama）。
+    func findLlamaServer() -> String {
+        let candidates = [supportDir.appendingPathComponent("llama/llama-server").path,
+                          "/opt/homebrew/bin/llama-server", "/usr/local/bin/llama-server",
+                          "/opt/local/bin/llama-server"]
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
+    }
 
     /// 实际用哪个词库：设置里的 Lexicon（文件在才用）> 安装包里的雾凇词库。
     func lexiconPath() -> String? {
@@ -103,13 +121,39 @@ final class AppState {
         if loaded != config || configGeneration == 0 {
             config = loaded
             configGeneration += 1
-            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@",
+            applyTranslateSettings()
+            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 互译=%@",
                   config.horizontal ? "横排" : "竖排", config.pageSize, config.fuzzy ? 1 : 0, config.fuzzyGroups,
                   config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme,
                   config.shiftToggle.rawValue, config.traditional ? 1 : 0, config.halfwidthPunct ? 1 : 0,
-                  config.candidateFontSize, config.lexicon.isEmpty ? "自带" : config.lexicon)
+                  config.candidateFontSize, config.lexicon.isEmpty ? "自带" : config.lexicon, translateSummary())
         }
         applyPanelSettings()
+    }
+
+    /// 设置里管互译的部分。和 Linux 一样，打开过一次就留着翻译器（关掉时只是切不到「译」）；
+    /// 不用本地模型了马上停掉 llama-server。
+    private func applyTranslateSettings() {
+        if config.translate && translator == nil {
+            translator = Translator()
+        }
+        guard let translator else { return }
+        // 手动建的 Key 文件权限可能太宽，收紧到只有自己能读
+        TranslateKeyFile.tighten(translateKeyPath)
+        translator.configure(config, keyFile: translateKeyPath, defaultLocalModel: localModelPath,
+                             llamaServer: config.translateLocal ? findLlamaServer() : "")
+    }
+
+    private func translateSummary() -> String {
+        guard config.translate else { return "关" }
+        guard let translator, translator.isReady else { return "开（未配置，切不到「译」）" }
+        let service = config.translateLocal ? "本地 HY-MT" : "\(config.translateModel) @ \(config.translateBaseUrl)"
+        return "开（\(service) → \(config.translateTarget)）"
+    }
+
+    /// 退出时停掉本地模型的 llama-server（它是输入法起的子进程）。
+    func shutdownTranslator() {
+        translator?.configure(WowtypeConfig(), keyFile: "", defaultLocalModel: "")
     }
 
     /// 候选框的设置（字号）。
@@ -207,6 +251,10 @@ final class AppState {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastCheck >= 1 else { return }
         lastCheck = now
+        if force && translator != nil {
+            // 切换输入框时再找一次 llama-server（设置以后才 brew install 的）、收紧 Key 文件的权限
+            applyTranslateSettings()
+        }
         if FileStamp(configPath) != configStamp {
             let generation = configGeneration
             loadConfig()

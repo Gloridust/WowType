@@ -3,6 +3,7 @@
 // 当前候选绿底白字，序号灰色，最右边是绿色的翻页箭头（翻不动的那边变淡）。
 // 横排一行「1 是  2 十 …」。展开面板（横排按下键）一行 6 个排成网格：光标所在行浅绿底、
 // 标 1–6（数字选这一行的第几个），光标处的词绿底白字，翻页箭头在右下角。
+// 互译时候选上面多一行「中→英 互译：」+ 原文，下面多一行状态（灰色小字）；没有候选时只有这两行。
 
 import AppKit
 
@@ -66,6 +67,8 @@ struct CandidateLayout {
     static let arrowGap: CGFloat = 4
     /// 展开面板最底下放箭头的那一行有多高
     static let arrowRowHeight: CGFloat = 16
+    /// 互译的原文最多显示这么多个字（太长只留后面的）
+    static let maxSourceLength = 40
 
     let textFont: NSFont
     let labelFont: NSFont
@@ -77,17 +80,59 @@ struct CandidateLayout {
     private(set) var arrows: (prev: NSRect, next: NSRect)?
     let hasPrev: Bool
     let hasNext: Bool
+    /// 互译：候选上面那行（标题 + 原文）和下面那行（状态）的位置；不在互译时 nil
+    private(set) var header: (title: String, source: String, origin: NSPoint)?
+    private(set) var footer: (text: String, origin: NSPoint)?
 
     init(page: CandidatePage, fontSize: CGFloat) {
         textFont = .systemFont(ofSize: fontSize)
         labelFont = .monospacedDigitSystemFont(ofSize: (fontSize * 0.76).rounded(), weight: .regular)
         hasPrev = page.hasPrev
         hasNext = page.hasNext
-        if page.expanded {
-            layOutGrid(page)
-        } else {
-            layOutRow(page)
+        guard let translate = page.translate else {
+            layOutCandidates(page, top: Self.inset.height)
+            return
         }
+        // 互译：先摆标题和原文，候选往下挪，最后摆状态，框的宽度取最宽的那行
+        let source = translate.source.count > Self.maxSourceLength
+            ? "…" + translate.source.suffix(Self.maxSourceLength) : translate.source
+        let left = Self.inset.width + Self.cellPadding.width
+        let headerSize = headerContent(title: translate.title, source: source, titleColor: .clear,
+                                       textColor: .clear).size()
+        header = (translate.title, source, NSPoint(x: left, y: Self.inset.height + Self.cellPadding.height))
+        var bottom = Self.inset.height + ceil(headerSize.height) + Self.cellPadding.height * 2
+        var width = left + ceil(headerSize.width) + Self.cellPadding.width
+        if !page.texts.isEmpty {
+            layOutCandidates(page, top: bottom + Self.spacing)
+            bottom = size.height - Self.inset.height
+            width = max(width, size.width - Self.inset.width)
+        }
+        if !translate.status.isEmpty {
+            let status = footerContent(translate.status, color: .clear).size()
+            footer = (translate.status, NSPoint(x: left, y: bottom + Self.spacing))
+            bottom += Self.spacing + ceil(status.height) + Self.cellPadding.height
+            width = max(width, left + ceil(status.width) + Self.cellPadding.width)
+        }
+        size = NSSize(width: width + Self.inset.width, height: bottom + Self.inset.height)
+    }
+
+    private mutating func layOutCandidates(_ page: CandidatePage, top: CGFloat) {
+        if page.expanded {
+            layOutGrid(page, top: top)
+        } else {
+            layOutRow(page, top: top)
+        }
+    }
+
+    /// 互译那一行：「中→英 互译：」用序号的颜色和字号，原文用候选的。
+    func headerContent(title: String, source: String, titleColor: NSColor, textColor: NSColor) -> NSAttributedString {
+        let out = NSMutableAttributedString(string: title, attributes: [.font: labelFont, .foregroundColor: titleColor])
+        out.append(NSAttributedString(string: source, attributes: [.font: textFont, .foregroundColor: textColor]))
+        return out
+    }
+
+    func footerContent(_ text: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: color])
     }
 
     /// 序号和词连成一串（序号用小一号的字，基线对齐）。
@@ -109,9 +154,9 @@ struct CandidateLayout {
         ceil(content(label: label, text: text, labelColor: .clear, textColor: .clear).size().width)
     }
 
-    private mutating func layOutRow(_ page: CandidatePage) {
+    private mutating func layOutRow(_ page: CandidatePage, top: CGFloat) {
         let height = cellHeight
-        let y = Self.inset.height
+        let y = top
         var x = Self.inset.width
         for (i, text) in page.texts.enumerated() {
             let label = "\(i + 1)"
@@ -130,7 +175,7 @@ struct CandidateLayout {
         size = NSSize(width: x + Self.inset.width, height: y + height + Self.inset.height)
     }
 
-    private mutating func layOutGrid(_ page: CandidatePage) {
+    private mutating func layOutGrid(_ page: CandidatePage, top: CGFloat) {
         let columns = CandidatePage.columns
         let height = cellHeight
         let cursorRow = page.cursor >= 0 ? page.cursor / columns : -1
@@ -147,10 +192,10 @@ struct CandidateLayout {
             x += width + Self.cellPadding.width * 2 + Self.spacing
         }
         let right = x - Self.spacing
-        var bottom = Self.inset.height
+        var bottom = top
         for (i, text) in page.texts.enumerated() {
             let (r, column) = (i / columns, i % columns)
-            let y = Self.inset.height + CGFloat(r) * (height + Self.spacing)
+            let y = top + CGFloat(r) * (height + Self.spacing)
             let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
             cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, showLabel: r == cursorRow,
                               current: i == page.cursor))
@@ -195,6 +240,13 @@ final class CandidateView: NSView {
         panel.lineWidth = 1
         panel.stroke()
 
+        if let header = layout.header {
+            layout.headerContent(title: header.title, source: header.source, titleColor: theme.label,
+                                 textColor: theme.text).draw(at: header.origin)
+        }
+        if let footer = layout.footer {
+            layout.footerContent(footer.text, color: theme.label).draw(at: footer.origin)
+        }
         if let row = layout.row {
             theme.row.setFill()
             roundedRect(row).fill()
