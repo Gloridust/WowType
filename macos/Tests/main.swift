@@ -64,7 +64,7 @@ func writeFile(_ path: String, _ text: String) {
 /// 测试用的小词库：你好、ni/hao 的单字、略（lve），加上 shi 的 24 个字（9 个一页，3 页）。
 func writeTestLexicon() -> String {
     var lines = ["nihao\t你好\t50000", "ni\t你\t40000", "ni\t尼\t3000", "hao\t好\t40000", "hao\t号\t5000",
-                 "shishi\t事实\t8000", "lve\t略\t30000"]
+                 "shishi\t事实\t8000", "lve\t略\t30000", "kai xin\t开心\t30000"]
     let shi = Array("是十时事市使实式试世师史石示视适识施室势诗释湿")
     for (i, ch) in shi.enumerated() {
         lines.append("shi\t\(ch)\t\(60000 - i * 1000)")
@@ -630,6 +630,7 @@ do {
     all.halfwidthPunct = true
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
+    all.emojiKey = Shortcut(name: "Control+semicolon")
     check(WowtypeConfig.keys.allSatisfy { all.value(forKey: $0) != d.value(forKey: $0) }, "每一项都改了")
     for (name, base) in [("模板", nil), ("空文件", ""), ("只有注释", "# 我的设置\n")] as [(String, String?)] {
         let out = all.serialized(into: base)
@@ -805,6 +806,275 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     check(client.committed == "你好", "换了引擎照常打字", client.committed)
+}
+
+// MARK: v + 空格的工具栏、表情面板
+
+do {
+    // 默认值、快捷键的键名（和 fcitx5 一样）
+    let d = WowtypeConfig()
+    check(d.toolbar && !d.clipboardHistory && d.emojiKey == .emojiDefault && d.emojiKey?.name == "Control+period",
+          "默认工具栏开、剪贴板历史关、表情面板快捷键 Control+period", d.emojiKey?.name ?? "nil")
+    check(WowtypeConfig.parse("EmojiKey=Super+period").emojiKey == .emojiDefault,
+          "Linux 的默认值 Super+period 拷过来是 Control+.")
+    check(WowtypeConfig.parse("EmojiKey=").emojiKey == nil, "EmojiKey 留空：不用快捷键")
+    check(WowtypeConfig.parse("EmojiKey=Hyper+F12").emojiKey == .emojiDefault, "认不出的快捷键保持默认")
+    let e = WowtypeConfig.parse("Toolbar=False\nClipboardHistory=True\nEmojiKey=Control+Shift+E")
+    check(!e.toolbar && e.clipboardHistory, "Toolbar、ClipboardHistory")
+    check(e.emojiKey?.matches(.char("E", [.control, .shift])) == true, "Control+Shift+E：按下时 macOS 给大写也认")
+    check(e.emojiKey?.matches(.char("e", [.control])) == false, "少了 Shift 不算")
+    check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
+    check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
+    check(Shortcut.emojiDefault.matches(.char(".", [.control, .command])) == false, "多按了 Command 不算")
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "v")
+    check(c.handle(.char(" ")) && c.openPanel == .menu, "v + 空格打开工具栏")
+    check(client.marked.isEmpty && client.committed.isEmpty && !c.isComposing, "打开工具栏时 v 不上屏、编辑区清掉",
+          client.committed)
+    check(client.page?.texts == ["剪贴板", "常用语", "符号", "表情"] && client.page?.vertical == true
+              && client.page?.cursor == 0 && client.page?.expanded == false,
+          "工具栏竖排四项", "\(client.page?.texts ?? [])")
+    check(client.page?.aux == "工具栏：数字键选择，Esc 关闭", "工具栏的提示", client.page?.aux ?? "nil")
+    check(c.handle(.char("a")) && c.openPanel == .menu && client.committed.isEmpty, "别的键吃掉，不打进应用")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 1.1) && c.mode == .chinese, "工具栏开着时单按 Shift 不切")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 1, "下键移光标", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.backspace))
+    check(c.openPanel == nil && client.page == nil, "菜单里退格关上")
+
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("2"))
+    check(c.openPanel == .phrases, "2 进常用语")
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在菜单「编辑自定义词」里添加",
+          "没有自定义词时只有提示", client.page?.aux ?? "nil")
+    _ = c.handle(.key(Keysym.backspace))
+    check(c.openPanel == .menu, "退格返回菜单")
+    c.select(1)
+    check(c.openPanel == .phrases, "点第 2 项也进常用语")
+    _ = c.handle(.key(Keysym.escape))
+    check(c.openPanel == nil && client.page == nil && client.committed.isEmpty, "Esc 关上")
+
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(!c.handle(.char("c", [.control])) && c.openPanel == nil && client.page == nil, "Control+C 收起工具栏、交给应用")
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    c.commitComposition()
+    check(c.openPanel == nil && client.page == nil && client.committed.isEmpty, "切走输入法时收起工具栏，不上屏")
+    type(c, "vim")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "vim 照常打字")
+}
+
+withConfig({ $0.toolbar = false }) { c, _ in
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "关掉工具栏：v + 空格不打开")
+}
+
+withConfig({ $0.shuangpin = true }) { c, _ in
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "双拼时不开工具栏")
+}
+
+do {
+    // 常用语：custom.tsv 的顺序，「编码　词」，选了上屏（\n 是换行）
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).phrases.tsv"
+    writeFile(path, "dz\t北京市海淀区\nqm\t张三\\n13800000000\n")
+    engine.loadCustomWords(path)
+    let (c, client) = fresh()
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("2"))
+    let texts = client.page?.texts ?? []
+    check(texts.count == 2 && texts[0] == "dz\u{3000}北京市海淀区" && texts[1].hasPrefix("qm\u{3000}张三"),
+          "常用语按文件顺序，编码在前", "\(texts)")
+    check(client.page?.aux == "常用语：选一条上屏，退格返回", "常用语的提示", client.page?.aux ?? "nil")
+    _ = c.handle(.key(Keysym.down))
+    _ = c.handle(.char(" "))
+    check(client.committed == "张三\n13800000000" && c.openPanel == nil && client.page == nil, "空格上屏光标处的，收起",
+          client.committed)
+    unlink(path)
+    engine.loadCustomWords(path)
+}
+
+withConfig({ $0.clipboardHistory = true }) { c, client in
+    ClipboardHistory.remember("第一条")
+    // 外壳看到的系统剪贴板（打开剪贴板页时取一次）
+    c.sampleClipboard = { ClipboardHistory.remember("第二条\n第二行") }
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(c.openPanel == .clipboard && client.page?.texts == ["第二条⏎第二行", "第一条"],
+          "剪贴板：打开时取一次，最新的在前，换行显示成 ⏎", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char("1"))
+    check(client.committed == "第二条\n第二行" && c.openPanel == nil, "数字选一条上屏", client.committed)
+    c.sampleClipboard = nil
+    for i in 1...12 {
+        ClipboardHistory.remember("条目\(i)")
+    }
+    client.committed = ""
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(client.page?.texts.count == 9 && client.page?.hasNext == true && client.page?.hasPrev == false,
+          "一页 9 条", "\(client.page?.texts.count ?? 0)")
+    _ = c.handle(.char("="))
+    check(client.page?.texts.first == "条目3" && client.page?.hasPrev == true && client.page?.cursor == 0,
+          "= 翻到下一页", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char("2"))
+    check(client.committed == "条目2", "数字选这一页的第几个", client.committed)
+    var off = c.config
+    off.clipboardHistory = false
+    c.apply(off)
+    check(ClipboardHistory.items.isEmpty, "关掉剪贴板历史时马上清空")
+}
+
+withConfig({ _ in }) { c, client in
+    ClipboardHistory.remember("不该列出来")
+    var sampled = false
+    c.sampleClipboard = { sampled = true }
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(!sampled && client.page?.texts.isEmpty == true
+              && client.page?.aux == "剪贴板：没打开，在设置（wowtype.conf）里写 ClipboardHistory=True",
+          "剪贴板历史默认关：不取、不列", client.page?.aux ?? "nil")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil && client.committed.isEmpty, "空列表按空格关上")
+    ClipboardHistory.clear()
+}
+
+withConfig({ _ in }) { c, client in
+    let recent = RecentEmoji()
+    c.recentEmoji = recent
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("3"))
+    check(c.openPanel == .emoji(symbols: true) && client.page?.expanded == true && (client.page?.texts.count ?? 0) > 6,
+          "3 进符号面板（6 列网格）", "\(client.page?.texts.count ?? 0)")
+    check(client.page?.aux == "符号：打拼音或英文搜索，Esc 关闭", "符号面板的提示", client.page?.aux ?? "nil")
+    let first = client.page?.texts.first ?? "?"
+    _ = c.handle(.char(" "))
+    check(client.committed == first && recent.items.isEmpty, "空格上屏符号，不记进最近用过", client.committed)
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("4"))
+    check(c.openPanel == .emoji(symbols: false), "4 进表情面板")
+}
+
+withConfig({ _ in }) { c, client in
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).emoji-recent.txt"
+    unlink(path)
+    let recent = RecentEmoji(path: path)
+    c.recentEmoji = recent
+    check(c.handle(.char(".", [.control])) && c.openPanel == .emoji(symbols: false), "Control+. 打开表情面板")
+    check(client.page?.expanded == true && client.page?.texts.count == 36 && client.page?.hasNext == true
+              && client.page?.aux == "表情：打拼音或英文搜索，Esc 关闭",
+          "不搜索时列全部 emoji，一屏 6 × 6", "\(client.page?.texts.count ?? 0) \(client.page?.aux ?? "nil")")
+    type(c, "pizza")
+    check(client.marked == "pizza" && client.page?.texts.first == "🍕" && client.page?.aux == "表情：pizza",
+          "打英文搜：pizza → 🍕，搜索词在编辑区", "\(client.page?.texts.prefix(6) ?? [])")
+    _ = c.handle(.key(Keysym.backspace))
+    check(client.marked == "pizz" && c.openPanel != nil, "退格删搜索词", client.marked)
+    type(c, "A")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "🍕" && c.openPanel == nil && client.page == nil && client.marked.isEmpty,
+          "回车上屏，面板收起", client.committed)
+    check(recent.items == ["🍕"] && readFile(path) == "🍕\n", "记进最近用过，写到文件", "\(recent.items)")
+    check(RecentEmoji(path: path).items == ["🍕"], "下次启动从文件读回来")
+
+    _ = c.handle(.char(".", [.control]))
+    check(client.page?.texts.first == "🍕", "最近用过的排最前", "\(client.page?.texts.prefix(6) ?? [])")
+    _ = c.handle(.key(Keysym.right))
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 7, "右键、下键在网格里走", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.up))
+    _ = c.handle(.key(Keysym.up))
+    check(client.page?.cursor == 1 && c.openPanel != nil, "第一行再往上不收起", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.pageDown))
+    check(client.page?.cursor == 1 && client.page?.hasPrev == true, "PgDn 翻一屏", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.pageUp))
+    let row = client.page?.texts ?? []
+    _ = c.handle(.char("3"))
+    check(row.count > 2 && client.committed == "🍕" + row[2], "数字选光标所在行的第几个", client.committed)
+    check(recent.items.count == 2 && recent.items.last == "🍕", "新用的排最前", "\(recent.items)")
+
+    client.committed = ""
+    _ = c.handle(.char(".", [.control]))
+    type(c, "zzqqxx")
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "表情：没找到「zzqqxx」", "搜不到", client.page?.aux ?? "nil")
+    _ = c.handle(.char(".", [.control]))
+    check(c.openPanel == nil && client.page == nil && client.marked.isEmpty && client.committed.isEmpty,
+          "再按一次快捷键关上")
+
+    type(c, "pizza")
+    _ = c.handle(.char(".", [.control]))
+    check(client.marked == "pizza" && client.page?.texts.first == "🍕" && !c.isComposing,
+          "打到一半按快捷键：拿打的字母搜", client.marked)
+    _ = c.handle(.key(Keysym.escape))
+    check(c.openPanel == nil && client.committed.isEmpty && client.marked.isEmpty, "Esc 关上，不上屏")
+
+    type(c, "nihaoshi")
+    if let i = client.page?.texts.firstIndex(of: "你好"), i < 9 {
+        _ = c.handle(.char(Character("\(i + 1)")))
+        check(c.isComposing, "选了句首的词", client.marked)
+        _ = c.handle(.char(".", [.control]))
+        check(client.committed == "你好shi" && c.openPanel != nil && client.marked.isEmpty,
+              "选了词以后按快捷键：打的先上屏，搜索词空着", client.committed)
+        _ = c.handle(.key(Keysym.escape))
+    } else {
+        check(false, "nihaoshi 的候选里有你好", "\(client.page?.texts ?? [])")
+    }
+    unlink(path)
+}
+
+withConfig({ _ in }) { c, client in
+    c.recentEmoji = RecentEmoji()
+    c.toggleMode()
+    check(c.handle(.char(".", [.control])) && c.openPanel != nil, "英文模式也能开表情面板")
+    type(c, "pizza")
+    _ = c.handle(.char(" "))
+    check(client.committed == "🍕", "英文模式里搜索上屏", client.committed)
+    check(!c.handle(.char("a")), "收起以后英文模式照常交给应用")
+    c.toggleMode()
+    _ = c.handle(.char(".", [.control]))
+    check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
+}
+
+withConfig({ $0.emojiKey = nil }) { c, _ in
+    check(!c.handle(.char(".", [.control])) && c.openPanel == nil, "不用快捷键：Control+. 交给应用")
+}
+
+withConfig({ $0.emojiKey = Shortcut(name: "Control+semicolon") }) { c, _ in
+    check(!c.handle(.char(".", [.control])) && c.handle(.char(";", [.control])) && c.openPanel != nil,
+          "快捷键换成 Control+;")
+}
+
+do {
+    // 打字推荐的 emoji（kaixin → 开心、😊）选了也记进最近用过
+    let (c, client) = fresh()
+    let recent = RecentEmoji()
+    c.recentEmoji = recent
+    type(c, "kaixin")
+    let texts = client.page?.texts ?? []
+    if let i = texts.firstIndex(where: { $0.unicodeScalars.contains { $0.properties.isEmojiPresentation } }), i < 9 {
+        _ = c.handle(.char(Character("\(i + 1)")))
+        check(recent.items.count == 1 && client.committed.hasSuffix(recent.items[0]),
+              "选打字推荐的 emoji 记进最近用过", "\(client.committed) \(recent.items)")
+    } else {
+        check(false, "kaixin 推荐 emoji", "\(texts)")
+    }
+}
+
+withConfig({ $0.horizontal = false }) { c, client in
+    type(c, "shi")
+    check(client.page?.vertical == true, "设置竖排时候选框竖着画")
 }
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {

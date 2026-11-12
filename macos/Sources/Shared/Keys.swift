@@ -164,3 +164,92 @@ public struct ShiftTap {
         downAt = nil
     }
 }
+
+/// 快捷键（设置里的 EmojiKey）。键名和 fcitx5 一样：修饰键 + 键，用 + 连起来，比如 Control+period、
+/// Control+Shift+E、Alt+semicolon。键只能是可见的 ASCII 字符（X keysym 名字，或者字符本身）。
+///
+/// macOS 上 Command 组合键多半被应用的菜单先拿走，到不了输入法，所以 Super（Linux 上的 Windows 键）
+/// 当 Control：Linux 的默认值 Super+period 拷过来就是 Control+.，和 macOS 的默认值一样。
+public struct Shortcut: Equatable, Sendable {
+    /// 可见 ASCII；字母存小写
+    public var keysym: UInt32
+    /// 只有 shift、control、option
+    public var modifiers: Modifiers
+
+    /// 表情面板的默认快捷键（macOS）：Control+.
+    public static let emojiDefault = Shortcut(keysym: 0x2e, modifiers: .control)
+
+    public init(keysym: UInt32, modifiers: Modifiers) {
+        self.keysym = Shortcut.fold(keysym)
+        self.modifiers = modifiers.intersection([.shift, .control, .option])
+    }
+
+    /// 解析 fcitx5 的键名；认不出返回 nil（设置里写错了就保持默认）。
+    public init?(name: String) {
+        let parts = name.split(separator: "+", omittingEmptySubsequences: false).map { trimSpaces(String($0)) }
+        guard let key = parts.last, !key.isEmpty else { return nil }
+        var modifiers: Modifiers = []
+        for part in parts.dropLast() {
+            switch part.lowercased() {
+            case "control", "ctrl", "super": modifiers.insert(.control)
+            case "alt", "option": modifiers.insert(.option)
+            case "shift": modifiers.insert(.shift)
+            default: return nil
+            }
+        }
+        guard let keysym = Shortcut.keysym(named: key) else { return nil }
+        self.init(keysym: keysym, modifiers: modifiers)
+    }
+
+    /// 写回设置文件、记日志用的名字（Control+period）。
+    public var name: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Control") }
+        if modifiers.contains(.option) { parts.append("Alt") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        let index = Int(keysym) - 0x20
+        let names = Shortcut.asciiNames
+        parts.append(index >= 0 && index < names.count ? names[index] : "?")
+        return parts.joined(separator: "+")
+    }
+
+    /// 这次按键是不是这个快捷键。CapsLock 不算；字母不分大小写（按着 Shift 时 macOS 给的是大写）。
+    public func matches(_ key: KeyInput) -> Bool {
+        key.modifiers.intersection([.shift, .control, .option, .command]) == modifiers
+            && Shortcut.fold(key.keysym) == keysym
+    }
+
+    private static func fold(_ keysym: UInt32) -> UInt32 {
+        keysym >= 0x41 && keysym <= 0x5a ? keysym | 0x20 : keysym
+    }
+
+    private static func keysym(named name: String) -> UInt32? {
+        if let scalar = name.unicodeScalars.first, name.unicodeScalars.count == 1,
+           scalar.value > 0x20, scalar.value <= 0x7e {
+            return scalar.value
+        }
+        let lower = name.lowercased()
+        guard let index = asciiNames.firstIndex(where: { $0.lowercased() == lower }) else { return nil }
+        return UInt32(0x20 + index)
+    }
+
+    /// 0x20–0x7e 的 X keysym 名字（字母、数字是它自己）。
+    private static let asciiNames: [String] = {
+        var names = ["space", "exclam", "quotedbl", "numbersign", "dollar", "percent", "ampersand", "apostrophe",
+                     "parenleft", "parenright", "asterisk", "plus", "comma", "minus", "period", "slash"]
+        names += (0...9).map { "\($0)" }
+        names += ["colon", "semicolon", "less", "equal", "greater", "question", "at"]
+        names += (0x41...0x5a).map { String(UnicodeScalar(UInt8($0))) }
+        names += ["bracketleft", "backslash", "bracketright", "asciicircum", "underscore", "grave"]
+        names += (0x61...0x7a).map { String(UnicodeScalar(UInt8($0))) }
+        names += ["braceleft", "bar", "braceright", "asciitilde"]
+        return names
+    }()
+}
+
+private func trimSpaces(_ s: String) -> String {
+    var s = Substring(s)
+    while s.first == " " { s.removeFirst() }
+    while s.last == " " { s.removeLast() }
+    return String(s)
+}
