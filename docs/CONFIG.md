@@ -59,7 +59,7 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 
 ### 本地模型（离线）
 
-不想把字发出去，可以在「翻译」页打开「用本地模型翻译」，用腾讯混元的翻译模型
+不想把字发出去，可以在「翻译」页的「用什么翻译」里选「这台电脑上的模型（离线）」，用腾讯混元的翻译模型
 [HY-MT 1.5 1.8B](https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF)（Q4_K_M，1.13 GB）在本机翻：
 
 - 模型点「下载」获取，放在 `~/.local/share/wowtype/models/`，下载完校验 SHA256，断了再点会接着下。
