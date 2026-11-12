@@ -2,7 +2,9 @@
 //
 // 键名、取值、默认值和 Linux 的 ~/.config/fcitx5/conf/wowtype.conf 一样（fcitx5-addon/src/wowtype_engine.h
 // 的 WowtypeConfig，说明见 docs/CONFIG.md），一份配置两边都能用。文件不存在、少写了哪一项就用默认值；
-// 不认识的键（工具栏、语音、互译这些 macOS 还没有的）不管。
+// 不认识的键（语音这些 macOS 还没有的）不管。只有 EmojiKey 的默认值不一样（见 Shortcut）。
+// 互译的 API Key 不在这里（这个文件谁都能读），在同一个目录的 translate.key（0600，见 TranslateKeyFile）。
+// 设置窗口用 serialized / merged 写回去，只改认识的键，别的行原样留着。
 //
 // 不依赖 Foundation / AppKit：按键测试在 Linux 上也编。
 
@@ -24,6 +26,9 @@ public struct WowtypeConfig: Equatable {
 
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
+
+    /// 互译语言（和 Linux 的 WowtypeTranslateTarget、核心的 translate::LANGUAGES 一样）。
+    public static let translateTargets = ["en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "vi", "th", "id", "ar"]
 
     public var horizontal = true
     public var pageSize = 9
@@ -59,10 +64,33 @@ public struct WowtypeConfig: Equatable {
     public var autoSpace = false
     public var autoSpaceLetters = true
     public var autoSpaceDigits = true
+    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）
+    public var toolbar = true
+    /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
+    public var clipboardHistory = false
+    /// 打开表情面板的快捷键，nil 不用快捷键。Linux 默认 Super+period；macOS 上 Command 组合键
+    /// 多半到不了输入法，默认 Control+period（Super 也当 Control，见 Shortcut）
+    public var emojiKey: Shortcut? = .emojiDefault
     /// 词库文件，空串用安装包里的雾凇词库；文件不在也用自带的
     public var lexicon = ""
     /// 候选字号（磅），只有 macOS 有：Linux 上字号跟着 fcitx5 主题
     public var candidateFontSize = 17
+    /// 互译（Shift 在 中 → 英 → 译 之间切）
+    public var translate = false
+    public var translateTarget = "en"
+    /// 翻译服务（OpenAI 格式，如 https://api.openai.com/v1）和模型
+    public var translateBaseUrl = ""
+    public var translateModel = ""
+    /// 译文用正式语气（默认聊天口吻）
+    public var translateFormal = false
+    /// 用本地模型（HY-MT）。和 Linux 一样，配置文件里没写这一项时是 False
+    public var translateLocal = false
+    /// 本地模型文件，留空用数据目录下 models/HY-MT1.5-1.8B-Q4_K_M.gguf
+    public var translateLocalModel = ""
+    /// llama-server 的路径，留空自己找
+    public var translateLlamaServer = ""
+    /// 本地模型闲置几分钟后释放内存，0–240，0 不释放
+    public var translateIdleMinutes = 5
 
     public init() {}
 
@@ -109,11 +137,12 @@ public struct WowtypeConfig: Equatable {
     }
 
     /// 解析 fcitx5 的 INI 格式：一行一个 Key=Value，# 开头是注释，值可以带双引号。
-    /// 只认最外层的键（[分组] 下面的不是 WowType 的设置）。
+    /// 只认最外层的键（[分组] 下面的不是 WowType 的设置）。同一个键写了几次，算最后一次。
     public static func parse(_ text: String) -> WowtypeConfig {
         var config = WowtypeConfig()
         var inGroup = false
-        for raw in text.split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        // Swift 把 \r\n 当成一个字符，用 isNewline 才认得出 Windows 换行
+        for raw in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
             let line = trim(Substring(raw))
             if line.isEmpty || line.hasPrefix("#") || line.hasPrefix(";") {
                 continue
@@ -127,59 +156,185 @@ public struct WowtypeConfig: Equatable {
             }
             let key = trim(line[..<eq])
             let value = unquote(trim(line[line.index(after: eq)...]))
-            config.set(key, value)
+            config.setValue(value, forKey: key)
         }
         return config
     }
 
-    private mutating func set(_ key: String, _ value: String) {
+    /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
+    public static let keys = [
+        "CandidateLayout", "PageSize", "CandidateFontSize",
+        "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
+        "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
+        "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
+        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShiftToggle", "Traditional",
+        "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
+        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
+        "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
+        "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
+    ]
+
+    /// 开关类的键（True / False）
+    private static let boolKeys: [String: WritableKeyPath<WowtypeConfig, Bool>] = [
+        "PageKeysMinusEqual": \.pageKeysMinus, "PageKeysBracket": \.pageKeysBracket,
+        "PageKeysCommaPeriod": \.pageKeysComma, "PageKeysTab": \.pageKeysTab,
+        "Fuzzy": \.fuzzy, "FuzzyZh": \.fuzzyZh, "FuzzyCh": \.fuzzyCh, "FuzzySh": \.fuzzySh,
+        "FuzzyNL": \.fuzzyNL, "FuzzyFH": \.fuzzyFH, "FuzzyRL": \.fuzzyRL, "FuzzyAn": \.fuzzyAn,
+        "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
+        "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
+        "Shuangpin": \.shuangpin, "Traditional": \.traditional, "PickChar": \.pickChar,
+        "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
+        "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
+        "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
+        "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateLocal": \.translateLocal,
+    ]
+
+    /// 按文件里的写法改一项。不认识的键、认不出的值不管（保持原值）。
+    public mutating func setValue(_ value: String, forKey key: String) {
+        if let path = WowtypeConfig.boolKeys[key] {
+            setBool(&self[keyPath: path], value)
+            return
+        }
         switch key {
         case "CandidateLayout":
             if let v = matchName(value, ["Horizontal", "Vertical"]) { horizontal = v == "Horizontal" }
         case "PageSize":
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
-        case "PageKeysMinusEqual": setBool(&pageKeysMinus, value)
-        case "PageKeysBracket": setBool(&pageKeysBracket, value)
-        case "PageKeysCommaPeriod": setBool(&pageKeysComma, value)
-        case "PageKeysTab": setBool(&pageKeysTab, value)
-        case "Fuzzy": setBool(&fuzzy, value)
-        case "FuzzyZh": setBool(&fuzzyZh, value)
-        case "FuzzyCh": setBool(&fuzzyCh, value)
-        case "FuzzySh": setBool(&fuzzySh, value)
-        case "FuzzyNL": setBool(&fuzzyNL, value)
-        case "FuzzyFH": setBool(&fuzzyFH, value)
-        case "FuzzyRL": setBool(&fuzzyRL, value)
-        case "FuzzyAn": setBool(&fuzzyAn, value)
-        case "FuzzyEn": setBool(&fuzzyEn, value)
-        case "FuzzyIn": setBool(&fuzzyIn, value)
-        case "FuzzyIan": setBool(&fuzzyIan, value)
-        case "FuzzyUan": setBool(&fuzzyUan, value)
-        case "FuzzyUn": setBool(&fuzzyUn, value)
-        case "TypoCorrection": setBool(&typoCorrection, value)
-        case "RareExtChars": setBool(&rareExtChars, value)
-        case "Shuangpin": setBool(&shuangpin, value)
         case "ShuangpinScheme":
             if !value.isEmpty { shuangpinScheme = matchName(value, WowtypeConfig.shuangpinSchemes) ?? value }
         case "ShiftToggle":
             if let v = matchName(value, ShiftToggle.allCases.map(\.rawValue)) { shiftToggle = ShiftToggle(rawValue: v)! }
-        case "Traditional": setBool(&traditional, value)
         case "PunctuationStyle":
             if let v = matchName(value, ["Fullwidth", "Halfwidth"]) { halfwidthPunct = v == "Halfwidth" }
         case "SelectKeys":
             if let v = matchName(value, SelectKeys.allCases.map(\.rawValue)) { selectKeys = SelectKeys(rawValue: v)! }
-        case "PickChar": setBool(&pickChar, value)
-        case "DateTime": setBool(&dateTime, value)
-        case "Calculator": setBool(&calculator, value)
-        case "EmojiSuggest": setBool(&emojiSuggest, value)
-        case "AutoSpace": setBool(&autoSpace, value)
-        case "AutoSpaceLetters": setBool(&autoSpaceLetters, value)
-        case "AutoSpaceDigits": setBool(&autoSpaceDigits, value)
         case "Lexicon": lexicon = value
         case "CandidateFontSize":
             if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
+        case "EmojiKey":
+            // 留空是不用快捷键；写错了保持默认
+            if value.isEmpty {
+                emojiKey = nil
+            } else if let key = Shortcut(name: value) {
+                emojiKey = key
+            }
+        case "TranslateTarget":
+            if let v = matchName(value, WowtypeConfig.translateTargets) { translateTarget = v }
+        case "TranslateBaseUrl": translateBaseUrl = value
+        case "TranslateModel": translateModel = value
+        case "TranslateLocalModel": translateLocalModel = value
+        case "TranslateLlamaServer": translateLlamaServer = value
+        case "TranslateIdleMinutes":
+            if let n = Int(value) { translateIdleMinutes = min(max(n, 0), 240) }
         default:
             break
         }
+    }
+
+    /// 这一项在文件里的写法（True / False、枚举名、数字、原样的路径）；不认识的键是 nil。
+    public func value(forKey key: String) -> String? {
+        if let path = WowtypeConfig.boolKeys[key] {
+            return self[keyPath: path] ? "True" : "False"
+        }
+        switch key {
+        case "CandidateLayout": return horizontal ? "Horizontal" : "Vertical"
+        case "PageSize": return String(pageSize)
+        case "ShuangpinScheme": return shuangpinScheme
+        case "ShiftToggle": return shiftToggle.rawValue
+        case "PunctuationStyle": return halfwidthPunct ? "Halfwidth" : "Fullwidth"
+        case "SelectKeys": return selectKeys.rawValue
+        case "Lexicon": return lexicon
+        case "CandidateFontSize": return String(candidateFontSize)
+        case "EmojiKey": return emojiKey?.name ?? ""
+        case "TranslateTarget": return translateTarget
+        case "TranslateBaseUrl": return translateBaseUrl
+        case "TranslateModel": return translateModel
+        case "TranslateLocalModel": return translateLocalModel
+        case "TranslateLlamaServer": return translateLlamaServer
+        case "TranslateIdleMinutes": return String(translateIdleMinutes)
+        default: return nil
+        }
+    }
+
+    /// 把设置写进配置文件的原文，返回新的原文。
+    ///
+    /// 只动认识的键：值读出来已经一样的那行原样不动（大小写、引号、两边的空格都留着），不一样的只换 = 后面的值。
+    /// 注释、空行、不认识的键（语音这些 macOS 还没有的）、[分组] 原样留着，所以 Linux 拷过来的文件
+    /// 改完拿回 Linux 照样能用。文件里没有、又不是默认值的键补在最后一个设置后面（[分组] 前面）。
+    /// text 是 nil 或空的（还没有文件）时从带说明的模板开始。
+    public func serialized(into text: String?) -> String {
+        guard let text, text.contains(where: { !$0.isWhitespace }) else {
+            return serialized(into: WowtypeConfig.template())
+        }
+        // 按 \n 拆（\r\n 在 Swift 里是一个字符，要按码位拆），每行末尾的 \r 留着
+        var lines = text.unicodeScalars.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var seen = Set<String>()
+        var firstGroup: Int?
+        var crlf = false
+        for i in lines.indices {
+            var line = lines[i]
+            let cr = line.hasSuffix("\r")
+            if cr {
+                line.removeLast()
+                crlf = true
+            }
+            let body = trim(Substring(line))
+            if body.hasPrefix("[") {
+                firstGroup = firstGroup ?? i
+            }
+            if firstGroup != nil || body.isEmpty || body.hasPrefix("#") || body.hasPrefix(";") {
+                continue
+            }
+            guard let eq = line.firstIndex(of: "=") else {
+                continue
+            }
+            let key = trim(line[..<eq])
+            guard let wanted = value(forKey: key) else {
+                continue
+            }
+            seen.insert(key)
+            // 这一行单独读出来（从默认值开始）已经是要的值：不动。认不出的值读出来是默认值，
+            // 要的正好是默认值也不动；前面同一个键的行都已经是要的值，所以整份读出来还是对的。
+            var probe = WowtypeConfig()
+            probe.setValue(unquote(trim(line[line.index(after: eq)...])), forKey: key)
+            if probe.value(forKey: key) == wanted {
+                continue
+            }
+            var start = line.index(after: eq)
+            while start < line.endIndex, line[start] == " " || line[start] == "\t" {
+                start = line.index(after: start)
+            }
+            lines[i] = String(line[..<start]) + quote(wanted) + (cr ? "\r" : "")
+        }
+
+        let defaults = WowtypeConfig()
+        let missing = WowtypeConfig.keys.compactMap { key -> String? in
+            guard !seen.contains(key), let v = value(forKey: key), v != defaults.value(forKey: key) else {
+                return nil
+            }
+            return key + "=" + quote(v) + (crlf ? "\r" : "")
+        }
+        if !missing.isEmpty {
+            // 补在最后一个设置后面：跳过 [分组]（或文件末尾）前面的空行
+            var at = firstGroup ?? lines.count
+            while at > 0, trim(Substring(lines[at - 1])).isEmpty || lines[at - 1] == "\r" {
+                at -= 1
+            }
+            lines.insert(contentsOf: missing, at: at)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 设置窗口保存时用：只把 base → self 改过的键写进文件现在的原文。窗口开着时文件在别处改了
+    /// （文本编辑、Linux 同步过来），别处改的键不会被窗口里的旧值盖掉。
+    public func merged(changesFrom base: WowtypeConfig, into text: String?) -> String {
+        var target = text.map(WowtypeConfig.parse) ?? WowtypeConfig()
+        for key in WowtypeConfig.keys {
+            if let mine = value(forKey: key), mine != base.value(forKey: key) {
+                target.setValue(mine, forKey: key)
+            }
+        }
+        return target.serialized(into: text)
     }
 
     /// 第一次打开设置时写出来的文件：每项都是默认值，带上说明。
@@ -247,8 +402,37 @@ public struct WowtypeConfig: Equatable {
         AutoSpaceLetters=\(b(d.autoSpaceLetters))
         AutoSpaceDigits=\(b(d.autoSpaceDigits))
 
+        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（只在全拼下）
+        Toolbar=\(b(d.toolbar))
+        # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
+        ClipboardHistory=\(b(d.clipboardHistory))
+        # 打开表情面板的快捷键，键名同 fcitx5：Control+period、Control+semicolon、Control+Shift+E；留空不用。
+        # Command 组合键多半到不了输入法，写 Super 的当 Control
+        EmojiKey=\(d.emojiKey?.name ?? "")
+
         # 词库文件（拼音<TAB>词<TAB>频次），留空用自带的雾凇词库；文件不在也用自带的
         Lexicon=
+
+        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切）。
+        # 「译」里打的中文攒在候选框里，停 0.5 秒发去翻译，回车上屏译文。打的字会发给下面的服务。
+        Translate=\(b(d.translate))
+        # 译成哪种语言：en 英、ja 日、ko 韩、fr 法、de 德、es 西、ru 俄、pt 葡、it 意、vi 越、th 泰、id 印尼、ar 阿
+        TranslateTarget=\(d.translateTarget)
+        # 翻译服务（OpenAI 格式的 chat/completions），如 https://api.openai.com/v1；本机的 Ollama 是 http://127.0.0.1:11434/v1
+        # API Key 不写在这里：菜单里「设置互译 API Key…」，存在同一个目录的 translate.key（只有自己能读）
+        TranslateBaseUrl=
+        TranslateModel=
+        # 译文用正式语气（默认聊天口吻）
+        TranslateFormal=\(b(d.translateFormal))
+        # 用本地模型（腾讯 HY-MT 1.5 1.8B，离线）代替上面的服务。模型要自己下载（不是开源许可，
+        # 不适用于欧盟、英国和韩国，见 docs/CONFIG.md），放到数据目录的 models/HY-MT1.5-1.8B-Q4_K_M.gguf，
+        # 或者在 TranslateLocalModel 写它的路径；还要装 llama.cpp（brew install llama.cpp）
+        TranslateLocal=\(b(d.translateLocal))
+        TranslateLocalModel=
+        # llama-server 的路径，留空在 /opt/homebrew/bin、/usr/local/bin 等处找
+        TranslateLlamaServer=
+        # 本地模型闲置几分钟后释放内存，0–240，0 不释放
+        TranslateIdleMinutes=\(d.translateIdleMinutes)
 
         """
     }
@@ -283,6 +467,25 @@ private func unquote(_ value: String) -> String {
     return out
 }
 
+/// 写文件时：值里有空白、换行，或者本身就被引号包着，照 fcitx5 的写法加双引号并转义（unquote 读回来一样）。
+private func quote(_ value: String) -> String {
+    let special: Set<Character> = [" ", "\t", "\n", "\r", "\u{0B}", "\u{0C}"]
+    let wrapped = value.count >= 2 && value.hasPrefix("\"") && value.hasSuffix("\"")
+    guard wrapped || value.contains(where: { special.contains($0) }) else {
+        return value
+    }
+    var out = "\""
+    for c in value {
+        switch c {
+        case "\\": out += "\\\\"
+        case "\"": out += "\\\""
+        case "\n": out += "\\n"
+        default: out.append(c)
+        }
+    }
+    return out + "\""
+}
+
 /// 枚举值不分大小写（fcitx5 写的是 Horizontal，手写 horizontal 也认）；不认识返回 nil，保持默认。
 private func matchName(_ value: String, _ names: [String]) -> String? {
     names.first { $0.lowercased() == value.lowercased() }
@@ -296,7 +499,8 @@ private func setBool(_ target: inout Bool, _ value: String) {
     }
 }
 
-private func readFile(_ path: String) -> String? {
+/// 读整个文本文件；打不开返回 nil。
+func readFile(_ path: String) -> String? {
     guard let f = fopen(path, "rb") else {
         return nil
     }

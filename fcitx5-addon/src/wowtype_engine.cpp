@@ -2170,6 +2170,14 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
         applySessionFrame(ic, state, frame);
         event.filterAndAccept();
+        return;
+    }
+    // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
+    if (translating(ic) && sym > FcitxKey_space && sym <= FcitxKey_asciitilde &&
+        !((sym >= FcitxKey_a && sym <= FcitxKey_z) || (sym >= FcitxKey_A && sym <= FcitxKey_Z))) {
+        commitPlain(ic, std::string(1, static_cast<char>(sym)));
+        updateInputPanel(ic, state);
+        event.filterAndAccept();
     }
 }
 
