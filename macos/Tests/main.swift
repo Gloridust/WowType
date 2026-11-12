@@ -16,6 +16,8 @@ final class FakeClient: TextClient {
     var marked = ""
     var markedCursor = 0
     var page: CandidatePage?
+    /// false：像开着安全输入的密码框，不翻译
+    var allowsTranslation = true
 
     func insertText(_ text: String) {
         committed += text
@@ -64,7 +66,7 @@ func writeFile(_ path: String, _ text: String) {
 /// 测试用的小词库：你好、ni/hao 的单字、略（lve），加上 shi 的 24 个字（9 个一页，3 页）。
 func writeTestLexicon() -> String {
     var lines = ["nihao\t你好\t50000", "ni\t你\t40000", "ni\t尼\t3000", "hao\t好\t40000", "hao\t号\t5000",
-                 "shishi\t事实\t8000", "lve\t略\t30000"]
+                 "shishi\t事实\t8000", "lve\t略\t30000", "kai xin\t开心\t30000"]
     let shi = Array("是十时事市使实式试世师史石示视适识施室势诗释湿")
     for (i, ch) in shi.enumerated() {
         lines.append("shi\t\(ch)\t\(60000 - i * 1000)")
@@ -463,6 +465,8 @@ do {
     check(c.autoSpaceFlags == 1, "自动空格只加字母", "\(c.autoSpaceFlags)")
     check(c.lexicon == "~/dicts/my lexicon.tsv" && c.candidateFontSize == 20, "带引号的值、字号", c.lexicon)
     check(!c.traditional, "认不出的值保持默认")
+    check(WowtypeConfig.parse("PageSize=5\r\nFuzzy=True\r\n") == { var w = WowtypeConfig(); w.pageSize = 5; w.fuzzy = true; return w }(),
+          "Windows 换行（\\r\\n）")
 }
 
 withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client in
@@ -603,6 +607,179 @@ withConfig({ _ in }) { c, _ in
 }
 
 do {
+    // 设置窗口写回 wowtype.conf：只改认识的键，别的行原样留着；读回来就是写进去的设置
+    let d = WowtypeConfig()
+    check(d.serialized(into: nil) == WowtypeConfig.template(), "没有设置文件：写出来的是模板")
+    check(Set(WowtypeConfig.keys).count == WowtypeConfig.keys.count
+          && WowtypeConfig.keys.allSatisfy { d.value(forKey: $0) != nil }, "每个键都有写法")
+    let template = WowtypeConfig.template()
+    check(WowtypeConfig.keys.allSatisfy { template.contains("\n" + $0 + "=") }, "模板里每个键都有")
+    // 加了新设置（模板里多了一行）却没加进 keys / setValue / value(forKey:)：设置窗口写不回去
+    let templateKeys = template.split(separator: "\n").compactMap { line -> String? in
+        guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { return nil }
+        return String(line[..<eq])
+    }
+    check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
+          "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
+    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+
+    // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
+    var all = WowtypeConfig()
+    for key in WowtypeConfig.keys {
+        if d.value(forKey: key) == "True" { all.setValue("False", forKey: key) }
+        if d.value(forKey: key) == "False" { all.setValue("True", forKey: key) }
+    }
+    all.horizontal = false
+    all.pageSize = 4
+    all.candidateFontSize = 22
+    all.shuangpinScheme = "PinyinJiajia"
+    all.shiftToggle = .off
+    all.halfwidthPunct = true
+    all.selectKeys = .semicolonQuote
+    all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
+    all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.translateTarget = "ja"
+    all.translateBaseUrl = "http://127.0.0.1:11434/v1"
+    all.translateModel = "qwen 2.5"
+    all.translateLocalModel = "/Users/me/模型/HY-MT.gguf"
+    all.translateLlamaServer = "/opt/homebrew/bin/llama-server"
+    all.translateIdleMinutes = 30
+    check(WowtypeConfig.keys.allSatisfy { all.value(forKey: $0) != d.value(forKey: $0) }, "每一项都改了")
+    for (name, base) in [("模板", nil), ("空文件", ""), ("只有注释", "# 我的设置\n")] as [(String, String?)] {
+        let out = all.serialized(into: base)
+        check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
+        check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
+    }
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+          "文件里没有的键照模板顺序补在后面")
+    check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
+          "带空格、引号的值加引号转义", all.serialized(into: nil))
+
+    // Linux 拷过来的文件：注释、不认识的键、[分组]、大小写、引号、空格都在
+    let linux = """
+    # 自己写的注释
+    CandidateLayout=horizontal
+    PageSize=20
+      TypoCorrection = False
+    Voice=True
+    VoiceKey=Alt_R
+    TranslateBaseUrl=https://api.deepseek.com/v1
+    Lexicon="~/dicts/my lexicon.tsv"
+    Traditional=maybe
+    ShuangpinScheme=xiaohe
+
+    [Hotkey]
+    PageSize=4
+
+    """
+    let parsed = WowtypeConfig.parse(linux)
+    check(parsed.serialized(into: linux) == linux, "设置没改：文件一个字都不动")
+
+    var changed = parsed
+    changed.pageSize = 5
+    changed.typoCorrection = true
+    changed.fuzzy = true
+    changed.fuzzyNL = true
+    changed.traditional = true
+    let out = changed.serialized(into: linux)
+    check(WowtypeConfig.parse(out) == changed, "改过的设置读回来一样", out)
+    check(out.contains("\nPageSize=5\n") && out.contains("\n  TypoCorrection = True\n")
+          && out.contains("\nTraditional=True\n"), "改的行只换值，前面的空格留着", out)
+    check(out.contains("CandidateLayout=horizontal\n") && out.contains("Lexicon=\"~/dicts/my lexicon.tsv\"\n")
+          && out.contains("ShuangpinScheme=xiaohe\n"), "没改的行原样（大小写、引号）", out)
+    check(out.hasPrefix("# 自己写的注释\n") && out.contains("Voice=True\nVoiceKey=Alt_R\nTranslateBaseUrl=https://api.deepseek.com/v1\n"),
+          "注释和不认识的键留着", out)
+    check(out.hasSuffix("ShuangpinScheme=xiaohe\nFuzzy=True\nFuzzyNL=True\n\n[Hotkey]\nPageSize=4\n"),
+          "新加的键补在 [分组] 前面，分组原样", out)
+
+    var back = changed
+    back.traditional = false
+    let unparsable = back.serialized(into: linux)
+    check(unparsable.contains("\nTraditional=maybe\n") && WowtypeConfig.parse(unparsable) == back,
+          "认不出的值：要的是默认值就不动", unparsable)
+
+    // 同一个键写了两次：都改；Windows 换行留着
+    let twice = "PageSize=5\r\nFuzzy=False\r\nPageSize=7\r\n"
+    var three = WowtypeConfig.parse(twice)
+    three.pageSize = 3
+    three.traditional = true
+    check(three.serialized(into: twice) == "PageSize=3\r\nFuzzy=False\r\nPageSize=3\r\nTraditional=True\r\n",
+          "重复的键都改，\\r\\n 留着", three.serialized(into: twice))
+
+    // 窗口开着时文件在别处改了：窗口只写自己改的键
+    let opened = "PageSize=7\nFuzzy=False\nVoice=True\n"
+    let base = WowtypeConfig.parse(opened)
+    var window = base
+    window.pageSize = 4
+    let edited = "PageSize=7\nFuzzy=True\nVoice=True\nTraditional=True\n"
+    let merged = window.merged(changesFrom: base, into: edited)
+    let mergedConfig = WowtypeConfig.parse(merged)
+    check(merged == "PageSize=4\nFuzzy=True\nVoice=True\nTraditional=True\n", "合并：别处改的留着，窗口改的写上", merged)
+    check(mergedConfig.pageSize == 4 && mergedConfig.fuzzy && mergedConfig.traditional, "合并后读回来")
+    check(window.merged(changesFrom: base, into: nil) == window.serialized(into: nil), "文件被删了：从模板写")
+}
+
+do {
+    // custom.tsv：没动的行原样写回去，加词、删词、导入照 Linux 设置界面的规则
+    let text = "# 我的常用语\r\nni hao\t你好呀\t100\nmail\thello@example.com\n\n坏行\nzhang san\t \nbjdx\t北京大学\n"
+    var words = CustomWords(text: text)
+    check(words.entries == [.init(code: "ni hao", word: "你好呀"), .init(code: "mail", word: "hello@example.com"),
+                            .init(code: "bjdx", word: "北京大学")], "读自定义词", "\(words.entries)")
+    check(words.text == text, "没改：原样写回去（注释、频次、坏行都在）", words.text)
+    check(CustomWords(text: "\u{FEFF}mail\ta@b.c").text == "mail\ta@b.c\n", "去掉 BOM，补上末尾换行")
+
+    check(!words.add(code: "gs", word: "公司名"), "加新词")
+    check(words.add(code: "ni hao ya", word: "你好呀"), "加已有的词：换编码")
+    check(words.text == "# 我的常用语\r\nmail\thello@example.com\n\n坏行\nzhang san\t \nbjdx\t北京大学\ngs\t公司名\nni hao ya\t你好呀\n",
+          "换编码的词挪到最后", words.text)
+    check(words.remove(word: "北京大学") == [.init(code: "bjdx", word: "北京大学")] && words.remove(word: "没有") == [],
+          "删词")
+    check(!words.text.contains("北京大学") && words.text.hasPrefix("# 我的常用语\r\n"), "删掉的行没了，注释还在")
+
+    let incoming = CustomWords.parseImport("# 注释\nNi Hǎo Ya\t你好呀\nzhang'san\t张三\nMAIL\thello@example.com\n123\t数字\nxyz?\t问号\n")
+    check(incoming == [.init(code: "ni hao ya", word: "你好呀"), .init(code: "zhang san", word: "张三"),
+                       .init(code: "mail", word: "hello@example.com")], "导入时整理编码，不对的不要", "\(incoming)")
+    var imported = CustomWords(text: "mail\thello@example.com\nni hao\t你好呀\n")
+    let counts = imported.merge(incoming)
+    check(counts.added == 1 && counts.updated == 1, "导入：新增 1 个，更新 1 个，一样的不算", "\(counts)")
+    check(imported.entries.map(\.word) == ["hello@example.com", "你好呀", "张三"], "导入后的顺序", "\(imported.entries)")
+
+    let empty = CustomWords(text: nil)
+    check(empty.entries.isEmpty && empty.text == CustomWords.header + "\n", "新文件只有说明")
+    var fresh = empty
+    fresh.add(code: "gs", word: "公司")
+    check(CustomWords(text: fresh.text).entries == [.init(code: "gs", word: "公司")], "新文件加词读回来")
+    check(CustomWords.isValidWord("四川省\\n宜宾市") && !CustomWords.isValidWord("a\tb")
+          && !CustomWords.isValidWord("a\nb") && !CustomWords.isValidWord(""), "词里不能有 TAB、换行")
+
+    for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
+                          ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
+                          ("hua r", "hua r"), ("zhongguo", "zhong guo")] {
+        check(CustomWords.normalizePinyin(input) == want, "拼音整理 \(input)", CustomWords.normalizePinyin(input) ?? "nil")
+    }
+    check(CustomWords.normalizePinyin("mail") == nil && CustomWords.normalizeCode("mail") == "mail"
+          && CustomWords.normalizeCode("Addr") == "addr" && CustomWords.normalizeCode("a b?") == nil
+          && CustomWords.normalizeCode("  ") == nil, "非拼音的字母编码")
+
+    // 从词库猜拼音：整词取频次最高的，没有就逐字
+    let lexiconText = "# 注释\nni hao\t你好\t500\nnihao\t你好\t10\nzhong\t重\t100\nchong\t重\t300\nni\t你\t1\nhao\t好\t1\nshi\t是\t9"
+    func guess(_ word: String) -> String? {
+        Array(lexiconText.utf8).withUnsafeBytes { CustomWords.guessPinyin(word, lexicon: $0) }
+    }
+    check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
+    check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
+    if !ownLexicon, let f = fopen(lexicon, "rb") {
+        var bytes: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        while case let n = fread(&buffer, 1, buffer.count, f), n > 0 { bytes.append(contentsOf: buffer[0..<n]) }
+        fclose(f)
+        let real = bytes.withUnsafeBytes { CustomWords.guessPinyin("字节跳动", lexicon: $0) }
+        check(real == "zi jie tiao dong", "真实词库猜拼音", real ?? "nil")
+    }
+}
+
+do {
     // custom.tsv：自定义词排第一，简拼、非拼音编码也行；文件删掉就清空
     let path = "/tmp/wowtype-macos-harness-\(getpid()).custom.tsv"
     writeFile(path, "# 注释\nni hao\t你好呀\nmail\thello@example.com\n")
@@ -642,6 +819,781 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     check(client.committed == "你好", "换了引擎照常打字", client.committed)
+}
+
+// MARK: v + 空格的工具栏、表情面板
+
+do {
+    // 默认值、快捷键的键名（和 fcitx5 一样）
+    let d = WowtypeConfig()
+    check(d.toolbar && !d.clipboardHistory && d.emojiKey == .emojiDefault && d.emojiKey?.name == "Control+period",
+          "默认工具栏开、剪贴板历史关、表情面板快捷键 Control+period", d.emojiKey?.name ?? "nil")
+    check(WowtypeConfig.parse("EmojiKey=Super+period").emojiKey == .emojiDefault,
+          "Linux 的默认值 Super+period 拷过来是 Control+.")
+    check(WowtypeConfig.parse("EmojiKey=").emojiKey == nil, "EmojiKey 留空：不用快捷键")
+    check(WowtypeConfig.parse("EmojiKey=Hyper+F12").emojiKey == .emojiDefault, "认不出的快捷键保持默认")
+    let e = WowtypeConfig.parse("Toolbar=False\nClipboardHistory=True\nEmojiKey=Control+Shift+E")
+    check(!e.toolbar && e.clipboardHistory, "Toolbar、ClipboardHistory")
+    check(e.emojiKey?.matches(.char("E", [.control, .shift])) == true, "Control+Shift+E：按下时 macOS 给大写也认")
+    check(e.emojiKey?.matches(.char("e", [.control])) == false, "少了 Shift 不算")
+    check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
+    check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
+    check(Shortcut.emojiDefault.matches(.char(".", [.control, .command])) == false, "多按了 Command 不算")
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "v")
+    check(c.handle(.char(" ")) && c.openPanel == .menu, "v + 空格打开工具栏")
+    check(client.marked.isEmpty && client.committed.isEmpty && !c.isComposing, "打开工具栏时 v 不上屏、编辑区清掉",
+          client.committed)
+    check(client.page?.texts == ["剪贴板", "常用语", "符号", "表情"] && client.page?.vertical == true
+              && client.page?.cursor == 0 && client.page?.expanded == false,
+          "工具栏竖排四项", "\(client.page?.texts ?? [])")
+    check(client.page?.aux == "工具栏：数字键选择，Esc 关闭", "工具栏的提示", client.page?.aux ?? "nil")
+    check(c.handle(.char("a")) && c.openPanel == .menu && client.committed.isEmpty, "别的键吃掉，不打进应用")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 1.1) && c.mode == .chinese, "工具栏开着时单按 Shift 不切")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 1, "下键移光标", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.backspace))
+    check(c.openPanel == nil && client.page == nil, "菜单里退格关上")
+
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("2"))
+    check(c.openPanel == .phrases, "2 进常用语")
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在菜单「编辑自定义词」里添加",
+          "没有自定义词时只有提示", client.page?.aux ?? "nil")
+    _ = c.handle(.key(Keysym.backspace))
+    check(c.openPanel == .menu, "退格返回菜单")
+    c.select(1)
+    check(c.openPanel == .phrases, "点第 2 项也进常用语")
+    _ = c.handle(.key(Keysym.escape))
+    check(c.openPanel == nil && client.page == nil && client.committed.isEmpty, "Esc 关上")
+
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(!c.handle(.char("c", [.control])) && c.openPanel == nil && client.page == nil, "Control+C 收起工具栏、交给应用")
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    c.commitComposition()
+    check(c.openPanel == nil && client.page == nil && client.committed.isEmpty, "切走输入法时收起工具栏，不上屏")
+    type(c, "vim")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "vim 照常打字")
+}
+
+withConfig({ $0.toolbar = false }) { c, _ in
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "关掉工具栏：v + 空格不打开")
+}
+
+withConfig({ $0.shuangpin = true }) { c, _ in
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil, "双拼时不开工具栏")
+}
+
+do {
+    // 常用语：custom.tsv 的顺序，「编码　词」，选了上屏（\n 是换行）
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).phrases.tsv"
+    writeFile(path, "dz\t北京市海淀区\nqm\t张三\\n13800000000\n")
+    engine.loadCustomWords(path)
+    let (c, client) = fresh()
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("2"))
+    let texts = client.page?.texts ?? []
+    check(texts.count == 2 && texts[0] == "dz\u{3000}北京市海淀区" && texts[1].hasPrefix("qm\u{3000}张三"),
+          "常用语按文件顺序，编码在前", "\(texts)")
+    check(client.page?.aux == "常用语：选一条上屏，退格返回", "常用语的提示", client.page?.aux ?? "nil")
+    _ = c.handle(.key(Keysym.down))
+    _ = c.handle(.char(" "))
+    check(client.committed == "张三\n13800000000" && c.openPanel == nil && client.page == nil, "空格上屏光标处的，收起",
+          client.committed)
+    unlink(path)
+    engine.loadCustomWords(path)
+}
+
+withConfig({ $0.clipboardHistory = true }) { c, client in
+    ClipboardHistory.remember("第一条")
+    // 外壳看到的系统剪贴板（打开剪贴板页时取一次）
+    c.sampleClipboard = { ClipboardHistory.remember("第二条\n第二行") }
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(c.openPanel == .clipboard && client.page?.texts == ["第二条⏎第二行", "第一条"],
+          "剪贴板：打开时取一次，最新的在前，换行显示成 ⏎", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char("1"))
+    check(client.committed == "第二条\n第二行" && c.openPanel == nil, "数字选一条上屏", client.committed)
+    c.sampleClipboard = nil
+    for i in 1...12 {
+        ClipboardHistory.remember("条目\(i)")
+    }
+    client.committed = ""
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(client.page?.texts.count == 9 && client.page?.hasNext == true && client.page?.hasPrev == false,
+          "一页 9 条", "\(client.page?.texts.count ?? 0)")
+    _ = c.handle(.char("="))
+    check(client.page?.texts.first == "条目3" && client.page?.hasPrev == true && client.page?.cursor == 0,
+          "= 翻到下一页", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char("2"))
+    check(client.committed == "条目2", "数字选这一页的第几个", client.committed)
+    var off = c.config
+    off.clipboardHistory = false
+    c.apply(off)
+    check(ClipboardHistory.items.isEmpty, "关掉剪贴板历史时马上清空")
+}
+
+withConfig({ _ in }) { c, client in
+    ClipboardHistory.remember("不该列出来")
+    var sampled = false
+    c.sampleClipboard = { sampled = true }
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("1"))
+    check(!sampled && client.page?.texts.isEmpty == true
+              && client.page?.aux == "剪贴板：没打开，在设置（wowtype.conf）里写 ClipboardHistory=True",
+          "剪贴板历史默认关：不取、不列", client.page?.aux ?? "nil")
+    _ = c.handle(.char(" "))
+    check(c.openPanel == nil && client.committed.isEmpty, "空列表按空格关上")
+    ClipboardHistory.clear()
+}
+
+withConfig({ _ in }) { c, client in
+    let recent = RecentEmoji()
+    c.recentEmoji = recent
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("3"))
+    check(c.openPanel == .emoji(symbols: true) && client.page?.expanded == true && (client.page?.texts.count ?? 0) > 6,
+          "3 进符号面板（6 列网格）", "\(client.page?.texts.count ?? 0)")
+    check(client.page?.aux == "符号：打拼音或英文搜索，Esc 关闭", "符号面板的提示", client.page?.aux ?? "nil")
+    let first = client.page?.texts.first ?? "?"
+    _ = c.handle(.char(" "))
+    check(client.committed == first && recent.items.isEmpty, "空格上屏符号，不记进最近用过", client.committed)
+    type(c, "v")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("4"))
+    check(c.openPanel == .emoji(symbols: false), "4 进表情面板")
+}
+
+withConfig({ _ in }) { c, client in
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).emoji-recent.txt"
+    unlink(path)
+    let recent = RecentEmoji(path: path)
+    c.recentEmoji = recent
+    check(c.handle(.char(".", [.control])) && c.openPanel == .emoji(symbols: false), "Control+. 打开表情面板")
+    check(client.page?.expanded == true && client.page?.texts.count == 36 && client.page?.hasNext == true
+              && client.page?.aux == "表情：打拼音或英文搜索，Esc 关闭",
+          "不搜索时列全部 emoji，一屏 6 × 6", "\(client.page?.texts.count ?? 0) \(client.page?.aux ?? "nil")")
+    type(c, "pizza")
+    check(client.marked == "pizza" && client.page?.texts.first == "🍕" && client.page?.aux == "表情：pizza",
+          "打英文搜：pizza → 🍕，搜索词在编辑区", "\(client.page?.texts.prefix(6) ?? [])")
+    _ = c.handle(.key(Keysym.backspace))
+    check(client.marked == "pizz" && c.openPanel != nil, "退格删搜索词", client.marked)
+    type(c, "A")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "🍕" && c.openPanel == nil && client.page == nil && client.marked.isEmpty,
+          "回车上屏，面板收起", client.committed)
+    check(recent.items == ["🍕"] && readFile(path) == "🍕\n", "记进最近用过，写到文件", "\(recent.items)")
+    check(RecentEmoji(path: path).items == ["🍕"], "下次启动从文件读回来")
+
+    _ = c.handle(.char(".", [.control]))
+    check(client.page?.texts.first == "🍕", "最近用过的排最前", "\(client.page?.texts.prefix(6) ?? [])")
+    _ = c.handle(.key(Keysym.right))
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 7, "右键、下键在网格里走", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.up))
+    _ = c.handle(.key(Keysym.up))
+    check(client.page?.cursor == 1 && c.openPanel != nil, "第一行再往上不收起", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.pageDown))
+    check(client.page?.cursor == 1 && client.page?.hasPrev == true, "PgDn 翻一屏", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.key(Keysym.pageUp))
+    let row = client.page?.texts ?? []
+    _ = c.handle(.char("3"))
+    check(row.count > 2 && client.committed == "🍕" + row[2], "数字选光标所在行的第几个", client.committed)
+    check(recent.items.count == 2 && recent.items.last == "🍕", "新用的排最前", "\(recent.items)")
+
+    client.committed = ""
+    _ = c.handle(.char(".", [.control]))
+    type(c, "zzqqxx")
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "表情：没找到「zzqqxx」", "搜不到", client.page?.aux ?? "nil")
+    _ = c.handle(.char(".", [.control]))
+    check(c.openPanel == nil && client.page == nil && client.marked.isEmpty && client.committed.isEmpty,
+          "再按一次快捷键关上")
+
+    type(c, "pizza")
+    _ = c.handle(.char(".", [.control]))
+    check(client.marked == "pizza" && client.page?.texts.first == "🍕" && !c.isComposing,
+          "打到一半按快捷键：拿打的字母搜", client.marked)
+    _ = c.handle(.key(Keysym.escape))
+    check(c.openPanel == nil && client.committed.isEmpty && client.marked.isEmpty, "Esc 关上，不上屏")
+
+    type(c, "nihaoshi")
+    if let i = client.page?.texts.firstIndex(of: "你好"), i < 9 {
+        _ = c.handle(.char(Character("\(i + 1)")))
+        check(c.isComposing, "选了句首的词", client.marked)
+        _ = c.handle(.char(".", [.control]))
+        check(client.committed == "你好shi" && c.openPanel != nil && client.marked.isEmpty,
+              "选了词以后按快捷键：打的先上屏，搜索词空着", client.committed)
+        _ = c.handle(.key(Keysym.escape))
+    } else {
+        check(false, "nihaoshi 的候选里有你好", "\(client.page?.texts ?? [])")
+    }
+    unlink(path)
+}
+
+withConfig({ _ in }) { c, client in
+    c.recentEmoji = RecentEmoji()
+    c.toggleMode()
+    check(c.handle(.char(".", [.control])) && c.openPanel != nil, "英文模式也能开表情面板")
+    type(c, "pizza")
+    _ = c.handle(.char(" "))
+    check(client.committed == "🍕", "英文模式里搜索上屏", client.committed)
+    check(!c.handle(.char("a")), "收起以后英文模式照常交给应用")
+    c.toggleMode()
+    _ = c.handle(.char(".", [.control]))
+    check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
+}
+
+withConfig({ $0.emojiKey = nil }) { c, _ in
+    check(!c.handle(.char(".", [.control])) && c.openPanel == nil, "不用快捷键：Control+. 交给应用")
+}
+
+withConfig({ $0.emojiKey = Shortcut(name: "Control+semicolon") }) { c, _ in
+    check(!c.handle(.char(".", [.control])) && c.handle(.char(";", [.control])) && c.openPanel != nil,
+          "快捷键换成 Control+;")
+}
+
+do {
+    // 打字推荐的 emoji（kaixin → 开心、😊）选了也记进最近用过
+    let (c, client) = fresh()
+    let recent = RecentEmoji()
+    c.recentEmoji = recent
+    type(c, "kaixin")
+    let texts = client.page?.texts ?? []
+    if let i = texts.firstIndex(where: { $0.unicodeScalars.contains { $0.properties.isEmojiPresentation } }), i < 9 {
+        _ = c.handle(.char(Character("\(i + 1)")))
+        check(recent.items.count == 1 && client.committed.hasSuffix(recent.items[0]),
+              "选打字推荐的 emoji 记进最近用过", "\(client.committed) \(recent.items)")
+    } else {
+        check(false, "kaixin 推荐 emoji", "\(texts)")
+    }
+}
+
+withConfig({ $0.horizontal = false }) { c, client in
+    type(c, "shi")
+    check(client.page?.vertical == true, "设置竖排时候选框竖着画")
+}
+
+// MARK: 互译
+
+/// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
+final class FakeTranslator: TranslationBackend {
+    var isReady = true
+    weak var owner: AnyObject?
+    var started: [String] = []
+    var cancels = 0
+    var snapshot = TranslateSnapshot(phase: .idle)
+
+    func start(_ text: String) {
+        if snapshot.source == text && (snapshot.phase == .running || snapshot.phase == .done) {
+            return
+        }
+        started.append(text)
+        snapshot = TranslateSnapshot(phase: .running, source: text)
+    }
+
+    func cancel() {
+        cancels += 1
+        snapshot = TranslateSnapshot(phase: .idle)
+    }
+
+    func poll() -> TranslateSnapshot { snapshot }
+
+    func tag(for text: String) -> String { "中→英" }
+
+    func stream(_ text: String) { snapshot.text = text }
+
+    func finish(_ text: String) {
+        snapshot.text = text
+        snapshot.phase = .done
+    }
+
+    func fail(_ error: String) {
+        snapshot.phase = .error
+        snapshot.error = error
+    }
+}
+
+final class FakeClock {
+    var now = 100.0
+}
+
+final class Counter {
+    var count = 0
+}
+
+struct TranslateRig {
+    let c: Composer
+    let client: FakeClient
+    let t: FakeTranslator
+    let clock: FakeClock
+    /// onTranslatePoll 叫了几次（外壳这时开始定时 poll）
+    let pollRequests: Counter
+
+    /// 过了 seconds 秒，外壳的定时器 poll 一次。
+    @discardableResult
+    func tick(_ seconds: Double = 0.05) -> Bool {
+        clock.now += seconds
+        return c.pollTranslation()
+    }
+
+    var status: String { client.page?.translate?.status ?? "" }
+    var source: String { client.page?.translate?.source ?? "" }
+}
+
+/// 打开互译、切到「译」的输入框。
+func translateRig(_ change: (inout WowtypeConfig) -> Void = { _ in }) -> TranslateRig {
+    var config = WowtypeConfig()
+    config.translate = true
+    change(&config)
+    let (c, client) = fresh()
+    let t = FakeTranslator()
+    let clock = FakeClock()
+    let requests = Counter()
+    c.clock = { clock.now }
+    c.onTranslatePoll = { requests.count += 1 }
+    c.setTranslator(t)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    return TranslateRig(c: c, client: client, t: t, clock: clock, pollRequests: requests)
+}
+
+do {
+    // 设置：键名、默认值和 Linux 一样
+    let d = WowtypeConfig()
+    check(!d.translate && d.translateTarget == "en" && d.translateBaseUrl.isEmpty && d.translateModel.isEmpty
+          && !d.translateFormal && !d.translateLocal && d.translateLocalModel.isEmpty
+          && d.translateLlamaServer.isEmpty && d.translateIdleMinutes == 5,
+          "互译默认关、译成英文、不用本地模型（文件里没写 TranslateLocal 时和 Linux 一样是 False）")
+    let c = WowtypeConfig.parse("""
+    Translate=True
+    TranslateTarget=JA
+    TranslateBaseUrl=https://api.example.com/v1
+    TranslateModel="gpt-4o-mini"
+    TranslateFormal=True
+    TranslateLocal=True
+    TranslateLocalModel=~/models/hy.gguf
+    TranslateLlamaServer=/opt/homebrew/bin/llama-server
+    TranslateIdleMinutes=999
+    """)
+    check(c.translate && c.translateTarget == "ja" && c.translateBaseUrl == "https://api.example.com/v1"
+          && c.translateModel == "gpt-4o-mini" && c.translateFormal, "互译的各项", "\(c.translateTarget) \(c.translateModel)")
+    check(c.translateLocal && c.translateLocalModel == "~/models/hy.gguf"
+          && c.translateLlamaServer == "/opt/homebrew/bin/llama-server" && c.translateIdleMinutes == 240,
+          "本地模型的各项；闲置分钟数超出 0–240 取 240", "\(c.translateIdleMinutes)")
+    check(WowtypeConfig.parse("TranslateTarget=klingon").translateTarget == "en", "不认识的语言保持 en")
+    check(WowtypeConfig.template().contains("TranslateBaseUrl=") && !WowtypeConfig.template().contains("TranslateKey="),
+          "设置模板里有互译的项，没有 Key")
+}
+
+do {
+    // Shift：中 → 英 → 译 → 中；没打开互译、翻译器没配好时只在中英之间切
+    let r = translateRig()
+    r.c.switchMode(to: .chinese)
+    r.c.toggleMode()
+    check(r.c.mode == .english, "中 → 英")
+    r.c.toggleMode()
+    check(r.c.mode == .translate && r.c.translating, "英 → 译")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "译 → 中")
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
+    _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 2.0)
+    check(r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1) && r.c.mode == .translate, "单按两次 Shift 到译")
+
+    r.t.isReady = false
+    r.c.toggleMode()
+    r.c.toggleMode()
+    r.c.toggleMode()
+    check(r.c.mode == .chinese, "翻译器没配好：英 → 中，切不到译", "\(r.c.mode)")
+
+    let off = translateRig { $0.translate = false }
+    check(off.c.mode == .chinese && !off.c.translateAvailable, "设置里没打开互译：切不到译")
+    off.c.toggleMode()
+    off.c.toggleMode()
+    check(off.c.mode == .chinese, "没打开互译：英 → 中")
+
+    let (plain, _) = fresh()
+    plain.switchMode(to: .translate)
+    check(plain.mode == .chinese, "没有翻译器切不到译")
+}
+
+do {
+    // 打的字攒成原文，不上屏；停 0.5 秒才发请求，译文边出边写在编辑区，回车上屏译文
+    let r = translateRig()
+    type(r.c, "nihao")
+    check(r.client.marked.isEmpty && r.source == "ni'hao", "译：拼音在候选框顶上，编辑区留给译文",
+          "\(r.client.marked) / \(r.source)")
+    check(r.client.page?.translate?.title == "中→英 互译：" && r.client.page?.texts.first == "你好",
+          "候选框顶上是方向，下面照常是候选", "\(r.client.page?.translate?.title ?? "")")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.c.translateSource == "你好" && r.source == "你好",
+          "选的词进原文，不上屏", "\(r.client.committed) / \(r.c.translateSource)")
+    check(r.pollRequests.count == 1 && r.status == "翻译中…", "原文变了叫外壳开始轮询",
+          "\(r.pollRequests.count) \(r.status)")
+    check(r.tick(0.2) && r.t.started.isEmpty, "0.5 秒内不发请求")
+    check(r.tick(0.35) && r.t.started == ["你好"], "停够 0.5 秒发请求", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hel" && r.client.markedCursor == 3, "译文边出边写在编辑区", r.client.marked)
+    r.t.finish("Hello")
+    check(!r.tick(), "译完了就不用再轮询")
+    check(r.client.marked == "Hello" && r.status == "回车上屏 · Shift+回车上屏原文 · Esc 清空",
+          "译完提示怎么上屏", "\(r.client.marked) / \(r.status)")
+    check(r.c.handle(.key(Keysym.returnKey)), "回车吃掉")
+    check(r.client.committed == "Hello" && r.c.translateSource.isEmpty && r.client.marked.isEmpty && r.client.page == nil,
+          "回车上屏译文，清空原文和候选框", r.client.committed)
+    check(!r.c.handle(.key(Keysym.returnKey)), "原文空了回车交给应用")
+}
+
+do {
+    // 句末标点立刻发；还没译完按回车（空格也一样）等译好了自动上屏
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char("."))
+    check(r.c.translateSource == "你好。" && r.client.committed.isEmpty, "标点也进原文", r.c.translateSource)
+    r.tick(0.01)
+    check(r.t.started == ["你好。"], "句末标点不等 0.5 秒", "\(r.t.started)")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed.isEmpty && r.status == "翻译中…好了就上屏", "没译完按空格先等着", r.status)
+    check(r.tick(), "等着时接着轮询")
+    r.t.finish("Hello.")
+    check(!r.tick() && r.client.committed == "Hello." && r.c.translateSource.isEmpty, "译好了自动上屏", r.client.committed)
+}
+
+do {
+    // Shift+回车上屏原文；Esc 清空；退格删原文最后一个字、重新等 0.5 秒
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    _ = r.c.handle(.key(Keysym.returnKey, .shift))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty, "Shift+回车上屏原文", r.client.committed)
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    let cancels = r.t.cancels
+    check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
+          && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
+    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.finish("Hello good")
+    r.tick()
+    check(r.c.handle(.key(Keysym.backspace)) && r.c.translateSource == "你好", "退格删原文最后一个字", r.c.translateSource)
+    check(r.client.marked == "Hello good" && r.status == "翻译中…", "原文改了、新译文出来前留着上一句",
+          "\(r.client.marked) / \(r.status)")
+    r.tick(0.6)
+    check(r.t.started.last == "你好", "停一下重新翻", "\(r.t.started)")
+    r.t.stream("Hel")
+    r.tick()
+    check(r.client.marked == "Hello good", "新译文比上一句短时先不换", r.client.marked)
+    r.t.finish("Hello")
+    r.tick()
+    check(r.client.marked == "Hello", "译完了换成新的", r.client.marked)
+}
+
+do {
+    // 数字和 / + 进原文（3.14 的点原样）；方向键、Tab 吃掉；快捷键交给应用
+    let r = translateRig()
+    for ch in "3.14/2" {
+        check(r.c.handle(.char(ch)), "\(ch) 进原文")
+    }
+    check(r.c.translateSource == "3.14/2" && r.client.committed.isEmpty, "数字、点、斜杠进原文", r.c.translateSource)
+    check(r.c.handle(.key(Keysym.left)) && r.c.handle(.key(Keysym.tab)), "方向键、Tab 吃掉（原文里没有光标）")
+    check(!r.c.handle(.char("c", .command)) && r.c.translateSource == "3.14/2", "Command+C 交给应用")
+    check(r.c.hasPendingText && !r.c.isComposing, "攒着原文时外壳也要吃掉别的键")
+}
+
+do {
+    // 出错：候选框底下写原因，回车重试
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.status == "翻译失败：连不上服务器（回车重试）" && r.client.marked.isEmpty,
+          "出错写在底下", r.status)
+    _ = r.c.handle(.key(Keysym.returnKey))
+    check(r.t.started == ["你好", "你好"] && r.status == "翻译中…好了就上屏", "回车重试", "\(r.t.started) \(r.status)")
+    r.t.fail("翻译失败：连不上服务器")
+    check(!r.tick() && r.client.committed.isEmpty && r.status.hasSuffix("（回车重试）"), "又出错就不等了", r.status)
+}
+
+do {
+    // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+    let r = translateRig()
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    type(r.c, "hao")
+    r.c.toggleMode()
+    check(r.c.mode == .chinese && r.client.committed == "你好" && r.c.isComposing && r.client.marked == "hao",
+          "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
+    check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
+
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏
+    let s = translateRig()
+    type(s.c, "nihao")
+    _ = s.c.handle(.char(" "))
+    type(s.c, "hao")
+    s.c.commitComposition()
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil, "切走时原文原样上屏",
+          s.client.committed)
+
+    // 设置里关掉互译：离开「译」
+    let u = translateRig()
+    type(u.c, "nihao")
+    _ = u.c.handle(.char(" "))
+    var config = u.c.config
+    config.translate = false
+    u.c.apply(config)
+    check(u.c.mode == .chinese && u.client.committed == "你好" && u.c.translateSource.isEmpty,
+          "关掉互译时原文上屏、回到中文", u.client.committed)
+
+    // 失去焦点：拼音和原文都丢掉
+    let v = translateRig()
+    type(v.c, "nihao")
+    _ = v.c.handle(.char(" "))
+    v.c.cancel()
+    check(v.client.committed.isEmpty && !v.c.hasPendingText, "cancel 丢掉原文")
+}
+
+do {
+    // 密码框（安全输入）里照常打中文，不往外发
+    let r = translateRig()
+    r.client.allowsTranslation = false
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    check(r.client.committed == "你好" && r.c.translateSource.isEmpty && r.t.started.isEmpty && !r.c.translating,
+          "不能翻译的输入框直接上屏", r.client.committed)
+}
+
+do {
+    // 两个输入框共用一个翻译器：清空自己的原文不取消别人的请求
+    let r = translateRig()
+    let (other, _) = fresh()
+    var config = WowtypeConfig()
+    config.translate = true
+    other.setTranslator(r.t)
+    other.apply(config)
+    other.switchMode(to: .translate)
+    type(r.c, "nihao")
+    _ = r.c.handle(.char(" "))
+    r.tick(0.6)
+    other.cancel()
+    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+}
+
+/// 文件的权限位。
+func fileMode(_ path: String) -> Int {
+    var info = stat()
+    return stat(path, &info) == 0 ? Int(info.st_mode) & 0o777 : -1
+}
+
+do {
+    // API Key 文件：0600，一行；空串删掉；手动建的权限太宽时收紧
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).key"
+    check(TranslateKeyFile.write("  sk-test-123 \n", to: path), "写 Key")
+    check(TranslateKeyFile.read(path) == "sk-test-123" && fileMode(path) == 0o600, "Key 文件 0600，去掉空白",
+          "\(fileMode(path))")
+    check(TranslateKeyFile.write("", to: path) && access(path, F_OK) != 0, "空串删掉 Key 文件")
+    check(TranslateKeyFile.read(path).isEmpty, "没有 Key 文件读出空串")
+    writeFile(path, "sk-loose\n")
+    chmod(path, 0o644)
+    TranslateKeyFile.tighten(path)
+    check(fileMode(path) == 0o600 && TranslateKeyFile.read(path) == "sk-loose", "权限太宽的收紧", "\(fileMode(path))")
+    unlink(path)
+}
+
+do {
+    // 核心的翻译器：没填服务时没配好；本地模型看模型文件在不在
+    let t = Translator()
+    var config = WowtypeConfig()
+    config.translate = true
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(!t.isReady, "没填服务、没选本地模型：没配好")
+    config.translateBaseUrl = "http://127.0.0.1:1/v1"
+    config.translateModel = "m"
+    t.configure(config, keyFile: "", defaultLocalModel: "")
+    check(t.isReady, "填了地址和模型：配好了")
+    config.translateLocal = true
+    let model = "/tmp/wowtype-macos-harness-\(getpid()).gguf"
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(!t.isReady, "本地模型文件不在：没配好")
+    writeFile(model, "GGUF")
+    t.configure(config, keyFile: "", defaultLocalModel: model)
+    check(t.isReady && !t.localRunning, "TranslateLocalModel 留空用默认路径（第一次翻译时才起 llama-server）")
+    config.translateLocalModel = model
+    t.configure(config, keyFile: "", defaultLocalModel: "/nonexistent.gguf")
+    check(t.isReady, "写了模型路径用它")
+    unlink(model)
+    check(t.tag(for: "你好") == "中→英" && t.tag(for: "hello") == "英→中", "方向标签", t.tag(for: "hello"))
+}
+
+/// 本机的假翻译服务（OpenAI 格式，流式）。不起线程：测试循环里每次 service() 接一个连接、
+/// 读完请求、一次把 SSE 回完。
+final class FakeTranslateServer {
+    private let fd: Int32
+    let port: UInt16
+    var requests: [String] = []
+    var status = "200 OK"
+    var chunks: [String] = []
+
+    init?() {
+        #if canImport(Glibc)
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        #else
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        #endif
+        guard fd >= 0 else { return nil }
+        var addr = sockaddr_in()
+        #if !canImport(Glibc)
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        #endif
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var size = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let ok = withUnsafeMutablePointer(to: &addr) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, size) == 0 && listen(fd, 8) == 0 && getsockname(fd, $0, &size) == 0
+            }
+        }
+        guard ok else {
+            close(fd)
+            return nil
+        }
+        self.fd = fd
+        port = UInt16(bigEndian: addr.sin_port)
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+    }
+
+    deinit {
+        close(fd)
+    }
+
+    var baseURL: String { "http://127.0.0.1:\(port)/v1" }
+
+    static func sse(_ delta: String) -> String {
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\(delta)\"}}]}\n\n"
+    }
+
+    func service() {
+        let conn = accept(fd, nil, nil)
+        guard conn >= 0 else { return }
+        defer { close(conn) }
+        // macOS 上接进来的连接继承了非阻塞，改回阻塞，最多等 5 秒
+        _ = fcntl(conn, F_SETFL, fcntl(conn, F_GETFL) & ~O_NONBLOCK)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var bytes: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = recv(conn, &buffer, buffer.count, 0)
+            if n <= 0 { break }
+            bytes.append(contentsOf: buffer[0..<n])
+            // 请求头完了（空行）、请求体也够 Content-Length 了就不读了
+            guard let headEnd = (0..<max(bytes.count - 3, 0)).first(where: { bytes[$0..<$0 + 4] == [13, 10, 13, 10] })
+            else { continue }
+            let head = String(decoding: bytes[..<headEnd], as: UTF8.self)
+            let length = head.split(separator: "\r\n")
+                .first { $0.lowercased().hasPrefix("content-length:") }
+                .flatMap { Int(String($0.split(separator: ":")[1]).trimmingWhitespace()) } ?? 0
+            if bytes.count - (headEnd + 4) >= length { break }
+        }
+        requests.append(String(decoding: bytes, as: UTF8.self))
+        let type = status.hasPrefix("200") ? "text/event-stream" : "application/json"
+        let response = "HTTP/1.1 \(status)\r\nContent-Type: \(type)\r\nConnection: close\r\n\r\n" + chunks.joined()
+        let out = Array(response.utf8)
+        _ = out.withUnsafeBytes { send(conn, $0.baseAddress, $0.count, 0) }
+    }
+}
+
+func haveCurl() -> Bool {
+    let path = getenv("PATH").map { String(cString: $0) } ?? "/usr/bin:/bin"
+    return path.split(separator: ":").contains { access("\($0)/curl", X_OK) == 0 }
+}
+
+/// 一直轮询（外壳的定时器）直到 done 返回 true，最多 15 秒。
+func waitTranslation(_ c: Composer, _ server: FakeTranslateServer, until done: () -> Bool) -> Bool {
+    let deadline = monotonicSeconds() + 15
+    while monotonicSeconds() < deadline {
+        server.service()
+        c.pollTranslation()
+        if done() { return true }
+        usleep(20_000)
+    }
+    return false
+}
+
+if !haveCurl() {
+    print("skip 互译走真的翻译器（没有 curl）")
+} else if let server = FakeTranslateServer() {
+    // 走核心的翻译器（curl）连本机的假服务：Key、模型、语言照设置发，译文流式写进编辑区
+    signal(SIGPIPE, SIG_IGN)
+    let keyPath = "/tmp/wowtype-macos-harness-\(getpid()).translate.key"
+    TranslateKeyFile.write("sk-test-123", to: keyPath)
+    var config = WowtypeConfig()
+    config.translate = true
+    config.translateBaseUrl = server.baseURL
+    config.translateModel = "test-model"
+    config.translateTarget = "ja"
+    let translator = Translator()
+    translator.configure(config, keyFile: keyPath, defaultLocalModel: "")
+    let (c, client) = fresh()
+    c.setTranslator(translator)
+    c.apply(config)
+    c.switchMode(to: .translate)
+    check(c.mode == .translate, "真的翻译器：切到译")
+    server.chunks = [FakeTranslateServer.sse("また"), FakeTranslateServer.sse("明日"), "data: [DONE]\n\n"]
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    check(client.page?.translate?.title == "中→日 互译：", "方向标签照设置的语言", client.page?.translate?.title ?? "")
+    let done = waitTranslation(c, server) { client.page?.translate?.status.hasPrefix("回车上屏") == true }
+    check(done && client.marked == "また明日", "流式译文写进编辑区",
+          "\(client.marked) / \(client.page?.translate?.status ?? "")")
+    let request = server.requests.first ?? ""
+    check(request.hasPrefix("POST /v1/chat/completions") && request.contains("Authorization: Bearer sk-test-123"),
+          "请求带 Key", String(request.prefix(200)))
+    check(request.contains("\"model\":\"test-model\"") && request.contains("Japanese") && request.contains("你好。"),
+          "请求里有模型、目标语言、原文")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "また明日" && !c.hasPendingText, "回车上屏译文", client.committed)
+
+    // 服务出错：底下写原因
+    server.status = "401 Unauthorized"
+    server.chunks = ["{\"error\":{\"message\":\"bad key\"}}"]
+    type(c, "hao")
+    _ = c.handle(.char(" "))
+    _ = c.handle(.char("."))
+    let failed = waitTranslation(c, server) { client.page?.translate?.status.hasSuffix("（回车重试）") == true }
+    check(failed && client.page?.translate?.status.contains("bad key") == true, "服务出错写原因",
+          client.page?.translate?.status ?? "")
+    check(server.requests.count == 2, "连了两次假服务", "\(server.requests.count)")
+    unlink(keyPath)
+} else {
+    check(false, "起假翻译服务")
 }
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {

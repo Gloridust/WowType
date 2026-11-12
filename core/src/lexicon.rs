@@ -338,11 +338,8 @@ impl MemoryLexicon {
         if let Some(parent) = cache.parent() {
             fs::create_dir_all(parent).ok();
         }
-        let tmp = cache.with_extension("wcache.tmp");
-        fs::write(&tmp, &buf).with_context(|| format!("写词库快照失败: {}", tmp.display()))?;
-        fs::rename(&tmp, cache)
-            .with_context(|| format!("替换词库快照失败: {}", cache.display()))?;
-        Ok(())
+        crate::fsutil::write_atomic(cache, &buf)
+            .with_context(|| format!("写词库快照失败: {}", cache.display()))
     }
 
     fn read_cache(data: &[u8], src_len: u64, src_mtime: u64) -> Option<MemoryLexicon> {
@@ -863,7 +860,8 @@ impl UserLexicon {
         for (pinyin, word, freq) in words {
             out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));
         }
-        fs::write(path.as_ref(), out)
+        // 输入法进程随时可能被系统杀掉：写一半的用户词库会把学到的词全弄丢
+        crate::fsutil::write_atomic(path.as_ref(), out.as_bytes())
             .with_context(|| format!("写入用户词库失败: {}", path.as_ref().display()))
     }
 

@@ -3,6 +3,7 @@
 // 类名要和 Info.plist 里的 InputMethodServerControllerClass 一样（WowTypeInputController）。
 
 import AppKit
+import Carbon
 import InputMethodKit
 
 @objc(WowTypeInputController)
@@ -15,13 +16,36 @@ final class WowTypeInputController: IMKInputController {
     private var lastFlags: UInt = 0
     /// 照哪一版设置配的会话（AppState.configGeneration）
     private var configGeneration = -1
+    /// 互译：在等译文时每 50 毫秒取一次结果（主线程的 run loop 上，菜单打开时也走）
+    private var translateTimer: Timer?
+    static let translatePollInterval: TimeInterval = 0.05
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
         composer.onForget = { AppState.shared.didForget() }
+        composer.sampleClipboard = { AppState.shared.sampleClipboard() }
+        composer.onTranslatePoll = { [weak self] in self?.startTranslatePolling() }
         syncComposer()
+    }
+
+    private func startTranslatePolling() {
+        guard translateTimer == nil else { return }
+        let timer = Timer(timeInterval: Self.translatePollInterval, repeats: true) { [weak self] timer in
+            guard let self, self.composer.pollTranslation() else {
+                timer.invalidate()
+                self?.translateTimer = nil
+                return
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        translateTimer = timer
+    }
+
+    private func stopTranslatePolling() {
+        translateTimer?.invalidate()
+        translateTimer = nil
     }
 
     /// 词库载入完了、换了词库、改了设置：照 AppState 更新这个输入框的会话。
@@ -31,6 +55,7 @@ final class WowTypeInputController: IMKInputController {
         if let engine = state.engine, composer.currentEngine !== engine {
             composer.setEngine(engine)
         }
+        composer.setTranslator(state.translator)
         if configGeneration != state.configGeneration {
             configGeneration = state.configGeneration
             composer.apply(state.config)
@@ -54,8 +79,10 @@ final class WowTypeInputController: IMKInputController {
                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                                              cocoaFlags: event.modifierFlags.rawValue)
             else {
+                // 翻不出来的键（F 键、别的键盘布局打出的非 ASCII 字符）：打字途中、互译攒着原文、
+                // 工具栏或表情面板开着时吃掉，免得应用里的光标跑到别处
                 composer.otherModifierChanged()
-                return composer.isComposing
+                return composer.hasPendingText || composer.openPanel != nil
             }
             let handled = composer.handle(key)
             if !handled {
@@ -91,10 +118,13 @@ final class WowTypeInputController: IMKInputController {
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
         syncComposer(force: true)
+        // 剪贴板历史（设置里打开时）：切换输入框时看一眼（和 Linux 一样，另外打开工具栏的剪贴板页时也看）
+        AppState.shared.sampleClipboard()
     }
 
     override func deactivateServer(_ sender: Any!) {
         composer.commitComposition()
+        stopTranslatePolling()
         AppState.shared.candidatePanel.hide()
         AppState.shared.save()
         super.deactivateServer(sender)
@@ -116,8 +146,10 @@ final class WowTypeInputController: IMKInputController {
         item.isEnabled = false
         menu.addItem(item)
         menu.addItem(.separator())
-        for (title, action) in [("编辑设置（wowtype.conf）…", #selector(openConfig)),
-                                ("编辑自定义词（custom.tsv）…", #selector(openCustomWords)),
+        // 设置窗口是另一个进程（SettingsApp）；直接改文件的入口在设置窗口的「文件」菜单里
+        for (title, action) in [("WowType 设置…", #selector(openSettings)),
+                                ("自定义词…", #selector(openCustomWords)),
+                                ("设置互译 API Key…", #selector(editTranslateKey)),
                                 ("打开数据目录", #selector(openDataFolder))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
             entry.target = self
@@ -126,12 +158,16 @@ final class WowTypeInputController: IMKInputController {
         return menu
     }
 
-    @objc private func openConfig() {
-        AppState.shared.openConfigFile()
+    @objc private func openSettings() {
+        SettingsApp.open()
     }
 
     @objc private func openCustomWords() {
-        AppState.shared.openCustomWordsFile()
+        SettingsApp.open(page: .words)
+    }
+
+    @objc private func editTranslateKey() {
+        TranslateKeyWindow.shared.show()
     }
 
     @objc private func openDataFolder() {
@@ -198,6 +234,11 @@ extension WowTypeInputController: TextClient {
 
     var previousCharacterIsReliable: Bool {
         clientPreviousCharacter != nil
+    }
+
+    /// 密码框（应用开了安全输入）里不翻译，照常打中文。
+    var allowsTranslation: Bool {
+        !IsSecureEventInputEnabled()
     }
 
     var previousCharacter: UInt32 {

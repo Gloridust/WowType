@@ -3,6 +3,7 @@
 //   WowType.app/Contents/MacOS/WowType              输入法服务（系统按需启动）
 //   … --register | --enable | --select | --disable  向系统登记 / 打开 / 切换 / 关闭（install.sh 用）
 //   … --selftest                                    载入安装包里的词库打一句话，CI 用来检查链接和资源
+//   … --settings [general|input|emoji|words]        设置窗口（另一个进程，输入法菜单里「设置…」开的就是它）
 //   … --version
 
 import AppKit
@@ -55,11 +56,12 @@ if arguments.count > 1 {
     case "--select": ok = Installer.select()
     case "--disable": ok = Installer.disable()
     case "--selftest": ok = selfTest()
+    case "--settings": SettingsApp.run(page: arguments.count > 2 ? arguments[2] : nil)
     case "--version":
         print(appVersion)
         ok = true
     default:
-        print("用法：WowType [--register | --enable | --select | --disable | --selftest | --version]")
+        print("用法：WowType [--register | --enable | --select | --disable | --selftest | --settings [页面] | --version]")
         ok = false
     }
     exit(ok ? 0 : 1)
@@ -68,8 +70,20 @@ if arguments.count > 1 {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         AppState.shared.save()
+        AppState.shared.shutdownTranslator()
     }
 }
+
+// 被 kill（install.sh 换新版本、注销）时也存学习数据，停掉本地翻译模型的 llama-server（它是子进程，
+// 不停就一直占着 1.5 GB 内存）
+signal(SIGTERM, SIG_IGN)
+let terminationSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+terminationSource.setEventHandler {
+    AppState.shared.save()
+    AppState.shared.shutdownTranslator()
+    exit(0)
+}
+terminationSource.resume()
 
 guard let connection = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String,
       let bundleID = Bundle.main.bundleIdentifier
