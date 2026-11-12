@@ -363,6 +363,7 @@ typedef struct {
 /* WowtypeKey.hints（1.10 起）。 */
 #define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格 */
 #define WOWTYPE_KEY_HINT_PANEL_OPEN (1u << 1)    /* 外壳开着自己的面板（表情面板、工具栏）：按 Shift 不切中英文 */
+#define WOWTYPE_KEY_HINT_NO_TRANSLATE (1u << 2)  /* 不能翻译的输入框（密码框）：「译」里也照常上屏 */
 
 /* 输入模式（1.10 起）。单按 Shift（Shift_L 0xffe1 / Shift_R 0xffe2 的按下、松开都交给会话）
  * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1。
@@ -432,6 +433,13 @@ typedef struct {
                              * 外壳攒够次数存一次用户词库；只上屏了标点、emoji、计算结果、日期时间是 0 */
     int mode;               /* 1.10 起：这次调用以后的输入模式，WOWTYPE_MODE_* */
     int mode_changed;       /* 1.10 起：这次调用切换了输入模式（单按 Shift、wowtype_session_set_mode） */
+    int translating;        /* 1.10 起：互译中（「译」、有翻译器、输入框能翻译）。上屏的字攒成原文，
+                             * 不进 commit；下面四段字只在互译时有内容，否则是空串（不为 NULL） */
+    const char *translate_source; /* 攒着的原文（编辑区里画在拼音前面） */
+    const char *translate_text;   /* 显示的译文（原文改了、新译文还没写到上一句那么长时先留着上一句） */
+    const char *translate_title;  /* 候选框上方：方向标签 +「互译：」 */
+    const char *translate_status; /* 候选框下方的一行：出错原因、「翻译中…」、怎么上屏，没有是空串 */
+    int translate_done;     /* translate_text 是译完的最终结果 */
 } WowtypeFrame;
 
 /* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；
@@ -454,6 +462,31 @@ const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pe
 const WowtypeFrame *wowtype_session_set_mode(WowtypeSession *session, int mode);
 /* 现在的输入模式（1.10 起），WOWTYPE_MODE_*；session 为 NULL 时是中文。 */
 int wowtype_session_mode(const WowtypeSession *session);
+
+/* 互译（1.10 起）。会话攒原文、0.5 秒没再打字（句末标点立刻）发请求、回车上屏译文（没译完先记下，
+ * 译好了在 wowtype_session_tick 的 frame->commit 里）、Shift+回车上屏原文、Esc 清空、退格删原文；
+ * 离开「译」时原文原样上屏。frame->wake_after_ms > 0 时外壳过这么久调一次 wowtype_session_tick。
+ * 翻译器二选一：核心的（Linux）或外壳自己的函数表（macOS）。都要比会话活得久，释放前先设成 NULL。 */
+void wowtype_session_set_translator(WowtypeSession *session, WowtypeTranslator *translator);
+typedef struct {
+    uint32_t size; /* sizeof(WowtypeTranslateBackend) */
+    void *user;
+    void (*start)(void *user, const char *text); /* 开始翻译 text，取消别的；同一句正在译或已译好时不动 */
+    void (*cancel)(void *user);
+    /* 写出原文、译文、出错原因（下一次 poll 前有效），返回 WOWTYPE_TRANSLATE_* */
+    int (*poll)(void *user, const char **source, const char **text, const char **error);
+    const char *(*tag)(void *user, const char *text); /* 方向标签（「中→英」），下一次 tag 前有效 */
+} WowtypeTranslateBackend;
+void wowtype_session_set_translate_backend(WowtypeSession *session,
+                                           const WowtypeTranslateBackend *backend);
+/* now_ms：单调时钟的毫秒数（和 WowtypeKey.time_ms 同一个时钟）。 */
+const WowtypeFrame *wowtype_session_tick(WowtypeSession *session, uint64_t now_ms);
+/* 外壳要上屏一段与拼音无关的字（工具栏、表情面板、语音识别结果）：互译时进原文，否则补好空格放进
+ * frame->commit。prev_char 是应用里光标前的字，读不到给 0。 */
+const WowtypeFrame *wowtype_session_commit_text(WowtypeSession *session, const char *text,
+                                                uint32_t prev_char);
+/* 丢掉攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。 */
+const WowtypeFrame *wowtype_session_translate_clear(WowtypeSession *session);
 /* 点候选（1.6 起）：index 是显示的这些（frame 的 cand_count 个）里的序号。和按数字键一样：
  * 句首词进已选栈，用完输入就上屏并记选词。序号不对时 handled 为 0。 */
 const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index);

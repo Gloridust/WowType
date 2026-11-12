@@ -1655,3 +1655,160 @@ fn english_mode_auto_space() {
     assert_eq!(session.key(&key_after('L', Some('用'), 0)).commit.as_deref(), Some(" L"));
     assert!(!session.key(&key_after('i', Some('L'), 0)).handled);
 }
+
+/// 假翻译器：记下发了哪些请求、取消了几次，结果由测试写。
+#[derive(Default)]
+struct FakeTranslator {
+    started: std::cell::RefCell<Vec<String>>,
+    cancels: std::cell::Cell<usize>,
+    snap: std::cell::RefCell<wowtype_core::translate::Snapshot>,
+}
+
+impl FakeTranslator {
+    fn set(&self, state: wowtype_core::translate::JobState, text: &str) {
+        let mut snap = self.snap.borrow_mut();
+        snap.state = state;
+        snap.text = text.to_owned();
+    }
+}
+
+impl wowtype_core::session::TranslateBackend for FakeTranslator {
+    fn start(&self, text: &str) {
+        use wowtype_core::translate::JobState;
+        let snap = self.snap.borrow().clone();
+        if snap.source == text && matches!(snap.state, JobState::Running | JobState::Done) {
+            return;
+        }
+        self.started.borrow_mut().push(text.to_owned());
+        *self.snap.borrow_mut() = wowtype_core::translate::Snapshot {
+            state: JobState::Running,
+            source: text.to_owned(),
+            text: String::new(),
+            error: String::new(),
+        };
+    }
+    fn cancel(&self) {
+        self.cancels.set(self.cancels.get() + 1);
+        *self.snap.borrow_mut() = Default::default();
+    }
+    fn poll(&self) -> wowtype_core::translate::Snapshot {
+        self.snap.borrow().clone()
+    }
+    fn tag(&self, _text: &str) -> String {
+        "中→英".to_owned()
+    }
+}
+
+fn translating(t: &'static FakeTranslator) -> Session<'static> {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    session
+}
+
+fn at(c: char, time_ms: u64) -> Key {
+    Key { time_ms, ..Key::char(c) }
+}
+
+#[test]
+fn translate_collects_source_and_requests_after_pause() {
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    for (i, c) in "nihao".chars().enumerate() {
+        session.key(&at(c, 1000 + i as u64));
+    }
+    let frame = session.key(&at(' ', 1010));
+    assert_eq!(frame.commit, None, "互译时上屏的字攒成原文");
+    let view = frame.translate.clone().expect("互译中");
+    assert_eq!(view.source, "你好");
+    assert_eq!(view.title, "中→英 互译：");
+    assert!(frame.wake_after_ms > 0, "要叫会话发请求");
+    // 0.5 秒以内不发，之后发
+    session.tick(1300);
+    assert!(t.started.borrow().is_empty());
+    session.tick(1520);
+    assert_eq!(*t.started.borrow(), ["你好"]);
+    // 流式译文；译完了回车上屏
+    t.set(JobState::Running, "Hel");
+    assert_eq!(session.tick(1570).translate.unwrap().text, "Hel");
+    t.set(JobState::Done, "Hello");
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit.as_deref(), Some("Hello"));
+    assert_eq!(session.translate_source(), "");
+}
+
+#[test]
+fn translate_enter_before_done_commits_when_ready() {
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.translate.unwrap().status, "翻译中…好了就上屏");
+    assert_eq!(*t.started.borrow(), ["你好"], "回车立刻发请求");
+    t.set(JobState::Done, "Hello");
+    assert_eq!(session.tick(5000).commit.as_deref(), Some("Hello"));
+}
+
+#[test]
+fn translate_keys() {
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    // Shift+回车上屏原文
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let shift_enter = Key { modifiers: modifier::SHIFT, ..Key::press(keysym::RETURN) };
+    assert_eq!(session.key(&shift_enter).commit.as_deref(), Some("你好"));
+    // 退格删原文，Esc 清空，方向键吃掉
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.translate_source(), "你");
+    assert!(type_keys(&mut session, "<left>").handled);
+    type_keys(&mut session, "<esc>");
+    assert_eq!(session.translate_source(), "");
+    // 数字、点、斜杠进原文（3.14 的点原样）；句末标点立刻发请求
+    let mut session = translating(t);
+    type_keys(&mut session, "3.14/2");
+    assert_eq!(session.translate_source(), "3.14/2");
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao.");
+    assert_eq!(session.translate_source(), "你好。");
+    let before = t.started.borrow().len();
+    session.tick(0);
+    assert_eq!(t.started.borrow().len(), before + 1, "句末立刻发");
+}
+
+#[test]
+fn leaving_translate_commits_source() {
+    use wowtype_core::session::{key_hints::NO_TRANSLATE, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    type_keys(&mut session, "ma");
+    let frame = session.set_mode(Mode::Chinese);
+    assert_eq!(frame.commit.as_deref(), Some("你好"), "原文原样上屏");
+    assert!(session.composing(), "正在打的拼音留着");
+    // 密码框：「译」里也照常上屏
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao");
+    let frame = session.key(&Key { hints: NO_TRANSLATE, ..Key::press(keysym::SPACE) });
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert!(frame.translate.is_none());
+}
+
+#[test]
+fn clearing_one_session_keeps_others_request() {
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut a = translating(t);
+    let mut b = translating(t);
+    type_keys(&mut a, "nihao.");
+    a.tick(0);
+    assert_eq!(t.cancels.get(), 0);
+    b.clear_translation();
+    assert_eq!(t.cancels.get(), 0, "b 没发过请求，不取消 a 的");
+    a.clear_translation();
+    assert_eq!(t.cancels.get(), 1);
+}

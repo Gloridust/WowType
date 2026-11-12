@@ -393,8 +393,9 @@ fn curl_error(code: Option<i32>, stderr: &str) -> String {
     format!("翻译失败：{reason}")
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum JobState {
+    #[default]
     Idle,
     Running,
     Done,
@@ -428,7 +429,7 @@ impl Inner {
 }
 
 /// 一次 poll 看到的结果。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub state: JobState,
     pub source: String,
