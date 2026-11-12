@@ -117,6 +117,10 @@ pub struct EngineConfig {
     pub nnlm_rerank: usize,
 }
 
+/// 上文末尾和候选连起来本身是一个词（我 + 要 = 我要）时，上文排序特征至少给这么多
+/// （自然对数，和语言模型的分数同一个尺度）。见 [`Engine::word_lm_context_score`]。
+pub const MERGED_PAIR_SCORE: f64 = 1.5;
+
 /// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
 pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
 
@@ -1081,11 +1085,13 @@ impl Engine {
             .first()
             .map(|c| c.words.iter().any(|w| w.known))
             .unwrap_or(false);
+        // 第一名是几个词凑的整句（ok -> 哦 | 可）：不是「一个词还没打完」
+        let top_sentence = candidates.first().is_some_and(is_sentence);
         let position = if english.is_some() {
             if exact {
                 // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
                 Some(5)
-            } else if top_typos == 0.0 && has_known_word && !inner_abbrev {
+            } else if top_typos == 0.0 && has_known_word && !inner_abbrev && !top_sentence {
                 // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
                 // 用户多半还在打拼音，英文排第二
                 Some(1)
@@ -1221,11 +1227,14 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
+        // 接着前文打：第一个词不在句首，不加句首分（上文搭配由排序特征 context_bigram_score 管）
+        let mid_sentence = !self.context().trim().is_empty();
         let lm = LearnedLm {
             base: self.lm.as_ref(),
             pairs: &pairs,
             start: start.as_deref(),
             at_ms,
+            mid_sentence,
         };
         let mut paths = beam_search(graph, lexicon, &lm, &self.config.beam);
         drop(pairs);
@@ -1259,6 +1268,7 @@ impl Engine {
                 .total_cmp(&a.score)
                 .then_with(|| a.text.cmp(&b.text))
         });
+        let mut deduped = exact_syllable_first(deduped);
         deduped.truncate(self.config.max_candidates.max(1));
         Ok(deduped)
     }
@@ -1296,11 +1306,47 @@ impl Engine {
         out
     }
 
+    /// 词级语言模型下，光标前的文字接这个词的分数（上文排序特征）。
+    ///
+    /// 上文末尾 1–4 个字里，模型认识的每个后缀都当一次前一个词，取最高分。以前只试「整段上文」
+    /// 和「最后一个字」：整段上文模型不认识时得 0，反倒把负分抹平了（「今天我」碰巧正常、「我」不正常）。
+    ///
+    /// 「后缀 + 这个词」本身是模型里的一个词时（我 + 要 = 我要、不 + 知道 = 不知道），
+    /// 语料分词时它们被并成了一个词，这个搭配从没被计过数，模型给的是「没见过」的负分，
+    /// 还不如偶然见过几次的「我腰」「我悔」。这时按见过的常用搭配算，至少给 [`MERGED_PAIR_SCORE`]。
+    fn word_lm_context_score(&self, context: &str, word: &str) -> f32 {
+        let chars: Vec<char> = context.chars().collect();
+        let merged_floor = MERGED_PAIR_SCORE;
+        let mut best: Option<f64> = None;
+        for n in 1..=chars.len().min(4) {
+            let prev: String = chars[chars.len() - n..].iter().collect();
+            if self.lm.knows_word(&prev) == Some(true) {
+                let s = self.lm.score(Some(&prev), word);
+                best = Some(best.map_or(s, |b| b.max(s)));
+            }
+            if self.lm.knows_word(&format!("{prev}{word}")) == Some(true) {
+                best = Some(best.map_or(merged_floor, |b| b.max(merged_floor)));
+            }
+        }
+        best.unwrap_or(0.0) as f32
+    }
+
     fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64, nnlm: f32) -> Candidate {
         let mut feature = self.make_feature(&path, best_score, at_ms);
         feature.head_word_nnlm = nnlm;
         let rank_score = self.ranker.score(&feature) as f64;
-        let score = path.score + rank_score;
+        // 单个音节打全时只有一个字：句首 LM 分反映的是语料里谁常出现在句首，
+        // 没有上下文时不该压过字频（否则 he 会先出「何」）。
+        // 只减基础模型的句首分：path.lm_score 里还有用户学过的搭配加成，学过的字要照样靠前。
+        let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
+        // 接着前文打时句首分本来就没加（见 run_query 的 mid_sentence），不用再减
+        let mid_sentence = !self.context().trim().is_empty();
+        let score = if single_word && !mid_sentence {
+            let start = self.lm.score(None, &path.words[0].text);
+            path.score - self.config.beam.lm_weight * start + rank_score
+        } else {
+            path.score + rank_score
+        };
         Candidate {
             text: path.text,
             pinyin: path.pinyin,
@@ -1391,6 +1437,9 @@ impl Engine {
                 if context.is_empty() {
                     return (0.0, 0.0);
                 }
+                if self.lm.knows_word(&candidate.text).is_some() {
+                    return (1.0, self.word_lm_context_score(context, &candidate.text));
+                }
                 let mut best: Option<f32> = None;
                 let mut consider = |prev: &str| {
                     if prev.is_empty() {
@@ -1432,6 +1481,60 @@ impl Engine {
         }
     }
 }
+
+/// 输入正好是一个完整音节（xian、ji、zhe）时：本音节的字排在补全出来的字（想、就、真）前面，
+/// 纠错出来的（gei → 被、飞；si → 是，漏按 h）再往后。
+///
+/// 补全每个字母只罚 1.4 左右，高频字补全以后常常比本音节的字分还高；已经打全的音节，
+/// 用户要的是这个音节的字。多音节输入、没打全的音节不动。
+fn exact_syllable_first(candidates: Vec<Candidate>) -> Vec<Candidate> {
+    let exact = |c: &Candidate| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0;
+    let one_syllable = candidates
+        .iter()
+        .any(|c| exact(c) && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' '));
+    if !one_syllable {
+        return candidates;
+    }
+    let (mut out, rest): (Vec<Candidate>, Vec<Candidate>) = candidates.into_iter().partition(exact);
+    lift_split_word(&mut out);
+    // 补全的在前、纠错的在后，各自按分数
+    let (completions, typos): (Vec<Candidate>, Vec<Candidate>) =
+        rest.into_iter().partition(|c| c.features.typo_count == 0.0);
+    // 分数也压到前面的下面，后面按分数合并、排序的地方不会再把它们换上来
+    for c in completions.into_iter().chain(typos) {
+        let floor = out.last().map_or(0.0, |last| last.score);
+        out.push(Candidate {
+            score: c.score.min(floor - 1e-3),
+            ..c
+        });
+    }
+    out
+}
+
+/// 一个音节也能切成两个音节的整词（xian → 西安）：分数和第一名差得不多时，至少排到第 [`SPLIT_WORD_SLOT`] 位。
+/// 单字太多，按分数它常常排在十几位以后，第一页看不到。
+fn lift_split_word(exact: &mut Vec<Candidate>) {
+    let Some(top) = exact.first().map(|c| c.score) else {
+        return;
+    };
+    let found = exact.iter().position(|c| {
+        c.words.len() == 1 && c.pinyin.contains(' ') && top - c.score <= SPLIT_WORD_MARGIN
+    });
+    let Some(at) = found.filter(|&at| at > SPLIT_WORD_SLOT) else {
+        return;
+    };
+    let mut word = exact.remove(at);
+    // 分数夹在前后两个之间，后面再按分数排也不会变
+    let (above, below) = (exact[SPLIT_WORD_SLOT - 1].score, exact[SPLIT_WORD_SLOT].score);
+    word.score = (above + below) / 2.0;
+    exact.insert(SPLIT_WORD_SLOT, word);
+}
+
+/// [`lift_split_word`]：最多和第一名差多少（自然对数）。实测 xian 的「西安」差 3.0，
+/// 别的音节能切出来的整词（提案、彼岸、立案、堤岸）差 4 以上，不抬。
+const SPLIT_WORD_MARGIN: f64 = 3.5;
+/// [`lift_split_word`]：抬到第几位（从 0 数，4 是第五个）。
+const SPLIT_WORD_SLOT: usize = 4;
 
 /// 第 k 个字母之后在原始串里的字节位置（跳过紧随其后的隔音符）。
 fn letters_to_bytes(raw: &str, letters: usize) -> usize {
@@ -2254,6 +2357,114 @@ mod tests {
         assert_eq!(head.consumed, "wojintianwanshangyao".len());
     }
 
+    /// 模拟词级 LM 的句首（`<s>`）分：只给「何」一个很大的提升。
+    struct SentenceStartBoost;
+
+    impl LanguageModel for SentenceStartBoost {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            if prev.is_none() && cur == "何" {
+                5.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    #[test]
+    fn single_syllable_candidates_follow_word_frequency() {
+        // 打 he 时「和」比「何」常用，句首 LM 分不该把「何」抬上来。
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("he\t和\t100000\nhe\t何\t10000\nhe\t合\t1000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(SentenceStartBoost));
+        let texts: Vec<String> = e.input("he").into_iter().map(|c| c.text).collect();
+        let at = |word: &str| texts.iter().position(|t| t == word);
+        assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
+        assert!(at("何") < at("合"), "{texts:?}");
+    }
+
+    #[test]
+    fn single_syllable_keeps_learned_pair_bonus() {
+        // 去掉的只是基础模型的句首分：用户在「快」后面选过「乐」，这个搭配加成要留着。
+        // 两个引擎都选过一次「乐」（热度一样），只有 a 是在「快」后面选的。
+        let make = || {
+            let lexicon: Arc<dyn Lexicon> = Arc::new(
+                MemoryLexicon::from_tsv_str("le\t了\t100000\nle\t乐\t10000\n").unwrap(),
+            );
+            Engine::new(lexicon, Arc::new(SentenceStartBoost))
+        };
+        // 搭配只认「上一次选的词，且光标前正好以它结尾」，所以先选前一个字
+        let pick = |e: &Engine, prev: &str, word: &str| {
+            e.set_context("");
+            e.record_selection(prev);
+            e.set_context(prev);
+            e.record_selection(word);
+        };
+        let (a, b) = (make(), make());
+        pick(&a, "快", "乐");
+        pick(&b, "慢", "乐");
+        let score = |e: &Engine| {
+            e.set_context("");
+            e.record_selection("快");
+            e.set_context("快");
+            e.input("le").into_iter().find(|c| c.text == "乐").map(|c| c.score)
+        };
+        let (sa, sb) = (score(&a).unwrap(), score(&b).unwrap());
+        assert!(sa > sb, "学过的搭配没起作用：{sa} vs {sb}");
+    }
+
+    /// 模拟词级 LM 的分词缺口：「我要」是一个词，(我, 要) 从没计过数（回退分 −2.5），
+    /// 偶然见过几次的 (我, 腰) 反而有 +1.5。
+    struct MergedPairLm;
+
+    impl LanguageModel for MergedPairLm {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            match (prev, cur) {
+                (Some("我"), "腰") => 1.5,
+                (Some("我"), _) => -2.5,
+                _ => 0.0,
+            }
+        }
+
+        fn knows_word(&self, word: &str) -> Option<bool> {
+            Some(matches!(word, "我" | "要" | "腰" | "我要" | "今天"))
+        }
+    }
+
+    #[test]
+    fn context_merged_into_one_word_counts_as_common_pair() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(MergedPairLm));
+        // 上文只有「我」和「今天我」（整段不是模型里的词）都要一样：取末尾模型认识的后缀
+        for context in ["我", "今天我"] {
+            e.set_context(context);
+            let texts: Vec<String> = e.input("yao").into_iter().map(|c| c.text).collect();
+            assert_eq!(texts.first().map(String::as_str), Some("要"), "{context}: {texts:?}");
+        }
+    }
+
+    #[test]
+    fn complete_syllable_keeps_its_own_characters_first() {
+        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面；
+        // 切成 xi'an 的整词「西安」分数差得不多，抬到第五个
+        let mut tsv = String::from("xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\n");
+        for (i, c) in "先现显线险仙咸鲜".chars().enumerate() {
+            tsv.push_str(&format!("xian\t{c}\t{}\n", 1_000_000 - i * 100_000));
+        }
+        let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
+        let e = Engine::new(lexicon, Arc::new(BigramLm::default()));
+        let texts: Vec<String> = e.input("xian").into_iter().map(|c| c.text).collect();
+        let at = |w: &str| texts.iter().position(|t| t == w);
+        assert_eq!(texts.first().map(String::as_str), Some("先"), "{texts:?}");
+        assert!(at("鲜") < at("想"), "补全的字排到了本音节的字前面：{texts:?}");
+        assert_eq!(at("西安"), Some(4), "{texts:?}");
+        // 没打全时照样出补全
+        let texts: Vec<String> = e.input("xia").into_iter().map(|c| c.text).collect();
+        assert!(texts.iter().any(|t| t == "想"), "{texts:?}");
+    }
+
     #[test]
     fn context_bigram_boosts_first_word() {
         let mut lm = BigramLm::new().with_backoff(0.001);
@@ -2702,6 +2913,19 @@ mod tests {
         assert!(pos == 5 || (pos >= 1 && pos == she.len() - 1), "{she:?}");
         // 缩写编码（Jan -> January）不当作英文词
         assert!(!texts("jan").iter().any(|t| t == "January"));
+    }
+
+    #[test]
+    fn english_word_beats_chinese_sentence_made_of_abbreviations() {
+        // ok -> 哦 | 可（o + k）是两个词硬凑的；bug -> 不过（bu + g）是一个词还没打完
+        let e = engine("o\t哦\t900000\nke\t可\t900000\nbu guo\t不过\t500000\nbu\t不\t1000000\n");
+        e.load_english_str("ok\nbug\n");
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        assert_eq!(texts("ok").first().map(String::as_str), Some("ok"), "{:?}", texts("ok"));
+        let bug = texts("bug");
+        assert_eq!(bug.first().map(String::as_str), Some("不过"), "{bug:?}");
+        assert_eq!(bug.get(1).map(String::as_str), Some("bug"), "{bug:?}");
     }
 
     #[test]

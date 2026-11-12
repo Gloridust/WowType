@@ -21,6 +21,11 @@ pub trait LanguageModel: Send + Sync {
         false
     }
 
+    /// 词表里有没有这个词；None 表示这个模型没有词表可查（字级、测试用的模型）。
+    fn knows_word(&self, _word: &str) -> Option<bool> {
+        None
+    }
+
     /// 一句话的累计对数概率。
     fn sequence_score(&self, words: &[&str]) -> f64 {
         let mut total = 0.0;

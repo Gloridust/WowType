@@ -1444,8 +1444,9 @@ void runCases(Instance &instance) {
     check(ic->committed == " 5" && ic->passed.empty(), "汉字后打数字补空格：[" + ic->committed + "]");
     fresh(ic.get());
     surround("第 5");
-    type(ic.get(), "zhangjie<sp>");
-    check(ic->committed == " 章节", "数字后上屏汉字补空格：[" + ic->committed + "]");
+    // 测的是补空格，不是排序：用首选不受上文影响的你好（zhangjie 的章节 / 张杰会随前面用例上屏的字变）
+    type(ic.get(), "nihao<sp>");
+    check(ic->committed == " 你好", "数字后上屏汉字补空格：[" + ic->committed + "]");
     fresh(ic.get());
     surround("Linux");
     type(ic.get(), "xitong<sp>");
