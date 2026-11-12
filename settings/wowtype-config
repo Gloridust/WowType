@@ -4754,7 +4754,7 @@ if __name__ == "__main__":
         merged, added, updated = merge_custom_words([("ni hao", "妮好")],
                                                     [("ni hao", "妮好"), ("mail", "me@x.com")])
         assert (added, updated) == (1, 0) and merged[-1] == ("mail", "me@x.com")
-        assert len(SYLLABLES) == 432
+        assert len(SYLLABLES) == 435  # 和核心的一样，核心的测试比对内容
         assert parse_version("v0.2.10") > parse_version("0.2.9")
         assert parse_version("0.2.1-1~ubuntu26.04") == (0, 2, 1)
         assert parse_version("2026.10.31") < parse_version("2026.11.01")
