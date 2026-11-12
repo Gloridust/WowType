@@ -164,10 +164,7 @@ pub fn save_history<P: AsRef<Path>>(
         ));
     }
     // 先写临时文件再改名，写到一半断电也不会把旧文件弄坏
-    let tmp = path.with_extension("tsv.tmp");
-    std::fs::write(&tmp, out).with_context(|| format!("写入 {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("改名为 {}", path.display()))?;
-    Ok(())
+    crate::fsutil::write_atomic(path, out.as_bytes())
 }
 
 /// 读回 [`save_history`] 写的文件，返回读到的条数。坏行跳过。

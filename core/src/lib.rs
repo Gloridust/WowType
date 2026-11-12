@@ -12,6 +12,7 @@ pub mod convert;
 pub mod datetime;
 pub mod emoji;
 pub mod ffi;
+pub mod fsutil;
 pub mod graph;
 pub mod learn;
 pub mod lexicon;
