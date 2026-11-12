@@ -132,6 +132,10 @@ impl LanguageModel for WordLm {
         }
     }
 
+    fn knows_word(&self, word: &str) -> Option<bool> {
+        Some(self.ids.contains_key(word))
+    }
+
     fn has_bigram(&self, prev: &str, cur: &str) -> bool {
         match (self.ids.get(prev), self.ids.get(cur)) {
             (Some(&p), Some(&c)) => self.pair(p, c).is_some(),

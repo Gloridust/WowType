@@ -116,6 +116,10 @@ pub struct EngineConfig {
     pub nnlm_rerank: usize,
 }
 
+/// 上文末尾和候选连起来本身是一个词（我 + 要 = 我要）时，上文排序特征至少给这么多
+/// （自然对数，和语言模型的分数同一个尺度）。见 [`Engine::word_lm_context_score`]。
+pub const MERGED_PAIR_SCORE: f64 = 1.5;
+
 /// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
 pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
 
@@ -1220,11 +1224,14 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
+        // 接着前文打：第一个词不在句首，不加句首分（上文搭配由排序特征 context_bigram_score 管）
+        let mid_sentence = !self.context().trim().is_empty();
         let lm = LearnedLm {
             base: self.lm.as_ref(),
             pairs: &pairs,
             start: start.as_deref(),
             at_ms,
+            mid_sentence,
         };
         let mut paths = beam_search(graph, lexicon, &lm, &self.config.beam);
         drop(pairs);
@@ -1295,6 +1302,31 @@ impl Engine {
         out
     }
 
+    /// 词级语言模型下，光标前的文字接这个词的分数（上文排序特征）。
+    ///
+    /// 上文末尾 1–4 个字里，模型认识的每个后缀都当一次前一个词，取最高分。以前只试「整段上文」
+    /// 和「最后一个字」：整段上文模型不认识时得 0，反倒把负分抹平了（「今天我」碰巧正常、「我」不正常）。
+    ///
+    /// 「后缀 + 这个词」本身是模型里的一个词时（我 + 要 = 我要、不 + 知道 = 不知道），
+    /// 语料分词时它们被并成了一个词，这个搭配从没被计过数，模型给的是「没见过」的负分，
+    /// 还不如偶然见过几次的「我腰」「我悔」。这时按见过的常用搭配算，至少给 [`MERGED_PAIR_SCORE`]。
+    fn word_lm_context_score(&self, context: &str, word: &str) -> f32 {
+        let chars: Vec<char> = context.chars().collect();
+        let merged_floor = MERGED_PAIR_SCORE;
+        let mut best: Option<f64> = None;
+        for n in 1..=chars.len().min(4) {
+            let prev: String = chars[chars.len() - n..].iter().collect();
+            if self.lm.knows_word(&prev) == Some(true) {
+                let s = self.lm.score(Some(&prev), word);
+                best = Some(best.map_or(s, |b| b.max(s)));
+            }
+            if self.lm.knows_word(&format!("{prev}{word}")) == Some(true) {
+                best = Some(best.map_or(merged_floor, |b| b.max(merged_floor)));
+            }
+        }
+        best.unwrap_or(0.0) as f32
+    }
+
     fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64, nnlm: f32) -> Candidate {
         let mut feature = self.make_feature(&path, best_score, at_ms);
         feature.head_word_nnlm = nnlm;
@@ -1303,7 +1335,9 @@ impl Engine {
         // 没有上下文时不该压过字频（否则 he 会先出「何」）。
         // 只减基础模型的句首分：path.lm_score 里还有用户学过的搭配加成，学过的字要照样靠前。
         let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
-        let score = if single_word {
+        // 接着前文打时句首分本来就没加（见 run_query 的 mid_sentence），不用再减
+        let mid_sentence = !self.context().trim().is_empty();
+        let score = if single_word && !mid_sentence {
             let start = self.lm.score(None, &path.words[0].text);
             path.score - self.config.beam.lm_weight * start + rank_score
         } else {
@@ -1398,6 +1432,9 @@ impl Engine {
                 };
                 if context.is_empty() {
                     return (0.0, 0.0);
+                }
+                if self.lm.knows_word(&candidate.text).is_some() {
+                    return (1.0, self.word_lm_context_score(context, &candidate.text));
                 }
                 let mut best: Option<f32> = None;
                 let mut consider = |prev: &str| {
@@ -2316,6 +2353,38 @@ mod tests {
         };
         let (sa, sb) = (score(&a).unwrap(), score(&b).unwrap());
         assert!(sa > sb, "学过的搭配没起作用：{sa} vs {sb}");
+    }
+
+    /// 模拟词级 LM 的分词缺口：「我要」是一个词，(我, 要) 从没计过数（回退分 −2.5），
+    /// 偶然见过几次的 (我, 腰) 反而有 +1.5。
+    struct MergedPairLm;
+
+    impl LanguageModel for MergedPairLm {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            match (prev, cur) {
+                (Some("我"), "腰") => 1.5,
+                (Some("我"), _) => -2.5,
+                _ => 0.0,
+            }
+        }
+
+        fn knows_word(&self, word: &str) -> Option<bool> {
+            Some(matches!(word, "我" | "要" | "腰" | "我要" | "今天"))
+        }
+    }
+
+    #[test]
+    fn context_merged_into_one_word_counts_as_common_pair() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(MergedPairLm));
+        // 上文只有「我」和「今天我」（整段不是模型里的词）都要一样：取末尾模型认识的后缀
+        for context in ["我", "今天我"] {
+            e.set_context(context);
+            let texts: Vec<String> = e.input("yao").into_iter().map(|c| c.text).collect();
+            assert_eq!(texts.first().map(String::as_str), Some("要"), "{context}: {texts:?}");
+        }
     }
 
     #[test]
