@@ -25,6 +25,7 @@ final class WowTypeInputController: IMKInputController {
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
         composer.onForget = { AppState.shared.didForget() }
+        composer.sampleClipboard = { AppState.shared.sampleClipboard() }
         composer.onTranslatePoll = { [weak self] in self?.startTranslatePolling() }
         syncComposer()
     }
@@ -78,9 +79,10 @@ final class WowTypeInputController: IMKInputController {
                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                                              cocoaFlags: event.modifierFlags.rawValue)
             else {
+                // 翻不出来的键（F 键、别的键盘布局打出的非 ASCII 字符）：打字途中、互译攒着原文、
+                // 工具栏或表情面板开着时吃掉，免得应用里的光标跑到别处
                 composer.otherModifierChanged()
-                // 打字途中、互译攒着原文时别的键吃掉，免得应用里的光标跑到别处
-                return composer.hasPendingText
+                return composer.hasPendingText || composer.openPanel != nil
             }
             let handled = composer.handle(key)
             if !handled {
@@ -116,6 +118,8 @@ final class WowTypeInputController: IMKInputController {
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
         syncComposer(force: true)
+        // 剪贴板历史（设置里打开时）：切换输入框时看一眼（和 Linux 一样，另外打开工具栏的剪贴板页时也看）
+        AppState.shared.sampleClipboard()
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -142,8 +146,9 @@ final class WowTypeInputController: IMKInputController {
         item.isEnabled = false
         menu.addItem(item)
         menu.addItem(.separator())
-        for (title, action) in [("编辑设置（wowtype.conf）…", #selector(openConfig)),
-                                ("编辑自定义词（custom.tsv）…", #selector(openCustomWords)),
+        // 设置窗口是另一个进程（SettingsApp）；直接改文件的入口在设置窗口的「文件」菜单里
+        for (title, action) in [("WowType 设置…", #selector(openSettings)),
+                                ("自定义词…", #selector(openCustomWords)),
                                 ("设置互译 API Key…", #selector(editTranslateKey)),
                                 ("打开数据目录", #selector(openDataFolder))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
@@ -153,12 +158,12 @@ final class WowTypeInputController: IMKInputController {
         return menu
     }
 
-    @objc private func openConfig() {
-        AppState.shared.openConfigFile()
+    @objc private func openSettings() {
+        SettingsApp.open()
     }
 
     @objc private func openCustomWords() {
-        AppState.shared.openCustomWordsFile()
+        SettingsApp.open(page: .words)
     }
 
     @objc private func editTranslateKey() {
