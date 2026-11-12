@@ -18,11 +18,16 @@ static RECENT: Mutex<Recent> = Mutex::new(Recent {
     items: Vec::new(),
 });
 
-/// 用这个文件存（读进已有的）。换了路径会重新读。
+/// 用这个文件存（读进已有的）。换了路径会重新读；空串表示只记在内存里，并清空。
 pub fn set_path(path: &str) {
     let Ok(mut recent) = RECENT.lock() else {
         return;
     };
+    if path.is_empty() {
+        recent.path = None;
+        recent.items.clear();
+        return;
+    }
     let path = PathBuf::from(path);
     if recent.path.as_ref() == Some(&path) {
         return;
@@ -65,10 +70,3 @@ pub fn list() -> Vec<String> {
     RECENT.lock().map(|r| r.items.clone()).unwrap_or_default()
 }
 
-#[cfg(test)]
-pub(crate) fn reset_for_test() {
-    if let Ok(mut recent) = RECENT.lock() {
-        recent.path = None;
-        recent.items.clear();
-    }
-}

@@ -54,7 +54,7 @@ pub struct WowtypeCandidates {
 
 impl WowtypeCandidates {
     /// 只有文本和分数的结果（预测、符号）。
-    fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
+    pub(crate) fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
         let n = texts.len();
         Self {
             texts,

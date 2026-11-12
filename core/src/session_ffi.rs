@@ -891,13 +891,19 @@ pub unsafe extern "C" fn wowtype_session_open_panel(session: *const WowtypeSessi
     }
 }
 
-/// 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用；读进已有的）。（1.10 起）
+/// 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用；读进已有的）。
+/// NULL 或空串：只记在内存里，并清空。（1.10 起）
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_recent_emoji_path(path: *const c_char) {
-    let path = unsafe { arg(path) };
-    if !path.is_empty() {
-        crate::recent_emoji::set_path(&path);
-    }
+    crate::recent_emoji::set_path(&unsafe { arg(path) });
+}
+
+/// 最近用过的 emoji，最近的在前；用 wowtype_candidates_* 读取并释放。（1.10 起）
+#[no_mangle]
+pub extern "C" fn wowtype_recent_emoji_list() -> *mut crate::ffi::WowtypeCandidates {
+    let texts: Vec<CString> = crate::recent_emoji::list().iter().map(|t| to_c(t)).collect();
+    let scores = vec![0.0; texts.len()];
+    Box::into_raw(Box::new(crate::ffi::WowtypeCandidates::plain(texts, scores)))
 }
 
 /// 攒着的原文（互译），没有是空串。在同一个会话下一次调用前有效。（1.10 起）

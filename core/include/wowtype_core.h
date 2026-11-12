@@ -508,8 +508,10 @@ const WowtypeFrame *wowtype_session_toggle_emoji_panel(WowtypeSession *session);
 const WowtypeFrame *wowtype_session_open_tool(WowtypeSession *session, int tool);
 /* 开着的面板，WOWTYPE_TOOL_*。 */
 int wowtype_session_open_panel(const WowtypeSession *session);
-/* 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用，最多 18 个）。 */
+/* 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用，最多 18 个）；NULL 或空串只记在内存里并清空。 */
 void wowtype_recent_emoji_path(const char *path);
+/* 最近用过的 emoji，最近的在前；用 wowtype_candidates_* 读取并释放。 */
+WowtypeCandidates *wowtype_recent_emoji_list(void);
 /* 攒着的原文，没有是空串；在同一个会话下一次调用前有效。 */
 const char *wowtype_session_translate_source(WowtypeSession *session);
 /* 丢掉攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。 */
