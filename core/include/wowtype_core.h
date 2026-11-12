@@ -410,6 +410,8 @@ typedef struct {
     int shift_toggle;    /* 1.10 起：WOWTYPE_SHIFT_TOGGLE_*，默认两边都行 */
     uint32_t shift_tap_ms; /* 1.10 起：按住 Shift 多久以内松开算单按（毫秒），0 用默认 500 */
     int translate_mode;  /* 1.10 起：单按 Shift 的循环里有「译」（配好了翻译服务），默认 0 */
+    int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、互译时不开），默认 1 */
+    int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -421,8 +423,10 @@ typedef struct {
     const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 还没选的输入（分好音节，
                             * nihao 显示成 ni'hao，双拼显示成全拼；没有引擎时是原始输入） */
     int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
-    const char *aux;       /* 候选框上方的提示，没有为 NULL（还没用） */
-    int panel;             /* 0 普通一页 1 展开面板（横排按下键，6 列，一屏 6 行）；2 表情面板还没用 */
+    const char *aux;       /* 候选框上方的提示（1.10 起：工具栏、表情面板），没有为 NULL */
+    int panel;             /* WOWTYPE_PANEL_*：0 普通一页、1 展开面板（横排按下键，6 列，一屏 6 行）、
+                            * 2 表情面板（1.10 起，同样的网格，preedit 是搜索词）、
+                            * 3 工具栏（1.10 起，竖排一列，一页 9 个）；面板的提示在 aux */
     size_t cand_count;     /* 候选框里显示几个（一页，或展开面板的一屏）；用 wowtype_session_candidate 取 */
     int cand_cursor;       /* 光标在显示的这些里的位置；-1 不在这一页上（翻页按钮翻走以后） */
     int has_prev, has_next; /* 前面 / 后面还有一页（展开面板是一屏） */
@@ -485,6 +489,29 @@ const WowtypeFrame *wowtype_session_tick(WowtypeSession *session, uint64_t now_m
  * frame->commit。prev_char 是应用里光标前的字，读不到给 0。 */
 const WowtypeFrame *wowtype_session_commit_text(WowtypeSession *session, const char *text,
                                                 uint32_t prev_char);
+/* 工具栏和表情面板（1.10 起）。只打一个 v 再按空格会话自己打开工具栏；表情面板快捷键由外壳按设置认出来，
+ * 调 toggle。开着时按键都归面板（带 Ctrl / Alt / Super 的组合键收起面板、交给应用），条目用候选的
+ * 读法（wowtype_session_candidate、_candidate_info），选了的放进 frame->commit（互译时进原文）。
+ * 剪贴板历史由外壳读系统剪贴板交给 wowtype_clipboard_remember（打开工具栏之前读一次）。 */
+#define WOWTYPE_PANEL_NORMAL 0
+#define WOWTYPE_PANEL_EXPANDED 1
+#define WOWTYPE_PANEL_EMOJI 2
+#define WOWTYPE_PANEL_TOOL 3
+#define WOWTYPE_TOOL_NONE 0
+#define WOWTYPE_TOOL_MENU 1
+#define WOWTYPE_TOOL_CLIPBOARD 2
+#define WOWTYPE_TOOL_PHRASES 3
+#define WOWTYPE_TOOL_SYMBOLS 4
+#define WOWTYPE_TOOL_EMOJI 5
+const WowtypeFrame *wowtype_session_toggle_emoji_panel(WowtypeSession *session);
+/* 打开工具栏的一页或表情面板（WOWTYPE_TOOL_*）；WOWTYPE_TOOL_NONE 关上。 */
+const WowtypeFrame *wowtype_session_open_tool(WowtypeSession *session, int tool);
+/* 开着的面板，WOWTYPE_TOOL_*。 */
+int wowtype_session_open_panel(const WowtypeSession *session);
+/* 最近用过的 emoji 存在这个文件（一行一个，进程内所有会话共用，最多 18 个）；NULL 或空串只记在内存里并清空。 */
+void wowtype_recent_emoji_path(const char *path);
+/* 最近用过的 emoji，最近的在前；用 wowtype_candidates_* 读取并释放。 */
+WowtypeCandidates *wowtype_recent_emoji_list(void);
 /* 攒着的原文，没有是空串；在同一个会话下一次调用前有效。 */
 const char *wowtype_session_translate_source(WowtypeSession *session);
 /* 丢掉攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。 */

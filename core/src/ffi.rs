@@ -54,7 +54,7 @@ pub struct WowtypeCandidates {
 
 impl WowtypeCandidates {
     /// 只有文本和分数的结果（预测、符号）。
-    fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
+    pub(crate) fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
         let n = texts.len();
         Self {
             texts,
@@ -898,53 +898,8 @@ pub unsafe extern "C" fn wowtype_engine_emoji_search(
         set_last_error("query is null or not utf8");
         return ptr::null_mut();
     };
-    let query = query.trim();
-    let results: Vec<String> = if query.is_empty() {
-        crate::emoji::all()
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    } else {
-        let mut words: Vec<String> = Vec::new();
-        if let Some(handle) = unsafe { engine.as_ref() } {
-            if query.bytes().all(|b| b.is_ascii_alphabetic() || b == b'\'') {
-                let outcome =
-                    panic::catch_unwind(panic::AssertUnwindSafe(|| handle.engine.try_input(query)));
-                if let Ok(Ok(candidates)) = outcome {
-                    words = candidates
-                        .into_iter()
-                        .filter(|c| c.consumed >= query.len() && !c.text.is_ascii())
-                        .map(|c| c.text)
-                        .take(8)
-                        .collect();
-                }
-            } else if !query.is_ascii() {
-                words.push(query.to_string());
-            }
-        }
-        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
-        let mut out: Vec<String> = Vec::new();
-        let add = |items: Vec<&str>, out: &mut Vec<String>| {
-            for item in items {
-                if !out.iter().any(|x| x == item) {
-                    out.push(item.to_string());
-                }
-            }
-        };
-        let symbols = crate::symbols::search(query, limit);
-        let (named, prefixed): (Vec<_>, Vec<_>) =
-            symbols.into_iter().partition(|s| s.names.contains(&query));
-        // 符号名完全对上的、关键词完全对上的 emoji、以名字开头的符号、英文、关键词里包含这个词的
-        add(named.into_iter().map(|s| s.text).collect(), &mut out);
-        add(crate::emoji::search_words_exact(&refs, limit), &mut out);
-        add(prefixed.into_iter().map(|s| s.text).collect(), &mut out);
-        add(crate::emoji::search_english(query, limit), &mut out);
-        add(
-            crate::emoji::search_words_containing(&refs, limit),
-            &mut out,
-        );
-        out
-    };
+    let engine = unsafe { engine.as_ref() }.map(|handle| &handle.engine);
+    let results = crate::emoji::panel_search(engine, query, limit);
     let texts: Vec<CString> = results
         .into_iter()
         .take(limit.max(1))

@@ -201,9 +201,9 @@ public final class Composer {
     /// 有新的就交给 ClipboardHistory.remember。
     public var sampleClipboard: (() -> Void)?
     /// 最近用过的 emoji（表情面板里排最前）。
+    /// 最近用过的 emoji（在核心里，一个进程一份）；测试里换一个只在内存里的
     public var recentEmoji = RecentEmoji.shared
     /// 开着的工具栏 / 表情面板（Toolbar.swift）；nil 是没开
-    var tool: ToolState?
 
     // 互译：攒原文、去抖、回车等译完、离开「译」上屏原文都在会话里，这里只画和排定时器
     /// 翻译器（一个进程一个，所有输入框共用）；nil 表示没有互译
@@ -336,7 +336,7 @@ public final class Composer {
             toggleEmojiPanel()
             return true
         }
-        if tool != nil {
+        if openPanel != nil {
             return handleToolKey(key)
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
@@ -378,9 +378,6 @@ public final class Composer {
         raw.release = down ? 0 : 1
         raw.modifiers = otherModifiers ? Modifiers.control.rawValue : 0
         raw.time_ms = UInt64(max(now, 0) * 1000)
-        if tool != nil {
-            raw.hints |= WOWTYPE_KEY_HINT_PANEL_OPEN
-        }
         guard let frame = wowtype_session_key(session, &raw), frame.pointee.mode_changed != 0 else {
             return false
         }
@@ -442,7 +439,7 @@ public final class Composer {
 
     /// 放弃正在打的（输入框失去焦点）：拼音和互译攒着的原文都丢掉。
     public func cancel() {
-        tool = nil
+        closeTool()
         translateDrawn = ""
         wowtype_session_translate_clear(session)
         apply(wowtype_session_reset(session, 0))
@@ -450,12 +447,7 @@ public final class Composer {
 
     /// 点候选框里显示的第 index 个（和按数字键一样）。
     public func select(_ index: Int) {
-        if let tool {
-            // 工具栏一页 9 个、表情面板一屏 36 个，index 是这一页 / 这一屏里的
-            let size = tool.panel.isEmoji ? CandidatePage.columns * ToolLimits.gridRows : ToolLimits.pageSize
-            selectTool(tool.cursor / size * size + index)
-            return
-        }
+        // 工具栏 / 表情面板开着时选的是面板这一页 / 这一屏里的第 index 项（会话认）
         guard index >= 0, let frame = wowtype_session_select(session, index), frame.pointee.handled != 0 else {
             return
         }
@@ -485,6 +477,8 @@ public final class Composer {
         case .off: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_OFF
         }
         config.translate_mode = translateAvailable ? 1 : 0
+        config.toolbar = settings.toolbar ? 1 : 0
+        config.clipboard_history = settings.clipboardHistory ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -513,8 +507,9 @@ public final class Composer {
     }
 
     private func handleComposing(_ key: KeyInput) -> Bool {
-        if opensToolbar(key) {
-            return true
+        if key.keysym == 0x20 && input == "v" && config.clipboardHistory {
+            // 只打一个 v 再按空格打开工具栏（会话做）：剪贴板页要的历史先读一次
+            sampleClipboard?()
         }
         if sendToSession(key) {
             return true
@@ -534,7 +529,7 @@ public final class Composer {
     }
 
     @discardableResult
-    private func sendToSession(_ key: KeyInput) -> Bool {
+    func sendToSession(_ key: KeyInput) -> Bool {
         var raw = WowtypeKey()
         raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
         raw.keysym = key.keysym
@@ -574,7 +569,7 @@ public final class Composer {
     }
 
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
-    private func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
+    func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         if let frame, let commit = frame.pointee.commit {
             // 会话已经补好了空格（insert 不再补）；互译时进原文
             let text = String(cString: commit)
@@ -582,13 +577,7 @@ public final class Composer {
             if frame.pointee.learned != 0 {
                 onCommit?(text)
             }
-            // 选的是打字推荐的 emoji：记进最近用过（表情面板里排最前）
-            var info = WowtypeCandidateInfo()
-            info.size = UInt32(MemoryLayout<WowtypeCandidateInfo>.size)
-            if wowtype_session_last_choice(session, &info) == 0, info.kind == WOWTYPE_CAND_EMOJI,
-               let emoji = info.emoji {
-                recentEmoji.remember(String(cString: emoji))
-            }
+            // 选了 emoji（打字推荐的、表情面板的）会话记进最近用过
         }
         if let frame, Int(frame.pointee.size) >= MemoryLayout<WowtypeFrame>.size, frame.pointee.forgot != 0 {
             onForget?()
@@ -624,8 +613,8 @@ public final class Composer {
     }
 
     func refresh() {
-        if let tool {
-            drawTool(tool)
+        if openPanel != nil {
+            drawTool()
             return
         }
         if translating, let all = wowtype_session_frame(session), all.pointee.translating != 0,

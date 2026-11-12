@@ -1812,3 +1812,95 @@ fn clearing_one_session_keeps_others_request() {
     a.clear_translation();
     assert_eq!(t.cancels.get(), 1);
 }
+
+#[test]
+fn v_space_opens_toolbar() {
+    use wowtype_core::session::{Panel, Tool};
+    let mut session = with(engine());
+    let frame = type_keys(&mut session, "v<sp>");
+    assert_eq!(frame.panel, Panel::Tool);
+    assert_eq!(frame.aux, "工具栏：数字键选择，Esc 关闭");
+    assert_eq!(shown_texts(&mut session), ["剪贴板", "常用语", "符号", "表情"]);
+    // 菜单第 3 项「符号」：符号面板（网格），不搜索时列全部符号
+    let frame = type_keys(&mut session, "3");
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(session.open_panel(), Some(Tool::Emoji { symbols: true }));
+    assert!(frame.cand_count > 0);
+    // Esc 关上
+    let frame = type_keys(&mut session, "<esc>");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(session.open_panel(), None);
+    // vim 照常打字；v1+2 照常算
+    let mut session = with(engine());
+    type_keys(&mut session, "vim<sp>");
+    assert_eq!(session.open_panel(), None);
+    // 关掉工具栏：v 空格就是 v
+    let mut session = with(engine());
+    session.configure(Config { toolbar: false, ..Config::default() });
+    type_keys(&mut session, "v<sp>");
+    assert_eq!(session.open_panel(), None);
+}
+
+#[test]
+fn toolbar_clipboard_and_back() {
+    use wowtype_core::session::Tool;
+    wowtype_core::clipboard::clear();
+    // 没打开剪贴板历史：提示去设置里打开
+    let mut session = with(engine());
+    type_keys(&mut session, "v<sp>1");
+    assert_eq!(session.open_panel(), Some(Tool::Clipboard));
+    assert_eq!(session.frame(false).aux, "剪贴板：没打开，在设置里打开「记录剪贴板历史」");
+    // 退格回菜单，菜单里退格关上
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), Some(Tool::Menu));
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), None);
+    // 打开了：选一条上屏（多行的显示成 ⏎）
+    wowtype_core::clipboard::remember("第一行\n第二行");
+    let mut session = with(engine());
+    session.configure(Config { clipboard_history: true, ..Config::default() });
+    type_keys(&mut session, "v<sp>1");
+    assert_eq!(shown_texts(&mut session), ["第一行⏎第二行"]);
+    let frame = type_keys(&mut session, "1");
+    assert_eq!(frame.commit.as_deref(), Some("第一行\n第二行"));
+    assert!(!frame.learned);
+    assert_eq!(session.open_panel(), None);
+    wowtype_core::clipboard::clear();
+}
+
+#[test]
+fn emoji_panel_search_and_pick() {
+    use wowtype_core::session::{Panel, Tool};
+    // 打了一半的拼音当搜索词；字母接着搜，退格删搜索词，删空了再按就关上
+    let mut session = with(engine());
+    type_keys(&mut session, "xiao");
+    let frame = session.toggle_emoji_panel();
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(frame.preedit, "xiao");
+    assert!(!session.composing());
+    assert_eq!(session.open_panel(), Some(Tool::Emoji { symbols: false }));
+    type_keys(&mut session, "<bs><bs><bs><bs>");
+    assert_eq!(session.frame(false).preedit, "");
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), None);
+    // 英文搜索；右移、数字选光标所在行的第几个
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    type_keys(&mut session, "smile");
+    let all = shown_texts(&mut session);
+    assert!(all.len() > 2, "{all:?}");
+    let frame = type_keys(&mut session, "2");
+    assert_eq!(frame.commit.as_deref(), Some(all[1].as_str()));
+    assert_eq!(session.open_panel(), None);
+    // 带 Ctrl 的组合键：收起面板，交给应用
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    let ctrl_c = Key { modifiers: modifier::CTRL, ..Key::char('c') };
+    assert!(!session.key(&ctrl_c).handled);
+    assert_eq!(session.open_panel(), None);
+    // 面板开着时单按 Shift 不切中英文
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+}

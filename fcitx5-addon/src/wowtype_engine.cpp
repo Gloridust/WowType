@@ -56,10 +56,6 @@ constexpr unsigned int kMaxCandidates = 1000;
 constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
 constexpr int kSaveEvery = 20;
-/// 表情面板最多列这么多个（空搜索时是全部 emoji）。
-constexpr std::size_t kMaxEmoji = 2000;
-/// 记住最近用过的 emoji 个数（面板里排最前，正好三行）。
-constexpr std::size_t kRecentEmoji = 18;
 /// 打字推荐的 emoji 插在第几个候选（从 0 数）：不挤掉前两个词。
 
 bool envFlag(const char *name, bool fallback) {
@@ -375,7 +371,7 @@ public:
     }
 
     void select(fcitx::InputContext *inputContext) const override {
-        engine_->selectTool(inputContext, state_, index_);
+        engine_->choosePanelItem(inputContext, state_, index_);
     }
 
 private:
@@ -472,12 +468,8 @@ public:
     std::size_t panelCursor_ = 0;
     /// candidates_ 抄的是会话第几次重算的候选（WowtypeSessionView.generation）。
     uint64_t candGeneration_ = UINT64_MAX;
-    /// 表情面板开着：会话的原始输入是搜索词（可以为空）。
-    bool emojiPanel_ = false;
-    /// 表情面板是从工具栏的「符号」打开的：没有搜索词时列全部符号。
-    bool symbolPanel_ = false;
-    /// 工具栏开着（菜单、剪贴板、常用语）：候选在 candidates_ 里，光标是 panelCursor_。
-    WowtypeTool tool_ = WowtypeTool::None;
+    /// 开着的工具栏 / 表情面板（WOWTYPE_TOOL_*），会话管。
+    int panel() const { return wowtype_session_open_panel(session_); }
 
     /// 全部原始输入（包括已经选过词的部分）。
     std::string input() const { return wowtype_session_input(session_); }
@@ -510,9 +502,6 @@ public:
         return wowtype_session_key(session_, &raw);
     }
     void clear() {
-        emojiPanel_ = false;
-        symbolPanel_ = false;
-        tool_ = WowtypeTool::None;
         wowtype_session_reset(session_, 0);
         candidates_.clear();
         candGeneration_ = UINT64_MAX;
@@ -1146,6 +1135,8 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                           : shiftToggle_ == WowtypeShiftToggle::Off   ? WOWTYPE_SHIFT_TOGGLE_OFF
                                                                       : WOWTYPE_SHIFT_TOGGLE_BOTH;
     config.translate_mode = translateAvailable() ? 1 : 0;
+    config.toolbar = toolbar_ ? 1 : 0;
+    config.clipboard_history = clipboardHistory_ ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
@@ -1223,17 +1214,8 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         maybeSaveUserDict(true);
     }
     if (frame && frame->commit) {
-        // 选候选上屏的：emoji 记进最近用过，emoji、计算结果、日期时间不算学到了词；
-        // 原样上屏输入（回车、没候选时的空格）也记一次选词
-        WowtypeCandidateInfo info{};
-        info.size = sizeof(info);
-        const bool chosen = wowtype_session_last_choice(state->session_, &info) == 0;
-        const int kind = chosen ? info.kind : WOWTYPE_CAND_WORD;
-        const std::string emoji = chosen && info.emoji ? info.emoji : "";
+        // 学没学到词看 frame->learned；选了 emoji 由会话记进最近用过
         finishCommit(ic, state, frame);
-        if (kind == WOWTYPE_CAND_EMOJI) {
-            rememberEmoji(emoji);
-        }
         updateInputPanel(ic, state);
         return;
     }
@@ -1282,10 +1264,11 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     state->gridCursor_ = 0;
     state->panelPage_ = 0;
     state->panelCursor_ = 0;
-    if (state->remaining().empty() || !coreReady()) {
+    const bool panelOpen = state->panel() != WOWTYPE_TOOL_NONE;
+    if (!panelOpen && (state->remaining().empty() || !coreReady())) {
         return;
     }
-    // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间）由会话算，
+    // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间，或者开着的工具栏 / 表情面板的条目）由会话算，
     // fcitx5 的候选框要整个列表，抄一份过来；点候选按这份拷贝的序号调会话
     syncSession(state);
     WowtypeSessionView view{};
@@ -1320,147 +1303,6 @@ std::string WowtypeEngine::recentEmojiPath() const {
     return dir.empty() ? std::string() : dir + "/emoji-recent.txt";
 }
 
-void WowtypeEngine::rememberEmoji(const std::string &emoji) {
-    if (emoji.empty()) {
-        return;
-    }
-    recentEmoji_.erase(std::remove(recentEmoji_.begin(), recentEmoji_.end(), emoji),
-                       recentEmoji_.end());
-    recentEmoji_.insert(recentEmoji_.begin(), emoji);
-    if (recentEmoji_.size() > kRecentEmoji) {
-        recentEmoji_.resize(kRecentEmoji);
-    }
-    const std::string path = recentEmojiPath();
-    if (path.empty()) {
-        return;
-    }
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
-    std::ofstream out(path, std::ios::trunc);
-    for (const auto &item : recentEmoji_) {
-        out << item << '\n';
-    }
-}
-
-void WowtypeEngine::openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state) {
-    if (!recentEmojiLoaded_) {
-        recentEmojiLoaded_ = true;
-        std::ifstream in(recentEmojiPath());
-        std::string line;
-        while (recentEmoji_.size() < kRecentEmoji && std::getline(in, line)) {
-            if (!line.empty()) {
-                recentEmoji_.push_back(line);
-            }
-        }
-    }
-    // 打了一半的拼音拿来当搜索词（xiao + 快捷键 -> 笑相关的 emoji）
-    std::string query;
-    if (state->composing()) {
-        if (!state->hasSelections()) {
-            for (char c : state->remaining()) {
-                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-                    query.push_back(static_cast<char>(c | 0x20));
-                }
-            }
-        } else {
-            commitInput(ic, state);
-        }
-    }
-    state->clear();
-    state->emojiPanel_ = true;
-    state->append(query);
-    refreshEmojiPanel(state);
-    updateInputPanel(ic, state);
-}
-
-void WowtypeEngine::refreshEmojiPanel(WowtypeState *state) {
-    state->candidates_.clear();
-    state->gridCursor_ = 0;
-    state->expanded_ = true;
-    const std::string query = state->input();
-    auto add = [&](const std::string &text) {
-        for (const auto &have : state->candidates_) {
-            if (have.text == text) {
-                return;
-            }
-        }
-        WowtypeCandidate candidate{text, "", 0};
-        candidate.emoji = true;
-        candidate.commit = text;
-        candidate.emojiText = text;
-        state->candidates_.push_back(std::move(candidate));
-    };
-    if (query.empty() && state->symbolPanel_) {
-        if (WowtypeCandidates *all = wowtype_symbol_list()) {
-            const std::size_t count = wowtype_candidates_len(all);
-            for (std::size_t i = 0; i < count; ++i) {
-                if (const char *text = wowtype_candidates_text(all, i)) {
-                    add(text);
-                }
-            }
-            wowtype_candidates_free(all);
-        }
-        return;
-    }
-    if (query.empty()) {
-        for (const auto &emoji : recentEmoji_) {
-            add(emoji);
-        }
-    }
-    WowtypeCandidates *raw =
-        wowtype_engine_emoji_search(coreReady() ? core_ : nullptr, query.c_str(), kMaxEmoji);
-    if (!raw) {
-        return;
-    }
-    for (std::size_t i = 0; i < wowtype_candidates_len(raw); ++i) {
-        if (const char *text = wowtype_candidates_text(raw, i)) {
-            add(text);
-        }
-    }
-    wowtype_candidates_free(raw);
-}
-
-void WowtypeEngine::closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state) {
-    state->clear();
-    updateInputPanel(ic, state);
-}
-
-void WowtypeEngine::openSymbolPanel(fcitx::InputContext *ic, WowtypeState *state) {
-    state->clear();
-    state->emojiPanel_ = true;
-    state->symbolPanel_ = true;
-    refreshEmojiPanel(state);
-    updateInputPanel(ic, state);
-}
-
-namespace {
-constexpr std::size_t kToolPageSize = 9;
-const char *const kToolMenu[] = {"剪贴板", "常用语", "符号", "表情"};
-
-/// 列表里一行显示的样子：换行、制表符换成符号，太长的截断。
-std::string toolLine(const std::string &text) {
-    constexpr std::size_t kMaxChars = 40;
-    std::string out;
-    std::size_t chars = 0;
-    for (std::size_t i = 0; i < text.size() && chars < kMaxChars;) {
-        const unsigned char c = static_cast<unsigned char>(text[i]);
-        const std::size_t len = c < 0x80 ? 1 : c < 0xE0 ? 2 : c < 0xF0 ? 3 : 4;
-        if (c == '\n') {
-            out += "⏎"; // ⏎
-        } else if (c == '\t' || c == '\r') {
-            out += ' ';
-        } else {
-            out.append(text, i, len);
-        }
-        i += len;
-        if (++chars == kMaxChars && i < text.size()) {
-            out += "…";
-        }
-    }
-    return out;
-}
-} // namespace
-
 void WowtypeEngine::sampleClipboard(fcitx::InputContext *ic) {
     if (!clipboardHistory_ || !ic) {
         return;
@@ -1479,81 +1321,14 @@ void WowtypeEngine::sampleClipboard(fcitx::InputContext *ic) {
     }
 }
 
-void WowtypeEngine::openTool(fcitx::InputContext *ic, WowtypeState *state, WowtypeTool tool) {
-    state->clear();
-    state->tool_ = tool;
-    auto add = [state](const std::string &shown, const std::string &commit) {
-        WowtypeCandidate candidate{shown, "", 0};
-        candidate.commit = commit;
-        candidate.plain = true;
-        state->candidates_.push_back(std::move(candidate));
-    };
-    auto addAll = [&](WowtypeCandidates *raw, bool withCode) {
-        if (!raw) {
-            return;
-        }
-        const std::size_t count = wowtype_candidates_len(raw);
-        for (std::size_t i = 0; i < count; ++i) {
-            const char *text = wowtype_candidates_text(raw, i);
-            const char *commit = wowtype_candidates_commit(raw, i);
-            const char *code = wowtype_candidates_pinyin(raw, i);
-            if (!text || !commit) {
-                continue;
-            }
-            std::string shown = toolLine(text);
-            if (withCode && code && *code) {
-                shown = std::string(code) + "　" + shown;
-            }
-            add(shown, commit);
-        }
-        wowtype_candidates_free(raw);
-    };
-    switch (tool) {
-    case WowtypeTool::Menu:
-        for (const char *item : kToolMenu) {
-            add(item, "");
-        }
-        break;
-    case WowtypeTool::Clipboard:
-        sampleClipboard(ic);
-        addAll(wowtype_clipboard_history(), false);
-        break;
-    case WowtypeTool::Phrases:
-        if (coreReady()) {
-            addAll(wowtype_engine_custom_phrases(core_), true);
-        }
-        break;
-    case WowtypeTool::None:
-        break;
-    }
-    updateInputPanel(ic, state);
-}
-
 void WowtypeEngine::fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state) {
-    std::string aux;
-    switch (state->tool_) {
-    case WowtypeTool::Menu:
-        aux = "工具栏：数字键选择，Esc 关闭";
-        break;
-    case WowtypeTool::Clipboard:
-        aux = state->candidates_.empty()
-                  ? (clipboardHistory_ ? "剪贴板：还没有记录，复制过的文字会出现在这里"
-                                       : "剪贴板：没打开，在 WowType 设置「输入」页打开「记录剪贴板历史」")
-                  : "剪贴板：选一条上屏，退格返回";
-        break;
-    case WowtypeTool::Phrases:
-        aux = state->candidates_.empty() ? "常用语：还没有，在设置的「自定义词」里添加"
-                                         : "常用语：选一条上屏，退格返回";
-        break;
-    case WowtypeTool::None:
-        return;
-    }
-    panel.setAuxUp(fcitx::Text(aux));
-    if (state->candidates_.empty()) {
-        return;
-    }
+    // 工具栏（菜单、剪贴板、常用语）：竖排一列，一页 9 个，数字键选这一页的
+    constexpr std::size_t kToolPageSize = 9;
     const std::size_t n = state->candidates_.size();
-    state->panelCursor_ = std::min(state->panelCursor_, n - 1);
+    if (n == 0) {
+        return;
+    }
+    const std::size_t cursor = std::min(state->panelCursor_, n - 1);
     auto list = std::make_unique<fcitx::CommonCandidateList>();
     list->setLayoutHint(fcitx::CandidateLayoutHint::Vertical);
     list->setPageSize(static_cast<int>(kToolPageSize));
@@ -1562,169 +1337,24 @@ void WowtypeEngine::fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state)
         list->append<WowtypeToolWord>(this, state, i, state->candidates_[i].text);
     }
     // setGlobalCursorIndex 只设光标、不翻页：先翻到光标那一页，不然光标走到后面几页时看不到
-    list->setPage(static_cast<int>(state->panelCursor_ / kToolPageSize));
-    list->setGlobalCursorIndex(static_cast<int>(state->panelCursor_));
+    list->setPage(static_cast<int>(cursor / kToolPageSize));
+    list->setGlobalCursorIndex(static_cast<int>(cursor));
     panel.setCandidateList(std::move(list));
 }
 
-void WowtypeEngine::selectTool(fcitx::InputContext *ic, WowtypeState *state, std::size_t index) {
-    if (!ic || index >= state->candidates_.size()) {
+void WowtypeEngine::choosePanelItem(fcitx::InputContext *ic, WowtypeState *state,
+                                    std::size_t index) {
+    // 点了工具栏 / 表情面板的一项：菜单进下一层，别的上屏（会话做，表情记进最近用过）
+    if (!ic) {
         return;
     }
-    switch (state->tool_) {
-    case WowtypeTool::Menu:
-        switch (index) {
-        case 0:
-            openTool(ic, state, WowtypeTool::Clipboard);
-            break;
-        case 1:
-            openTool(ic, state, WowtypeTool::Phrases);
-            break;
-        case 2:
-            openSymbolPanel(ic, state);
-            break;
-        default:
-            state->clear();
-            openEmojiPanel(ic, state);
-            break;
-        }
-        return;
-    case WowtypeTool::Clipboard:
-    case WowtypeTool::Phrases: {
-        const std::string text = state->candidates_[index].commit;
-        state->clear();
-        if (!text.empty()) {
-            emit(ic, text);
-        }
-        updateInputPanel(ic, state);
-        return;
+    if (state->panel() == WOWTYPE_TOOL_MENU) {
+        sampleClipboard(ic);
     }
-    case WowtypeTool::None:
-        return;
+    const WowtypeFrame *frame = wowtype_session_choose(state->session_, index);
+    if (frame && frame->handled) {
+        applySessionFrame(ic, state, frame);
     }
-}
-
-bool WowtypeEngine::handleToolKey(fcitx::InputContext *ic, WowtypeState *state,
-                                  const fcitx::Key &key) {
-    const auto sym = key.sym();
-    if (key.isModifier()) {
-        return false;
-    }
-    if (key.states().testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
-                                              fcitx::KeyState::Super})) {
-        // 别的组合键（复制粘贴等）：收起工具栏，交给应用
-        state->clear();
-        updateInputPanel(ic, state);
-        return false;
-    }
-    const std::size_t n = state->candidates_.size();
-    std::size_t &cursor = state->panelCursor_;
-    if (sym == FcitxKey_Escape) {
-        state->clear();
-    } else if (sym == FcitxKey_BackSpace) {
-        if (state->tool_ == WowtypeTool::Menu) {
-            state->clear();
-        } else {
-            openTool(ic, state, WowtypeTool::Menu);
-            return true;
-        }
-    } else if (key.isDigit() && key.digit() >= 1) {
-        const std::size_t pick = cursor / kToolPageSize * kToolPageSize + key.digit() - 1;
-        if (pick < n) {
-            selectTool(ic, state, pick);
-            return true;
-        }
-    } else if (sym == FcitxKey_space || sym == FcitxKey_Return || sym == FcitxKey_KP_Enter) {
-        if (n == 0) {
-            state->clear();
-        } else {
-            selectTool(ic, state, std::min(cursor, n - 1));
-            return true;
-        }
-    } else if (n > 0 && (sym == FcitxKey_Down || sym == FcitxKey_Right)) {
-        cursor = std::min(cursor + 1, n - 1);
-    } else if (n > 0 && (sym == FcitxKey_Up || sym == FcitxKey_Left)) {
-        cursor = cursor == 0 ? 0 : cursor - 1;
-    } else if (n > 0 && (sym == FcitxKey_Page_Down || sym == FcitxKey_equal ||
-                         sym == FcitxKey_period || sym == FcitxKey_bracketright)) {
-        const std::size_t next = cursor / kToolPageSize * kToolPageSize + kToolPageSize;
-        if (next < n) {
-            cursor = next;
-        }
-    } else if (n > 0 && (sym == FcitxKey_Page_Up || sym == FcitxKey_minus ||
-                         sym == FcitxKey_comma || sym == FcitxKey_bracketleft)) {
-        const std::size_t page = cursor / kToolPageSize * kToolPageSize;
-        cursor = page >= kToolPageSize ? page - kToolPageSize : 0;
-    }
-    // 其他键吃掉，免得打进应用
-    updateInputPanel(ic, state);
-    return true;
-}
-
-bool WowtypeEngine::handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
-                                        const fcitx::Key &key) {
-    const auto sym = key.sym();
-    if (key.states().test(fcitx::KeyState::Ctrl) || key.states().test(fcitx::KeyState::Alt) ||
-        key.states().test(fcitx::KeyState::Super)) {
-        // 别的组合键（复制粘贴等）：收起面板，交给应用
-        closeEmojiPanel(ic, state);
-        return false;
-    }
-    if (sym == FcitxKey_Escape) {
-        closeEmojiPanel(ic, state);
-        return true;
-    }
-    if (sym == FcitxKey_BackSpace) {
-        if (!state->composing()) {
-            closeEmojiPanel(ic, state);
-            return true;
-        }
-        // 搜索词删一个字（删空时只清编辑区，面板还开着）。不走会话的退格：
-        // 会话会把搜索词当拼音去算候选
-        std::string query = state->input();
-        popUtf8(query);
-        state->setInput(query);
-    } else if ((sym >= FcitxKey_a && sym <= FcitxKey_z) ||
-               (sym >= FcitxKey_A && sym <= FcitxKey_Z)) {
-        state->append(std::string(1, static_cast<char>(sym | 0x20)));
-    } else if (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter || sym == FcitxKey_space) {
-        if (state->candidates_.empty()) {
-            closeEmojiPanel(ic, state);
-        } else {
-            commitEmoji(ic, state, std::min(state->gridCursor_, state->candidates_.size() - 1));
-        }
-        return true;
-    } else if (sym == FcitxKey_Up && state->gridCursor_ < kGridCols) {
-        return true; // 第一行再往上：不收起
-    } else if (!state->candidates_.empty() &&
-               (key.isDigit() || key.isCursorMove() || sym == FcitxKey_minus ||
-                sym == FcitxKey_equal)) {
-        handleGridKey(ic, state, key);
-        return true;
-    } else {
-        return true; // 其他键吃掉，免得打进应用
-    }
-    refreshEmojiPanel(state);
-    updateInputPanel(ic, state);
-    return true;
-}
-
-void WowtypeEngine::commitEmoji(fcitx::InputContext *ic, WowtypeState *state,
-                                std::size_t index) {
-    if (!ic || index >= state->candidates_.size()) {
-        return;
-    }
-    const WowtypeCandidate chosen = state->candidates_[index];
-    const std::string text = state->selectedText() + chosen.commit;
-    if (!text.empty()) {
-        emit(ic, text);
-        rememberContext(text);
-    }
-    if (!state->symbolPanel_) {
-        rememberEmoji(chosen.emojiText);
-    }
-    state->clear();
-    updateInputPanel(ic, state);
 }
 
 /// 还没选词的拼音，按第一个用完它的候选分好音节（hengxiang -> heng'xiang）。
@@ -1761,32 +1391,24 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
     auto &panel = ic->inputPanel();
     panel.reset();
 
-    if (state->emojiPanel_) {
-        const std::string query = state->input();
+    if (const int open = state->panel(); open != WOWTYPE_TOOL_NONE) {
+        // 工具栏 / 表情面板：条目、光标、提示、搜索词都是会话给的
+        syncView(state);
+        const WowtypeFrame *frame = wowtype_session_frame(state->session_);
         fcitx::Text preedit;
-        preedit.append(query, fcitx::TextFormatFlag::Underline);
+        preedit.append(frame && frame->preedit ? frame->preedit : "", fcitx::TextFormatFlag::Underline);
         preedit.setCursor(static_cast<int>(preedit.textLength()));
         sendPreedit(ic, preedit);
-        std::string aux = state->symbolPanel_ ? "符号" : "表情";
-        if (query.empty()) {
-            aux += "：打拼音或英文搜索，Esc 关闭";
-        } else if (state->candidates_.empty()) {
-            aux += "：没找到「" + query + "」";
-        } else {
-            aux += "：" + query;
+        if (frame && frame->aux) {
+            panel.setAuxUp(fcitx::Text(frame->aux));
         }
-        panel.setAuxUp(fcitx::Text(aux));
         if (!state->candidates_.empty()) {
-            fillGridPanel(panel, state);
+            if (open == WOWTYPE_TOOL_EMOJI || open == WOWTYPE_TOOL_SYMBOLS) {
+                fillGridPanel(panel, state);
+            } else {
+                fillToolPanel(panel, state);
+            }
         }
-        ic->updatePreedit();
-        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
-        return;
-    }
-
-    if (state->tool_ != WowtypeTool::None) {
-        sendPreedit(ic, fcitx::Text());
-        fillToolPanel(panel, state);
         ic->updatePreedit();
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
         return;
@@ -1997,9 +1619,8 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     if (!ic || !state || index >= state->candidates_.size()) {
         return;
     }
-    if (state->emojiPanel_) {
-        // 表情面板的候选还在外壳
-        commitEmoji(ic, state, index);
+    if (state->panel() != WOWTYPE_TOOL_NONE) {
+        choosePanelItem(ic, state, index);
         return;
     }
     // 选词、上屏、学习由会话做；外壳的候选是会话候选的一份拷贝，序号一样
@@ -2026,9 +1647,6 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
     }
     if (frame->commit) {
         finishCommit(ic, state, frame);
-        if (chosen.emoji) {
-            rememberEmoji(chosen.emojiText);
-        }
     } else {
         // 句首词进了已选栈，剩下的拼音继续选
         refreshCandidates(state);
@@ -2069,23 +1687,24 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
 
 
     if (isEmojiKey(key)) {
-        if (state->emojiPanel_) {
-            closeEmojiPanel(ic, state);
-        } else {
-            openEmojiPanel(ic, state);
-        }
+        // 表情面板快捷键：开着就关上；打了一半的拼音当搜索词（会话做）
+        coreReady();
+        syncSession(state);
+        applySessionFrame(ic, state, wowtype_session_toggle_emoji_panel(state->session_));
         event.filterAndAccept();
         return;
     }
-    if (state->emojiPanel_) {
-        if (handleEmojiPanelKey(ic, state, key)) {
-            event.filterAndAccept();
+    if (state->panel() != WOWTYPE_TOOL_NONE) {
+        // 工具栏 / 表情面板开着：按键都归它（会话管）；带 Ctrl / Alt / Super 的收起面板、交给应用
+        if (state->panel() == WOWTYPE_TOOL_MENU) {
+            sampleClipboard(ic); // 下一步可能进「剪贴板」页
         }
-        return;
-    }
-    if (state->tool_ != WowtypeTool::None) {
-        if (handleToolKey(ic, state, key)) {
+        const WowtypeFrame *frame = sessionKey(ic, state, key);
+        if (frame && frame->handled) {
+            applySessionFrame(ic, state, frame);
             event.filterAndAccept();
+        } else {
+            updateInputPanel(ic, state);
         }
         return;
     }
@@ -2130,13 +1749,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     }
 
     if (state->composing()) {
-        // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字）
-        // （互译模式下不开：工具栏选的字会绕过攒着的原文直接上屏）
-        if (sym == FcitxKey_space && !state->expanded_ && toolbar_ && !shuangpin_ &&
-            !translating(ic) && state->input() == "v" && !state->hasSelections()) {
-            openTool(ic, state, WowtypeTool::Menu);
-            event.filterAndAccept();
-            return;
+        // 只打了一个 v 再按空格打开工具栏：会话做（剪贴板页要的历史先读一次）
+        if (sym == FcitxKey_space && state->input() == "v") {
+            sampleClipboard(ic);
         }
         // 字母、隔音符、退格、Esc、空格、回车、数字、分号引号选词、V 模式算式、双拼分号、
         // 翻页、移动候选、展开面板都由会话处理。fcitx5 全局设置里的翻页、移动候选热键
@@ -2187,6 +1802,8 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     state->clear();
     clearTranslation(state);
     coreReady();
+    // 最近用过的 emoji 在核心里（所有输入框共用），存在 ~/.local/share/wowtype/emoji-recent.txt
+    wowtype_recent_emoji_path(recentEmojiPath().c_str());
     sampleClipboard(ic);
     maybeCheckUpdate();
 }
@@ -2276,9 +1893,6 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
     // 按住不放的自动重复不重新计时（key() 规整时去掉了 Repeat，要看 rawKey）
     raw.repeat = event.rawKey().states().test(fcitx::KeyState::Repeat) ? 1 : 0;
     raw.time_ms = static_cast<uint64_t>(fcitx::now(CLOCK_MONOTONIC) / 1000);
-    if (state->emojiPanel_ || state->tool_ != WowtypeTool::None) {
-        raw.hints |= WOWTYPE_KEY_HINT_PANEL_OPEN;
-    }
     const bool wasExpanded = state->expanded_;
     const WowtypeFrame *frame = wowtype_session_key(state->session_, &raw);
     if (!frame || !frame->mode_changed) {

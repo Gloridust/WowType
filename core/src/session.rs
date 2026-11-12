@@ -331,6 +331,8 @@ pub struct Frame {
     pub translate: Option<TranslateView>,
     /// 大于 0：过这么久（毫秒）调一次 [`Session::tick`]（等译文、等发请求）。
     pub wake_after_ms: u32,
+    /// 候选框上方的提示（工具栏、表情面板），没有是空串。
+    pub aux: String,
 }
 
 /// 候选框的样子。
@@ -341,6 +343,37 @@ pub enum Panel {
     Normal,
     /// 横排时按下键展开的面板：[`GRID_COLS`] 列，一屏 [`GRID_ROWS`] 行，光标所在行标 1–6。
     Expanded,
+    /// 表情面板（表情快捷键、工具栏的「符号」「表情」）：和展开面板一样的网格，编辑区是搜索词。
+    Emoji,
+    /// v + 空格的工具栏（菜单、剪贴板、常用语）：竖排一列，一页 [`TOOL_PAGE`] 个。
+    Tool,
+}
+
+/// 工具栏一页几个。
+pub const TOOL_PAGE: usize = 9;
+/// 表情面板最多列这么多个（不搜索时是全部 emoji）。
+const MAX_EMOJI: usize = 2000;
+const TOOL_MENU: [&str; 4] = ["剪贴板", "常用语", "符号", "表情"];
+
+/// 开着的面板（[`Session::open_tool`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// v + 空格的菜单：剪贴板、常用语、符号、表情
+    Menu,
+    Clipboard,
+    Phrases,
+    /// 表情面板；symbols 是从菜单「符号」进来的（不搜索时列全部符号，选的不记进最近用过）
+    Emoji { symbols: bool },
+}
+
+#[derive(Clone, Debug)]
+struct ToolState {
+    tool: Tool,
+    items: Vec<Candidate>,
+    /// 光标在 items 里的位置（不分页）
+    cursor: usize,
+    /// 表情面板的搜索词（打拼音或英文）
+    query: String,
 }
 
 /// 展开面板一行几个候选。
@@ -413,6 +446,10 @@ pub struct Config {
     pub shift_tap_ms: u32,
     /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
     pub translate_mode: bool,
+    /// 只打一个 v 再按空格打开工具栏（双拼、互译时不开）。
+    pub toolbar: bool,
+    /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
+    pub clipboard_history: bool,
 }
 
 impl Default for Config {
@@ -431,6 +468,8 @@ impl Default for Config {
             shift_toggle: ShiftToggle::Both,
             shift_tap_ms: 500,
             translate_mode: false,
+            toolbar: true,
+            clipboard_history: false,
         }
     }
 }
@@ -531,6 +570,8 @@ pub struct Session<'e> {
     shift: ShiftTap,
     translator: Option<&'e dyn TranslateBackend>,
     translation: Translation,
+    /// 开着的工具栏 / 表情面板；None 是没开。
+    tool: Option<ToolState>,
     /// 最近一次按键或 tick 的时刻（毫秒）。
     now_ms: u64,
 }
@@ -564,6 +605,7 @@ impl Default for Session<'_> {
             shift: ShiftTap::default(),
             translator: None,
             translation: Translation::default(),
+            tool: None,
             now_ms: 0,
         }
     }
@@ -668,6 +710,9 @@ impl<'e> Session<'e> {
     fn handle_key(&mut self, key: &Key) -> bool {
         if key.release {
             return false;
+        }
+        if self.tool.is_some() {
+            return self.tool_key(key);
         }
         if self.mode == Mode::English && !self.composing() {
             return self.english_key(key);
@@ -921,6 +966,390 @@ impl<'e> Session<'e> {
         Some((view, wake))
     }
 
+    /// 开着的面板，None 是没开。
+    pub fn open_panel(&self) -> Option<Tool> {
+        self.tool.as_ref().map(|t| t.tool)
+    }
+
+    /// 打开工具栏的一页或表情面板（外壳的菜单、按钮用；v + 空格会话自己开）。打到一半的丢掉。
+    pub fn open_tool(&mut self, tool: Tool) -> Frame {
+        self.last_choice = None;
+        self.open_tool_now(tool, String::new());
+        self.frame(true)
+    }
+
+    /// 关上工具栏 / 表情面板。
+    pub fn close_panel(&mut self) -> Frame {
+        self.last_choice = None;
+        self.close_tool();
+        self.frame(true)
+    }
+
+    /// 表情面板快捷键：开着就关上。打了一半的拼音拿来当搜索词（xiao + 快捷键 → 笑相关的 emoji）；
+    /// 已经选了词的，先把打的原样上屏（和回车一样）。
+    pub fn toggle_emoji_panel(&mut self) -> Frame {
+        self.last_choice = None;
+        if matches!(self.open_panel(), Some(Tool::Emoji { .. })) {
+            self.close_tool();
+            return self.frame(true);
+        }
+        let mut query = String::new();
+        if self.composing() {
+            if self.selections.is_empty() {
+                query = self
+                    .remaining()
+                    .chars()
+                    .filter(char::is_ascii_alphabetic)
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect();
+                self.clear();
+            } else {
+                self.commit_input_now();
+            }
+        }
+        self.open_tool_now(Tool::Emoji { symbols: false }, query);
+        self.frame(true)
+    }
+
+    fn opens_toolbar(&self) -> bool {
+        self.config.toolbar
+            && !self.shuangpin()
+            && !self.translating()
+            && !self.expanded
+            && self.input == "v"
+            && self.selections.is_empty()
+    }
+
+    fn open_tool_now(&mut self, tool: Tool, query: String) {
+        if self.composing() {
+            self.clear();
+        }
+        let mut state = ToolState {
+            tool,
+            items: Vec::new(),
+            cursor: 0,
+            query,
+        };
+        let item = |shown: String, commit: String| Candidate {
+            text: shown,
+            commit,
+            kind: CandidateKind::Plain,
+            ..Candidate::default()
+        };
+        match tool {
+            Tool::Menu => {
+                state.items = TOOL_MENU.iter().map(|m| item((*m).to_owned(), String::new())).collect();
+            }
+            Tool::Clipboard => {
+                if self.config.clipboard_history {
+                    state.items = crate::clipboard::history()
+                        .into_iter()
+                        .map(|text| item(tool_line(&text), text))
+                        .collect();
+                }
+            }
+            Tool::Phrases => {
+                if let Some(engine) = self.engine {
+                    // 自定义词按 custom.tsv 的顺序：「编码　词」
+                    state.items = engine
+                        .lexicon()
+                        .custom_phrases()
+                        .into_iter()
+                        .map(|(code, word)| {
+                            let shown = if code.is_empty() {
+                                tool_line(&word)
+                            } else {
+                                format!("{code}\u{3000}{}", tool_line(&word))
+                            };
+                            item(shown, crate::unescape_custom(&word))
+                        })
+                        .collect();
+                }
+            }
+            Tool::Emoji { .. } => {}
+        }
+        self.tool = Some(state);
+        if matches!(tool, Tool::Emoji { .. }) {
+            self.search_emoji();
+        }
+        self.generation += 1;
+    }
+
+    fn close_tool(&mut self) {
+        if self.tool.take().is_some() {
+            self.generation += 1;
+        }
+    }
+
+    /// 按搜索词重新列表情面板，光标回到第一个。
+    fn search_emoji(&mut self) {
+        let engine = self.engine;
+        let Some(state) = self.tool.as_mut() else {
+            return;
+        };
+        let Tool::Emoji { symbols } = state.tool else {
+            return;
+        };
+        let mut texts: Vec<String> = Vec::new();
+        let mut add = |text: String| {
+            if !texts.contains(&text) {
+                texts.push(text);
+            }
+        };
+        if state.query.is_empty() && symbols {
+            crate::symbols::SYMBOLS.iter().for_each(|s| add(s.text.to_owned()));
+        } else {
+            if state.query.is_empty() {
+                crate::recent_emoji::list().into_iter().for_each(&mut add);
+            }
+            // 拼音（经引擎转成中文词）、英文、符号名一起找；引擎还没载入好时只按英文和符号名
+            crate::emoji::panel_search(engine, &state.query, MAX_EMOJI)
+                .into_iter()
+                .for_each(&mut add);
+        }
+        state.items = texts
+            .into_iter()
+            .map(|text| Candidate {
+                commit: text.clone(),
+                emoji: text.clone(),
+                text,
+                kind: CandidateKind::Emoji,
+                ..Candidate::default()
+            })
+            .collect();
+        state.cursor = 0;
+        self.generation += 1;
+    }
+
+    /// 工具栏或表情面板开着时的按键。返回 false 的只有修饰键本身和带 Ctrl / Alt / Super 的组合键
+    /// （收起面板，交给应用：复制粘贴等）。别的键都吃掉，免得打进应用。
+    fn tool_key(&mut self, key: &Key) -> bool {
+        if is_modifier_keysym(key.keysym) {
+            return false;
+        }
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            self.close_tool();
+            return false;
+        }
+        let Some(state) = self.tool.clone() else {
+            return false;
+        };
+        if matches!(state.tool, Tool::Emoji { .. }) {
+            self.emoji_key(key, state);
+        } else {
+            self.list_key(key, state);
+        }
+        true
+    }
+
+    fn list_key(&mut self, key: &Key, state: ToolState) {
+        let n = state.items.len();
+        let page = state.cursor / TOOL_PAGE * TOOL_PAGE;
+        let mut cursor = state.cursor;
+        match key.keysym {
+            keysym::ESCAPE => return self.close_tool(),
+            keysym::BACKSPACE => {
+                // 退格返回上一层，在菜单里就关上
+                if state.tool == Tool::Menu {
+                    self.close_tool();
+                } else {
+                    self.open_tool_now(Tool::Menu, String::new());
+                }
+                return;
+            }
+            keysym::SPACE | keysym::RETURN | keysym::KP_ENTER => {
+                if n == 0 {
+                    self.close_tool();
+                } else {
+                    self.select_tool(cursor.min(n - 1));
+                }
+                return;
+            }
+            keysym::DOWN | keysym::RIGHT if n > 0 => cursor = (cursor + 1).min(n - 1),
+            keysym::UP | keysym::LEFT => cursor = cursor.saturating_sub(1),
+            keysym::PAGE_DOWN | keysym::EQUAL | keysym::PERIOD | keysym::BRACKET_RIGHT => {
+                if page + TOOL_PAGE < n {
+                    cursor = page + TOOL_PAGE;
+                }
+            }
+            keysym::PAGE_UP | keysym::MINUS | keysym::COMMA | keysym::BRACKET_LEFT => {
+                cursor = page.saturating_sub(TOOL_PAGE);
+            }
+            sym => {
+                if let Some(d) = digit_of(sym).filter(|&d| d >= 1) {
+                    if page + d - 1 < n {
+                        self.select_tool(page + d - 1);
+                    }
+                }
+                return;
+            }
+        }
+        if let Some(state) = self.tool.as_mut() {
+            state.cursor = cursor;
+        }
+    }
+
+    fn emoji_key(&mut self, key: &Key, state: ToolState) {
+        let n = state.items.len();
+        let sym = key.keysym;
+        match sym {
+            keysym::ESCAPE => return self.close_tool(),
+            keysym::BACKSPACE => {
+                // 删搜索词的最后一个字母，删空了再按就关上
+                if state.query.is_empty() {
+                    return self.close_tool();
+                }
+                if let Some(state) = self.tool.as_mut() {
+                    state.query.pop();
+                }
+                return self.search_emoji();
+            }
+            keysym::SPACE | keysym::RETURN | keysym::KP_ENTER => {
+                if n == 0 {
+                    self.close_tool();
+                } else {
+                    self.commit_tool(state.cursor.min(n - 1));
+                }
+                return;
+            }
+            _ => {}
+        }
+        if let Some(c) = char::from_u32(sym).filter(char::is_ascii_alphabetic) {
+            if let Some(state) = self.tool.as_mut() {
+                state.query.push(c.to_ascii_lowercase());
+            }
+            return self.search_emoji();
+        }
+        if n == 0 {
+            return;
+        }
+        let screen = GRID_SCREEN;
+        let mut cursor = state.cursor;
+        match sym {
+            keysym::LEFT => cursor = cursor.saturating_sub(1),
+            keysym::RIGHT => cursor = (cursor + 1).min(n - 1),
+            // 第一行再往上：不动（不像展开面板那样收起）
+            keysym::UP if cursor >= GRID_COLS => cursor -= GRID_COLS,
+            keysym::UP => {}
+            keysym::DOWN => {
+                if cursor + GRID_COLS < n {
+                    cursor += GRID_COLS;
+                } else if cursor / GRID_COLS + 1 < n.div_ceil(GRID_COLS) {
+                    cursor = n - 1; // 最后一行不满时落到最后一个
+                }
+            }
+            keysym::PAGE_DOWN | keysym::EQUAL => cursor = (cursor + screen).min(n - 1),
+            keysym::PAGE_UP | keysym::MINUS => {
+                cursor = if cursor >= screen {
+                    cursor - screen
+                } else {
+                    cursor % GRID_COLS
+                };
+            }
+            sym => {
+                if let Some(d) = digit_of(sym).filter(|d| (1..=GRID_COLS).contains(d)) {
+                    let index = cursor / GRID_COLS * GRID_COLS + d - 1;
+                    if index < n {
+                        self.commit_tool(index);
+                    }
+                }
+                return;
+            }
+        }
+        if let Some(state) = self.tool.as_mut() {
+            state.cursor = cursor;
+        }
+    }
+
+    /// 选工具栏里的第 index 项：菜单进下一层，剪贴板、常用语、表情上屏。
+    fn select_tool(&mut self, index: usize) {
+        let Some(state) = self.tool.as_ref() else {
+            return;
+        };
+        if index >= state.items.len() {
+            return;
+        }
+        if state.tool != Tool::Menu {
+            return self.commit_tool(index);
+        }
+        let next = match index {
+            0 => Tool::Clipboard,
+            1 => Tool::Phrases,
+            2 => Tool::Emoji { symbols: true },
+            _ => Tool::Emoji { symbols: false },
+        };
+        self.open_tool_now(next, String::new());
+    }
+
+    fn commit_tool(&mut self, index: usize) {
+        let Some(state) = self.tool.take() else {
+            return;
+        };
+        self.generation += 1;
+        let Some(item) = state.items.get(index) else {
+            return;
+        };
+        let text = item.commit.clone();
+        self.emit(&text);
+        if state.tool == (Tool::Emoji { symbols: false }) {
+            crate::recent_emoji::remember(&text);
+        }
+        self.last_choice = Some(item.clone());
+    }
+
+    /// 工具栏 / 表情面板开着时的 frame：候选是面板的条目，编辑区是搜索词。
+    fn tool_frame(&self, frame: &mut Frame) {
+        let Some(state) = &self.tool else {
+            return;
+        };
+        let n = state.items.len();
+        let emoji = matches!(state.tool, Tool::Emoji { .. });
+        let size = if emoji { GRID_SCREEN } else { TOOL_PAGE };
+        let cursor = state.cursor.min(n.saturating_sub(1));
+        let start = cursor / size * size;
+        frame.panel = if emoji { Panel::Emoji } else { Panel::Tool };
+        frame.cand_start = start;
+        frame.cand_count = n.saturating_sub(start).min(size);
+        frame.cand_cursor = (n > 0).then_some(cursor - start);
+        frame.has_prev = start > 0;
+        frame.has_next = start + size < n;
+        frame.preedit = state.query.clone();
+        frame.preedit_cursor = state.query.len();
+        frame.aux = self.tool_hint(state);
+    }
+
+    fn tool_hint(&self, state: &ToolState) -> String {
+        let empty = state.items.is_empty();
+        match state.tool {
+            Tool::Menu => "工具栏：数字键选择，Esc 关闭".to_owned(),
+            Tool::Clipboard if !empty => "剪贴板：选一条上屏，退格返回".to_owned(),
+            Tool::Clipboard if self.config.clipboard_history => {
+                "剪贴板：还没有记录，复制过的文字会出现在这里".to_owned()
+            }
+            Tool::Clipboard => "剪贴板：没打开，在设置里打开「记录剪贴板历史」".to_owned(),
+            Tool::Phrases if empty => "常用语：还没有，在设置的「自定义词」里添加".to_owned(),
+            Tool::Phrases => "常用语：选一条上屏，退格返回".to_owned(),
+            Tool::Emoji { symbols } => {
+                let name = if symbols { "符号" } else { "表情" };
+                if state.query.is_empty() {
+                    format!("{name}：打拼音或英文搜索，Esc 关闭")
+                } else if empty {
+                    format!("{name}：没找到「{}」", state.query)
+                } else {
+                    format!("{name}：{}", state.query)
+                }
+            }
+        }
+    }
+
+    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，否则是候选（C 接口读这个）。
+    pub fn display_candidates(&mut self) -> &[Candidate] {
+        if self.tool.is_some() {
+            return self.tool.as_ref().map_or(&[], |t| t.items.as_slice());
+        }
+        self.candidates()
+    }
+
     /// 外壳要上屏一段与拼音无关的字（工具栏、表情面板、语音识别结果）：互译时进原文，
     /// 否则照会话的规矩（补空格、记上文）放进 frame 的 commit。prev_char 是应用里光标前的字（读不到 None）。
     pub fn commit_text(&mut self, text: &str, prev_char: Option<char>) -> Frame {
@@ -989,7 +1418,8 @@ impl<'e> Session<'e> {
                 ShiftToggle::Off => false,
             };
             let other = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0;
-            if wanted && !other && key.hints & key_hints::PANEL_OPEN == 0 {
+            let panel = key.hints & key_hints::PANEL_OPEN != 0 || self.tool.is_some();
+            if wanted && !other && !panel {
                 let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
                 if !held {
                     self.shift.down = Some((sym, key.code, key.time_ms));
@@ -1169,6 +1599,12 @@ impl<'e> Session<'e> {
             }
             keysym::ESCAPE => {
                 self.clear();
+                return Some(true);
+            }
+            keysym::SPACE if self.opens_toolbar() => {
+                // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字，v1+2*3 照常算算式）
+                self.clear();
+                self.open_tool(Tool::Menu);
                 return Some(true);
             }
             keysym::SPACE => return Some(self.commit_current()),
@@ -1591,10 +2027,15 @@ impl<'e> Session<'e> {
             mode_changed: std::mem::take(&mut self.mode_changed),
             translate: None,
             wake_after_ms: 0,
+            aux: String::new(),
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()
         };
+        if self.tool.is_some() {
+            self.tool_frame(&mut frame);
+            return frame;
+        }
         if let Some((view, wake)) = self.translate_view() {
             frame.translate = Some(view);
             frame.wake_after_ms = wake;
@@ -1624,6 +2065,15 @@ impl<'e> Session<'e> {
 
     /// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
     pub fn view(&mut self) -> View {
+        if let Some(state) = &self.tool {
+            let emoji = matches!(state.tool, Tool::Emoji { .. });
+            return View {
+                page: state.cursor / TOOL_PAGE,
+                cursor: state.cursor,
+                expanded: emoji,
+                grid_cursor: state.cursor,
+            };
+        }
         self.candidates();
         View {
             page: self.page,
@@ -1636,10 +2086,13 @@ impl<'e> Session<'e> {
     /// 候选框里显示的候选（一页，或展开面板的一屏）。
     pub fn shown(&mut self) -> &[Candidate] {
         let frame = self.frame(false);
-        // frame 会取走要上屏的字；这里只是看，放回去
+        // frame 会取走要上屏的字和几个标记；这里只是看，放回去
         self.pending = frame.commit;
         self.forgot = frame.forgot;
-        &self.candidates[frame.cand_start..frame.cand_start + frame.cand_count]
+        self.learned = frame.learned;
+        self.mode_changed = frame.mode_changed;
+        let (start, count) = (frame.cand_start, frame.cand_count);
+        &self.display_candidates()[start..start + count]
     }
 
     /// 上一次调用上屏的字是选哪个候选来的；原样上屏输入、没上屏是 None。
@@ -1837,6 +2290,13 @@ impl<'e> Session<'e> {
     /// 序号不对时什么也不做（handled = false）。过渡：外壳的鼠标点候选、展开面板点一行用。
     pub fn choose(&mut self, index: usize) -> Frame {
         self.last_choice = None;
+        if self.tool.is_some() {
+            let ok = self.tool.as_ref().is_some_and(|t| index < t.items.len());
+            if ok {
+                self.select_tool(index);
+            }
+            return self.frame(ok);
+        }
         let handled = self.choose_now(index);
         self.frame(handled)
     }
@@ -1844,10 +2304,15 @@ impl<'e> Session<'e> {
     /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
     pub fn select(&mut self, index: usize) -> Frame {
         self.last_choice = None;
+        if self.tool.is_some() {
+            let shown = self.frame(false);
+            return self.choose(shown.cand_start + index);
+        }
         let shown = self.frame(false);
         self.pending = shown.commit;
         self.forgot = shown.forgot;
         self.learned = shown.learned;
+        self.mode_changed = shown.mode_changed;
         let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
         self.frame(handled)
     }
@@ -1861,6 +2326,8 @@ impl<'e> Session<'e> {
             CandidateKind::Emoji => {
                 let text = self.selected_text() + &chosen.commit;
                 self.finish(text);
+                // 打字推荐的 emoji：记进最近用过（表情面板里排最前）
+                crate::recent_emoji::remember(&chosen.emoji);
                 self.last_choice = Some(chosen);
             }
             CandidateKind::Plain if chosen.consumed >= remaining => {
@@ -2024,6 +2491,33 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
 fn char_tail(text: &str, max_chars: usize) -> String {
     let skip = text.chars().count().saturating_sub(max_chars);
     text.chars().skip(skip).collect()
+}
+
+/// 工具栏列表里一行显示的样子：换行显示成 ⏎，制表符换成空格，太长的截断（40 个字）。
+fn tool_line(text: &str) -> String {
+    const MAX: usize = 40;
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == MAX {
+            out.push('…');
+            break;
+        }
+        match c {
+            '\n' => out.push('⏎'),
+            '\t' | '\r' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 数字键（主键盘、小键盘）的数字。
+fn digit_of(sym: u32) -> Option<usize> {
+    match sym {
+        0x30..=0x39 => Some((sym - 0x30) as usize),
+        keysym::KP_0..=0xffb9 => Some((sym - keysym::KP_0) as usize),
+        _ => None,
+    }
 }
 
 /// 句末（。！？…. ! ? 换行）：原文打到这里立刻发翻译请求。

@@ -21,6 +21,7 @@ pub mod lm;
 pub mod nnlm;
 pub mod preedit;
 pub mod rank;
+pub mod recent_emoji;
 pub mod session;
 pub mod session_ffi;
 pub mod shuangpin;

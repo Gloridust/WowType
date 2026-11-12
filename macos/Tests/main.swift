@@ -862,7 +862,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("2"))
     check(c.openPanel == .phrases, "2 进常用语")
-    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在菜单「编辑自定义词」里添加",
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在设置的「自定义词」里添加",
           "没有自定义词时只有提示", client.page?.aux ?? "nil")
     _ = c.handle(.key(Keysym.backspace))
     check(c.openPanel == .menu, "退格返回菜单")
@@ -956,7 +956,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("1"))
     check(!sampled && client.page?.texts.isEmpty == true
-              && client.page?.aux == "剪贴板：没打开，在设置（wowtype.conf）里写 ClipboardHistory=True",
+              && client.page?.aux == "剪贴板：没打开，在设置里打开「记录剪贴板历史」",
           "剪贴板历史默认关：不取、不列", client.page?.aux ?? "nil")
     _ = c.handle(.char(" "))
     check(c.openPanel == nil && client.committed.isEmpty, "空列表按空格关上")
