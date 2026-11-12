@@ -662,8 +662,8 @@ impl<'e> Session<'e> {
         self.switch_mode(next);
     }
 
-    /// Shift 的按下、松开，以及打断单按的别的键。Some：这是 Shift 键（handled 是里面的值，
-    /// 单按切换了模式时为 true）；None：不是 Shift，接着照常处理。
+    /// Shift 的按下、松开，以及打断单按的别的键。Some：处理完了（handled 是里面的值，
+    /// 单按切换了模式时为 true）；None：接着照常处理（Shift 的按下也接着处理：展开面板要收起）。
     ///
     /// 和以前 Linux 外壳的规矩一样：按下时带着 Ctrl / Alt / Super、外壳开着面板时不算；
     /// 按住不放的自动重复不重新计时；松开时按键码认（没有键码时按符号）；
@@ -691,7 +691,7 @@ impl<'e> Session<'e> {
             } else {
                 self.shift.down = None;
             }
-            return Some(false);
+            return None;
         }
         let Some((down_sym, down_code, down_at)) = self.shift.down else {
             return is_shift.then_some(false);
