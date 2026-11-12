@@ -61,12 +61,14 @@ for lproj in macos/Resources/*.lproj; do
 done
 cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$res/"
 [[ -f "$DATA/words.lm" ]] && cp "$DATA/words.lm" "$res/"
+# 简繁对照表（设置里 Traditional=True 时用），和 Linux 包里的 /usr/share/wowtype/s2t.tsv 是同一份
+cp "${WOWTYPE_S2T:-core/data/s2t.tsv}" "$res/s2t.tsv"
 [[ -f "$DATA/LICENSE" ]] && cp "$DATA/LICENSE" "$res/DATA-LICENSE"
 [[ -f "$DATA/SOURCE.txt" ]] && cp "$DATA/SOURCE.txt" "$res/DATA-SOURCE.txt"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.tiff|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.tiff|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2

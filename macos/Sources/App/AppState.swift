@@ -1,19 +1,38 @@
-// 进程里只有一份的东西：词库（后台载入）、数据目录、定时保存学习数据。
+// 进程里只有一份的东西：词库（后台载入）、设置、数据目录、定时保存学习数据。
 
 import AppKit
 
 final class AppState {
     static let shared = AppState()
 
-    /// 后台载入完成前是 nil；输入控制器每次按键时来取。
+    /// 后台载入完成前是 nil；输入控制器每次按键时来取（换词库时换成新的）。
     private(set) var engine: Engine?
     private var loading = false
+    /// 载入途中设置又换了词库：载完再看一次
+    private var reloadAfterLoading = false
     private var commitsSinceSave = 0
     /// 每上屏这么多次存一次（系统可能随时杀掉输入法进程，和 fcitx5 外壳一样）。
     private let saveEvery = 20
 
+    /// wowtype.conf 的内容（键名同 Linux）。改了以后 configGeneration 加一，输入控制器照着重新设置会话。
+    private(set) var config = WowtypeConfig()
+    private(set) var configGeneration = 0
+    /// 正在用的词库文件，和它载入时的 (大小, 修改时间)
+    private var lexiconInUse: String?
+    private var lexiconStamp: FileStamp?
+    private var configStamp: FileStamp?
+    private var customStamp: FileStamp?
+    private var lastCheck: TimeInterval = 0
+    private var missingLexiconLogged: String?
+
     // 第一次要画候选框时才建窗口（自检时没有图形界面）
-    lazy var candidatePanel = CandidatePanel()
+    private var panelCreated = false
+    lazy var candidatePanel: CandidatePanel = {
+        panelCreated = true
+        let panel = CandidatePanel()
+        panel.fontSize = CGFloat(config.candidateFontSize)
+        return panel
+    }()
 
     /// 安装包里的数据（词库、英文词表、语言模型）。
     var resourceDir: URL {
@@ -32,10 +51,31 @@ final class AppState {
 
     var userDictPath: String { supportDir.appendingPathComponent("user.tsv").path }
     var historyPath: String { supportDir.appendingPathComponent("history.tsv").path }
+    /// 设置，键名同 Linux 的 ~/.config/fcitx5/conf/wowtype.conf
+    var configPath: String { supportDir.appendingPathComponent("wowtype.conf").path }
+    /// 自定义词（常用语），格式同 Linux 的 ~/.local/share/wowtype/custom.tsv
+    var customWordsPath: String { supportDir.appendingPathComponent("custom.tsv").path }
 
-    /// 词库路径。词库旁边会写一份快照（.wcache，下次启动快很多）；安装包是签过名的，
-    /// 不能往里写，所以在数据目录放一个指向安装包里词库的链接，快照就落在数据目录。
+    /// 实际用哪个词库：设置里的 Lexicon（文件在才用）> 安装包里的雾凇词库。
     func lexiconPath() -> String? {
+        let configured = config.lexicon
+        if !configured.isEmpty {
+            let path = (configured as NSString).expandingTildeInPath
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue {
+                return path
+            }
+            if missingLexiconLogged != path {
+                missingLexiconLogged = path
+                NSLog("WowType: 设置里的词库 %@ 不在，用自带的词库", path)
+            }
+        }
+        return bundledLexiconPath()
+    }
+
+    /// 安装包里的词库。词库旁边会写一份快照（.wcache，下次启动快很多）；安装包是签过名的，
+    /// 不能往里写，所以在数据目录放一个指向安装包里词库的链接，快照就落在数据目录。
+    private func bundledLexiconPath() -> String? {
         let bundled = resourceDir.appendingPathComponent("lexicon.tsv")
         guard FileManager.default.fileExists(atPath: bundled.path) else { return nil }
         let link = supportDir.appendingPathComponent("lexicon.tsv")
@@ -54,13 +94,46 @@ final class AppState {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
-    /// 同步载入（自检和后台线程用）。
-    func makeEngine() -> Engine? {
-        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-        guard let lexicon = lexiconPath() else {
-            NSLog("WowType: 安装包里没有 lexicon.tsv")
-            return nil
+    /// 读设置文件。没有就用默认值（和 Linux 一样，不自动建文件；菜单里「编辑设置」才建）。
+    func loadConfig() {
+        configStamp = FileStamp(configPath)
+        let loaded = WowtypeConfig.load(path: configPath)
+        if loaded != config || configGeneration == 0 {
+            config = loaded
+            configGeneration += 1
+            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@",
+                  config.horizontal ? "横排" : "竖排", config.pageSize, config.fuzzy ? 1 : 0, config.fuzzyGroups,
+                  config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme,
+                  config.shiftToggle.rawValue, config.traditional ? 1 : 0, config.halfwidthPunct ? 1 : 0,
+                  config.candidateFontSize, config.lexicon.isEmpty ? "自带" : config.lexicon)
         }
+        applyPanelSettings()
+    }
+
+    /// 候选框的设置（字号）。
+    private func applyPanelSettings() {
+        // 候选框是第一次要画时才建的，自检时不要建窗口
+        guard panelCreated else { return }
+        candidatePanel.fontSize = CGFloat(config.candidateFontSize)
+    }
+
+    /// 设置里管引擎的部分 + 自定义词。
+    private func applyEngineSettings(_ engine: Engine) {
+        for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+            NSLog("WowType: %@", problem)
+        }
+        customStamp = FileStamp(customWordsPath)
+        let custom = engine.loadCustomWords(customWordsPath)
+        if custom < 0 {
+            NSLog("WowType: 自定义词载入失败 %@", customWordsPath)
+        } else if custom > 0 {
+            NSLog("WowType: 载入自定义词 %d 条", custom)
+        }
+    }
+
+    /// 同步载入（自检和后台线程用）。只读文件，设置在主线程上由 install 套上。
+    func makeEngine(lexicon: String) -> Engine? {
+        try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
         guard let engine = Engine(lexicon: lexicon, languageModel: resource("words.lm"))
             ?? Engine(lexicon: lexicon)
         else {
@@ -75,19 +148,122 @@ final class AppState {
         return engine
     }
 
+    /// 自检用：读设置、载入词库、套上设置。
+    func makeConfiguredEngine() -> Engine? {
+        loadConfig()
+        guard let lexicon = lexiconPath() else {
+            NSLog("WowType: 安装包里没有 lexicon.tsv")
+            return nil
+        }
+        guard let engine = makeEngine(lexicon: lexicon) else { return nil }
+        applyEngineSettings(engine)
+        return engine
+    }
+
     /// 启动时调用：词库有几十 MB，放后台读，读完再交给输入控制器。
     func loadEngineInBackground() {
-        guard engine == nil, !loading else { return }
+        if configGeneration == 0 {
+            loadConfig()
+        }
+        guard !loading else {
+            reloadAfterLoading = true
+            return
+        }
+        guard let lexicon = lexiconPath() else {
+            NSLog("WowType: 安装包里没有 lexicon.tsv")
+            return
+        }
+        // 换词库：新引擎要读学习数据，先把旧引擎学到的存下来（载入途中学的就丢了，最多几秒）
+        save(force: true)
         loading = true
+        let stamp = FileStamp(lexicon)
         let start = Date()
         DispatchQueue.global(qos: .userInitiated).async {
-            let engine = self.makeEngine()
+            let engine = self.makeEngine(lexicon: lexicon)
             DispatchQueue.main.async {
-                self.engine = engine
                 self.loading = false
-                NSLog("WowType: 词库载入%@，用时 %.1f 秒", engine == nil ? "失败" : "完成",
+                NSLog("WowType: 词库 %@ 载入%@，用时 %.1f 秒", lexicon, engine == nil ? "失败" : "完成",
                       Date().timeIntervalSince(start))
+                if let engine {
+                    self.applyEngineSettings(engine)
+                    self.engine = engine
+                    self.commitsSinceSave = 0
+                    self.lexiconInUse = lexicon
+                    self.lexiconStamp = stamp
+                }
+                if self.reloadAfterLoading {
+                    self.reloadAfterLoading = false
+                    self.checkForChanges(force: true)
+                }
             }
+        }
+    }
+
+    /// 看看设置、自定义词、词库文件改了没有（按键时调，一秒最多看一次；切换输入框时 force）。
+    /// 设置改了马上生效；换了词库在后台载入，载完之前照旧用旧的。
+    func checkForChanges(force: Bool = false) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - lastCheck >= 1 else { return }
+        lastCheck = now
+        if FileStamp(configPath) != configStamp {
+            let generation = configGeneration
+            loadConfig()
+            if configGeneration != generation, let engine {
+                for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+                    NSLog("WowType: %@", problem)
+                }
+            }
+        }
+        if let engine, FileStamp(customWordsPath) != customStamp {
+            customStamp = FileStamp(customWordsPath)
+            let custom = engine.loadCustomWords(customWordsPath)
+            NSLog("WowType: 自定义词改了，重新载入 %d 条", custom)
+        }
+        guard engine != nil || loading else { return }
+        let wanted = lexiconPath()
+        if let wanted, wanted != lexiconInUse || FileStamp(wanted) != lexiconStamp {
+            if loading {
+                reloadAfterLoading = true
+            } else if engine != nil {
+                NSLog("WowType: 换词库 %@ -> %@", lexiconInUse ?? "", wanted)
+                loadEngineInBackground()
+            }
+        }
+    }
+
+    /// 菜单「编辑设置」：没有设置文件就写一份全是默认值的，用文本编辑打开。
+    func openConfigFile() {
+        if !FileManager.default.fileExists(atPath: configPath) {
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            try? WowtypeConfig.template().write(toFile: configPath, atomically: true, encoding: .utf8)
+        }
+        openInTextEditor(configPath)
+    }
+
+    /// 菜单「编辑自定义词」：custom.tsv，格式同 Linux。
+    func openCustomWordsFile() {
+        if !FileManager.default.fileExists(atPath: customWordsPath) {
+            try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+            let header = """
+            # 自定义词（常用语）：一行一个，编码<TAB>词[<TAB>频次]。加进去的词总排在候选第一个，简拼也能打。
+            # 编码一般是拼音（可以用空格分音节），也可以是别的字母（mail）；词里 \\n 是换行。
+            # 例：
+            # zi jie tiao dong	字节跳动
+            # mail	hello@example.com
+
+            """
+            try? header.write(toFile: customWordsPath, atomically: true, encoding: .utf8)
+        }
+        openInTextEditor(customWordsPath)
+    }
+
+    private func openInTextEditor(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        let textEdit = URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        if FileManager.default.fileExists(atPath: textEdit.path) {
+            NSWorkspace.shared.open([url], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -104,8 +280,8 @@ final class AppState {
         save()
     }
 
-    func save() {
-        guard let engine, commitsSinceSave > 0 else { return }
+    func save(force: Bool = false) {
+        guard let engine, force || commitsSinceSave > 0 else { return }
         commitsSinceSave = 0
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
         if !engine.saveUserDict(userDictPath) {
@@ -114,5 +290,23 @@ final class AppState {
         if !engine.saveHistory(historyPath) {
             NSLog("WowType: 保存输入习惯失败")
         }
+    }
+}
+
+/// 文件的 (大小, 修改时间)；文件不在是 nil。用来看文件改了没有。
+struct FileStamp: Equatable {
+    let size: UInt64
+    let modified: Date
+
+    init?(_ path: String) {
+        // 自带词库是指向安装包的链接：看链接指向的文件
+        let real = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: real),
+              let modified = attrs[.modificationDate] as? Date
+        else {
+            return nil
+        }
+        size = (attrs[.size] as? NSNumber)?.uint64Value ?? 0
+        self.modified = modified
     }
 }
