@@ -116,7 +116,7 @@ macos/           macOS 外壳：IMK 输入法 + 设置窗口 + 打包脚本
 | 编辑区 | fcitx5 preedit | `setMarkedText:selectionRange:replacementRange:`；终端和部分 Electron 应用画得不对时，准备「在候选框里显示编辑区」的兜底 |
 | 候选框 | fcitx5 / kimpanel 画 | 自己画一个无边框 `NSPanel`（`IMKCandidates` 撑不起横排、展开 6 列和主题）；位置用 `attributesForCharacterIndex:lineHeightRectangle:` |
 | 单按 Shift、按住右 Option 说话 | 普通按键事件 | 只能从 `flagsChanged:` 的 keyCode 判断左右和按下松开 |
-| 表情面板快捷键 | `Super+.` | Command 组合键到不了输入法，要换（比如 `Control+.` 或候选框里的按钮），默认值两边可以不同 |
+| 表情面板快捷键 | `Super+.` | Command 组合键多半被应用的菜单先拿走、到不了输入法：默认 `Control+.`，设置里写 `Super` 的当 `Control`（Linux 的设置文件拷过来照样能用） |
 | 读周围文字（小数点、自动空格） | surrounding text | `attributedSubstringFromRange:`，很多应用不给，就靠会话自己记 |
 | 语音浮条 | GNOME 扩展 + D-Bus 信号 | 输入法进程里直接开一个小窗；麦克风要在 Info.plist 写 `NSMicrophoneUsageDescription` |
 | 设置界面 | GTK 4 | SwiftUI 小窗，和输入法同一个 bundle；配置文件 `~/Library/Application Support/WowType/wowtype.conf`，键名同 Linux |
