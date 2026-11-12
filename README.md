@@ -24,7 +24,7 @@
 </tr>
 <tr>
 <td align="center"><sub>介绍视频</sub></td>
-<td align="center"><sub>v0.3.12：互译、语音输入、日期时间、候选更准……</sub></td>
+<td align="center"><sub>v0.3.12：互译、语音输入、macOS 版、日期时间、候选更准……</sub></td>
 </tr>
 </table>
 
