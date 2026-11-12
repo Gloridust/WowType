@@ -3,6 +3,7 @@
 //   WowType.app/Contents/MacOS/WowType              输入法服务（系统按需启动）
 //   … --register | --enable | --select | --disable  向系统登记 / 打开 / 切换 / 关闭（install.sh 用）
 //   … --selftest                                    载入安装包里的词库打一句话，CI 用来检查链接和资源
+//   … --settings [general|input|emoji|words]        设置窗口（另一个进程，输入法菜单里「设置…」开的就是它）
 //   … --version
 
 import AppKit
@@ -55,11 +56,12 @@ if arguments.count > 1 {
     case "--select": ok = Installer.select()
     case "--disable": ok = Installer.disable()
     case "--selftest": ok = selfTest()
+    case "--settings": SettingsApp.run(page: arguments.count > 2 ? arguments[2] : nil)
     case "--version":
         print(appVersion)
         ok = true
     default:
-        print("用法：WowType [--register | --enable | --select | --disable | --selftest | --version]")
+        print("用法：WowType [--register | --enable | --select | --disable | --selftest | --settings [页面] | --version]")
         ok = false
     }
     exit(ok ? 0 : 1)
