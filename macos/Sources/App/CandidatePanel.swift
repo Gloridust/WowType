@@ -1,37 +1,261 @@
-// 候选框：一个不抢焦点的小窗口，横排「1 是  2 十 …」，当前候选高亮，右边是翻页箭头。
-// 展开面板（横排按下键）一行 6 个，只有光标所在行标 1–6（数字选这一行的第几个）。
+// 候选框：一个不抢焦点的小窗口，照 WowType 主题自己画。颜色、圆角、边距和 Linux 上的
+// themes/fcitx5/wowtype、wowtype-dark 一样，系统换深色模式时跟着换：圆角白底（深色是深灰底），
+// 当前候选绿底白字，序号灰色，最右边是绿色的翻页箭头（翻不动的那边变淡）。
+// 横排一行「1 是  2 十 …」。展开面板（横排按下键）一行 6 个排成网格：光标所在行浅绿底、
+// 标 1–6（数字选这一行的第几个），光标处的词绿底白字，翻页箭头在右下角。
 
 import AppKit
 
+/// WowType 主题的颜色，取自 themes/fcitx5/wowtype*/theme.conf 和 themes/src/*.svg。
+struct CandidateTheme {
+    var background: NSColor
+    var border: NSColor
+    var text: NSColor
+    var label: NSColor
+    var highlight: NSColor
+    var highlightText: NSColor
+    var arrow: NSColor
+    /// 展开面板里光标所在行的底色
+    var row: NSColor
+
+    static let light = CandidateTheme(
+        background: .rgb(0xFFFFFF), border: .rgb(0xDCE3DF), text: .rgb(0x1D2321), label: .rgb(0x7A8580),
+        highlight: .rgb(0x0EAF76), highlightText: .rgb(0xFFFFFF), arrow: .rgb(0x0EAF76),
+        row: .rgb(0x0EAF76, alpha: 0.12))
+    static let dark = CandidateTheme(
+        background: .rgb(0x25292B), border: .rgb(0x3B4144), text: .rgb(0xE6EAE8), label: .rgb(0x8E9894),
+        highlight: .rgb(0x13B57C), highlightText: .rgb(0xFFFFFF), arrow: .rgb(0x3CCB93),
+        row: .rgb(0x13B57C, alpha: 0.2))
+
+    static func matching(_ appearance: NSAppearance) -> CandidateTheme {
+        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+    }
+}
+
+private extension NSColor {
+    static func rgb(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+    }
+}
+
+/// 一页候选摆在哪（左上角为原点）。只算位置，画由 CandidateView 来。
+struct CandidateLayout {
+    struct Cell {
+        /// 高亮底的范围，序号和词在里面居中
+        var frame: NSRect
+        var label: String
+        var text: String
+        /// 展开面板里只有光标所在行标序号，别的行留出序号的位置，各行的词才对得齐
+        var showLabel: Bool
+        var current: Bool
+    }
+
+    static let cornerRadius: CGFloat = 12
+    static let cellRadius: CGFloat = 7
+    /// 框边到候选底
+    static let inset = NSSize(width: 7, height: 7)
+    /// 候选底到字
+    static let cellPadding = NSSize(width: 8, height: 4)
+    /// 候选之间（左右、上下）
+    static let spacing: CGFloat = 2
+    /// 序号和词之间
+    static let labelGap: CGFloat = 4
+    /// 一个翻页箭头占的宽度；箭头和最后一个候选隔开 arrowGap
+    static let arrowWidth: CGFloat = 13
+    static let arrowGap: CGFloat = 4
+    /// 展开面板最底下放箭头的那一行有多高
+    static let arrowRowHeight: CGFloat = 16
+
+    let textFont: NSFont
+    let labelFont: NSFont
+    private(set) var size = NSSize.zero
+    private(set) var cells: [Cell] = []
+    /// 展开面板光标所在行；没有时 nil
+    private(set) var row: NSRect?
+    /// 两个翻页箭头；都翻不动时 nil
+    private(set) var arrows: (prev: NSRect, next: NSRect)?
+    let hasPrev: Bool
+    let hasNext: Bool
+
+    init(page: CandidatePage, fontSize: CGFloat) {
+        textFont = .systemFont(ofSize: fontSize)
+        labelFont = .monospacedDigitSystemFont(ofSize: (fontSize * 0.76).rounded(), weight: .regular)
+        hasPrev = page.hasPrev
+        hasNext = page.hasNext
+        if page.expanded {
+            layOutGrid(page)
+        } else {
+            layOutRow(page)
+        }
+    }
+
+    /// 序号和词连成一串（序号用小一号的字，基线对齐）。
+    func content(label: String, text: String, labelColor: NSColor, textColor: NSColor) -> NSAttributedString {
+        let out = NSMutableAttributedString(string: label, attributes: [
+            .font: labelFont, .foregroundColor: labelColor, .kern: Self.labelGap,
+        ])
+        out.append(NSAttributedString(string: text, attributes: [.font: textFont, .foregroundColor: textColor]))
+        return out
+    }
+
+    private var cellHeight: CGFloat {
+        // 量一个汉字：系统字体里没有汉字，实际画的是回退字体（苹方），行高以它为准
+        let line = NSAttributedString(string: "中", attributes: [.font: textFont]).size().height
+        return ceil(line) + Self.cellPadding.height * 2
+    }
+
+    private func contentWidth(label: String, text: String) -> CGFloat {
+        ceil(content(label: label, text: text, labelColor: .clear, textColor: .clear).size().width)
+    }
+
+    private mutating func layOutRow(_ page: CandidatePage) {
+        let height = cellHeight
+        let y = Self.inset.height
+        var x = Self.inset.width
+        for (i, text) in page.texts.enumerated() {
+            let label = "\(i + 1)"
+            let width = contentWidth(label: label, text: text) + Self.cellPadding.width * 2
+            cells.append(Cell(frame: NSRect(x: x, y: y, width: width, height: height), label: label, text: text,
+                              showLabel: true, current: i == page.cursor))
+            x += width + Self.spacing
+        }
+        x -= Self.spacing
+        if page.hasPrev || page.hasNext {
+            x += Self.arrowGap
+            let prev = NSRect(x: x, y: y, width: Self.arrowWidth, height: height)
+            arrows = (prev, prev.offsetBy(dx: Self.arrowWidth, dy: 0))
+            x += Self.arrowWidth * 2 + Self.arrowGap
+        }
+        size = NSSize(width: x + Self.inset.width, height: y + height + Self.inset.height)
+    }
+
+    private mutating func layOutGrid(_ page: CandidatePage) {
+        let columns = CandidatePage.columns
+        let height = cellHeight
+        let cursorRow = page.cursor >= 0 ? page.cursor / columns : -1
+        // 每一列和这一屏里这一列最宽的词一样宽，上下键才是在同一列里走
+        var widths = [CGFloat](repeating: 0, count: columns)
+        for (i, text) in page.texts.enumerated() {
+            let column = i % columns
+            widths[column] = max(widths[column], contentWidth(label: "\(column + 1)", text: text))
+        }
+        var xs: [CGFloat] = []
+        var x = Self.inset.width
+        for width in widths where width > 0 {
+            xs.append(x)
+            x += width + Self.cellPadding.width * 2 + Self.spacing
+        }
+        let right = x - Self.spacing
+        var bottom = Self.inset.height
+        for (i, text) in page.texts.enumerated() {
+            let (r, column) = (i / columns, i % columns)
+            let y = Self.inset.height + CGFloat(r) * (height + Self.spacing)
+            let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
+            cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, showLabel: r == cursorRow,
+                              current: i == page.cursor))
+            if r == cursorRow {
+                row = NSRect(x: Self.inset.width, y: y, width: right - Self.inset.width, height: height)
+            }
+            bottom = y + height
+        }
+        if page.hasPrev || page.hasNext {
+            let next = NSRect(x: right - Self.arrowWidth, y: bottom + Self.spacing,
+                              width: Self.arrowWidth, height: Self.arrowRowHeight)
+            arrows = (next.offsetBy(dx: -Self.arrowWidth, dy: 0), next)
+            bottom = next.maxY
+        }
+        size = NSSize(width: right + Self.inset.width, height: bottom + Self.inset.height)
+    }
+}
+
+/// 照 CandidateLayout 画候选框。颜色按自己的外观（跟着系统的浅色 / 深色）挑。
+final class CandidateView: NSView {
+    var layout: CandidateLayout? {
+        didSet { needsDisplay = true }
+    }
+
+    override var isFlipped: Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let layout else { return }
+        let theme = CandidateTheme.matching(effectiveAppearance)
+
+        let panel = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5),
+                                 xRadius: CandidateLayout.cornerRadius - 0.5,
+                                 yRadius: CandidateLayout.cornerRadius - 0.5)
+        theme.background.setFill()
+        panel.fill()
+        theme.border.setStroke()
+        panel.lineWidth = 1
+        panel.stroke()
+
+        if let row = layout.row {
+            theme.row.setFill()
+            roundedRect(row).fill()
+        }
+        for cell in layout.cells {
+            if cell.current {
+                theme.highlight.setFill()
+                roundedRect(cell.frame).fill()
+            }
+            let label: NSColor = !cell.showLabel ? .clear : cell.current ? theme.highlightText : theme.label
+            let content = layout.content(label: cell.label, text: cell.text, labelColor: label,
+                                         textColor: cell.current ? theme.highlightText : theme.text)
+            let size = content.size()
+            content.draw(at: NSPoint(x: cell.frame.midX - size.width / 2, y: cell.frame.midY - size.height / 2))
+        }
+        if let arrows = layout.arrows {
+            drawChevron(in: arrows.prev, pointingLeft: true, color: theme.arrow, enabled: layout.hasPrev)
+            drawChevron(in: arrows.next, pointingLeft: false, color: theme.arrow, enabled: layout.hasNext)
+        }
+    }
+
+    private func roundedRect(_ rect: NSRect) -> NSBezierPath {
+        NSBezierPath(roundedRect: rect, xRadius: CandidateLayout.cellRadius, yRadius: CandidateLayout.cellRadius)
+    }
+
+    /// 和 themes/src/prev.svg、next.svg 一样的尖角：高 9、宽 4.5，线宽 1.8，圆头。
+    private func drawChevron(in rect: NSRect, pointingLeft: Bool, color: NSColor, enabled: Bool) {
+        let (cx, cy) = (rect.midX, rect.midY)
+        let dx: CGFloat = pointingLeft ? 2.25 : -2.25
+        let path = NSBezierPath()
+        path.move(to: NSPoint(x: cx + dx, y: cy - 4.5))
+        path.line(to: NSPoint(x: cx - dx, y: cy))
+        path.line(to: NSPoint(x: cx + dx, y: cy + 4.5))
+        path.lineWidth = 1.8
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        (enabled ? color : color.withAlphaComponent(0.3)).setStroke()
+        path.stroke()
+    }
+}
+
 final class CandidatePanel {
     private let panel: NSPanel
-    private let label = NSTextField(labelWithString: "")
-    private let padding = NSSize(width: 10, height: 6)
+    private let view = CandidateView()
+    /// 候选的字号（磅）；序号小一号
+    var fontSize: CGFloat = 17
+    /// 输入框这一行和候选框之间
     private let gap: CGFloat = 4
 
     init() {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
                         styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
         panel.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.cursorWindow)) - 1)
+        // 窗口本身透明，圆角框由 CandidateView 画；系统按画出来的形状投影
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
-
-        let background = NSVisualEffectView()
-        background.material = .popover
-        background.state = .active
-        background.wantsLayer = true
-        background.layer?.cornerRadius = 8
-        background.layer?.masksToBounds = true
-        panel.contentView = background
-
-        label.translatesAutoresizingMaskIntoConstraints = true
-        label.lineBreakMode = .byClipping
-        label.maximumNumberOfLines = 0 // 展开面板有好几行
-        background.addSubview(label)
+        panel.contentView = view
     }
 
     func hide() {
@@ -40,13 +264,14 @@ final class CandidatePanel {
 
     /// line 是输入框光标所在行的矩形（屏幕坐标，左下角为原点）；拿不到时是空矩形。
     func show(_ page: CandidatePage, below line: NSRect) {
-        label.attributedStringValue = render(page)
-        let text = label.fittingSize
-        let size = NSSize(width: ceil(text.width) + padding.width * 2, height: ceil(text.height) + padding.height * 2)
-        label.frame = NSRect(x: padding.width, y: padding.height, width: ceil(text.width), height: ceil(text.height))
-        panel.setContentSize(size)
-        panel.setFrameOrigin(origin(for: size, line: line))
+        let layout = CandidateLayout(page: page, fontSize: fontSize)
+        view.layout = layout
+        panel.setContentSize(layout.size)
+        panel.setFrameOrigin(origin(for: layout.size, line: line))
         panel.orderFrontRegardless()
+        // 投影是照窗口里画出来的形状算的，大小一变就得先画好再重算
+        panel.displayIfNeeded()
+        panel.invalidateShadow()
     }
 
     private func origin(for size: NSSize, line: NSRect) -> NSPoint {
@@ -56,7 +281,8 @@ final class CandidatePanel {
             : line
         let screen = NSScreen.screens.first { $0.frame.contains(anchor.origin) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 10000, height: 10000)
-        var x = anchor.minX
+        // 第一个候选的序号对着编辑区的第一个字母
+        var x = anchor.minX - CandidateLayout.inset.width - CandidateLayout.cellPadding.width
         var y = anchor.minY - size.height - gap
         if y < visible.minY {
             // 下面放不下就放到这一行上面
@@ -65,42 +291,5 @@ final class CandidatePanel {
         x = min(max(x, visible.minX), visible.maxX - size.width)
         y = min(max(y, visible.minY), visible.maxY - size.height)
         return NSPoint(x: x, y: y)
-    }
-
-    private func render(_ page: CandidatePage) -> NSAttributedString {
-        let font = NSFont.systemFont(ofSize: 17)
-        let small = NSFont.systemFont(ofSize: 12)
-        let columns = CandidatePage.columns
-        let cursorRow = page.cursor >= 0 ? page.cursor / columns : -1
-        let out = NSMutableAttributedString()
-        for (i, text) in page.texts.enumerated() {
-            if i > 0 {
-                let newRow = page.expanded && i % columns == 0
-                out.append(NSAttributedString(string: newRow ? "\n" : "  ", attributes: [.font: font]))
-            }
-            let current = i == page.cursor
-            let color: NSColor = current ? .selectedMenuItemTextColor : .labelColor
-            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
-            var numberAttrs: [NSAttributedString.Key: Any] = [.font: small,
-                                                              .foregroundColor: current ? color : NSColor.secondaryLabelColor]
-            if current {
-                attrs[.backgroundColor] = NSColor.controlAccentColor
-                numberAttrs[.backgroundColor] = NSColor.controlAccentColor
-            }
-            let number: String
-            if page.expanded {
-                number = i / columns == cursorRow ? " \(i % columns + 1) " : "   "
-            } else {
-                number = " \(i + 1) "
-            }
-            out.append(NSAttributedString(string: number, attributes: numberAttrs))
-            out.append(NSAttributedString(string: "\(text) ", attributes: attrs))
-        }
-        if page.hasPrev || page.hasNext {
-            let arrows = (page.hasPrev ? "◀" : "◁") + (page.hasNext ? "▶" : "▷")
-            out.append(NSAttributedString(string: "   \(arrows)",
-                                          attributes: [.font: small, .foregroundColor: NSColor.secondaryLabelColor]))
-        }
-        return out
     }
 }
