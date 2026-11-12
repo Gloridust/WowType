@@ -1,7 +1,7 @@
 //! 本地翻译模型的运行时：按需起一个 `llama-server`，闲置一段时间后停掉。
 //!
-//! 不把 llama.cpp 编进插件：用户自己装 `llama-server`（发行版的 llama.cpp 包，或者官方发布的
-//! 二进制），我们只管它的生命周期。
+//! 不把 llama.cpp 编进插件：`llama-server` 用系统里装的（发行版的 llama.cpp 包），没有就用
+//! 设置界面下载的官方二进制（[`downloaded_server`]），我们只管它的生命周期。
 //!
 //! - 第一次翻译时才启动：没打开互译、没选本地模型时，不起进程、不占端口
 //! - 只监听 127.0.0.1，端口每次随机挑一个空闲的（不会和别的服务抢）
@@ -45,7 +45,8 @@ impl LocalConfig {
         self.model.is_file()
     }
 
-    /// 找 llama-server：写了路径就用路径，只写名字就在 PATH 里找。找不到返回 None。
+    /// 找 llama-server：写了路径就用路径；只写名字就在 PATH 里找，再看设置界面下载的那份
+    /// （[`downloaded_server`]）。找不到返回 None。
     pub fn server_path(&self) -> Option<PathBuf> {
         let name = if self.server.trim().is_empty() {
             "llama-server"
@@ -56,11 +57,32 @@ impl LocalConfig {
             let path = PathBuf::from(name);
             return is_executable(&path).then_some(path);
         }
-        let path = std::env::var_os("PATH")?;
+        find_server(name, std::env::var_os("PATH"), downloaded_server())
+    }
+}
+
+/// 在 PATH 里找 name，找不到就用下载的那份（要能执行）。
+fn find_server(
+    name: &str,
+    path: Option<std::ffi::OsString>,
+    downloaded: Option<PathBuf>,
+) -> Option<PathBuf> {
+    path.and_then(|path| {
         std::env::split_paths(&path)
             .map(|dir| dir.join(name))
             .find(|p| is_executable(p))
-    }
+    })
+    .or_else(|| downloaded.filter(|p| is_executable(p)))
+}
+
+/// 设置界面「下载」放 llama-server 的地方：`$XDG_DATA_HOME/wowtype/llama/llama-server`
+/// （llama.cpp 官方发布的二进制，和它的动态库在同一个目录）。
+pub fn downloaded_server() -> Option<PathBuf> {
+    let data = match std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".local/share"),
+    };
+    Some(data.join("wowtype/llama/llama-server"))
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -155,7 +177,7 @@ impl LocalServer {
                 ));
             }
             let server = config.server_path().ok_or_else(|| {
-                "翻译失败：没找到 llama-server（装上 llama.cpp，或者在设置里填它的路径）"
+                "翻译失败：没找到 llama-server（在设置的「翻译」页点下载，或者自己装 llama.cpp）"
                     .to_string()
             })?;
             let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
@@ -480,5 +502,35 @@ mod tests {
             .unwrap()
             .contains("没找到 llama-server"));
         assert!(!server.is_running());
+    }
+
+    #[test]
+    fn server_lookup_prefers_path_then_downloaded() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("wowtype-llama-find-{}", std::process::id()));
+        let exe = |sub: &str| {
+            let d = dir.join(sub);
+            std::fs::create_dir_all(&d).unwrap();
+            let p = d.join("llama-server");
+            std::fs::write(&p, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            p
+        };
+        let system = exe("bin");
+        let downloaded = exe("data");
+        let path = Some(dir.join("bin").into_os_string());
+        let empty = Some(dir.join("nowhere").into_os_string());
+        assert_eq!(
+            find_server("llama-server", path, Some(downloaded.clone())),
+            Some(system)
+        );
+        assert_eq!(
+            find_server("llama-server", empty.clone(), Some(downloaded.clone())),
+            Some(downloaded.clone())
+        );
+        assert_eq!(find_server("llama-server", None, Some(downloaded.clone())), Some(downloaded));
+        // 下载的那份不能执行（没下完、被删）时当作没有
+        assert_eq!(find_server("llama-server", empty, Some(dir.join("data/none"))), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
