@@ -31,7 +31,7 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 
 ## 互译
 
-在设置界面「翻译」里填好一个 OpenAI 格式（`chat/completions`）的翻译服务，打开「互译」，
+在设置界面「翻译」里下载本地模型，或者在「用什么翻译」里选「自定义翻译服务」填一个 OpenAI 格式（`chat/completions`）的接口，打开「互译」，
 单按 Shift 就在 **中 → 英 → 译 → 中** 之间切换（没填好服务时只在中英之间切）。
 左 Shift 被 fcitx5 拿去「临时切换输入法」时切不到「译」，用右 Shift，或在设置「输入」页打开「Shift 只给 WowType 用」。
 
@@ -59,7 +59,7 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 
 ### 本地模型（离线）
 
-不想把字发出去，可以在「翻译」页打开「用本地模型翻译」，用腾讯混元的翻译模型
+不想把字发出去，可以在「翻译」页的「用什么翻译」里选「本地模型（离线）」（设置里默认就是它），用腾讯混元的翻译模型
 [HY-MT 1.5 1.8B](https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF)（Q4_K_M，1.13 GB）在本机翻：
 
 - 模型点「下载」获取，放在 `~/.local/share/wowtype/models/`，下载完校验 SHA256，断了再点会接着下。
@@ -142,7 +142,7 @@ TranslateTarget=en
 TranslateBaseUrl=
 TranslateModel=
 TranslateFormal=False
-TranslateLocal=False
+TranslateLocal=True
 TranslateLocalModel=
 TranslateLlamaServer=
 TranslateIdleMinutes=5
@@ -154,7 +154,7 @@ Lexicon=
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateLocal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
 | `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
@@ -165,6 +165,7 @@ Lexicon=
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键 |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
 | `TranslateBaseUrl`、`TranslateModel` | 翻译服务（OpenAI 格式）的地址和模型，见[互译](#互译) |
+| `TranslateLocal` | `True` 用本地模型，`False` 用 `TranslateBaseUrl` 的翻译服务。设置界面里默认 `True`；配置文件里没写这一项时是 `False`（0.3.10 及以前填过翻译服务的照旧用服务） |
 | `TranslateLocalModel` | 本地模型文件，留空用 `~/.local/share/wowtype/models/HY-MT1.5-1.8B-Q4_K_M.gguf`，见[本地模型](#本地模型离线) |
 | `TranslateLlamaServer` | `llama-server` 的路径，留空先在 `PATH` 里找，再用设置里下载的那份 |
 | `TranslateIdleMinutes` | 本地模型闲置几分钟后释放，0–240，0 表示不自动释放 |
