@@ -24,6 +24,8 @@ use crate::Engine;
 
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
 pub mod keysym {
+    pub const SHIFT_L: u32 = 0xffe1;
+    pub const SHIFT_R: u32 = 0xffe2;
     pub const BACKSPACE: u32 = 0xff08;
     pub const TAB: u32 = 0xff09;
     pub const RETURN: u32 = 0xff0d;
@@ -85,6 +87,9 @@ pub enum KeyAction {
     NextPage,
     PrevCandidate,
     NextCandidate,
+    /// 外壳只是告诉会话有这个键（松开的、外壳自己处理掉的）：单按 Shift 的判断要看到按住
+    /// Shift 时的每个键；会话不处理它。
+    Observe,
 }
 
 /// 一次按键。
@@ -101,12 +106,47 @@ pub struct Key {
     pub action: KeyAction,
     /// 输入框的情况，[`key_hints`] 的位掩码。
     pub hints: u32,
+    /// 按键码（硬件键码），不知道是 0。单按 Shift 时按下、松开按键码对上才算同一个键：
+    /// xkb 选项或输入法布局重新翻译时，松开那一下可能翻成别的符号。
+    pub code: u32,
+    /// 按住不放的自动重复。
+    pub repeat: bool,
+    /// 按键时刻（毫秒，单调递增的任意起点），不知道是 0。单按 Shift 看按住多久。
+    pub time_ms: u64,
 }
 
 /// 外壳告诉会话的输入框情况（[`Key::hints`]）。
 pub mod key_hints {
     /// 密码框、网址框、邮箱框：不自动补空格。
     pub const NO_AUTO_SPACE: u32 = 1 << 0;
+    /// 外壳开着自己的面板（表情面板、工具栏）：这时按 Shift 不切中英文。
+    pub const PANEL_OPEN: u32 = 1 << 1;
+}
+
+/// 输入模式：中文、英文（按键原样交给应用）、互译（打中文出外文，上屏由外壳接管）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Chinese,
+    English,
+    Translate,
+}
+
+/// 用哪边的 Shift 单按切换中英文（[`Config::shift_toggle`]）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShiftToggle {
+    #[default]
+    Both,
+    Left,
+    Right,
+    Off,
+}
+
+/// 单按 Shift：按下以后、松开以前没按别的键，也没按太久（[`Config::shift_tap_ms`]）。
+#[derive(Clone, Copy, Debug, Default)]
+struct ShiftTap {
+    /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
+    down: Option<(u32, u32, u64)>,
 }
 
 impl Key {
@@ -221,6 +261,10 @@ pub struct Frame {
     /// 这次上屏里有引擎学到的选词（选了引擎的候选、原样上屏输入）：外壳攒够次数存一次用户词库。
     /// 只上屏了标点、emoji、计算结果、日期时间的是 false。
     pub learned: bool,
+    /// 这次调用以后的输入模式。
+    pub mode: Mode,
+    /// 这次调用切换了输入模式（单按 Shift、set_mode）：外壳更新状态栏、提示。
+    pub mode_changed: bool,
 }
 
 /// 候选框的样子。
@@ -297,6 +341,12 @@ pub struct Config {
     pub punct_style: PunctStyle,
     /// 中英文之间自动补空格，[`crate::autospace`] 的 `LETTERS | DIGITS` 位掩码，0 是关。
     pub auto_space: u32,
+    /// 用哪边的 Shift 单按切换中英文。
+    pub shift_toggle: ShiftToggle,
+    /// 按住 Shift 多久以内松开才算单按（毫秒）：按久了多半是想打大写或者犹豫了。
+    pub shift_tap_ms: u32,
+    /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
+    pub translate_mode: bool,
 }
 
 impl Default for Config {
@@ -312,6 +362,9 @@ impl Default for Config {
             pick_char: true,
             punct_style: PunctStyle::Fullwidth,
             auto_space: 0,
+            shift_toggle: ShiftToggle::Both,
+            shift_tap_ms: 500,
+            translate_mode: false,
         }
     }
 }
@@ -406,6 +459,10 @@ pub struct Session<'e> {
     last_char: Option<char>,
     /// 这次按键时外壳给的输入框情况（[`key_hints`]）。
     hints: u32,
+    mode: Mode,
+    /// 这次调用切换了模式（frame 取走）。
+    mode_changed: bool,
+    shift: ShiftTap,
 }
 
 impl Default for Session<'_> {
@@ -432,6 +489,9 @@ impl Default for Session<'_> {
             prev_char: None,
             last_char: None,
             hints: 0,
+            mode: Mode::Chinese,
+            mode_changed: false,
+            shift: ShiftTap::default(),
         }
     }
 }
@@ -502,6 +562,12 @@ impl<'e> Session<'e> {
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
         self.last_choice = None;
+        if let Some(handled) = self.shift_key(key) {
+            return self.frame(handled);
+        }
+        if key.action == KeyAction::Observe {
+            return self.frame(false);
+        }
         if !key.release {
             self.prev_char = key.prev_char;
             self.hints = key.hints;
@@ -526,6 +592,9 @@ impl<'e> Session<'e> {
     fn handle_key(&mut self, key: &Key) -> bool {
         if key.release {
             return false;
+        }
+        if self.mode == Mode::English && !self.composing() {
+            return self.english_key(key);
         }
         if self.composing() && key.is_forget() {
             self.forget_current();
@@ -556,6 +625,111 @@ impl<'e> Session<'e> {
             self.push_input('\'');
             return true;
         }
+        false
+    }
+
+    /// 现在的输入模式。
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// 切到 mode（外部命令、设置里的默认模式、外壳全局的模式）。切到英文时打到一半的原样上屏。
+    pub fn set_mode(&mut self, mode: Mode) -> Frame {
+        self.last_choice = None;
+        self.switch_mode(mode);
+        self.frame(true)
+    }
+
+    fn switch_mode(&mut self, mode: Mode) {
+        if mode == self.mode {
+            return;
+        }
+        if mode == Mode::English && self.composing() {
+            // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
+            self.commit_input_now();
+        }
+        self.mode = mode;
+        self.mode_changed = true;
+    }
+
+    /// 单按 Shift 循环切换：中 → 英 →（有「译」时）译 → 中。
+    fn toggle_mode(&mut self) {
+        let next = match self.mode {
+            Mode::Chinese => Mode::English,
+            Mode::English if self.config.translate_mode => Mode::Translate,
+            Mode::English | Mode::Translate => Mode::Chinese,
+        };
+        self.switch_mode(next);
+    }
+
+    /// Shift 的按下、松开，以及打断单按的别的键。Some：处理完了（handled 是里面的值，
+    /// 单按切换了模式时为 true）；None：接着照常处理（Shift 的按下也接着处理：展开面板要收起）。
+    ///
+    /// 和以前 Linux 外壳的规矩一样：按下时带着 Ctrl / Alt / Super、外壳开着面板时不算；
+    /// 按住不放的自动重复不重新计时；松开时按键码认（没有键码时按符号）；
+    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算。
+    fn shift_key(&mut self, key: &Key) -> Option<bool> {
+        let sym = key.keysym;
+        let is_shift = sym == keysym::SHIFT_L || sym == keysym::SHIFT_R;
+        if !key.release {
+            if !is_shift {
+                self.shift.down = None;
+                return None;
+            }
+            let wanted = match self.config.shift_toggle {
+                ShiftToggle::Both => true,
+                ShiftToggle::Left => sym == keysym::SHIFT_L,
+                ShiftToggle::Right => sym == keysym::SHIFT_R,
+                ShiftToggle::Off => false,
+            };
+            let other = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0;
+            if wanted && !other && key.hints & key_hints::PANEL_OPEN == 0 {
+                let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
+                if !held {
+                    self.shift.down = Some((sym, key.code, key.time_ms));
+                }
+            } else {
+                self.shift.down = None;
+            }
+            return None;
+        }
+        let Some((down_sym, down_code, down_at)) = self.shift.down else {
+            return is_shift.then_some(false);
+        };
+        let same = if key.code != 0 && down_code != 0 {
+            key.code == down_code
+        } else {
+            sym == down_sym
+        };
+        if !same {
+            if !is_shift {
+                self.shift.down = None;
+                return None;
+            }
+            return Some(false);
+        }
+        self.shift.down = None;
+        let held_ms = key.time_ms.saturating_sub(down_at);
+        if key.time_ms != 0 && down_at != 0 && held_ms > u64::from(self.config.shift_tap_ms) {
+            return Some(false);
+        }
+        self.toggle_mode();
+        Some(true)
+    }
+
+    /// 英文模式、没在打字：按键交给应用；汉字后面打字母、数字要补空格时自己连空格一起上屏。
+    fn english_key(&mut self, key: &Key) -> bool {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return false;
+        }
+        let Some(c) = char::from_u32(key.keysym).filter(|c| c.is_ascii_graphic()) else {
+            return false;
+        };
+        if c.is_ascii_alphanumeric() && self.space_before(c) {
+            self.emit(&c.to_string());
+            return true;
+        }
+        self.last_char = Some(c);
         false
     }
 
@@ -727,7 +901,8 @@ impl<'e> Session<'e> {
                 KeyAction::NextPage => self.next_page(),
                 KeyAction::PrevCandidate => self.move_cursor(true),
                 KeyAction::NextCandidate => self.move_cursor(false),
-                KeyAction::None => {}
+                // OBSERVE 在 key() 里就返回了，到不了这里
+                KeyAction::None | KeyAction::Observe => {}
             }
             return Some(true);
         }
@@ -1073,6 +1248,8 @@ impl<'e> Session<'e> {
             commit: self.pending.take(),
             forgot: std::mem::take(&mut self.forgot),
             learned: std::mem::take(&mut self.learned),
+            mode: self.mode,
+            mode_changed: std::mem::take(&mut self.mode_changed),
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()

@@ -295,10 +295,11 @@ private:
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
-    bool handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
-                           fcitx::KeyEvent &event);
-    /// Shift 循环切换：中 → 英 → 译（配置了翻译服务才有）→ 中。
-    void toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// Shift 键交给会话判断单按（别的键只报一下，打断单按）。返回 true：这个键处理完了
+    /// （Shift 键都是；单按切换了模式时吃掉，否则交给应用）。
+    bool handleShiftKey(fcitx::InputContext *ic, WowtypeState *state, fcitx::KeyEvent &event);
+    /// 把全局的中 / 英 / 译对齐到这个输入框的会话（切英文时会话上屏打到一半的）。
+    void syncMode(fcitx::InputContext *ic, WowtypeState *state);
     /// 切到指定模式。离开「译」上屏攒着的原文，切到英文上屏打到一半的；
     /// notify：弹出「中 / 英 / 译」提示（外部命令切的不弹，免得 vim 每按一次 Esc 闪一下）。
     void switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii, bool translate,
@@ -457,10 +458,6 @@ private:
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。
     bool translateMode_ = false;
-    /// 按下还没松开的 Shift（单按才切换，中间按了别的键就作废）、它的键码和按下的时刻。
-    fcitx::KeySym shiftDown_ = FcitxKey_None;
-    int shiftDownCode_ = 0;
-    uint64_t shiftDownAt_ = 0;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
     bool emojiSuggest_ = true;

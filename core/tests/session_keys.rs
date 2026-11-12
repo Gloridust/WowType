@@ -1542,3 +1542,116 @@ fn auto_space_between_han_and_ascii() {
     session.key(&key_after('o', Some('x'), 0));
     assert_eq!(session.key(&key_after(' ', Some('x'), 0)).commit.as_deref(), Some("你好"));
 }
+
+fn shift(sym: u32, release: bool, time_ms: u64) -> Key {
+    Key {
+        keysym: sym,
+        release,
+        time_ms,
+        code: if sym == keysym::SHIFT_L { 50 } else { 62 },
+        ..Key::default()
+    }
+}
+
+#[test]
+fn shift_tap_toggles_mode() {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    assert!(!session.key(&shift(keysym::SHIFT_L, false, 1000)).handled);
+    let frame = session.key(&shift(keysym::SHIFT_L, true, 1100));
+    assert!(frame.handled && frame.mode_changed);
+    assert_eq!(frame.mode, Mode::English);
+    // 英文模式：字母交给应用
+    assert!(!type_keys(&mut session, "a").handled);
+    assert!(!type_keys(&mut session, ",").handled);
+    // 再按一下回到中文（没有「译」）
+    session.key(&shift(keysym::SHIFT_L, false, 2000));
+    assert_eq!(session.key(&shift(keysym::SHIFT_L, true, 2100)).mode, Mode::Chinese);
+    assert!(type_keys(&mut session, "a").handled);
+}
+
+#[test]
+fn shift_tap_rules() {
+    use wowtype_core::session::{Mode, ShiftToggle};
+    // 按住太久不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1600)).mode_changed);
+    // 按住时按了别的键（Shift+A 打大写）不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    type_keys(&mut session, "A");
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    // 外壳自己处理掉的键也报给会话（OBSERVE）：按住 Shift 时按了它就不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let observed = Key {
+        keysym: u32::from(b'1'),
+        action: wowtype_core::session::KeyAction::Observe,
+        ..Key::default()
+    };
+    assert!(!session.key(&observed).handled, "OBSERVE 不处理");
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    // 自动重复不重新计时：按住 0.6 秒，中间来了几次重复
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    session.key(&Key { repeat: true, ..shift(keysym::SHIFT_L, false, 1400) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1600)).mode_changed);
+    // 松开时按键码认：同一个键松开时翻成了别的符号也算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let other = Key { keysym: 0xfe08, code: 50, release: true, time_ms: 1100, ..Key::default() };
+    assert!(session.key(&other).mode_changed, "ISO_Next_Group 松开");
+    // 只用右 Shift：左边的不算
+    let mut session = with(engine());
+    session.configure(Config { shift_toggle: ShiftToggle::Right, ..Config::default() });
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    session.key(&shift(keysym::SHIFT_R, false, 2000));
+    assert!(session.key(&shift(keysym::SHIFT_R, true, 2100)).mode_changed);
+    // 带 Ctrl 按下（Ctrl+Shift 切输入法）、开着面板不算
+    let mut session = with(engine());
+    session.key(&Key { modifiers: modifier::CTRL, ..shift(keysym::SHIFT_L, false, 1000) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    use wowtype_core::session::key_hints::PANEL_OPEN;
+    session.key(&Key { hints: PANEL_OPEN, ..shift(keysym::SHIFT_L, false, 2000) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 2100)).mode_changed);
+    // 有「译」：中 → 英 → 译 → 中
+    let mut session = with(engine());
+    session.configure(Config { translate_mode: true, ..Config::default() });
+    let mut modes = Vec::new();
+    for i in 0..3u64 {
+        session.key(&shift(keysym::SHIFT_L, false, 1000 * (i + 1)));
+        modes.push(session.key(&shift(keysym::SHIFT_L, true, 1000 * (i + 1) + 50)).mode);
+    }
+    assert_eq!(modes, [Mode::English, Mode::Translate, Mode::Chinese]);
+}
+
+#[test]
+fn switching_to_english_commits_composition() {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let frame = session.key(&shift(keysym::SHIFT_L, true, 1100));
+    assert_eq!(frame.commit.as_deref(), Some("nihao"));
+    assert!(!session.composing());
+    // set_mode 一样；切回中文不上屏
+    let mut session = with(engine());
+    type_keys(&mut session, "ni");
+    assert_eq!(session.set_mode(Mode::English).commit.as_deref(), Some("ni"));
+    let frame = session.set_mode(Mode::Chinese);
+    assert!(frame.mode_changed && frame.commit.is_none());
+    assert!(!session.set_mode(Mode::Chinese).mode_changed, "已经是中文");
+}
+
+#[test]
+fn english_mode_auto_space() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    session.configure(Config { auto_space: LETTERS | DIGITS, ..Config::default() });
+    session.set_mode(Mode::English);
+    assert_eq!(session.key(&key_after('L', Some('用'), 0)).commit.as_deref(), Some(" L"));
+    assert!(!session.key(&key_after('i', Some('L'), 0)).handled);
+}

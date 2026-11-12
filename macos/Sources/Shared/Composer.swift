@@ -166,7 +166,14 @@ public final class Composer {
     /// 原文停下来这么久才发请求（句末标点立刻发）
     public static let translateDelay = 0.5
 
-    public private(set) var mode: Mode = .chinese
+    /// 输入模式由会话管（单按 Shift 的判断也在会话里）。
+    public var mode: Mode {
+        switch wowtype_session_mode(session) {
+        case WOWTYPE_MODE_ENGLISH: return .english
+        case WOWTYPE_MODE_TRANSLATE: return .translate
+        default: return .chinese
+        }
+    }
     /// 设置（wowtype.conf）里管会话和外壳的部分；管引擎的部分用 Engine.apply。
     public private(set) var config = WowtypeConfig()
     /// 一页几个候选
@@ -185,7 +192,6 @@ public final class Composer {
     let session: OpaquePointer
     private(set) var engine: Engine?
     private(set) weak var client: TextClient?
-    private var shiftTap = ShiftTap()
     /// 上屏里有引擎学到的选词时调用（frame->learned；外壳攒够次数存一次学习数据）。
     /// 只上屏了标点、emoji、计算结果的不调。
     public var onCommit: ((String) -> Void)?
@@ -262,8 +268,9 @@ public final class Composer {
         guard translator !== self.translator else { return }
         leaveTranslate()
         self.translator = translator
+        configure()
         if mode == .translate && !translateAvailable {
-            mode = .chinese
+            apply(wowtype_session_set_mode(session, WOWTYPE_MODE_CHINESE))
         }
         refresh()
     }
@@ -313,7 +320,8 @@ public final class Composer {
         if key.release {
             return false
         }
-        shiftTap.interrupt()
+        // 先报给会话：按住 Shift 时按了别的键，这一下就不算单按（下面有的键不交给会话）
+        observe(key)
         // 表情面板快捷键中英文都管；工具栏、表情面板开着时按键都归它们（和 Linux 一样）
         if let emojiKey = config.emojiKey, emojiKey.matches(key) {
             toggleEmojiPanel()
@@ -332,8 +340,8 @@ public final class Composer {
             return true
         }
         if mode == .english {
-            // 英文模式：按键原样交给应用；汉字后面打字母、数字要补空格时自己上屏
-            return autoSpaceKey(key)
+            // 英文模式：按键原样交给应用；汉字后面打字母、数字要补空格时会话连空格一起上屏
+            return sendToSession(key)
         }
         let composing = isComposing
         if engine == nil && !composing {
@@ -353,29 +361,49 @@ public final class Composer {
 
     /// Shift 的按下 / 松开（macOS 的 flagsChanged）。单按切中英文时返回 true。
     /// right 是右 Shift（设置里 ShiftToggle 可以只用一边，或者不用 Shift 切换）。
+    /// 判断在会话里（和 Linux 同一套规矩）：中间按了别的键、按住超过 0.5 秒、按下时带着别的修饰键、
+    /// 工具栏或表情面板开着都不算。
     @discardableResult
     public func shiftChanged(down: Bool, otherModifiers: Bool, now: Double, right: Bool = false) -> Bool {
-        let allowed: Bool
-        switch tool == nil ? config.shiftToggle : .off { // 工具栏、表情面板开着时不切
-        case .both: allowed = true
-        case .left: allowed = !right
-        case .right: allowed = right
-        case .off: allowed = false
+        configure() // 翻译器可能刚配好（本地模型下载完）：「译」这一档跟着
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.keysym = right ? 0xffe2 : 0xffe1
+        raw.release = down ? 0 : 1
+        raw.modifiers = otherModifiers ? Modifiers.control.rawValue : 0
+        raw.time_ms = UInt64(max(now, 0) * 1000)
+        if tool != nil {
+            raw.hints |= WOWTYPE_KEY_HINT_PANEL_OPEN
         }
-        guard allowed else {
-            shiftTap.interrupt()
+        let before = mode
+        guard let frame = wowtype_session_key(session, &raw), frame.pointee.mode_changed != 0 else {
             return false
         }
-        guard shiftTap.shift(down: down, otherModifiers: otherModifiers, now: now) else {
-            return false
+        if before == .translate {
+            // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+            leaveTranslate()
         }
-        toggleMode()
+        // 打到一半切英文：会话把已选的词 + 打的字母放进了 frame
+        apply(frame)
         return true
     }
 
     /// 别的修饰键变了（Command、Option 等）：这次 Shift 不算单按。
     public func otherModifierChanged() {
-        shiftTap.interrupt()
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
+        wowtype_session_key(session, &raw)
+    }
+
+    /// 告诉会话有这个键（只用来打断单按 Shift，不处理）。
+    private func observe(_ key: KeyInput) {
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.keysym = key.keysym
+        raw.modifiers = key.modifiers.rawValue
+        raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
+        wowtype_session_key(session, &raw)
     }
 
     /// 单按 Shift：中 → 英 → 译 → 中（没配好互译时只在中英之间切），和 Linux 一样。
@@ -387,7 +415,7 @@ public final class Composer {
         }
     }
 
-    /// 切模式。打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）；
+    /// 切模式。打到一半切英文：已选的词 + 打的字母原样上屏（会话做，和微信输入法一样）；
     /// 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打。
     public func switchMode(to newMode: Mode) {
         let target = newMode == .translate && !translateAvailable ? Mode.chinese : newMode
@@ -395,11 +423,13 @@ public final class Composer {
         if mode == .translate {
             leaveTranslate()
         }
-        if target == .english && isComposing {
-            commitInput()
+        let raw: Int32
+        switch target {
+        case .chinese: raw = WOWTYPE_MODE_CHINESE
+        case .english: raw = WOWTYPE_MODE_ENGLISH
+        case .translate: raw = WOWTYPE_MODE_TRANSLATE
         }
-        mode = target
-        refresh()
+        apply(wowtype_session_set_mode(session, raw))
     }
 
     /// 切走输入法、换输入框：打到一半的原样上屏（互译时拼音进原文，原文再原样上屏，和 Linux 一样），
@@ -451,6 +481,13 @@ public final class Composer {
         config.pick_char = settings.pickChar ? 1 : 0
         config.punct_style = settings.halfwidthPunct ? 1 : 0
         config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
+        switch settings.shiftToggle {
+        case .both: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_BOTH
+        case .left: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_LEFT
+        case .right: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_RIGHT
+        case .off: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_OFF
+        }
+        config.translate_mode = translateAvailable ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -567,21 +604,6 @@ public final class Composer {
         }
         let prev = client.previousCharacter
         return prev != 0 && wowtype_autospace(Int32(bitPattern: prev), Int32(bitPattern: first.value), flags) == 1
-    }
-
-    /// 英文模式、没在打字时直接打的字母和数字：要补空格就连空格一起上屏，吃掉这个键。
-    private func autoSpaceKey(_ key: KeyInput) -> Bool {
-        guard key.modifiers.isDisjoint(with: [.control, .option, .command]),
-              key.isLetter || key.isDigit, let c = key.ascii
-        else {
-            return false
-        }
-        let text = String(UnicodeScalar(c))
-        guard needsAutoSpace(before: text) else {
-            return false
-        }
-        client?.insertText(" " + text)
-        return true
     }
 
     /// 上屏：交给应用（要补空格时带上空格；spaced：会话上屏的已经补过了）；互译时进原文。

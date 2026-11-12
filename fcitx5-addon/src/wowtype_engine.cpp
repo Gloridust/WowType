@@ -1159,6 +1159,11 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.pick_char = pickChar_ ? 1 : 0;
     config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
     config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
+    config.shift_toggle = shiftToggle_ == WowtypeShiftToggle::Left    ? WOWTYPE_SHIFT_TOGGLE_LEFT
+                          : shiftToggle_ == WowtypeShiftToggle::Right ? WOWTYPE_SHIFT_TOGGLE_RIGHT
+                          : shiftToggle_ == WowtypeShiftToggle::Off   ? WOWTYPE_SHIFT_TOGGLE_OFF
+                                                                      : WOWTYPE_SHIFT_TOGGLE_BOTH;
+    config.translate_mode = translateAvailable() ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
@@ -1166,6 +1171,7 @@ const WowtypeFrame *WowtypeEngine::sessionKey(fcitx::InputContext *ic, WowtypeSt
                                               const fcitx::Key &key, uint32_t action) {
     coreReady();
     syncSession(state);
+    syncMode(ic, state);
     uint32_t hints = 0;
     // 密码框、网址框、邮箱框不自动补空格；互译时上屏的字进原文，也不补
     if (!ic || translating(ic) ||
@@ -2063,9 +2069,9 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 单按 Shift 切中英文（WowType 自己的英文模式）。fcitx 的「临时切换输入法」热键
+    // 单按 Shift 切中英文（WowType 自己的英文模式），由会话判断。fcitx 的「临时切换输入法」热键
     // （默认左 Shift）生效时 fcitx 会先把 Shift 吃掉，这里就收不到，两者不会重复切换。
-    if (handleShiftToggle(ic, state, event)) {
+    if (handleShiftKey(ic, state, event)) {
         return;
     }
     if (event.isRelease()) {
@@ -2101,9 +2107,11 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 英文模式：按键原样交给应用（字母、半角标点都直接上屏）
+    // 英文模式：按键原样交给应用（字母、半角标点都直接上屏）；汉字后面打字母、数字要补空格时
+    // 会话连空格一起上屏
     if (asciiMode_ && !state->composing()) {
-        if (autoSpaceKey(ic, key)) {
+        if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
+            applySessionFrame(ic, state, frame);
             event.filterAndAccept();
         }
         return;
@@ -2264,62 +2272,67 @@ std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*en
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
-bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
-                                      fcitx::KeyEvent &event) {
-    const auto sym = event.key().sym();
-    const int code = event.origKey().code();
+bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
+                                   fcitx::KeyEvent &event) {
+    coreReady();
+    syncSession(state);
+    syncMode(ic, state);
+    const fcitx::Key key = event.key();
+    const auto sym = key.sym();
     const bool isShift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
-    const bool wanted =
-        isShift && (shiftToggle_ == WowtypeShiftToggle::Both ||
-                    (shiftToggle_ == WowtypeShiftToggle::Left && sym == FcitxKey_Shift_L) ||
-                    (shiftToggle_ == WowtypeShiftToggle::Right && sym == FcitxKey_Shift_R));
-    if (!event.isRelease()) {
-        const auto states = event.key().states();
-        const bool otherModifier = states.test(fcitx::KeyState::Ctrl) ||
-                                   states.test(fcitx::KeyState::Alt) ||
-                                   states.test(fcitx::KeyState::Super);
-        if (wanted && !otherModifier && !state->emojiPanel_ &&
-            state->tool_ == WowtypeTool::None) {
-            // 按住不放时的自动重复：还是那一下，不重新计时（key() 规整时去掉了 Repeat，要看 rawKey）
-            if (shiftDown_ != sym || !event.rawKey().states().test(fcitx::KeyState::Repeat)) {
-                shiftDownAt_ = fcitx::now(CLOCK_MONOTONIC);
-            }
-            shiftDown_ = sym;
-            shiftDownCode_ = code;
-        } else {
-            shiftDown_ = FcitxKey_None;
-        }
-        return false;
-    }
+    WowtypeKey raw{};
+    raw.size = sizeof(raw);
+    raw.keysym = static_cast<uint32_t>(sym);
+    raw.modifiers = static_cast<uint32_t>(key.states());
+    raw.release = event.isRelease() ? 1 : 0;
+    // 别的键只报给会话（按住 Shift 时按了它，这一下就不算单按），不让会话处理
+    raw.action = isShift ? WOWTYPE_KEY_ACTION_NONE : WOWTYPE_KEY_ACTION_OBSERVE;
     // 松开时按键码认：xkb 选项（比如 grp:shifts_toggle）或 fcitx5 按输入法布局重新翻译时，
-    // 松开那一下 Shift 已经算按着，同一个键可能翻成别的符号（ISO_Next_Group 等）。
-    // 没有键码（测试、部分前端）时还按符号认。
-    const bool sameKey = shiftDown_ != FcitxKey_None &&
-                         (code && shiftDownCode_ ? code == shiftDownCode_ : sym == shiftDown_);
-    if (!sameKey) {
-        if (!isShift) {
-            shiftDown_ = FcitxKey_None;
+    // 松开那一下 Shift 可能翻成别的符号（ISO_Next_Group 等）
+    raw.code = static_cast<uint32_t>(event.origKey().code());
+    // 按住不放的自动重复不重新计时（key() 规整时去掉了 Repeat，要看 rawKey）
+    raw.repeat = event.rawKey().states().test(fcitx::KeyState::Repeat) ? 1 : 0;
+    raw.time_ms = static_cast<uint64_t>(fcitx::now(CLOCK_MONOTONIC) / 1000);
+    if (state->emojiPanel_ || state->tool_ != WowtypeTool::None) {
+        raw.hints |= WOWTYPE_KEY_HINT_PANEL_OPEN;
+    }
+    const bool wasExpanded = state->expanded_;
+    const WowtypeFrame *frame = wowtype_session_key(state->session_, &raw);
+    if (!frame || !frame->mode_changed) {
+        if (isShift) {
+            // Shift 只走这一条路（再交给会话一次会把按下的时刻、键码冲掉）。展开面板里按下 Shift：
+            // 会话已经把面板收起来了，重画；Shift 本身交给应用
+            if (wasExpanded) {
+                syncView(state);
+                updateInputPanel(ic, state);
+            }
+            return true;
         }
         return false;
     }
-    shiftDown_ = FcitxKey_None;
-    // 按住 Shift 超过 0.5 秒多半是想打大写或者犹豫了，不切
-    if (fcitx::now(CLOCK_MONOTONIC) - shiftDownAt_ > 500000) {
-        return false;
+    if (frame->commit) {
+        // 打到一半切英文：已选的词 + 打的字母原样上屏（会话已经放进 frame）
+        finishCommit(ic, state, frame);
+        updateInputPanel(ic, state);
     }
-    toggleAsciiMode(ic, state);
+    switchMode(ic, state, frame->mode == WOWTYPE_MODE_ENGLISH,
+               frame->mode == WOWTYPE_MODE_TRANSLATE, true);
     event.filterAndAccept();
     return true;
 }
 
-void WowtypeEngine::toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state) {
-    if (translateMode_) {
-        switchMode(ic, state, false, false, true);
-    } else if (asciiMode_) {
-        // 英 → 译（配置了翻译服务才有这一档）或 → 中
-        switchMode(ic, state, false, translateAvailable(), true);
-    } else {
-        switchMode(ic, state, true, false, true);
+void WowtypeEngine::syncMode(fcitx::InputContext *ic, WowtypeState *state) {
+    // 中 / 英 / 译是全局的（在一个应用里切了，别的应用里也是）；会话每个输入框一份，按键前对齐
+    const int want = translateMode_ ? WOWTYPE_MODE_TRANSLATE
+                     : asciiMode_   ? WOWTYPE_MODE_ENGLISH
+                                    : WOWTYPE_MODE_CHINESE;
+    if (wowtype_session_mode(state->session_) == want) {
+        return;
+    }
+    const WowtypeFrame *frame = wowtype_session_set_mode(state->session_, want);
+    if (frame && frame->commit && ic) {
+        finishCommit(ic, state, frame);
+        updateInputPanel(ic, state);
     }
 }
 
@@ -2345,6 +2358,9 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
     }
     asciiMode_ = ascii;
     translateMode_ = translate;
+    if (state) {
+        syncMode(ic, state);
+    }
     const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
     WLOG_I() << "WowType: 切到" << name;
     if (!ic) {

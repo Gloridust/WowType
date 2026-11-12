@@ -14,7 +14,8 @@ use std::ptr;
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
 use crate::symbols::PunctStyle;
 use crate::session::{
-    Candidate, CandidateKind, Config, Frame, Key, KeyAction, Panel, SelectKeys, Session,
+    Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys, Session,
+    ShiftToggle,
 };
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
@@ -31,15 +32,48 @@ pub struct WowtypeKey {
     pub action: u32,
     /// 1.10 起：`WOWTYPE_KEY_HINT_*`。
     pub hints: u32,
+    /// 1.10 起：按键码，不知道给 0。
+    pub code: u32,
+    /// 1.10 起：按住不放的自动重复。
+    pub repeat: u32,
+    /// 1.10 起：按键时刻（毫秒，单调递增），不知道给 0。
+    pub time_ms: u64,
 }
 
 pub const WOWTYPE_KEY_HINT_NO_AUTO_SPACE: u32 = crate::session::key_hints::NO_AUTO_SPACE;
+pub const WOWTYPE_KEY_HINT_PANEL_OPEN: u32 = crate::session::key_hints::PANEL_OPEN;
+
+pub const WOWTYPE_MODE_CHINESE: c_int = 0;
+pub const WOWTYPE_MODE_ENGLISH: c_int = 1;
+pub const WOWTYPE_MODE_TRANSLATE: c_int = 2;
+
+fn mode_to_c(mode: Mode) -> c_int {
+    match mode {
+        Mode::Chinese => WOWTYPE_MODE_CHINESE,
+        Mode::English => WOWTYPE_MODE_ENGLISH,
+        Mode::Translate => WOWTYPE_MODE_TRANSLATE,
+    }
+}
+
+fn mode_from_c(raw: c_int) -> Mode {
+    match raw {
+        WOWTYPE_MODE_ENGLISH => Mode::English,
+        WOWTYPE_MODE_TRANSLATE => Mode::Translate,
+        _ => Mode::Chinese,
+    }
+}
+
+pub const WOWTYPE_SHIFT_TOGGLE_BOTH: c_int = 0;
+pub const WOWTYPE_SHIFT_TOGGLE_LEFT: c_int = 1;
+pub const WOWTYPE_SHIFT_TOGGLE_RIGHT: c_int = 2;
+pub const WOWTYPE_SHIFT_TOGGLE_OFF: c_int = 3;
 
 pub const WOWTYPE_KEY_ACTION_NONE: u32 = 0;
 pub const WOWTYPE_KEY_ACTION_PREV_PAGE: u32 = 1;
 pub const WOWTYPE_KEY_ACTION_NEXT_PAGE: u32 = 2;
 pub const WOWTYPE_KEY_ACTION_PREV_CANDIDATE: u32 = 3;
 pub const WOWTYPE_KEY_ACTION_NEXT_CANDIDATE: u32 = 4;
+pub const WOWTYPE_KEY_ACTION_OBSERVE: u32 = 5;
 
 fn key_action(raw: u32) -> KeyAction {
     match raw {
@@ -47,6 +81,7 @@ fn key_action(raw: u32) -> KeyAction {
         WOWTYPE_KEY_ACTION_NEXT_PAGE => KeyAction::NextPage,
         WOWTYPE_KEY_ACTION_PREV_CANDIDATE => KeyAction::PrevCandidate,
         WOWTYPE_KEY_ACTION_NEXT_CANDIDATE => KeyAction::NextCandidate,
+        WOWTYPE_KEY_ACTION_OBSERVE => KeyAction::Observe,
         _ => KeyAction::None,
     }
 }
@@ -77,6 +112,12 @@ pub struct WowtypeSessionConfig {
     pub punct_style: c_int,
     /// 1.10 起：自动补空格，`autospace::LETTERS | DIGITS`，0 关。
     pub auto_space: u32,
+    /// 1.10 起：`WOWTYPE_SHIFT_TOGGLE_*`，默认两边都行。
+    pub shift_toggle: c_int,
+    /// 1.10 起：按住 Shift 多久以内松开算单按（毫秒），0 用默认（500）。
+    pub shift_tap_ms: u32,
+    /// 1.10 起：单按 Shift 的循环里有「译」。
+    pub translate_mode: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -98,6 +139,14 @@ impl Default for WowtypeSessionConfig {
             pick_char: c_int::from(config.pick_char),
             punct_style: c_int::from(config.punct_style == PunctStyle::Halfwidth),
             auto_space: config.auto_space,
+            shift_toggle: match config.shift_toggle {
+                ShiftToggle::Both => WOWTYPE_SHIFT_TOGGLE_BOTH,
+                ShiftToggle::Left => WOWTYPE_SHIFT_TOGGLE_LEFT,
+                ShiftToggle::Right => WOWTYPE_SHIFT_TOGGLE_RIGHT,
+                ShiftToggle::Off => WOWTYPE_SHIFT_TOGGLE_OFF,
+            },
+            shift_tap_ms: config.shift_tap_ms,
+            translate_mode: c_int::from(config.translate_mode),
         }
     }
 }
@@ -127,6 +176,18 @@ impl WowtypeSessionConfig {
                 PunctStyle::Fullwidth
             },
             auto_space: self.auto_space,
+            shift_toggle: match self.shift_toggle {
+                WOWTYPE_SHIFT_TOGGLE_LEFT => ShiftToggle::Left,
+                WOWTYPE_SHIFT_TOGGLE_RIGHT => ShiftToggle::Right,
+                WOWTYPE_SHIFT_TOGGLE_OFF => ShiftToggle::Off,
+                _ => ShiftToggle::Both,
+            },
+            shift_tap_ms: if self.shift_tap_ms == 0 {
+                Config::default().shift_tap_ms
+            } else {
+                self.shift_tap_ms
+            },
+            translate_mode: self.translate_mode != 0,
         }
     }
 }
@@ -219,6 +280,10 @@ pub struct WowtypeFrame {
     pub forgot: c_int,
     /// 1.10 起：这次上屏里有引擎学到的选词。
     pub learned: c_int,
+    /// 1.10 起：这次调用以后的输入模式，`WOWTYPE_MODE_*`。
+    pub mode: c_int,
+    /// 1.10 起：这次调用切换了输入模式。
+    pub mode_changed: c_int,
 }
 
 impl Default for WowtypeFrame {
@@ -238,6 +303,8 @@ impl Default for WowtypeFrame {
             wake_after_ms: 0,
             forgot: 0,
             learned: 0,
+            mode: WOWTYPE_MODE_CHINESE,
+            mode_changed: 0,
         }
     }
 }
@@ -316,6 +383,8 @@ impl WowtypeSession {
             has_next: c_int::from(frame.has_next),
             forgot: c_int::from(frame.forgot),
             learned: c_int::from(frame.learned),
+            mode: mode_to_c(frame.mode),
+            mode_changed: c_int::from(frame.mode_changed),
             ..WowtypeFrame::default()
         };
         &self.frame
@@ -482,6 +551,9 @@ pub unsafe extern "C" fn wowtype_session_key(
         prev_char: char::from_u32(raw.prev_char).filter(|&c| c != '\0'),
         action: key_action(raw.action),
         hints: raw.hints,
+        code: raw.code,
+        repeat: raw.repeat != 0,
+        time_ms: raw.time_ms,
     };
     handle.run("key", |session| session.key(&key))
 }
@@ -527,6 +599,25 @@ pub unsafe extern "C" fn wowtype_session_reset(
         return ptr::null();
     };
     handle.run("reset", |session| session.reset(commit_pending != 0))
+}
+
+/// 切换输入模式（`WOWTYPE_MODE_*`，外部命令、默认模式、外壳全局的模式用）。切到英文时打到一半的放进
+/// frame->commit。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_set_mode(
+    session: *mut WowtypeSession,
+    mode: c_int,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("set_mode", |session| session.set_mode(mode_from_c(mode)))
+}
+
+/// 现在的输入模式，`WOWTYPE_MODE_*`；session 为 NULL 时是中文。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_mode(session: *const WowtypeSession) -> c_int {
+    unsafe { session.as_ref() }.map_or(WOWTYPE_MODE_CHINESE, |handle| mode_to_c(handle.session.mode()))
 }
 
 // ---- 过渡函数：外壳还没挪完时用，挪完以后删掉（见 docs/ABI.md）----
@@ -722,6 +813,9 @@ mod tests {
             prev_char: 0,
             action: 0,
             hints: 0,
+            code: 0,
+            repeat: 0,
+            time_ms: 0,
         };
         let frame = unsafe { &*wowtype_session_key(session, &key) };
         assert_eq!(frame.handled, 1);

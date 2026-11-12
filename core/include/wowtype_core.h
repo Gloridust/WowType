@@ -339,6 +339,9 @@ typedef struct WowtypeSession WowtypeSession;
 #define WOWTYPE_KEY_ACTION_NEXT_PAGE 2
 #define WOWTYPE_KEY_ACTION_PREV_CANDIDATE 3
 #define WOWTYPE_KEY_ACTION_NEXT_CANDIDATE 4
+/* 1.10 起：外壳只是告诉会话有这个键（松开的、外壳自己处理掉的），会话不处理它，只用来判断
+ * 单按 Shift（按住 Shift 时按了别的键就不算）。外壳每个非 Shift 的键都先这样报一下。 */
+#define WOWTYPE_KEY_ACTION_OBSERVE 5
 
 /* 一次按键。keysym 是 XKB keysym 的子集（字母、数字、标点、方向、功能键）。
  * size 填 sizeof(WowtypeKey)：以后在末尾加字段，旧外壳没填的字段当 0。 */
@@ -352,10 +355,27 @@ typedef struct {
                          * （读不到就不补） */
     uint32_t action;    /* WOWTYPE_KEY_ACTION_*（1.6 起） */
     uint32_t hints;     /* 1.10 起：WOWTYPE_KEY_HINT_*，输入框的情况 */
+    uint32_t code;      /* 1.10 起：按键码（硬件键码），不知道给 0。单按 Shift 时按下、松开按它对上 */
+    uint32_t repeat;    /* 1.10 起：按住不放的自动重复 */
+    uint64_t time_ms;   /* 1.10 起：按键时刻（毫秒，单调递增的任意起点），不知道给 0 */
 } WowtypeKey;
 
 /* WowtypeKey.hints（1.10 起）。 */
 #define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格 */
+#define WOWTYPE_KEY_HINT_PANEL_OPEN (1u << 1)    /* 外壳开着自己的面板（表情面板、工具栏）：按 Shift 不切中英文 */
+
+/* 输入模式（1.10 起）。单按 Shift（Shift_L 0xffe1 / Shift_R 0xffe2 的按下、松开都交给会话）
+ * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1。
+ * 英文模式下会话只管字母、数字前的自动空格，别的键都交给应用。互译时的上屏还在外壳。 */
+#define WOWTYPE_MODE_CHINESE 0
+#define WOWTYPE_MODE_ENGLISH 1
+#define WOWTYPE_MODE_TRANSLATE 2
+
+/* 用哪边的 Shift 单按切换（WowtypeSessionConfig.shift_toggle，1.10 起）。 */
+#define WOWTYPE_SHIFT_TOGGLE_BOTH 0
+#define WOWTYPE_SHIFT_TOGGLE_LEFT 1
+#define WOWTYPE_SHIFT_TOGGLE_RIGHT 2
+#define WOWTYPE_SHIFT_TOGGLE_OFF 3
 
 /* 设置里能选的翻页键（WowtypeSessionConfig.page_keys 的位掩码）。PgUp PgDn 一直能用；
  * 横排时上下键翻页、竖排时左右键翻页。 */
@@ -386,6 +406,9 @@ typedef struct {
     int punct_style;    /* 1.10 起：0 全角（中文标点，默认）、1 半角（标点原样交给应用） */
     uint32_t auto_space; /* 1.10 起：中英文之间自动补空格，1 汉字和字母之间、2 汉字和数字之间，
                           * 可以相加；0 关（默认） */
+    int shift_toggle;    /* 1.10 起：WOWTYPE_SHIFT_TOGGLE_*，默认两边都行 */
+    uint32_t shift_tap_ms; /* 1.10 起：按住 Shift 多久以内松开算单按（毫秒），0 用默认 500 */
+    int translate_mode;  /* 1.10 起：单按 Shift 的循环里有「译」（配好了翻译服务），默认 0 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -407,6 +430,8 @@ typedef struct {
                              * 外壳该马上存用户词库和输入习惯（和上屏后存的一样） */
     int learned;            /* 1.10 起：这次上屏里有引擎学到的选词（选了引擎的候选、原样上屏输入），
                              * 外壳攒够次数存一次用户词库；只上屏了标点、emoji、计算结果、日期时间是 0 */
+    int mode;               /* 1.10 起：这次调用以后的输入模式，WOWTYPE_MODE_* */
+    int mode_changed;       /* 1.10 起：这次调用切换了输入模式（单按 Shift、wowtype_session_set_mode） */
 } WowtypeFrame;
 
 /* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；
@@ -424,6 +449,11 @@ const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKe
 /* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法、
  * 打字途中切英文时，和回车一样），原始输入也记一次选词。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
+/* 切换输入模式（1.10 起，WOWTYPE_MODE_*）：外部命令、设置里的默认模式、外壳全局的模式用。
+ * 切到英文时打到一半的（已选的词 + 原始输入）放进 frame->commit。 */
+const WowtypeFrame *wowtype_session_set_mode(WowtypeSession *session, int mode);
+/* 现在的输入模式（1.10 起），WOWTYPE_MODE_*；session 为 NULL 时是中文。 */
+int wowtype_session_mode(const WowtypeSession *session);
 /* 点候选（1.6 起）：index 是显示的这些（frame 的 cand_count 个）里的序号。和按数字键一样：
  * 句首词进已选栈，用完输入就上屏并记选词。序号不对时 handled 为 0。 */
 const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index);
