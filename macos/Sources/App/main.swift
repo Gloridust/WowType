@@ -7,6 +7,7 @@
 //   … --version
 
 import AppKit
+import CWowtype
 import InputMethodKit
 
 /// 自检里用的假输入框。
@@ -84,6 +85,12 @@ terminationSource.setEventHandler {
     exit(0)
 }
 terminationSource.resume()
+
+// 核心的接口主版本要和编译时的头文件一样（docs/ABI.md）：静态链接时一定对得上，改成动态库以后装错了版本就别跑
+if Int(wowtype_abi_version()) / 1000 != Int(WOWTYPE_ABI_VERSION_MAJOR) {
+    NSLog("WowType: 核心接口版本 %d 和编译时的主版本 %d 对不上", wowtype_abi_version(), WOWTYPE_ABI_VERSION_MAJOR)
+    exit(1)
+}
 
 guard let connection = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String,
       let bundleID = Bundle.main.bundleIdentifier

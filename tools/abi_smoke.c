@@ -197,7 +197,6 @@ int main(int argc, char **argv) {
         }
         check(wowtype_session_candidate_total(s) == 0, "session: no engine, no candidates");
         wowtype_session_set_engine(s, e);
-        wowtype_session_set_context(s, "");
         const WowtypeFrame *f = wowtype_session_frame(s);
         check(f && !f->handled && strcmp(f->preedit, "ni'hao'zhong'guo") == 0,
               "session: preedit segmented");
@@ -236,8 +235,8 @@ int main(int argc, char **argv) {
         }
         WowtypeKey enter = {sizeof(WowtypeKey), 0xff0d, 0, 0, 0};
         f = wowtype_session_key(s, &enter);
-        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0, "session: return commits raw letters");
-        check(wowtype_session_last_choice(s, &info) == -1, "session: return is not a candidate");
+        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0 && f->learned,
+              "session: return commits raw letters (learned)");
         /* ABI 1.6：显示的这一页、点候选、上屏的是哪个候选、候选框状态 */
         for (const char *k = "nihao"; *k; ++k) {
             WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
@@ -263,8 +262,13 @@ int main(int argc, char **argv) {
         check(!wowtype_session_select(s, shown)->handled, "session: select out of range");
         f = wowtype_session_select(s, 0);
         check(f && f->handled && f->commit && strcmp(f->commit, first) == 0, "session: select commits");
-        check(wowtype_session_last_choice(s, &info) == 0 && strcmp(info.text, first) == 0,
-              "session: last choice");
+        check(f->learned && f->mode == WOWTYPE_MODE_CHINESE && !f->translating,
+              "session: 1.10 frame fields");
+        /* ABI 1.10：没在打字时标点由会话换成中文标点 */
+        WowtypeKey comma = {sizeof(WowtypeKey), ',', 0, 0, 0};
+        f = wowtype_session_key(s, &comma);
+        check(f && f->handled && f->commit && strcmp(f->commit, "，") == 0 && !f->learned,
+              "session: punctuation");
         wowtype_session_set_engine(s, NULL);
         check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
         wowtype_session_free(s);

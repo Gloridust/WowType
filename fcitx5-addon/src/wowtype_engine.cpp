@@ -478,13 +478,6 @@ public:
     std::string selectedText() const { return wowtype_session_selected_text(session_); }
     bool hasSelections() const { return !selectedText().empty(); }
     bool composing() const { return *wowtype_session_input(session_) != '\0'; }
-    /// 往原始输入后面加字（计算器、双拼分号、表情面板搜索词）。
-    void append(const std::string &text) { wowtype_session_append(session_, text.c_str()); }
-    /// 把原始输入换成 text（表情面板的搜索词退格用，不让会话去算拼音候选）。
-    void setInput(const std::string &text) {
-        wowtype_session_reset(session_, 0);
-        wowtype_session_append(session_, text.c_str());
-    }
     /// 交给会话处理一个按下的键（keysym 为 0 时只有动作）。先用 WowtypeEngine::sessionKey
     /// 同步引擎和设置。返回的 frame 归会话，下一次调会话前有效。
     /// prev_char：应用里光标前一个字（读不到给 0）；hints：WOWTYPE_KEY_HINT_*。
@@ -749,6 +742,8 @@ void WowtypeEngine::maybeSwitchLexicon() {
         auto *state = ic->propertyFor(&factory_);
         state->clear();
         clearTranslation(state);
+        // 会话借用引擎：先让它放开，再释放（ABI.md：引擎要比会话活得久）
+        wowtype_session_set_engine(state->session_, nullptr);
         ic->inputPanel().reset();
         ic->updatePreedit();
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
@@ -992,6 +987,13 @@ WowtypeEngine::~WowtypeEngine() {
     if (loading_.valid()) {
         core_ = loading_.get();
     }
+    // 会话借用引擎和翻译器：先让它们放开，再释放（ABI.md：要比会话活得久）
+    instance_->inputContextManager().foreach([this](fcitx::InputContext *ic) {
+        auto *state = ic->propertyFor(&factory_);
+        wowtype_session_set_translator(state->session_, nullptr);
+        wowtype_session_set_engine(state->session_, nullptr);
+        return true;
+    });
     if (core_) {
         maybeSaveUserDict(true);
         wowtype_engine_free(core_);

@@ -436,7 +436,7 @@ pub struct WowtypeSession {
     preedit: CString,
     /// frame 里显示的候选在全部候选里的起点（`wowtype_session_candidate` 用）。
     shown_start: usize,
-    /// 上一次上屏是选的哪个候选（`wowtype_session_last_choice` 用）。
+    /// 上一次上屏是选的哪个候选（以前的 `wowtype_session_last_choice` 用，现在只给调试看）。
     last_choice: Option<CCandidate>,
     /// 过渡函数返回的字符串。
     text: CString,
@@ -930,7 +930,7 @@ pub unsafe extern "C" fn wowtype_session_translate_clear(
     })
 }
 
-// ---- 过渡函数：外壳还没挪完时用，挪完以后删掉（见 docs/ABI.md）----
+// ---- 读会话状态、整个候选列表（fcitx5 的候选框要整个列表），见 docs/ABI.md「输入会话」----
 
 /// 全部原始输入（含已选词用掉的部分）。
 #[no_mangle]
@@ -1001,44 +1001,6 @@ pub unsafe extern "C" fn wowtype_session_view(
     };
     unsafe { write_sized(out, value) };
     0
-}
-
-/// 上一次返回的 frame 上屏的字是选哪个候选来的，写进 out（按 out->size 写）。
-/// 返回 0 是选候选上屏的；-1：原样上屏输入、没上屏，或参数为 NULL。
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_session_last_choice(
-    session: *mut WowtypeSession,
-    out: *mut WowtypeCandidateInfo,
-) -> c_int {
-    let (Some(handle), false) = (unsafe { session.as_mut() }, out.is_null()) else {
-        return -1;
-    };
-    let Some(c) = handle.last_choice.as_ref() else {
-        return -1;
-    };
-    unsafe { write_sized(out, c.info()) };
-    0
-}
-
-/// 往原始输入后面加字（计算器、双拼分号、表情面板搜索词）。
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_session_append(session: *mut WowtypeSession, text: *const c_char) {
-    if let Some(handle) = unsafe { session.as_mut() } {
-        let text = unsafe { arg(text) };
-        handle.session.append(&text);
-    }
-}
-
-/// 光标前已经上屏的字（外壳记的上文）。
-#[no_mangle]
-pub unsafe extern "C" fn wowtype_session_set_context(
-    session: *mut WowtypeSession,
-    text: *const c_char,
-) {
-    if let Some(handle) = unsafe { session.as_mut() } {
-        let text = unsafe { arg(text) };
-        handle.session.set_context(&text);
-    }
 }
 
 /// 全部候选的个数（不分页）。
@@ -1146,10 +1108,6 @@ mod tests {
         assert!(unsafe { wowtype_session_candidate(ptr::null_mut(), 0) }.is_null());
         assert_eq!(
             unsafe { wowtype_session_view(ptr::null_mut(), ptr::null_mut()) },
-            -1
-        );
-        assert_eq!(
-            unsafe { wowtype_session_last_choice(ptr::null_mut(), ptr::null_mut()) },
             -1
         );
         unsafe { wowtype_session_free(ptr::null_mut()) };

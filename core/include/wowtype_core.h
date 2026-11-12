@@ -523,20 +523,18 @@ const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index
  * 在同一会话下一次调用前有效。 */
 const char *wowtype_session_candidate(WowtypeSession *session, size_t index);
 
-/* 过渡：选词键、标点等还在外壳时，外壳用这些读写编辑区、选词。返回的字符串在同一会话下一次调用前有效。 */
+/* 读会话的状态（外壳判断在不在打字、拼编辑区用）。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */
 const char *wowtype_session_remaining(WowtypeSession *session);     /* 还没选词的部分 */
 const char *wowtype_session_selected_text(WowtypeSession *session); /* 已选的词连起来 */
 /* 选第 index 个候选（全部候选里的序号，不分页）：emoji、计算结果、日期时间原样上屏不学习；
  * 句首词进已选栈、记一次选词；其余已选的词 + 它上屏，记选词（分几次选出来的整句也记一次）。
- * 序号不对时 handled 为 0。外壳打字途中按标点时，用它把当前候选上屏。 */
+ * 序号不对时 handled 为 0。fcitx5 的候选框点了整个列表里的第几个时用；工具栏、表情面板开着时选面板的。
+ * （1.10 删掉了 wowtype_session_append、_set_context：上文由会话自己记，面板的搜索词也在会话里。） */
 const WowtypeFrame *wowtype_session_choose(WowtypeSession *session, size_t index);
-/* 往原始输入后面加字（计算器算式、双拼分号、表情面板搜索词）。 */
-void wowtype_session_append(WowtypeSession *session, const char *text);
-/* 光标前已经上屏的字（选了开头的词以后，拿它 + 已选的词当上文给剩下的部分排序）。 */
-void wowtype_session_set_context(WowtypeSession *session, const char *text);
 
-/* 过渡：选词键、翻页还在外壳时，外壳把整个候选列表（不分页）抄过去画候选框。 */
+/* 整个候选列表（不分页）：fcitx5 的候选框（CommonCandidateList）要整个列表，外壳抄过去画。
+ * 工具栏、表情面板开着时是面板的条目。 */
 #define WOWTYPE_CAND_WORD 0  /* 引擎的候选：选中要学习 */
 #define WOWTYPE_CAND_PLAIN 1 /* 计算结果、日期时间、带换行的自定义词：原样上屏，不学习 */
 #define WOWTYPE_CAND_EMOJI 2 /* emoji：上屏 commit，不学习 */
@@ -554,12 +552,9 @@ size_t wowtype_session_candidate_total(WowtypeSession *session);
 /* 第 index 个候选写进 out（按 out->size 写）。返回 0 成功，-1 越界或参数为 NULL。
  * 字符串在同一会话下一次改了编辑区、上文、引擎或设置的调用前有效。 */
 int wowtype_session_candidate_info(WowtypeSession *session, size_t index, WowtypeCandidateInfo *out);
-/* 过渡（1.6 起）：上一次调用（_key、_select、_choose）上屏的是哪个候选，写进 out。
- * 返回 0 有，-1 这次上屏的不是候选（回车、没候选时的空格）或没上屏。外壳要它把上屏的 emoji
- * 记进最近用过、看这次有没有学到新词。 */
-int wowtype_session_last_choice(WowtypeSession *session, WowtypeCandidateInfo *out);
+/* （1.10 删掉了 wowtype_session_last_choice：学没学到词看 frame->learned，选了 emoji 由会话记进最近用过。） */
 
-/* 过渡（1.6 起）：fcitx5 外壳的候选框（CommonCandidateList）要整个列表和页码、光标，
+/* 候选框的页码、光标（1.6 起）：fcitx5 外壳的候选框（CommonCandidateList）要整个列表和页码、光标，
  * 用它和 candidate_info 抄。 */
 typedef struct {
     uint32_t size;        /* 填 sizeof(WowtypeSessionView) */
