@@ -1095,7 +1095,6 @@ withConfig({ $0.horizontal = false }) { c, client in
 /// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
 final class FakeTranslator: TranslationBackend {
     var isReady = true
-    weak var owner: AnyObject?
     var started: [String] = []
     var cancels = 0
     var snapshot = TranslateSnapshot(phase: .idle)
@@ -1291,7 +1290,7 @@ do {
     let cancels = r.t.cancels
     check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
           && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
-    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+    check(r.t.cancels == cancels + 1, "Esc 取消请求")
 
     type(r.c, "nihao")
     _ = r.c.handle(.char(" "))
@@ -1401,7 +1400,8 @@ do {
     _ = r.c.handle(.char(" "))
     r.tick(0.6)
     other.cancel()
-    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+    // 每个会话只取消自己发的请求（会话记着发过没有）
+    check(r.t.cancels == 0, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
 }
 
 /// 文件的权限位。

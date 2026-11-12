@@ -42,6 +42,86 @@ pub struct WowtypeKey {
 
 pub const WOWTYPE_KEY_HINT_NO_AUTO_SPACE: u32 = crate::session::key_hints::NO_AUTO_SPACE;
 pub const WOWTYPE_KEY_HINT_PANEL_OPEN: u32 = crate::session::key_hints::PANEL_OPEN;
+pub const WOWTYPE_KEY_HINT_NO_TRANSLATE: u32 = crate::session::key_hints::NO_TRANSLATE;
+
+/// 外壳自己的翻译器（C 布局，1.10 起）：macOS 用它把自己的翻译器（测试里是假的）交给会话。
+/// 函数都不阻塞。poll 把这次的原文、译文、出错原因写进三个出参（在下一次 poll 前有效），
+/// 返回 `WOWTYPE_TRANSLATE_*`；tag 返回方向标签（下一次 tag 前有效）。
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WowtypeTranslateBackend {
+    pub size: u32,
+    pub user: *mut std::ffi::c_void,
+    pub start: Option<unsafe extern "C" fn(user: *mut std::ffi::c_void, text: *const c_char)>,
+    pub cancel: Option<unsafe extern "C" fn(user: *mut std::ffi::c_void)>,
+    pub poll: Option<
+        unsafe extern "C" fn(
+            user: *mut std::ffi::c_void,
+            source: *mut *const c_char,
+            text: *mut *const c_char,
+            error: *mut *const c_char,
+        ) -> c_int,
+    >,
+    pub tag: Option<unsafe extern "C" fn(user: *mut std::ffi::c_void, text: *const c_char) -> *const c_char>,
+}
+
+impl Default for WowtypeTranslateBackend {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            user: ptr::null_mut(),
+            start: None,
+            cancel: None,
+            poll: None,
+            tag: None,
+        }
+    }
+}
+
+/// 把外壳的函数表包成会话用的翻译器。
+struct CBackend(WowtypeTranslateBackend);
+
+impl crate::session::TranslateBackend for CBackend {
+    fn start(&self, text: &str) {
+        if let Some(start) = self.0.start {
+            let text = to_c(text);
+            unsafe { start(self.0.user, text.as_ptr()) };
+        }
+    }
+    fn cancel(&self) {
+        if let Some(cancel) = self.0.cancel {
+            unsafe { cancel(self.0.user) };
+        }
+    }
+    fn poll(&self) -> crate::translate::Snapshot {
+        use crate::translate::JobState;
+        let (mut source, mut text, mut error) = (ptr::null(), ptr::null(), ptr::null());
+        let state = match self.0.poll {
+            Some(poll) => unsafe { poll(self.0.user, &mut source, &mut text, &mut error) },
+            None => 0,
+        };
+        crate::translate::Snapshot {
+            state: match state {
+                1 => JobState::Running,
+                2 => JobState::Done,
+                3 => JobState::Error,
+                _ => JobState::Idle,
+            },
+            source: unsafe { arg(source) },
+            text: unsafe { arg(text) },
+            error: unsafe { arg(error) },
+        }
+    }
+    fn tag(&self, text: &str) -> String {
+        match self.0.tag {
+            Some(tag) => {
+                let text = to_c(text);
+                unsafe { arg(tag(self.0.user, text.as_ptr())) }
+            }
+            None => String::new(),
+        }
+    }
+}
 
 pub const WOWTYPE_MODE_CHINESE: c_int = 0;
 pub const WOWTYPE_MODE_ENGLISH: c_int = 1;
@@ -284,6 +364,14 @@ pub struct WowtypeFrame {
     pub mode: c_int,
     /// 1.10 起：这次调用切换了输入模式。
     pub mode_changed: c_int,
+    /// 1.10 起：互译中（下面四个字符串有效，不在互译时都是空串）。
+    pub translating: c_int,
+    pub translate_source: *const c_char,
+    pub translate_text: *const c_char,
+    pub translate_title: *const c_char,
+    pub translate_status: *const c_char,
+    /// 1.10 起：translate_text 是译完的最终结果。
+    pub translate_done: c_int,
 }
 
 impl Default for WowtypeFrame {
@@ -305,6 +393,12 @@ impl Default for WowtypeFrame {
             learned: 0,
             mode: WOWTYPE_MODE_CHINESE,
             mode_changed: 0,
+            translating: 0,
+            translate_source: EMPTY.as_ptr(),
+            translate_text: EMPTY.as_ptr(),
+            translate_title: EMPTY.as_ptr(),
+            translate_status: EMPTY.as_ptr(),
+            translate_done: 0,
         }
     }
 }
@@ -325,7 +419,13 @@ pub struct WowtypeSession {
     last_choice: Option<CCandidate>,
     /// 过渡函数返回的字符串。
     text: CString,
+    /// 互译要画的四段字（原文、译文、标题、提示）。
+    translate: [CString; 4],
+    /// 外壳给的翻译器（函数表或核心的翻译器），会话借用它。
+    backend: Option<Box<dyn crate::session::TranslateBackend>>,
 }
+
+static EMPTY: &std::ffi::CStr = c"";
 
 fn to_c(text: &str) -> CString {
     CString::new(text.replace('\0', " ")).unwrap_or_default()
@@ -385,8 +485,23 @@ impl WowtypeSession {
             learned: c_int::from(frame.learned),
             mode: mode_to_c(frame.mode),
             mode_changed: c_int::from(frame.mode_changed),
+            wake_after_ms: frame.wake_after_ms,
             ..WowtypeFrame::default()
         };
+        if let Some(view) = &frame.translate {
+            self.translate = [
+                to_c(&view.source),
+                to_c(&view.text),
+                to_c(&view.title),
+                to_c(&view.status),
+            ];
+            self.frame.translating = 1;
+            self.frame.translate_source = self.translate[0].as_ptr();
+            self.frame.translate_text = self.translate[1].as_ptr();
+            self.frame.translate_title = self.translate[2].as_ptr();
+            self.frame.translate_status = self.translate[3].as_ptr();
+            self.frame.translate_done = c_int::from(view.done);
+        }
         &self.frame
     }
 
@@ -479,6 +594,8 @@ pub unsafe extern "C" fn wowtype_session_new(
         shown_start: 0,
         last_choice: None,
         text: CString::default(),
+        translate: Default::default(),
+        backend: None,
     });
     handle.current(false);
     Box::into_raw(handle)
@@ -618,6 +735,103 @@ pub unsafe extern "C" fn wowtype_session_set_mode(
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_session_mode(session: *const WowtypeSession) -> c_int {
     unsafe { session.as_ref() }.map_or(WOWTYPE_MODE_CHINESE, |handle| mode_to_c(handle.session.mode()))
+}
+
+/// 互译用核心的翻译器（Linux 外壳）；NULL 表示没有翻译器。翻译器要比会话活得久，
+/// 释放前先设成 NULL。换掉时攒着的原文丢掉。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_set_translator(
+    session: *mut WowtypeSession,
+    translator: *mut crate::translate_ffi::WowtypeTranslator,
+) {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return;
+    };
+    // 生命周期由外壳保证（和引擎一样）
+    let backend: Option<&'static dyn crate::session::TranslateBackend> =
+        unsafe { translator.as_ref() }.map(|t| {
+            let inner: &dyn crate::session::TranslateBackend = &t.translator;
+            unsafe { &*(inner as *const dyn crate::session::TranslateBackend) }
+        });
+    handle.session.set_translator(backend);
+    handle.backend = None;
+}
+
+/// 互译用外壳自己的翻译器（函数表，macOS 外壳）；NULL 表示没有翻译器。表里的 user 要比会话活得久，
+/// 释放前先设成 NULL。换掉时攒着的原文丢掉。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_set_translate_backend(
+    session: *mut WowtypeSession,
+    backend: *const WowtypeTranslateBackend,
+) {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return;
+    };
+    let boxed: Option<Box<dyn crate::session::TranslateBackend>> = if backend.is_null() {
+        None
+    } else {
+        let raw = unsafe { read_sized(backend, (*backend).size) };
+        Some(Box::new(CBackend(raw)))
+    };
+    // 会话借用盒子里的翻译器：盒子放进 handle 以后地址不变；先换会话的，再放掉旧盒子
+    let borrowed: Option<&'static dyn crate::session::TranslateBackend> = boxed
+        .as_deref()
+        .map(|b| unsafe { &*(b as *const dyn crate::session::TranslateBackend) });
+    handle.session.set_translator(borrowed);
+    handle.backend = boxed;
+}
+
+/// 定时器到了（frame->wake_after_ms 排的）：该发翻译请求的发，按过回车且译好了的放进 frame->commit。
+/// now_ms 是单调时钟的毫秒数（和 WowtypeKey.time_ms 同一个时钟）。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_tick(
+    session: *mut WowtypeSession,
+    now_ms: u64,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("tick", |session| session.tick(now_ms))
+}
+
+/// 外壳要上屏一段与拼音无关的字（工具栏、表情面板、语音识别结果）：互译时进原文，否则补好空格放进
+/// frame->commit。prev_char 是应用里光标前的字，读不到给 0。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_commit_text(
+    session: *mut WowtypeSession,
+    text: *const c_char,
+    prev_char: u32,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    let text = unsafe { arg(text) };
+    let prev = char::from_u32(prev_char).filter(|&c| c != '\0');
+    handle.run("commit_text", |session| session.commit_text(&text, prev))
+}
+
+/// 攒着的原文（互译），没有是空串。在同一个会话下一次调用前有效。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_translate_source(session: *mut WowtypeSession) -> *const c_char {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return EMPTY.as_ptr();
+    };
+    let source = handle.session.translate_source().to_owned();
+    handle.text(&source)
+}
+
+/// 丢掉互译攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_translate_clear(
+    session: *mut WowtypeSession,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("translate_clear", |session| {
+        session.clear_translation();
+        session.frame(true)
+    })
 }
 
 // ---- 过渡函数：外壳还没挪完时用，挪完以后删掉（见 docs/ABI.md）----

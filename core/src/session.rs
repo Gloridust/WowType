@@ -20,6 +20,7 @@
 
 use crate::datetime::LocalTime;
 pub use crate::symbols::PunctStyle;
+use crate::translate::JobState;
 use crate::Engine;
 
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
@@ -48,6 +49,8 @@ pub mod keysym {
     pub const KP_0: u32 = 0xffb0;
     pub const KP_9: u32 = 0xffb9;
     pub const SPACE: u32 = 0x20;
+    pub const HOME: u32 = 0xff50;
+    pub const END: u32 = 0xff57;
     pub const PERCENT: u32 = 0x25;
     pub const APOSTROPHE: u32 = 0x27;
     pub const PAREN_LEFT: u32 = 0x28;
@@ -121,6 +124,65 @@ pub mod key_hints {
     pub const NO_AUTO_SPACE: u32 = 1 << 0;
     /// 外壳开着自己的面板（表情面板、工具栏）：这时按 Shift 不切中英文。
     pub const PANEL_OPEN: u32 = 1 << 1;
+    /// 不能翻译的输入框（密码框）：「译」里也照常上屏，不攒原文、不往外发。
+    pub const NO_TRANSLATE: u32 = 1 << 2;
+}
+
+/// 互译用的翻译器（[`crate::translate::Translator`]，或外壳自己的实现）。都不阻塞。
+pub trait TranslateBackend {
+    /// 开始翻译 text，取消别的请求；正在译或已经译好同一句话时什么也不做。
+    fn start(&self, text: &str);
+    fn cancel(&self);
+    fn poll(&self) -> crate::translate::Snapshot;
+    /// 方向标签（「中→英」「英→中」），按 text 判断。
+    fn tag(&self, text: &str) -> String;
+}
+
+impl TranslateBackend for crate::translate::Translator {
+    fn start(&self, text: &str) {
+        crate::translate::Translator::start(self, text);
+    }
+    fn cancel(&self) {
+        crate::translate::Translator::cancel(self);
+    }
+    fn poll(&self) -> crate::translate::Snapshot {
+        crate::translate::Translator::poll(self)
+    }
+    fn tag(&self, text: &str) -> String {
+        crate::translate::direction_tag(&self.config(), text)
+    }
+}
+
+/// 原文停下来这么久才发请求（句末标点立刻发）。
+pub const TRANSLATE_DELAY_MS: u64 = 500;
+/// 等译文时多久再叫一次会话（[`Frame::wake_after_ms`]）。
+pub const TRANSLATE_POLL_MS: u32 = 50;
+
+/// 互译时外壳要画的（[`Frame::translate`]）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranslateView {
+    /// 攒着的原文（编辑区里画在拼音前面）。
+    pub source: String,
+    /// 显示的译文：原文改了、新译文还没写到上一句那么长时先留着上一句，免得一闪一闪。
+    pub text: String,
+    /// 译完了（text 是最终结果）。
+    pub done: bool,
+    /// 候选框上方：方向标签 + 「互译：」。
+    pub title: String,
+    /// 候选框下方的一行：出错原因、「翻译中…」、怎么上屏；没有是空串。
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Translation {
+    source: String,
+    shown: String,
+    /// 按过回车：译好了就上屏。
+    pending: bool,
+    /// 什么时候发请求（毫秒）；None 不用发。
+    due_ms: Option<u64>,
+    /// 这个会话发过请求、还没取消（多个输入框共用一个翻译器：别的输入框清空不取消它的）。
+    requested: bool,
 }
 
 /// 输入模式：中文、英文（按键原样交给应用）、互译（打中文出外文，上屏由外壳接管）。
@@ -265,6 +327,10 @@ pub struct Frame {
     pub mode: Mode,
     /// 这次调用切换了输入模式（单按 Shift、set_mode）：外壳更新状态栏、提示。
     pub mode_changed: bool,
+    /// 互译中（「译」、有翻译器、输入框能翻译）：外壳画原文、译文、提示。
+    pub translate: Option<TranslateView>,
+    /// 大于 0：过这么久（毫秒）调一次 [`Session::tick`]（等译文、等发请求）。
+    pub wake_after_ms: u32,
 }
 
 /// 候选框的样子。
@@ -463,6 +529,10 @@ pub struct Session<'e> {
     /// 这次调用切换了模式（frame 取走）。
     mode_changed: bool,
     shift: ShiftTap,
+    translator: Option<&'e dyn TranslateBackend>,
+    translation: Translation,
+    /// 最近一次按键或 tick 的时刻（毫秒）。
+    now_ms: u64,
 }
 
 impl Default for Session<'_> {
@@ -492,6 +562,9 @@ impl Default for Session<'_> {
             mode: Mode::Chinese,
             mode_changed: false,
             shift: ShiftTap::default(),
+            translator: None,
+            translation: Translation::default(),
+            now_ms: 0,
         }
     }
 }
@@ -562,6 +635,9 @@ impl<'e> Session<'e> {
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
         self.last_choice = None;
+        if key.time_ms != 0 {
+            self.now_ms = key.time_ms;
+        }
         if let Some(handled) = self.shift_key(key) {
             return self.frame(handled);
         }
@@ -596,6 +672,15 @@ impl<'e> Session<'e> {
         if self.mode == Mode::English && !self.composing() {
             return self.english_key(key);
         }
+        if !self.translation.source.is_empty() && !self.translating() {
+            // 「译」里攒着原文时换到了不能翻译的输入框（密码框）：原文先原样上屏
+            self.commit_source();
+        }
+        if self.translating() && !self.composing() {
+            if let Some(handled) = self.translate_key(key) {
+                return handled;
+            }
+        }
         if self.composing() && key.is_forget() {
             self.forget_current();
             return true;
@@ -628,6 +713,223 @@ impl<'e> Session<'e> {
         false
     }
 
+    /// 换翻译器（None：没有翻译器，「译」里也照常上屏）。换掉时攒着的原文丢掉。
+    pub fn set_translator(&mut self, translator: Option<&'e dyn TranslateBackend>) {
+        let same = match (self.translator, translator) {
+            (Some(a), Some(b)) => std::ptr::addr_eq(a as *const dyn TranslateBackend, b as *const dyn TranslateBackend),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.clear_translation();
+        self.translator = translator;
+    }
+
+    /// 互译中：「译」、有翻译器、输入框能翻译（不是密码框）。
+    pub fn translating(&self) -> bool {
+        self.mode == Mode::Translate
+            && self.translator.is_some()
+            && self.hints & key_hints::NO_TRANSLATE == 0
+    }
+
+    /// 攒着的原文（互译）。
+    pub fn translate_source(&self) -> &str {
+        &self.translation.source
+    }
+
+    /// 丢掉攒着的原文，取消这个会话发的请求（输入框失去焦点、放弃输入）。
+    pub fn clear_translation(&mut self) {
+        let t = &mut self.translation;
+        t.source.clear();
+        t.shown.clear();
+        t.pending = false;
+        t.due_ms = None;
+        if std::mem::take(&mut t.requested) {
+            if let Some(translator) = self.translator {
+                translator.cancel();
+            }
+        }
+    }
+
+    /// 定时器到了（外壳按 frame 的 wake_after_ms 排的）：该发请求的发，按过回车且译好了的上屏。
+    pub fn tick(&mut self, now_ms: u64) -> Frame {
+        self.last_choice = None;
+        self.now_ms = now_ms;
+        self.poll_translation();
+        self.frame(true)
+    }
+
+    fn poll_translation(&mut self) {
+        let Some(translator) = self.translator else {
+            return;
+        };
+        if self.translation.source.is_empty() {
+            self.translation.due_ms = None;
+            if std::mem::take(&mut self.translation.requested) {
+                translator.cancel();
+            }
+            return;
+        }
+        if !self.translating() {
+            return;
+        }
+        if self.translation.due_ms.is_some_and(|due| self.now_ms >= due) {
+            self.translation.due_ms = None;
+            self.request_translation();
+        }
+        let snap = translator.poll();
+        let fresh = snap.source == self.translation.source;
+        if fresh && snap.state == JobState::Error {
+            self.translation.pending = false;
+        }
+        if self.translation.pending && fresh && snap.state == JobState::Done {
+            self.commit_translation();
+        }
+    }
+
+    fn request_translation(&mut self) {
+        if let Some(translator) = self.translator {
+            translator.start(&self.translation.source);
+            self.translation.requested = true;
+        }
+    }
+
+    /// 原文变了：过 TRANSLATE_DELAY_MS（now 时立刻）再发请求。
+    fn source_changed(&mut self, now: bool) {
+        self.translation.pending = false;
+        if self.translation.source.is_empty() {
+            self.clear_translation();
+            return;
+        }
+        let delay = if now { 0 } else { TRANSLATE_DELAY_MS };
+        self.translation.due_ms = Some(self.now_ms + delay);
+    }
+
+    /// 回车、空格：译好了就上屏译文；还没译好（或出错了，回车就是重试）记下来，好了再上屏。
+    fn commit_translation(&mut self) {
+        let Some(translator) = self.translator else {
+            return;
+        };
+        if self.translation.source.is_empty() {
+            return;
+        }
+        let snap = translator.poll();
+        let fresh = snap.source == self.translation.source;
+        if fresh && snap.state == JobState::Done {
+            self.translation.requested = false;
+            self.clear_translation();
+            self.push_commit(&snap.text);
+            return;
+        }
+        self.translation.pending = true;
+        if !fresh || matches!(snap.state, JobState::Error | JobState::Idle) {
+            self.translation.due_ms = None;
+            self.request_translation();
+        }
+    }
+
+    /// Shift+回车、离开「译」：原文原样上屏。
+    fn commit_source(&mut self) {
+        let source = std::mem::take(&mut self.translation.source);
+        self.clear_translation();
+        self.push_commit(&source);
+    }
+
+    /// 互译、没在打拼音时的键。Some：处理完了；None：照常处理（字母开始拼音，标点、数字进原文）。
+    fn translate_key(&mut self, key: &Key) -> Option<bool> {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return None;
+        }
+        if self.translation.source.is_empty() {
+            return None;
+        }
+        match key.keysym {
+            keysym::RETURN | keysym::KP_ENTER => {
+                if key.modifiers & modifier::SHIFT != 0 {
+                    self.commit_source();
+                } else {
+                    self.commit_translation();
+                }
+                Some(true)
+            }
+            keysym::SPACE => {
+                self.commit_translation();
+                Some(true)
+            }
+            keysym::ESCAPE => {
+                self.clear_translation();
+                Some(true)
+            }
+            keysym::BACKSPACE => {
+                self.translation.source.pop();
+                self.source_changed(false);
+                Some(true)
+            }
+            keysym::LEFT | keysym::RIGHT | keysym::UP | keysym::DOWN | keysym::HOME | keysym::END
+            | keysym::DELETE | keysym::PAGE_UP | keysym::PAGE_DOWN | keysym::TAB
+            | keysym::ISO_LEFT_TAB => {
+                // 原文里没有光标，别让应用里的光标乱跑
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    /// 互译时外壳要画的，顺便看要不要再叫会话（等发请求、等译文）。
+    fn translate_view(&mut self) -> Option<(TranslateView, u32)> {
+        if !self.translating() {
+            return None;
+        }
+        let translator = self.translator?;
+        let snap = translator.poll();
+        let t = &mut self.translation;
+        let fresh = !t.source.is_empty() && snap.source == t.source;
+        let failed = fresh && snap.state == JobState::Error;
+        let done = fresh && snap.state == JobState::Done;
+        let text = if fresh && !failed { snap.text.as_str() } else { "" };
+        if t.source.is_empty() || failed {
+            t.shown.clear();
+        } else if done || text.len() >= t.shown.len() {
+            t.shown = text.to_owned();
+        }
+        let status = if failed {
+            format!("{}（回车重试）", snap.error)
+        } else if t.pending {
+            "翻译中…好了就上屏".to_owned()
+        } else if !t.source.is_empty() && !done {
+            "翻译中…".to_owned()
+        } else if !t.source.is_empty() && self.input.is_empty() {
+            "回车上屏 · Shift+回车上屏原文 · Esc 清空".to_owned()
+        } else {
+            String::new()
+        };
+        let running = t.requested && snap.state == JobState::Running;
+        let wake = if t.due_ms.is_some() || t.pending || running {
+            TRANSLATE_POLL_MS
+        } else {
+            0
+        };
+        let view = TranslateView {
+            source: t.source.clone(),
+            text: t.shown.clone(),
+            done,
+            title: format!("{} 互译：", translator.tag(&t.source)),
+            status,
+        };
+        Some((view, wake))
+    }
+
+    /// 外壳要上屏一段与拼音无关的字（工具栏、表情面板、语音识别结果）：互译时进原文，
+    /// 否则照会话的规矩（补空格、记上文）放进 frame 的 commit。prev_char 是应用里光标前的字（读不到 None）。
+    pub fn commit_text(&mut self, text: &str, prev_char: Option<char>) -> Frame {
+        self.last_choice = None;
+        self.prev_char = prev_char;
+        self.emit(text);
+        self.frame(true)
+    }
+
     /// 现在的输入模式。
     pub fn mode(&self) -> Mode {
         self.mode
@@ -643,6 +945,10 @@ impl<'e> Session<'e> {
     fn switch_mode(&mut self, mode: Mode) {
         if mode == self.mode {
             return;
+        }
+        if self.mode == Mode::Translate {
+            // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+            self.commit_source();
         }
         if mode == Mode::English && self.composing() {
             // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
@@ -755,6 +1061,12 @@ impl<'e> Session<'e> {
             self.emit(&text);
             return true;
         }
+        if self.translating() {
+            // 互译时打的字都进原文：数字、没有中文写法的符号、数字后面的点（3.14）也是
+            let text = self.punct_text(c, self.last_char).unwrap_or_else(|| c.to_string());
+            self.emit(&text);
+            return true;
+        }
         if c.is_ascii_digit() {
             if self.space_before(c) {
                 self.emit(&c.to_string());
@@ -795,17 +1107,38 @@ impl<'e> Session<'e> {
         let Some(first) = text.chars().next() else {
             return;
         };
+        if self.translating() {
+            // 互译：上屏的字攒成原文，过一会儿（句末标点立刻）发请求
+            self.translation.source.push_str(text);
+            self.source_changed(ends_sentence(text));
+            self.remember(text);
+            return;
+        }
         let spaced = if self.space_before(first) {
             format!(" {text}")
         } else {
             text.to_owned()
         };
         self.pending.get_or_insert_with(String::new).push_str(&spaced);
+        self.remember(text);
+    }
+
+    /// 上屏了 text（或进了原文）：记下光标前的字和上文。
+    fn remember(&mut self, text: &str) {
         let last = text.chars().last();
         self.prev_char = last;
         self.last_char = last;
         self.context = char_tail(&(self.context.clone() + text), CONTEXT_CHARS);
         self.fresh = false;
+    }
+
+    /// 直接上屏（译文、原文），不进原文、不补空格。
+    fn push_commit(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.pending.get_or_insert_with(String::new).push_str(text);
+        self.remember(text);
     }
 
     /// 正在输入时的键（字母、隔音符除外）。Some：处理完了（handled 是里面的值）；
@@ -1229,12 +1562,18 @@ impl<'e> Session<'e> {
 
     /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
     /// 和回车一样也记一次选词。
+    ///
+    /// 互译时 commit_pending 的拼音先进原文，原文再原样上屏（切走输入法、换输入框）；
+    /// 不上屏时互译攒着的原文不动（外壳上屏以后清编辑区也调这个），要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
         if commit_pending && self.composing() {
             self.commit_input_now();
         } else {
             self.clear();
+        }
+        if commit_pending && !self.translation.source.is_empty() {
+            self.commit_source();
         }
         self.frame(true)
     }
@@ -1250,10 +1589,16 @@ impl<'e> Session<'e> {
             learned: std::mem::take(&mut self.learned),
             mode: self.mode,
             mode_changed: std::mem::take(&mut self.mode_changed),
+            translate: None,
+            wake_after_ms: 0,
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()
         };
+        if let Some((view, wake)) = self.translate_view() {
+            frame.translate = Some(view);
+            frame.wake_after_ms = wake;
+        }
         if n == 0 {
             return frame;
         }
@@ -1679,6 +2024,13 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
 fn char_tail(text: &str, max_chars: usize) -> String {
     let skip = text.chars().count().saturating_sub(max_chars);
     text.chars().skip(skip).collect()
+}
+
+/// 句末（。！？…. ! ? 换行）：原文打到这里立刻发翻译请求。
+fn ends_sentence(text: &str) -> bool {
+    ["。", "！", "？", "…", ".", "!", "?", "\n"]
+        .iter()
+        .any(|end| text.ends_with(end))
 }
 
 /// 单独的修饰键（Shift、Ctrl、Alt、Super、CapsLock、AltGr……）。
