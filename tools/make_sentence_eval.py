@@ -14,6 +14,11 @@
 所以手写句子尽量挑没有歧义读音的说法。
 
 维基百科的文本是 CC BY-SA 4.0，抽出的用例只在本地评测用，不提交。
+
+--context 改成逐词的用例：把每句切成词，第 2 个词起每个词一条「拼音<TAB>词<TAB>前面的文字」，
+测接着前文打的时候排序对不对（wowtype-eval 的第三列）。切词要 jieba：
+
+    python3 tools/make_sentence_eval.py --text tools/eval/daily_sentences.txt --context > tools/eval/context.tsv
 """
 
 import argparse
@@ -37,6 +42,33 @@ def to_pinyin(text):
             return None
         out.append(s)
     return "".join(out)
+
+
+def syllables_of(text):
+    """整句一起标音（多音字按词组读），返回每个字的拼音；有标不出的字时 None。"""
+    from pypinyin import Style, lazy_pinyin
+
+    syllables = lazy_pinyin(text, style=Style.NORMAL, errors="ignore", v_to_u=False)
+    if len(syllables) != len(text):
+        return None
+    out = [s.replace("ü", "v") for s in syllables]
+    if not all(re.fullmatch(r"[a-z]+", s) for s in out):
+        return None
+    return out
+
+
+def context_cases(sentence):
+    """一句切成词，第 2 个词起：(拼音, 词, 前面的文字)。"""
+    import jieba
+
+    syllables = syllables_of(sentence)
+    if syllables is None:
+        return
+    words = list(jieba.cut(sentence, HMM=False))
+    pos = len(words[0]) if words else 0
+    for word in words[1:]:
+        yield "".join(syllables[pos : pos + len(word)]), word, sentence[:pos]
+        pos += len(word)
 
 
 def from_text(path):
@@ -85,6 +117,7 @@ def main():
     ap.add_argument("--min-len", type=int, default=4)
     ap.add_argument("--max-len", type=int, default=12)
     ap.add_argument("--seed", type=int, default=20261109)
+    ap.add_argument("--context", action="store_true", help="逐词、带前文的用例（要 jieba）")
     args = ap.parse_args()
     if bool(args.text) == bool(args.wiki):
         sys.exit("--text 和 --wiki 二选一")
@@ -92,6 +125,17 @@ def main():
         sentences = list(from_text(args.text))
     else:
         sentences = from_wiki(args.wiki, args.count, args.min_len, args.max_len, args.seed)
+    if args.context:
+        import logging
+
+        import jieba
+
+        jieba.setLogLevel(logging.ERROR)
+        print("# 由 tools/make_sentence_eval.py --context 生成：拼音<TAB>词<TAB>前面已经上屏的文字")
+        for s in sentences:
+            for py, word, before in context_cases(s):
+                print(f"{py}\t{word}\t{before}")
+        return
     for s in sentences:
         py = to_pinyin(s)
         if py:
