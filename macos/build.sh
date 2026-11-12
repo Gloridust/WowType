@@ -75,6 +75,9 @@ if [[ -n "$bad" ]]; then
   exit 1
 fi
 
+# 拷进来的文件可能带扩展属性（浏览器下载的数据带隔离标记 com.apple.quarantine）：pkg 会把它们一起装上，
+# 带隔离标记的输入法系统不让跑。签名前全部清掉
+xattr -cr "$app"
 codesign --force --sign - --timestamp=none "$app"
 codesign --verify --strict --verbose=1 "$app"
 mkdir -p "$OUT"
