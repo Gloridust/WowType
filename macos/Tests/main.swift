@@ -262,11 +262,12 @@ do {
 
 do {
     let (c, client) = fresh()
-    // 数字交给了应用，光标前是数字：后面的符号原样（20:22、3,000）
+    // 数字交给了应用，光标前是数字：后面的符号也交给应用原样上屏（20:22、3,000）
     client.committed = "20"
-    _ = c.handle(.char(":"))
-    client.committed += "22"
-    _ = c.handle(.char(","))
+    check(!c.handle(.char(":")), "数字后的冒号交给应用", client.committed)
+    client.committed += ":22"
+    check(!c.handle(.char(",")), "数字后的逗号交给应用", client.committed)
+    client.committed += ","
     check(client.committed == "20:22,", "数字后的符号不换成中文标点", client.committed)
     type(c, "nihao")
     _ = c.handle(.char(":"))
@@ -354,7 +355,8 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     _ = c.handle(.char(","))
-    check(commits == ["你好", "，"], "上屏回调", "\(commits)")
+    // 只上屏标点不算学到了词，不回调（外壳按回调攒次数存学习数据）
+    check(commits == ["你好"], "上屏回调", "\(commits)")
 }
 
 do {
@@ -548,7 +550,10 @@ withConfig({ $0.pickChar = false }) { c, client in
 }
 
 withConfig({ $0.halfwidthPunct = true }) { c, client in
-    _ = c.handle(.char(","))
+    // 半角：没在打字时标点交给应用（应用原样上屏）；打字途中先上屏候选再上屏半角标点
+    if !c.handle(.char(",")) {
+        client.committed += ","
+    }
     type(c, "nihao")
     _ = c.handle(.char("."))
     check(client.committed == ",你好.", "半角标点", client.committed)

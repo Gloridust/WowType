@@ -510,6 +510,16 @@ impl<'e> Session<'e> {
             }
         }
         let handled = self.handle_key(key);
+        // 交给应用的退格、方向键、Delete……之后光标前是什么就不知道了（3 退格以后的点是句号）；
+        // 交给应用的数字、标点上面已经记了，单按修饰键不算
+        if !key.release
+            && !handled
+            && key.prev_char.is_none()
+            && visible_symbol(key.keysym).is_none()
+            && !is_modifier_keysym(key.keysym)
+        {
+            self.last_char = None;
+        }
         self.frame(handled)
     }
 
@@ -1492,6 +1502,11 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
 fn char_tail(text: &str, max_chars: usize) -> String {
     let skip = text.chars().count().saturating_sub(max_chars);
     text.chars().skip(skip).collect()
+}
+
+/// 单独的修饰键（Shift、Ctrl、Alt、Super、CapsLock、AltGr……）。
+fn is_modifier_keysym(sym: u32) -> bool {
+    (0xffe1..=0xffee).contains(&sym) || (0xfe01..=0xfe13).contains(&sym)
 }
 
 /// 字母、空格以外的可见 ASCII 字符（标点、符号、数字）。

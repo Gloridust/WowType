@@ -1478,6 +1478,11 @@ fn punctuation_after_digit_stays_ascii() {
     assert!(!type_keys(&mut session, "4").handled);
     assert_eq!(type_keys(&mut session, "nihao<sp>").commit.as_deref(), Some("你好"));
     assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+    // 数字交给应用以后又按了退格（也交给应用）：光标前是什么不知道了，点是句号
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    assert!(!type_keys(&mut session, "<bs>").handled);
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
 }
 
 #[test]
