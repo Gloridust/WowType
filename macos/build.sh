@@ -55,6 +55,13 @@ res="$app/Contents/Resources"
 cp icons/hicolor/32x32/apps/wowtype.png "$work/menu@2x.png"
 sips -s dpiWidth 144 -s dpiHeight 144 "$work/menu@2x.png" >/dev/null
 tiffutil -cathidpicheck icons/hicolor/16x16/apps/wowtype.png "$work/menu@2x.png" -out "$res/menu.tiff" 2>/dev/null
+# 应用图标：设置窗口（WowType --settings）在程序坞、关于窗口里用。没有 512 的 PNG，最大到 256（128pt@2x）
+iconset="$work/AppIcon.iconset"
+mkdir -p "$iconset"
+for spec in 16:16x16 32:16x16@2x 32:32x32 64:32x32@2x 128:128x128 256:128x128@2x 256:256x256; do
+  cp "icons/hicolor/${spec%%:*}x${spec%%:*}/apps/wowtype.png" "$iconset/icon_${spec#*:}.png"
+done
+iconutil -c icns "$iconset" -o "$res/AppIcon.icns"
 for lproj in macos/Resources/*.lproj; do
   cp -R "$lproj" "$res/"
   plutil -lint "$res/$(basename "$lproj")/InfoPlist.strings"
@@ -68,7 +75,7 @@ cp "${WOWTYPE_S2T:-core/data/s2t.tsv}" "$res/s2t.tsv"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.tiff|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.tiff|AppIcon\.icns|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2
