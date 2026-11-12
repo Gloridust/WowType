@@ -768,11 +768,16 @@ impl Engine {
         promote_picked(&mut result);
         self.promote_custom(&mut result);
         self.append_raw_candidate(raw_display.unwrap_or(display), &mut result);
+        let english_only = drop_forced_chinese(&mut result);
         if self.config.traditional {
             self.apply_traditional(&mut result);
         }
         for candidate in &mut result {
             candidate.consumed = raw.len();
+        }
+        if english_only {
+            // 打的是英文词（iphone、hello）：硬解出来的中文都去掉了，也不补句首词
+            return Ok(result);
         }
         if self.config.prefix_candidates > 0 {
             let leading = raw.len() - raw.trim_start().len();
@@ -1969,8 +1974,20 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
 
     let mut kept: Vec<Candidate> = Vec::new();
     let mut sentences = 0usize;
+    // 第一名是打全了的、词库里的整词（你好；纠错出来的也算：zhognguo -> 中国）时，比它差
+    // JUNK_SENTENCE_MARGIN 以上的整句（泥 | 好、点 | 脑、钟 | 国）是硬凑的，不占位置；用户选过的照留
+    let top_word = whole
+        .first()
+        .filter(|c| {
+            c.words.len() == 1 && c.words[0].known && c.features.prefix_completion == 0.0
+        })
+        .map(|c| c.score);
     for c in whole {
         if is_sentence(&c) {
+            let junk = top_word.is_some_and(|top| top - c.score > JUNK_SENTENCE_MARGIN);
+            if junk && c.features.history_use_count == 0.0 {
+                continue;
+            }
             let first = kept.is_empty();
             if !first
                 && (sentences >= cap || kept.iter().any(|k| differs_only_at_tail(&k.text, &c.text)))
@@ -2021,6 +2038,27 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
         }
     }
     *result = merged;
+}
+
+/// [`compose_candidates`]：整句比排第一的整词差多少（自然对数）就算硬凑的。
+/// 实测 你好 −6.6 vs 泥 | 好 −15.5，电脑 −7.6 vs 点 | 脑 −14.8；整句评测不受影响。
+const JUNK_SENTENCE_MARGIN: f64 = 3.0;
+
+/// 第一个候选是英文词表里的词（iPhone、hello）时，去掉硬解出来的中文：两处纠错的（屁 | 好呢）、
+/// 中间夹着只打了声母的音节的（合理[he l] | 了哦）。返回是不是只剩英文了。
+fn drop_forced_chinese(result: &mut Vec<Candidate>) -> bool {
+    let english_first = result.len() > 1
+        && result
+            .first()
+            .is_some_and(|c| is_raw_candidate(c) && c.words[0].known);
+    if !english_first {
+        return false;
+    }
+    result.retain(|c| {
+        is_raw_candidate(c)
+            || !(c.features.typo_count >= 2.0 || (is_mixed_jianpin(c) && abbrev_before_last(c)))
+    });
+    result.len() == 1
 }
 
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
@@ -2921,6 +2959,15 @@ mod tests {
         let bug = texts("bug");
         assert_eq!(bug.first().map(String::as_str), Some("不过"), "{bug:?}");
         assert_eq!(bug.get(1).map(String::as_str), Some("bug"), "{bug:?}");
+    }
+
+    #[test]
+    fn junk_sentence_does_not_follow_a_clear_word() {
+        // 你好比「泥 | 好」高得多：硬凑的整句不占第二位；英文词后面不出两处纠错硬解的中文
+        let e = engine("ni hao\t你好\t1000000\nni\t泥\t10000\nhao\t好\t100000\n");
+        let texts: Vec<String> = e.input("nihao").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("你好"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "泥好"), "{texts:?}");
     }
 
     #[test]
