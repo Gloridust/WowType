@@ -80,6 +80,8 @@ final class AppState {
         guard FileManager.default.fileExists(atPath: bundled.path) else { return nil }
         let link = supportDir.appendingPathComponent("lexicon.tsv")
         let fm = FileManager.default
+        // 第一次启动时数据目录还没有：先建，不然链接建不成，快照就写进安装包了
+        try? fm.createDirectory(at: supportDir, withIntermediateDirectories: true)
         if (try? fm.destinationOfSymbolicLink(atPath: link.path)) != bundled.path {
             try? fm.removeItem(at: link)
             if (try? fm.createSymbolicLink(at: link, withDestinationURL: bundled)) == nil {
