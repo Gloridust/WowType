@@ -279,7 +279,6 @@ public:
     /// 展开的候选面板里点了第 row 行：光标在这行就选光标处的词，否则选这行第一个。
     void selectGridRow(fcitx::InputContext *ic, WowtypeState *state, std::size_t row);
     /// 互译：上屏译文；还没译好就记下来，好了再上屏。
-    void commitTranslation(fcitx::InputContext *ic, WowtypeState *state);
 
 private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
@@ -317,18 +316,16 @@ private:
     bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
     /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
     bool autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key);
-    /// 原文变了：过一会儿（句末标点立刻）发请求。
-    void translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state, bool now);
-    /// 互译模式下、没有正在打的拼音时的按键，处理了返回 true。
-    bool handleTranslateKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     /// 原文原样上屏（Shift+回车、离开互译模式）。
-    void commitTranslateSource(fcitx::InputContext *ic, WowtypeState *state);
     void clearTranslation(WowtypeState *state);
-    void ensureTranslateTimer();
-    /// 定时调用：到点发请求、取流式结果、刷新面板。还要继续就返回 true。
-    bool pollTranslate();
-    /// 面板上翻译部分的内容摘要：变了才重画
-    std::string translateSignature(WowtypeState *state, int phase, bool fresh) const;
+    /// 单调时钟的毫秒数（会话的 time_ms、tick 用）。
+    static uint64_t nowMs();
+    /// 过 ms 毫秒叫一次会话的 tick（会话的 frame->wake_after_ms：等发请求、等译文）。
+    void scheduleTick(fcitx::InputContext *ic, uint32_t ms);
+    /// 定时器到了：tick 会话，按过回车且译好了的上屏，结果变了重画。返回多久以后再叫（0 不用）。
+    uint32_t tickTranslate();
+    /// 现在画的互译内容（变了才重画）。
+    std::string translateSignature(const WowtypeFrame *frame) const;
     /// 照微信输入法：译文直接写在应用的输入框里（编辑区），候选框当原文框
     /// （顶上是方向，下面是原文和正在打的拼音，拼音候选照常列在下面）。
     /// 只设编辑区和提示行，不动候选列表。
@@ -497,7 +494,6 @@ private:
     fcitx::TrackableObjectReference<fcitx::InputContext> translateIc_;
     std::unique_ptr<fcitx::EventSourceTime> translateTimer_;
     /// 到这个时刻（单调时钟，微秒）发请求；0 表示不用发。
-    uint64_t translateAt_ = 0;
     /// 上次画面板时的结果，没变就不重画。
     std::string translateDrawn_;
 
