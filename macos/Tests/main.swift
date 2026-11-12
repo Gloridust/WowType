@@ -438,7 +438,7 @@ do {
     FuzzyZh=False
       TypoCorrection = False
     Shuangpin=True
-    ShuangpinScheme=xiaohe
+    ShuangpinScheme=Xiaohe
     ShiftToggle=Right
     PunctuationStyle=Halfwidth
     SelectKeys=SemicolonQuote
@@ -457,7 +457,10 @@ do {
     check(!c.horizontal && c.pageSize == 9, "竖排；每页个数超出 3–9 取 9；[分组] 里的不算", "\(c.pageSize)")
     check(c.fuzzy && c.fuzzyGroups == (1 | 2 | 4 | 64 | 128 | 256 | 512 | 1024) & ~1 | 8, "模糊音分组", "\(c.fuzzyGroups)")
     check(!c.typoCorrection, "键值两边的空格不算")
-    check(c.shuangpin && c.shuangpinScheme == "Xiaohe", "双拼方案不分大小写", c.shuangpinScheme)
+    check(c.shuangpin && c.shuangpinScheme == "Xiaohe", "双拼方案", c.shuangpinScheme)
+    // 和 fcitx5 一样区分大小写，认不出的回到默认（三端一样，见 spec/config.json 的 readRules）
+    check(WowtypeConfig.parse("ShuangpinScheme=xiaohe").shuangpinScheme == "Ziranma"
+          && WowtypeConfig.parse("ShuangpinScheme=Dvorak").shuangpinScheme == "Ziranma", "双拼方案写错、大小写不对用默认")
     check(c.shiftToggle == .right && c.halfwidthPunct && c.selectKeys == .semicolonQuote, "枚举值")
     check(c.pageKeys == 2, "翻页键", "\(c.pageKeys)")
     check(c.autoSpaceFlags == 1, "自动空格只加字母", "\(c.autoSpaceFlags)")
@@ -830,6 +833,8 @@ do {
     let e = WowtypeConfig.parse("Toolbar=False\nClipboardHistory=True\nEmojiKey=Control+Shift+E")
     check(!e.toolbar && e.clipboardHistory, "Toolbar、ClipboardHistory")
     check(e.emojiKey?.matches(.char("E", [.control, .shift])) == true, "Control+Shift+E：按下时 macOS 给大写也认")
+    check(e.emojiKey?.name == "Control+Shift+E" && Shortcut(name: "Control+Shift+e")?.name == "Control+Shift+E"
+          && Shortcut(name: "Control+e")?.name == "Control+e", "按着 Shift 的字母写回时是大写（和 fcitx5、设置里的预设一样）")
     check(e.emojiKey?.matches(.char("e", [.control])) == false, "少了 Shift 不算")
     check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
     check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
@@ -1173,12 +1178,28 @@ do {
     // 设置：键名、默认值和 Linux 一样
     let d = WowtypeConfig()
     check(!d.translate && d.translateTarget == "en" && d.translateBaseUrl.isEmpty && d.translateModel.isEmpty
-          && !d.translateFormal && !d.translateLocal && d.translateLocalModel.isEmpty
+          && !d.translateFormal && d.translateLocal && d.translateLocalModel.isEmpty
           && d.translateLlamaServer.isEmpty && d.translateIdleMinutes == 5,
-          "互译默认关、译成英文、不用本地模型（文件里没写 TranslateLocal 时和 Linux 一样是 False）")
+          "互译默认关、译成英文、默认用本地模型")
+    // 0.3.10 及以前的文件没有 TranslateLocal：填了翻译接口的接着用接口（三端一样，见 spec/config.json）
+    let old = "Translate=True\nTranslateBaseUrl=https://api.deepseek.com/v1\nTranslateModel=deepseek-chat\n"
+    check(!WowtypeConfig.parse(old).translateLocal, "旧文件填了接口、没写 TranslateLocal：用接口")
+    check(WowtypeConfig.parse("Translate=True\nTranslateBaseUrl=\n").translateLocal, "没填接口：用本地模型")
+    check(WowtypeConfig.parse(old + "TranslateLocal=True\n").translateLocal, "写了 TranslateLocal 就照写的")
+    check(WowtypeConfig.parse(old).serialized(into: old) == old, "旧文件读进来没改：一个字都不动")
+    var keepLocal = WowtypeConfig.parse("Translate=True\n")
+    keepLocal.translateBaseUrl = "https://api.example.com/v1"
+    let keepLocalText = keepLocal.serialized(into: "Translate=True\n")
+    check(keepLocalText.contains("\nTranslateLocal=True\n") && WowtypeConfig.parse(keepLocalText).translateLocal,
+          "填了接口又要用本地模型：TranslateLocal=True 要写进文件，不然读回来成了 False", keepLocalText)
+    var useService = WowtypeConfig.parse(old)
+    useService.translateBaseUrl = ""
+    let useServiceText = useService.serialized(into: old)
+    check(useServiceText.contains("\nTranslateLocal=False\n") && !WowtypeConfig.parse(useServiceText).translateLocal,
+          "清空接口但还选着服务：TranslateLocal=False 要写进文件", useServiceText)
     let c = WowtypeConfig.parse("""
     Translate=True
-    TranslateTarget=JA
+    TranslateTarget=ja
     TranslateBaseUrl=https://api.example.com/v1
     TranslateModel="gpt-4o-mini"
     TranslateFormal=True
@@ -1425,6 +1446,7 @@ do {
     let t = Translator()
     var config = WowtypeConfig()
     config.translate = true
+    config.translateLocal = false
     t.configure(config, keyFile: "", defaultLocalModel: "")
     check(!t.isReady, "没填服务、没选本地模型：没配好")
     config.translateBaseUrl = "http://127.0.0.1:1/v1"
@@ -1550,6 +1572,7 @@ if !haveCurl() {
     TranslateKeyFile.write("sk-test-123", to: keyPath)
     var config = WowtypeConfig()
     config.translate = true
+    config.translateLocal = false
     config.translateBaseUrl = server.baseURL
     config.translateModel = "test-model"
     config.translateTarget = "ja"
@@ -1590,6 +1613,147 @@ if !haveCurl() {
 } else {
     check(false, "起假翻译服务")
 }
+
+// MARK: 本地翻译模型（和 Linux 设置的 download_model / install_llama_server 一样）
+
+do {
+    let arm = LocalModel.llamaAsset(machine: "arm64", os: (14, 0))
+    check(arm?.name == "llama-b12110-bin-macos-arm64.tar.gz" && arm?.size == 16_650_691
+          && arm?.url == "https://github.com/ggml-org/llama.cpp/releases/download/b12110/llama-b12110-bin-macos-arm64.tar.gz",
+          "Apple 芯片用 arm64 的官方包", "\(String(describing: arm))")
+    let intel = LocalModel.llamaAsset(machine: "x86_64", os: (13, 3))
+    check(intel?.name == "llama-b12110-bin-macos-x64.tar.gz" && intel?.size == 12_388_601, "Intel Mac 用 x64 的包",
+          "\(String(describing: intel))")
+    check([arm, intel].allSatisfy { $0?.sha256.count == 64 && $0?.sha256 == $0?.sha256.lowercased() }, "钉了 SHA256")
+    check(LocalModel.llamaAsset(machine: "arm64", os: (13, 2)) == nil && LocalModel.llamaAsset(machine: "x86_64", os: (12, 7)) == nil,
+          "macOS 13.3 以下没有能下载的 llama-server")
+    check(LocalModel.llamaAsset(machine: "ppc", os: (26, 0)) == nil, "不认识的 CPU 没有")
+    check(LocalModel.size == 1_133_080_512 && LocalModel.sha256.count == 64 && LocalModel.url.hasSuffix("/" + LocalModel.fileName),
+          "模型钉了大小和 SHA256")
+    // 和 Linux 设置钉的是同一个模型、同一个 llama.cpp 构建（规格目录旁边就是 settings/）
+    let specDir = getenv("WOWTYPE_SPEC_DIR").map { String(cString: $0) } ?? "spec"
+    if let linux = readFile(specDir + "/../settings/wowtype-config") {
+        check(linux.contains("\"\(LocalModel.sha256)\"") && linux.contains("LOCAL_MODEL_SIZE = \(LocalModel.size)")
+              && linux.contains("LOCAL_MODEL_FILE = \"\(LocalModel.fileName)\"")
+              && linux.contains("LLAMA_BUILD = \"\(LocalModel.llamaBuild)\""),
+              "模型的 SHA256、大小和 llama.cpp 构建号和 Linux 的 wowtype-config 一样")
+    } else {
+        print("skip 对照 Linux 的模型校验值（没找到 settings/wowtype-config）")
+    }
+
+    // 缺什么下什么
+    let all = LocalModel.plan(modelExists: false, serverFound: false, customServer: false, asset: arm)
+    check(all.wantModel && all.wantLlama && !all.ready && all.bytes == LocalModel.size + 16_650_691, "都没有：两样一起下",
+          "\(all)")
+    let model = LocalModel.plan(modelExists: false, serverFound: true, customServer: false, asset: arm)
+    check(model.wantModel && !model.wantLlama && model.bytes == LocalModel.size, "有 llama-server（Homebrew）只下模型", "\(model)")
+    let llama = LocalModel.plan(modelExists: true, serverFound: false, customServer: false, asset: arm)
+    check(!llama.wantModel && llama.wantLlama && llama.bytes == 16_650_691 && llama.canDownload, "只差 llama-server", "\(llama)")
+    check(LocalModel.plan(modelExists: true, serverFound: true, customServer: false, asset: nil).ready, "都有了：已就绪")
+    let old = LocalModel.plan(modelExists: true, serverFound: false, customServer: false, asset: nil)
+    check(old.llamaUnavailable && !old.canDownload && !old.ready, "系统太旧：下载不了 llama-server", "\(old)")
+    let custom = LocalModel.plan(modelExists: false, serverFound: false, customServer: true, asset: arm)
+    check(custom.wantModel && !custom.wantLlama && custom.llamaUnavailable && custom.bytes == LocalModel.size,
+          "自己写了 llama-server 的位置：不替它下载", "\(custom)")
+
+    // 和 Linux 设置的 human_size 一样：f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+    check(LocalModel.sizeText(LocalModel.size + 16_650_691) == "1.15 GB", "大小写成 1.15 GB（和 Linux 一样）",
+          LocalModel.sizeText(LocalModel.size + 16_650_691))
+    check(LocalModel.sizeText(16_650_691) == "17 MB" && LocalModel.sizeText(1_950_000_000) == "1.95 GB"
+          && LocalModel.sizeText(2_004_000_000) == "2.00 GB" && LocalModel.sizeText(1_133_080_512) == "1.13 GB",
+          "MB 取整、GB 留两位小数（和 Linux 一样）")
+    check(LocalModel.percent(42, of: 100) == 42 && LocalModel.percent(5, of: 0) == 0 && LocalModel.percent(300, of: 200) == 100,
+          "百分比")
+
+    // 续传：带 Range 请求后看服务回什么
+    check(LocalModel.resume(status: 206, have: 100, contentRange: "bytes 100-199/200") == .append, "206：接着写")
+    check(LocalModel.resume(status: 206, have: 100, contentRange: "bytes 0-199/200") == .fail(status: 206),
+          "206 但不是从 .part 末尾开始：不接")
+    check(LocalModel.resume(status: 200, have: 100) == .restart && LocalModel.resume(status: 200, have: 0) == .restart,
+          "200：服务不支持续传，从头下")
+    check(LocalModel.resume(status: 416, have: 100) == .complete, "416：.part 已经完整，只差校验")
+    check(LocalModel.resume(status: 416, have: 0) == .fail(status: 416) && LocalModel.resume(status: 404, have: 0) == .fail(status: 404),
+          "别的状态码算出错")
+
+    // 官方包里只要 llama-server 和动态库，不往外写
+    check(LocalModel.llamaEntry("llama-b12110/llama-server") == "llama-server"
+          && LocalModel.llamaEntry("./llama-b12110/libggml-metal.0.29.0.dylib") == "libggml-metal.0.29.0.dylib"
+          && LocalModel.llamaEntry("llama-b12110/libllama.dylib") == "libllama.dylib", "要 llama-server 和 lib*.dylib")
+    check(["llama-b12110/llama-cli", "llama-b12110/LICENSE", "llama-b12110/", "llama-server", "../llama-server",
+           "/llama-server", "llama-b12110/sub/libx.dylib", "-x/llama-server", "../libx.dylib"]
+          .allSatisfy { LocalModel.llamaEntry($0) == nil }, "别的程序、子目录、带 .. 的不要")
+    check(LocalModel.safeLinkTarget("libllama.0.9.0.dylib"), "链接指向同目录的文件")
+    check(!LocalModel.safeLinkTarget("../evil.dylib") && !LocalModel.safeLinkTarget("/usr/lib/libz.dylib")
+          && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
+}
+
+// MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）
+
+do {
+    check(LexiconPack.assetVersion("wowtype-data-wanxiang-2026.11.12.0.tar.gz") == "2026.11.12.0", "认出万象包和版本")
+    check(LexiconPack.assetVersion("wowtype-data-wanxiang-latest.tar.gz") == nil
+          && LexiconPack.assetVersion("wowtype-data-wanxiang-1.0.zip") == nil
+          && LexiconPack.assetVersion("wowtype-data-rime-ice-2026.10.31.2.tar.gz") == nil
+          && LexiconPack.assetVersion("wowtype-data-wanxiang-1.0/../x.tar.gz") == nil, "别的文件不认")
+    let pick = LexiconPack.pickAsset(["SHA256SUMS", "wowtype-data-wanxiang-2026.9.1.tar.gz",
+                                      "wowtype-data-wanxiang-2026.10.31.2.tar.gz", "wowtype-data-wanxiang-2026.10.31.tar.gz"])
+    check(pick?.version == "2026.10.31.2", "好几个包取版本最大的", "\(String(describing: pick))")
+    check(LexiconPack.pickAsset(["SHA256SUMS", "wowtype_0.3.10_debian13_amd64.deb"]) == nil, "没有万象包")
+    check(LexiconPack.compareVersions("2026.10.31.2", "2026.10.31") > 0 && LexiconPack.compareVersions("2026.9.1", "2026.10.1") < 0
+          && LexiconPack.compareVersions("1.0", "1") > 0, "版本按数字段比（和 Linux 一样，段多的大）")
+
+    let name = "wowtype-data-wanxiang-1.tar.gz"
+    let digest = String(repeating: "ab", count: 32)
+    if case .success(let sums) = LexiconPack.checksums("\(digest.uppercased())  \(name)\nffff  other\n", wanted: [name]) {
+        check(sums[name] == digest, "SHA256SUMS 取到校验值（转小写）")
+    } else {
+        check(false, "SHA256SUMS 取到校验值（转小写）")
+    }
+    if case .success(let sums) = LexiconPack.checksums("\(digest) *\(name)\r\n", wanted: [name]) {
+        check(sums[name] == digest, "二进制模式的 * 和 CRLF")
+    } else {
+        check(false, "二进制模式的 * 和 CRLF")
+    }
+    for (text, what) in [("\(digest)  \(name)\n\(digest)  \(name)\n", "重复"), ("bad  \(name)\n", "无效"),
+                         ("\(digest)  other.tar.gz\n", "缺失")] {
+        if case .failure = LexiconPack.checksums(text, wanted: [name]) {
+            check(true, "SHA256SUMS 的条目\(what)：不装")
+        } else {
+            check(false, "SHA256SUMS 的条目\(what)：不装")
+        }
+    }
+
+    check(LexiconPack.entryName("./lexicon.tsv") == "lexicon.tsv" && LexiconPack.entryName("VERSION") == "VERSION"
+          && LexiconPack.entryName("./") == "" && LexiconPack.entryName(".") == "", "包里认的条目")
+    check(LexiconPack.entryName("../lexicon.tsv") == nil && LexiconPack.entryName("/etc/passwd") == nil
+          && LexiconPack.entryName("dicts/lexicon.tsv") == nil && LexiconPack.entryName("evil.sh") == nil, "别的条目不认")
+
+    let dir = "/tmp/wowtype-macos-harness-\(getpid())-pack"
+    mkdir(dir, 0o755)
+    let lexicon = dir + "/lexicon.tsv"
+    writeFile(lexicon, "# 注释\n\nni hao\t你好\t100\nzhong guo\t中国\n")
+    check({ if case .success(2) = LexiconPack.checkLexicon(at: lexicon, minimum: 2) { return true }; return false }(),
+          "lexicon.tsv 数条数（注释、空行不算）")
+    check({ if case .failure = LexiconPack.checkLexicon(at: lexicon, minimum: 3) { return true }; return false }(),
+          "条数太少不装")
+    writeFile(lexicon, "ni hao 你好\n")
+    check({ if case .failure = LexiconPack.checkLexicon(at: lexicon, minimum: 1) { return true }; return false }(),
+          "没有 TAB 的不装")
+    check({ if case .failure = LexiconPack.checkLexicon(at: dir + "/none.tsv", minimum: 1) { return true }; return false }(),
+          "没有 lexicon.tsv 不装")
+    check(LexiconPack.installedVersion(folder: dir) == "?", "没有 VERSION 是 ?")
+    writeFile(dir + "/VERSION", "2026.11.12.0\n")
+    check(LexiconPack.installedVersion(folder: dir) == "2026.11.12.0", "读 VERSION")
+    unlink(lexicon)
+    check(LexiconPack.installedVersion(folder: dir) == nil, "没有 lexicon.tsv 算没装")
+    unlink(dir + "/VERSION")
+    rmdir(dir)
+}
+
+// MARK: 设置契约（spec/config.json、spec/lexicon-pack.json；Linux 两端在 scripts/test-config-contract.py 对照）
+
+checkConfigContract()
+checkLexiconPackContract()
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
     // 真实词库（补了雾凇大字表）：一个音节的字要列全，yi 有八百多个

@@ -67,7 +67,8 @@ LEXICON_CANDIDATES = [
     "/usr/share/wowtype/lexicon.tsv",
 ]
 
-# 和插件里的默认值一致（fcitx5-addon/src/wowtype_engine.h 的 WowtypeConfig）
+# 键名、默认值、范围、下面各选项列表以 spec/config.json 为准（设置契约，插件和 macOS 也对照它）；
+# 改这些要先改规格，scripts/test-config-contract.py 对照
 DEFAULTS = {
     "CandidateLayout": "Horizontal",
     "PageSize": "9",
@@ -121,6 +122,12 @@ DEFAULTS = {
     "CheckUpdate": "True",
     # 词库文件，留空用默认的雾凇；切到万象时是 WANXIANG_LEXICON
     "Lexicon": "",
+}
+
+# 数字项的范围（界面上的数字框），和插件的 IntConstrain 一样
+RANGES = {
+    "PageSize": (3, 9),
+    "TranslateIdleMinutes": (0, 240),
 }
 
 # 互译语言（存盘名和插件的 WowtypeTranslateTarget、core/src/translate.rs 的 LANGUAGES 一致）
@@ -197,6 +204,16 @@ SHIFT_TOGGLES = [
     ("右 Shift", "Right"),
     ("不用 Shift 切换", "Off"),
 ]
+
+# 枚举项认哪些写法（区分大小写，认不出的读成默认值，和插件、macOS 一样，见 spec/config.json）
+ENUMS = {
+    "CandidateLayout": ("Horizontal", "Vertical"),
+    "ShuangpinScheme": tuple(value for _label, value in SHUANGPIN_SCHEMES),
+    "ShiftToggle": tuple(value for _label, value in SHIFT_TOGGLES),
+    "PunctuationStyle": tuple(value for _label, value in PUNCT_STYLES),
+    "SelectKeys": tuple(value for _label, value in SELECT_KEYS),
+    "TranslateTarget": tuple(code for _label, code, _english in TRANSLATE_LANGUAGES),
+}
 
 # 设置窗口的样式（照微信输入法：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片）
 GREEN = "#0EAF76"
@@ -286,8 +303,43 @@ zhu zhua zhuai zhuan zhuang zhui zhun zhuo zi zong zou zu zuan zui zun zuo
 # ---------------------------------------------------------------- 文件读写
 
 
+def unquote_value(value):
+    """两边有双引号的值去掉引号，再把反斜杠、引号、换行的转义还原（和 fcitx5 读 wowtype.conf 一样）。"""
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return value
+    out, escaped = [], False
+    for c in value[1:-1]:
+        if escaped:
+            out.append("\n" if c == "n" else c)
+            escaped = False
+        elif c == "\\":
+            escaped = True
+        else:
+            out.append(c)
+    return "".join(out)
+
+
+def normalize_value(key, value):
+    """按插件的读法认这一项的值；认不出的（开关写成 true、枚举大小写不对、数字写成 abc）是默认值，
+    数字超出范围夹到边上。三端一样，见 spec/config.json 的 readRules。"""
+    default = DEFAULTS[key]
+    if default in ("True", "False"):
+        return value if value in ("True", "False") else default
+    if key in ENUMS:
+        return value if value in ENUMS[key] else default
+    if key in RANGES:
+        low, high = RANGES[key]
+        try:
+            return str(min(max(int(value), low), high))
+        except ValueError:
+            return default
+    return value
+
+
 def read_config():
-    """读 wowtype.conf，返回 (值, 原文里不认识的行)。"""
+    """读 wowtype.conf，返回 (值, 原文里不认识的行)。
+
+    [分组]（fcitx5 的 [Hotkey] 等）下面的行不是设置项，原样放进「不认识的行」，写回时留着。"""
     values = dict(DEFAULTS)
     extra = []
     try:
@@ -295,16 +347,20 @@ def read_config():
             lines = f.read().splitlines()
     except OSError:
         return values, extra
+    seen = set()
+    in_group = False
     for line in lines:
+        if line.strip().startswith("["):
+            in_group = True
         key, sep, value = line.partition("=")
         key = key.strip()
-        if sep and key in DEFAULTS:
-            values[key] = value.strip().strip('"')
+        if not in_group and sep and key in DEFAULTS:
+            values[key] = normalize_value(key, unquote_value(value.strip()))
+            seen.add(key)
         elif line.strip():
             extra.append(line)
     # 0.3.10 及以前没有 TranslateLocal：已经填好翻译接口的，接着用接口（设置里默认是本地模型）
-    if not any(line.partition("=")[0].strip() == "TranslateLocal" for line in lines) \
-            and values["TranslateBaseUrl"].strip():
+    if "TranslateLocal" not in seen and values["TranslateBaseUrl"].strip():
         values["TranslateLocal"] = "False"
     return values, extra
 
@@ -317,8 +373,15 @@ def write_atomic(path, text):
     os.replace(tmp, path)
 
 
+def quote_value(value):
+    """写回时要加引号的值（两边是引号、带换行、前后有空格）加上引号并转义，读回来还是它（fcitx5 也这么写）。"""
+    if (len(value) >= 2 and value[0] == '"' and value[-1] == '"') or "\n" in value or value != value.strip():
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
+    return value
+
+
 def write_config(values, extra):
-    lines = [f"{key}={values[key]}" for key in DEFAULTS]
+    lines = [f"{key}={quote_value(values[key])}" for key in DEFAULTS]
     write_atomic(CONFIG_FILE, "\n".join(lines + extra) + "\n")
 
 
@@ -2914,22 +2977,20 @@ class SettingsWindow(Adw.ApplicationWindow):
             "CandidateLayout", "Vertical" if row.get_selected() == 1 else "Horizontal"))
         cands.add(self.layout_row)
 
-        self.page_row = Adw.SpinRow.new_with_range(3, 9, 1)
+        self.page_row = Adw.SpinRow.new_with_range(*RANGES["PageSize"], 1)
         self.page_row.set_title("每页个数")
-        self.page_row.set_subtitle("用数字键 1–9 选词")
         try:
             self.page_row.set_value(int(self.values["PageSize"]))
         except ValueError:
-            self.page_row.set_value(9)
+            self.page_row.set_value(int(DEFAULTS["PageSize"]))
         self.page_row.connect("notify::value", lambda row, _p: self.set_value(
             "PageSize", str(int(row.get_value()))))
         cands.add(self.page_row)
-        page_keys = Adw.ExpanderRow(
-            title="翻页键", subtitle="Page Up / Page Down 和方向键一直能翻页；下面的可以另外打开")
+        page_keys = Adw.ExpanderRow(title="翻页键", subtitle="除了 Page Up / Page Down 和方向键")
         for key, title, subtitle in (
             ("PageKeysMinusEqual", "- 和 =", None),
-            ("PageKeysBracket", "[ 和 ]", "打开后打字途中 [ ] 不再出【】"),
-            ("PageKeysCommaPeriod", ", 和 .", "打开后打字途中逗号句号用来翻页，要先选词再打标点"),
+            ("PageKeysBracket", "[ 和 ]", "打字途中不再出【】"),
+            ("PageKeysCommaPeriod", ", 和 .", "打字途中要先选词再打标点"),
             ("PageKeysTab", "Shift+Tab 和 Tab", None),
         ):
             page_keys.add_row(self.make_switch(key, title, subtitle))
@@ -2938,58 +2999,59 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         look = Adw.PreferencesGroup(title="外观")
         self.theme_row = Adw.SwitchRow(
-            title="WowType 绿色主题",
-            subtitle="圆角候选框，选中的词是 WowType 绿，深色模式自动换深色版")
+            title="WowType 绿色主题", subtitle="圆角候选框，深色模式自动换深色版")
         self.theme_row.set_sensitive(False)  # 读到 fcitx5 的当前主题再打开
         self.theme_handler = self.theme_row.connect("notify::active", self.on_theme_toggled)
         look.add(self.theme_row)
         self.font_row = Adw.SpinRow.new_with_range(*FONT_SIZE_RANGE, 1)
         self.font_row.set_title("候选字号")
-        self.font_row.set_subtitle("候选框里字的大小（磅），改了马上生效")
         self.font_row.set_sensitive(False)  # 读到现在的字号再打开
         self.font_handler = self.font_row.connect("notify::value", self.on_font_size_changed)
         look.add(self.font_row)
         page.add(look)
 
-        tips = Adw.PreferencesGroup(title="小技巧")
+        # 帮助：小技巧折起来；macOS 设置窗口的「帮助」和这里一样（打开数据目录代替导出日志）
+        help_group = Adw.PreferencesGroup(title="帮助")
+        tips = Adw.ExpanderRow(title="小技巧")
         for title, subtitle in (
-            ("简拼", "只打声母也行：bjdx → 北京大学，kyi → 可以，zhch → 支持"),
-            ("长句分段选", "第一个候选不对时，先选开头的词，剩下的接着选"),
-            ("符号", "表情面板里也能搜符号名：gou → ✓、youjiantou → →、juhao → 。"),
-            ("互译", "在「翻译」里填好服务后，单按 Shift 切到「译」，打中文出英文"),
+            ("简拼", "bjdx → 北京大学，zhch → 支持"),
+            ("长句分段选", "先选开头的词，剩下的接着选"),
+            ("忘掉学错的词", "光标移到候选上，按 Ctrl+Delete"),
+            ("搜符号", "表情面板里打 gou → ✓、youjiantou → →"),
+            ("互译", "单按 Shift 切到「译」，打中文出外文"),
         ):
-            tips.add(Adw.ActionRow(title=title, subtitle=subtitle))
-        page.add(tips)
-
-        feedback = Adw.PreferencesGroup(title="问题反馈")
-        export_row = Adw.ActionRow(
-            title="导出日志",
-            subtitle="出问题时导出来发给我们；里面没有你打过的字和自定义词")
+            tips.add_row(Adw.ActionRow(title=title, subtitle=subtitle))
+        help_group.add(tips)
+        export_row = Adw.ActionRow(title="导出日志", subtitle="不含打过的字和自定义词")
         export_button = Gtk.Button(label="导出…", valign=Gtk.Align.CENTER)
         export_button.connect("clicked", self.on_export_log)
         export_row.add_suffix(export_button)
         export_row.set_activatable_widget(export_button)
-        feedback.add(export_row)
-        issue_row = Adw.ActionRow(title="提交问题", subtitle="到 GitHub 上告诉我们哪里不好用")
+        help_group.add(export_row)
+        issue_row = Adw.ActionRow(title="提交问题")
         issue_row.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
         issue_row.set_activatable(True)
         issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
-        feedback.add(issue_row)
-        page.add(feedback)
+        help_group.add(issue_row)
+        page.add(help_group)
         return page
 
     # ---------------- 词库（在「输入」页最上面）
 
     def build_lexicon(self):
-        group = Adw.PreferencesGroup(
-            title="词库",
-            description="换词库后几秒内生效，你加的词和输入法学到的习惯都还在。")
+        group = Adw.PreferencesGroup(title="词库")
+        group.set_header_suffix(self.info_button(
+            "换词库几秒后生效，自定义词和学到的习惯都会保留。\n\n"
+            "雾凇拼音在安装包里，跟着 WowType 一起更新。\n\n"
+            "万象拼音词更多，比雾凇多占约 300 MB 内存；从 amzxyz/rime_wanxiang（CC BY 4.0）转换，只用了它的词条。"
+            f"装在 {_home(WANXIANG_DIR)}。",
+            [("万象拼音项目主页", WANXIANG_PAGE)]))
         self.lexicon_busy = False
         self.lexicon_updating = False
         self.rime_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
         self.wanxiang_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.rime_check)
-        rime_row = Adw.ActionRow(title="雾凇拼音（默认）",
-                                 subtitle="约 89 万条，在安装包里，跟着 WowType 一起更新")
+        self.custom_lexicon_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.rime_check)
+        rime_row = Adw.ActionRow(title="雾凇拼音（默认）", subtitle="约 89 万条")
         rime_row.add_prefix(self.rime_check)
         rime_row.set_activatable_widget(self.rime_check)
         group.add(rime_row)
@@ -3002,25 +3064,22 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.lexicon_button.connect("clicked", lambda _b: self.start_lexicon_install())
         self.wanxiang_row.add_suffix(self.lexicon_button)
         self.lexicon_file = Gtk.Button(icon_name="document-open-symbolic", valign=Gtk.Align.CENTER,
-                                       tooltip_text="从下载好的词库包安装（wowtype-data-wanxiang-*.tar.gz）")
+                                       tooltip_text="从文件安装（wowtype-data-wanxiang-*.tar.gz）")
         self.lexicon_file.add_css_class("flat")
         self.lexicon_file.connect("clicked", self.on_lexicon_from_file)
         self.wanxiang_row.add_suffix(self.lexicon_file)
         self.lexicon_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                         tooltip_text="删掉万象词库")
+                                         tooltip_text="删除万象拼音")
         self.lexicon_delete.add_css_class("flat")
         self.lexicon_delete.connect("clicked", self.on_lexicon_delete)
         self.wanxiang_row.add_suffix(self.lexicon_delete)
         group.add(self.wanxiang_row)
 
-        source = Adw.ActionRow(
-            title="万象拼音的来源",
-            subtitle=GLib.markup_escape_text(
-                "另一套词库，词更多，比雾凇多占约 300 MB 内存。"
-                "来自 amzxyz/rime_wanxiang（CC BY 4.0），WowType 只用了它的词条。"))
-        source.add_suffix(Gtk.LinkButton(uri=WANXIANG_PAGE, label="项目主页",
-                                         valign=Gtk.Align.CENTER))
-        group.add(source)
+        # wowtype.conf 的 Lexicon 指向别的词库文件时才显示（这里不能选文件，和 macOS 的「自定义词库」同名）
+        self.custom_lexicon_row = Adw.ActionRow(title="自定义词库", visible=False)
+        self.custom_lexicon_row.add_prefix(self.custom_lexicon_check)
+        self.custom_lexicon_row.set_activatable_widget(self.custom_lexicon_check)
+        group.add(self.custom_lexicon_row)
         self.rime_check.connect("toggled", self.on_lexicon_choice)
         self.wanxiang_check.connect("toggled", self.on_lexicon_choice)
         self.refresh_lexicon()
@@ -3034,18 +3093,18 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.lexicon_updating = True
         self.wanxiang_check.set_active(kind == "wanxiang")
         self.rime_check.set_active(kind == "rime-ice")
+        self.custom_lexicon_check.set_active(kind == "custom")
         self.lexicon_updating = False
+        self.custom_lexicon_row.set_visible(kind == "custom")
+        self.custom_lexicon_row.set_subtitle(GLib.markup_escape_text(_home(path)) if kind == "custom" else "")
         asset = find_lexicon_asset(self.release) if getattr(self, "release", None) else None
         newer = bool(asset and version and parse_version(asset[2]) > parse_version(version))
         if progress:
             subtitle = progress
-        elif kind == "custom":
-            subtitle = f"现在用的是 wowtype.conf 里指定的词库：{_home(path)}"
         elif version:
-            subtitle = (f"已装 {version}（{human_size(os.path.getsize(WANXIANG_LEXICON))}），约 170 万条"
-                        + (f"；有新版 {asset[2]}" if newer else ""))
+            subtitle = f"已下载 {version}" + (f"，有新版 {asset[2]}" if newer else "")
         elif getattr(self, "release", None) and not asset:
-            subtitle = "最新的发布页上还没有万象词库包，可以先从文件安装"
+            subtitle = "暂时没有下载包，可以从文件安装"
         else:
             subtitle = "约 170 万条，要下载约 20 MB"
         self.wanxiang_row.set_subtitle(GLib.markup_escape_text(subtitle))
@@ -3066,11 +3125,11 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         self.use_lexicon(WANXIANG_LEXICON if button is self.wanxiang_check else "")
 
-    def use_lexicon(self, path):
+    def use_lexicon(self, path, message=None):
         self.values["Lexicon"] = path
         self.save_config()  # 每次都让插件重读：词库包更新了、路径没变也要重载
         log(f"词库改为 {active_lexicon(self.values)[0]}")
-        self.toast(("已切到万象拼音" if path else "已切回雾凇拼音") + "，几秒后生效")
+        self.toast(message or (("已切到万象拼音" if path else "已切回雾凇拼音") + "，几秒后生效"))
         self.refresh_lexicon()
 
     def start_lexicon_install(self, tarball=None):
@@ -3114,11 +3173,11 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.lexicon_busy = False
         if error:
             log(f"万象词库没装好：{error}")
-            self.toast(f"万象词库没装好：{error}")
+            self.toast(f"万象拼音没装好：{error}")
             self.refresh_lexicon()
             return GLib.SOURCE_REMOVE
         log(f"万象词库 {version} 装好了")
-        self.use_lexicon(WANXIANG_LEXICON)
+        self.use_lexicon(WANXIANG_LEXICON, f"已装好万象拼音 {version}，几秒后生效")
         return GLib.SOURCE_REMOVE
 
     def on_lexicon_from_file(self, _button):
@@ -3142,7 +3201,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         size = remove_lexicon_pack()
         log("删掉了万象词库")
-        self.toast(f"已删除，空出 {human_size(size)}")
+        self.toast(f"已删除万象拼音，空出 {human_size(size)}")
         self.refresh_lexicon()
 
     # ---------------- 输入
@@ -3154,10 +3213,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         mode = Adw.PreferencesGroup(title="输入方式")
         self.full_pinyin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
         self.shuangpin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.full_pinyin_check)
-        full_row = Adw.ActionRow(title="拼音输入", subtitle="全拼，也可以只打声母：bjdx → 北京大学")
+        full_row = Adw.ActionRow(title="拼音输入", subtitle="全拼，也能只打声母")
         full_row.add_prefix(self.full_pinyin_check)
         full_row.set_activatable_widget(self.full_pinyin_check)
-        sp_row = Adw.ActionRow(title="双拼输入", subtitle="每个字两个键，编辑区显示成全拼")
+        sp_row = Adw.ActionRow(title="双拼输入", subtitle="每个字打两个键")
         sp_row.add_prefix(self.shuangpin_check)
         sp_row.set_activatable_widget(self.shuangpin_check)
         mode.add(full_row)
@@ -3173,14 +3232,13 @@ class SettingsWindow(Adw.ApplicationWindow):
         mode.add(self.scheme_row)
         (self.shuangpin_check if self.values["Shuangpin"] == "True"
          else self.full_pinyin_check).set_active(True)
-        self.scheme_row.set_sensitive(self.values["Shuangpin"] == "True")
         self.shuangpin_check.connect("toggled", self.on_shuangpin_toggled)
         page.add(mode)
 
-        switch = Adw.PreferencesGroup(
-            title="中英文切换",
-            description="单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
-                        "打到一半切英文，打的字母原样上屏。")
+        switch = Adw.PreferencesGroup(title="中英文切换")
+        switch.set_header_suffix(self.info_button(
+            "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
+            "打到一半切英文，已经打的字母原样上屏。"))
         self.shift_names = [name for _, name in SHIFT_TOGGLES]
         self.shift_row = Adw.ComboRow(
             title="切换键", model=Gtk.StringList.new([label for label, _ in SHIFT_TOGGLES]))
@@ -3191,6 +3249,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         switch.add(self.shift_row)
         # fcitx5 自己也用 Shift 切输入法时提示，并能一键让给 WowType（再一键还回去）
         self.shift_free_row = Adw.SwitchRow(title="Shift 只给 WowType 用", visible=False)
+        self.shift_free_info = self.add_info(self.shift_free_row, "").info_label
         self.shift_free_handler = self.shift_free_row.connect(
             "notify::active", self.on_shift_free_toggled)
         switch.add(self.shift_free_row)
@@ -3198,25 +3257,22 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         pinyin = Adw.PreferencesGroup(title="拼音")
         self.fuzzy_row = Adw.ExpanderRow(
-            title="模糊音", subtitle="打开后选哪几组音不分，比如 n 和 l 分不清就打开 n = l",
-            show_enable_switch=True)
+            title="模糊音", subtitle="比如 n 和 l 不分", show_enable_switch=True)
         self.fuzzy_row.set_enable_expansion(self.values["Fuzzy"] == "True")
         self.fuzzy_row.connect("notify::enable-expansion", lambda r, _p: self.set_value(
             "Fuzzy", "True" if r.get_enable_expansion() else "False"))
         for key, title in FUZZY_GROUPS:
             self.fuzzy_row.add_row(self.make_switch(key, title, None))
         pinyin.add(self.fuzzy_row)
-        for key, title, subtitle in (
-            ("TypoCorrection", "按错键自动纠正", "比如 zhognguo 也能打出「中国」（全拼时）"),
-            ("Traditional", "繁体字", "候选词转成繁体"),
-            ("RareExtChars", "更多生僻字",
-             "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块，要先装能显示它们的字体（比如 fonts-hanazono）"),
-        ):
-            pinyin.add(self.make_switch(key, title, subtitle))
+        pinyin.add(self.make_switch("TypoCorrection", "按错键自动纠正", "zhognguo → 中国（全拼时）"))
+        pinyin.add(self.make_switch("Traditional", "繁体字", None))
+        rare = self.make_switch("RareExtChars", "更多生僻字", "要装能显示它们的字体，比如 fonts-hanazono")
+        self.add_info(rare, "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。")
+        pinyin.add(rare)
         self.punct_names = [name for _, name in PUNCT_STYLES]
         self.punct_row = Adw.ComboRow(
-            title="标点样式", subtitle="打中文时标点用中文的（，。）还是英文的（, .）。数字后面的符号总是英文的（3.14）",
-            model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
+            title="标点样式", model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
+        self.add_info(self.punct_row, "数字后面的符号总是半角的，比如 3.14。")
         current = self.values.get("PunctuationStyle", "Fullwidth")
         self.punct_row.set_selected(
             self.punct_names.index(current) if current in self.punct_names else 0)
@@ -3226,42 +3282,30 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(pinyin)
 
         extras = Adw.PreferencesGroup(title="快捷输入")
-        extras.add(self.make_switch(
-            "DateTime", "日期和时间",
-            "打 riqi、shijian、xingqi，候选里会多出今天的日期、现在的时间"))
-        self.calc_row = self.make_switch(
-            "Calculator", "计算器", "先打 v 再打算式，比如 v1+2*3 出 7，按空格用结果（双拼时不可用）")
-        self.calc_row.set_sensitive(self.values["Shuangpin"] != "True")
+        extras.add(self.make_switch("DateTime", "日期和时间", "打 riqi、shijian、xingqi"))
+        self.calc_row = self.make_switch("Calculator", "计算器", None)
         extras.add(self.calc_row)
-        self.toolbar_row = self.make_switch(
-            "Toolbar", "v + 空格打开工具栏",
-            "只打一个 v 再按空格：剪贴板历史、常用语（自定义词）、符号、表情（双拼时不可用）")
-        self.toolbar_row.set_sensitive(self.values["Shuangpin"] != "True")
+        self.toolbar_row = self.make_switch("Toolbar", "工具栏", None)
         extras.add(self.toolbar_row)
-        extras.add(self.make_switch(
-            "ClipboardHistory", "记录剪贴板历史",
-            "给工具栏里的「剪贴板」用，最多记 20 条，重启输入法就清空。"
-            "注意：复制过的密码也会被记下并显示出来"))
+        clipboard = self.make_switch("ClipboardHistory", "记录剪贴板历史", "复制的密码也可能被记下")
+        self.add_info(clipboard, "给工具栏里的「剪贴板」用，最多记 20 条，重启输入法就清空。"
+                                 "复制过的密码也会被记下并显示出来。")
+        extras.add(clipboard)
         self.select_names = [name for _, name in SELECT_KEYS]
         self.select_row = Adw.ComboRow(
-            title="分号、引号选词",
-            subtitle="按 ; 选第 2 个候选，按 ' 选第 3 个。用引号选词后，引号不能再用来隔开拼音",
-            model=Gtk.StringList.new([label for label, _ in SELECT_KEYS]))
+            title="分号、引号选词", model=Gtk.StringList.new([label for label, _ in SELECT_KEYS]))
+        self.add_info(self.select_row, "用引号选词后，引号不能再用来隔开拼音（xi'an）。")
         current = self.values.get("SelectKeys", "Off")
         self.select_row.set_selected(
             self.select_names.index(current) if current in self.select_names else 0)
         self.select_row.connect("notify::selected", lambda row, _p: self.set_value(
             "SelectKeys", self.select_names[row.get_selected()]))
         extras.add(self.select_row)
-        extras.add(self.make_switch(
-            "PickChar", "以词定字",
-            "只想要词里的一个字时用：打拼音时按 [ 取第一个字，按 ] 取最后一个字"
-            "（nihao 按 [ → 你）"))
+        extras.add(self.make_switch("PickChar", "以词定字", "按 [ 取第一个字，按 ] 取最后一个字"))
         auto_space = Adw.ExpanderRow(
-            title="中英文之间自动加空格",
-            subtitle="你好Linux → 你好 Linux、第5章 → 第 5 章。终端等少数程序里不起作用，"
-                     "密码、网址、邮箱输入框不加",
-            show_enable_switch=True)
+            title="中英文之间自动加空格", subtitle="第5章 → 第 5 章", show_enable_switch=True)
+        self.add_info(auto_space, "你好Linux → 你好 Linux。终端等少数程序里不起作用，"
+                                  "密码、网址、邮箱输入框不加。")
         auto_space.set_enable_expansion(self.values["AutoSpace"] == "True")
         auto_space.connect("notify::enable-expansion", lambda r, _p: self.set_value(
             "AutoSpace", "True" if r.get_enable_expansion() else "False"))
@@ -3269,33 +3313,40 @@ class SettingsWindow(Adw.ApplicationWindow):
         auto_space.add_row(self.make_switch("AutoSpaceDigits", "汉字和数字之间", None))
         extras.add(auto_space)
         page.add(extras)
+        self.show_shuangpin(self.values["Shuangpin"] == "True")
         return page
+
+    def show_shuangpin(self, on):
+        """双拼方案只在双拼时显示；计算器、工具栏双拼时灰掉，副标题说为什么。"""
+        self.scheme_row.set_visible(on)
+        self.calc_row.set_sensitive(not on)
+        self.calc_row.set_subtitle("双拼时不可用" if on else "v1+2*3 → 7")
+        self.toolbar_row.set_sensitive(not on)
+        self.toolbar_row.set_subtitle("双拼时不可用" if on else "打 v 再按空格：剪贴板、常用语、符号、表情")
 
     def on_shuangpin_toggled(self, check):
         on = check.get_active()
-        self.scheme_row.set_sensitive(on)
-        self.calc_row.set_sensitive(not on)
-        self.toolbar_row.set_sensitive(not on)
+        self.show_shuangpin(on)
         self.set_value("Shuangpin", "True" if on else "False")
 
     # ---------------- 表情
 
     def build_emoji(self):
         page = self.new_page()
-        emoji = Adw.PreferencesGroup(
-            title="表情",
-            description="按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
-                        "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。")
+        emoji = Adw.PreferencesGroup(title="表情")
         emoji.add(self.make_switch("EmojiSuggest", "打字时推荐 emoji",
-                                   "打「开心」「点赞」这类词时，第三个候选是对应的 emoji"))
+                                   "打「开心」「点赞」时，第 3 个候选是 emoji"))
         current = self.values["EmojiKey"]
         labels = [label for label, _ in EMOJI_KEYS]
         self.emoji_keys = [name for _, name in EMOJI_KEYS]
         if current not in self.emoji_keys:
             labels.append(f"其他（{current}）")
             self.emoji_keys.append(current)
-        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", subtitle="Super 就是 Windows 键",
-                                          model=Gtk.StringList.new(labels))
+        self.emoji_key_row = Adw.ComboRow(title="表情面板快捷键", model=Gtk.StringList.new(labels))
+        self.add_info(self.emoji_key_row,
+                      "按快捷键打开表情面板，打拼音或英文搜 emoji 和符号（xiao、pizza、youjiantou），"
+                      "方向键挑，空格或回车上屏，Esc 关闭。打了一半的拼音再按快捷键，直接拿它来搜。\n\n"
+                      "Super 就是 Windows 键。")
         self.emoji_key_row.set_selected(self.emoji_keys.index(current))
         self.emoji_key_row.connect("notify::selected", lambda row, _p: self.set_value(
             "EmojiKey", self.emoji_keys[row.get_selected()]))
@@ -3425,18 +3476,21 @@ class SettingsWindow(Adw.ApplicationWindow):
             if conflicts:
                 option = FCITX_OPTION_NAMES[conflicts[0][0]]
                 side = shift_side_names(conflicts)
-                row.set_subtitle(
-                    f"{side} 现在被 fcitx5 用来「{option}」（比如切到 en 键盘），WowType 收不到，"
-                    f"单按{side} 切不到英文和「译」。打开就让给 WowType")
+                row.set_subtitle(f"{side} 被 fcitx5 用来「{option}」，打开就让给 WowType")
+                self.shift_free_info.set_text(
+                    f"fcitx5 用{side}来「{option}」（比如切到 en 键盘），WowType 收不到，"
+                    f"单按{side} 切不到英文和「译」。打开这个开关就让给 WowType，关掉再还给 fcitx5。")
                 row.add_css_class("wt-warning")
             elif unsaved:
-                row.set_subtitle(f"只在这次有效：{fcitx_config_hint()}")
+                row.set_subtitle("只在这次有效，下次启动 fcitx5 又会拿走")
+                self.shift_free_info.set_text(fcitx_config_hint())
                 row.add_css_class("wt-warning")
             else:
                 trigger = key_list(self.fcitx_hotkey.get("TriggerKeys")) if self.fcitx_hotkey else []
-                switch_hint = (f"切到别的输入法按 {key_label(trigger[0])}" if trigger
-                               else "切到别的输入法要在 fcitx5 配置里设快捷键")
-                row.set_subtitle(f"fcitx5 不再用 Shift 切输入法；{switch_hint}。关掉就还给 fcitx5")
+                switch_hint = (f"切换输入法按 {key_label(trigger[0])}" if trigger
+                               else "切换输入法要在 fcitx5 配置里设快捷键")
+                row.set_subtitle(f"已让出；{switch_hint}")
+                self.shift_free_info.set_text("fcitx5 不再用 Shift 切输入法。关掉这个开关就还给 fcitx5。")
                 row.remove_css_class("wt-warning")
             self.refresh_translate_status()
         self.fcitx.get_config(GLOBAL_URI, done)
@@ -3493,6 +3547,39 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.switches[key] = row
         return row
 
+    # 页面上只放标题和最多一行的副标题。说明、注意事项、例子、来源、许可这类放进 ⓘ：
+    #   组：group.set_header_suffix(self.info_button("…", [("项目主页", url)]))，ⓘ 在组标题右边
+    #   行：self.add_info(row, "…")，ⓘ 在开关、下拉框前面（ActionRow、SwitchRow、ComboRow、ExpanderRow 都行）
+    # macOS 设置窗口对应的是 InfoButton 和各行的 info:（macos/Sources/App/SettingsView.swift）。
+
+    def info_button(self, text, links=()):
+        """ⓘ 小按钮，点开弹出说明；links 是 [(文字, 网址)…]，放在说明下面。
+
+        说明文字是 button.info_label，要随状态变时改它。标签不设 selectable：弹出框一打开它就拿到焦点、
+        整段被选中。"""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_top=10,
+                      margin_bottom=10, margin_start=12, margin_end=12)
+        label = Gtk.Label(label=text, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                          max_width_chars=36, xalign=0)
+        box.append(label)
+        for title, url in links:
+            box.append(Gtk.LinkButton(uri=url, label=title, halign=Gtk.Align.START))
+        button = Gtk.MenuButton(icon_name="help-about-symbolic", valign=Gtk.Align.CENTER,
+                                tooltip_text="说明", popover=Gtk.Popover(child=box))
+        button.add_css_class("flat")
+        button.info_label = label
+        return button
+
+    def add_info(self, row, text, links=()):
+        """给一行加 ⓘ，放在这一行自己的开关、下拉框前面。返回按钮。"""
+        button = self.info_button(text, links)
+        row.add_suffix(button)
+        # SwitchRow 的开关、ComboRow 的下拉也在后缀那一排里，新加的排在最后：挪到最前面
+        suffixes = button.get_parent()
+        if hasattr(suffixes, "reorder_child_after"):
+            suffixes.reorder_child_after(button, None)
+        return button
+
     def refresh_status(self):
         def done(info):
             if info is None:
@@ -3528,10 +3615,10 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def build_voice(self):
         page = self.new_page()
-        group = Adw.PreferencesGroup(
-            title="语音输入",
-            description="按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
-                        "说的时候按 Esc 取消。正在打拼音时语音键不起作用。")
+        group = Adw.PreferencesGroup(title="语音输入")
+        group.set_header_suffix(self.info_button(
+            "按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
+            "说的时候按 Esc 取消。正在打拼音时语音键不起作用。"))
         self.voice_row = self.make_switch("Voice", "语音输入", "")
         group.add(self.voice_row)
 
@@ -3548,24 +3635,22 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.switches["Voice"].bind_property("active", self.key_row, "sensitive",
                                              GObject.BindingFlags.SYNC_CREATE)
         group.add(self.key_row)
-        copy_row = self.make_switch(
-            "VoiceCopy", "同时复制到剪贴板",
-            "说的话打出来后也放进剪贴板，方便贴到别处（要系统装了 wl-clipboard 或 xclip）")
+        copy_row = self.make_switch("VoiceCopy", "同时复制到剪贴板", "要装 wl-clipboard 或 xclip")
         self.switches["Voice"].bind_property("active", copy_row, "sensitive",
                                              GObject.BindingFlags.SYNC_CREATE)
         group.add(copy_row)
         page.add(group)
 
-        model = Adw.PreferencesGroup(
-            title="识别模型",
-            description="在本机识别，录音不上传。" + VOICE_MODEL_NOTE)
+        model = Adw.PreferencesGroup(title="识别模型")
+        model.set_header_suffix(self.info_button(
+            f"在本机识别，录音不上传。{VOICE_MODEL_NOTE}\n\n模型放在 {_home(VOICE_MODEL_DIR)}。"))
         self.model_row = Adw.ActionRow(title="语音模型")
         self.voice_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
         self.voice_download.add_css_class("suggested-action")
         self.voice_download.connect("clicked", self.on_voice_download)
         self.model_row.add_suffix(self.voice_download)
         self.voice_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                       tooltip_text="删掉语音模型，关掉语音输入")
+                                       tooltip_text="删除语音模型（语音输入会关掉）")
         self.voice_delete.add_css_class("flat")
         self.voice_delete.connect("clicked", self.on_voice_delete)
         self.model_row.add_suffix(self.voice_delete)
@@ -3587,16 +3672,15 @@ class SettingsWindow(Adw.ApplicationWindow):
         elif busy:
             subtitle = None  # 进度由下载线程更新
         elif ready:
-            subtitle = f"已下载（{human_size(dir_size(VOICE_MODEL_DIR))}）：{_home(VOICE_MODEL_DIR)}"
+            subtitle = f"已下载（{human_size(dir_size(VOICE_MODEL_DIR))}）"
         elif self.voice_error:
-            subtitle = f"没下载好：{self.voice_error}。点「重试」再下"
+            subtitle = f"没下载好：{self.voice_error}"
         elif os.path.exists(VOICE_MODEL_DIR + ".apk.part"):
             done = os.path.getsize(VOICE_MODEL_DIR + ".apk.part")
-            subtitle = (f"下了 {human_size(done)} / {human_size(VOICE_MODEL_SIZE)}，"
-                        "点「下载」接着下")
+            subtitle = f"下了 {human_size(done)} / {human_size(VOICE_MODEL_SIZE)}，可以接着下"
         else:
-            subtitle = (f"还没下载。要下载 {human_size(VOICE_MODEL_SIZE)}，"
-                        f"解开后占 {human_size(VOICE_MODEL_DISK)} 左右")
+            subtitle = (f"要下载 {human_size(VOICE_MODEL_SIZE)}，"
+                        f"解开后约 {human_size(VOICE_MODEL_DISK)}")
         if subtitle is not None:
             self.model_row.set_subtitle(GLib.markup_escape_text(subtitle))
         self.voice_download.set_label("取消" if busy else ("重试" if self.voice_error else "下载"))
@@ -3608,8 +3692,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.voice_row.set_active(ready and self.values["Voice"] == "True")
         self.quiet_switch = False
         self.voice_row.set_sensitive(ready)
-        self.voice_row.set_subtitle(
-            "按语音键说话，在本机识别，不联网" if ready else "要先在下面下载语音模型才能打开")
+        self.voice_row.set_subtitle("在本机识别，不联网" if ready else "先在下面下载语音模型")
 
     def on_voice_download(self, _button):
         if self.voice_cancel is not None:
@@ -3688,31 +3771,32 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def build_translate(self):
         page = self.new_page()
-        intro = Adw.PreferencesGroup(
-            title="互译",
-            description="单按 Shift 切到「译」，照常打中文，停一下就翻成外文。"
-                        "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。")
+        intro = Adw.PreferencesGroup(title="互译")
+        intro.set_header_suffix(self.info_button(
+            "单按 Shift 切到「译」，照常打中文，停一下就翻成外文。"
+            "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。"))
         self.translate_row = self.make_switch("Translate", "互译", None)
         self.translate_row.connect("notify::active", self.on_translate_toggled)
         intro.add(self.translate_row)
         self.target_codes = [code for _, code, _ in TRANSLATE_LANGUAGES]
         self.target_row = Adw.ComboRow(
-            title="翻译成", subtitle="中文翻成这种语言；这种语言（和别的外文）翻成中文",
-            model=Gtk.StringList.new([label for label, _, _ in TRANSLATE_LANGUAGES]))
+            title="翻译成", model=Gtk.StringList.new([label for label, _, _ in TRANSLATE_LANGUAGES]))
+        self.add_info(self.target_row, "中文翻成这种语言；这种语言（和别的外文）翻成中文。")
         current = self.values.get("TranslateTarget", "en")
         self.target_row.set_selected(
             self.target_codes.index(current) if current in self.target_codes else 0)
         self.target_row.connect("notify::selected", lambda row, _p: self.set_value(
             "TranslateTarget", self.target_codes[row.get_selected()]))
         intro.add(self.target_row)
-        intro.add(self.make_switch("TranslateFormal", "正式语气",
-                                   "写邮件、公文时打开；默认是聊天的口吻"))
+        intro.add(self.make_switch("TranslateFormal", "正式语气", "默认是聊天的口吻"))
         page.add(intro)
 
-        service = Adw.PreferencesGroup(
-            title="翻译服务",
-            description="选一家服务商，填它给你的 Key，再挑一个模型。翻译要等服务回话，"
-                        "名字里带 mini、flash、turbo 的小模型更快。")
+        service = Adw.PreferencesGroup(title="翻译服务")
+        service.set_header_suffix(self.info_button(
+            "选一家服务商，填它给你的 Key，再挑一个模型。翻译要等服务回话，"
+            "名字里带 mini、flash、turbo 的小模型更快。\n\n"
+            "隐私：只在切到「译」时把打的字发给你选的服务，密码框里不翻译；WowType 自己不经手、不收集。"
+            f"Key 只存在这台电脑上（{_home(TRANSLATE_KEY_FILE)}）。"))
         self.provider_row = Adw.ComboRow(
             title="服务商", model=Gtk.StringList.new([name for name, _, _ in TRANSLATE_PROVIDERS]))
         self.provider_syncing = True
@@ -3743,17 +3827,11 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.tmodel_row.add_suffix(self.model_button)
         service.add(self.tmodel_row)
 
-        self.test_row = Adw.ActionRow(title="测试连接", subtitle="用「你好」试一下，看要等多久")
+        self.test_row = Adw.ActionRow(title="测试连接", subtitle="用「你好」试一下")
         self.test_button = Gtk.Button(label="测试", valign=Gtk.Align.CENTER)
         self.test_button.connect("clicked", self.on_test_translate)
         self.test_row.add_suffix(self.test_button)
         service.add(self.test_row)
-        privacy = Adw.ActionRow(
-            title="隐私",
-            subtitle=GLib.markup_escape_text(
-                "只在切到「译」时把打的字发给你选的服务，密码框里不翻译；WowType 自己不经手、不收集。"
-                f"Key 只存在这台电脑上（{_home(TRANSLATE_KEY_FILE)}）"))
-        service.add(privacy)
         self.service_group = service
 
         # 用什么翻译：下拉菜单，默认本地模型；选「自定义」才出现填接口的地方
@@ -3777,16 +3855,17 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.refresh_local_translate()
 
     def build_local_translate(self):
-        group = Adw.PreferencesGroup(
-            title="离线翻译模型",
-            description="腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。")
+        group = Adw.PreferencesGroup(title="离线翻译模型")
+        group.set_header_suffix(self.info_button(
+            "腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。\n\n"
+            + LOCAL_MODEL_TERMS, [("许可协议全文", LOCAL_MODEL_LICENSE)]))
         self.local_model_row = Adw.ActionRow(title="翻译模型")
         self.local_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
         self.local_download.add_css_class("suggested-action")
         self.local_download.connect("clicked", self.on_local_download)
         self.local_model_row.add_suffix(self.local_download)
         self.local_delete = Gtk.Button(icon_name="user-trash-symbolic", valign=Gtk.Align.CENTER,
-                                       tooltip_text="删掉下载的模型")
+                                       tooltip_text="删除下载的模型")
         self.local_delete.add_css_class("flat")
         self.local_delete.connect("clicked", self.on_local_delete)
         self.local_model_row.add_suffix(self.local_delete)
@@ -3794,27 +3873,21 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.local_cancel = None
         self.local_stage = "model"
 
-        terms = Adw.ActionRow(title="许可", subtitle="模型属于腾讯，不适用于欧盟、英国和韩国境内；"
-                                                   "下载时要同意它的许可协议")
-        terms.add_suffix(Gtk.LinkButton(uri=LOCAL_MODEL_LICENSE, label="协议全文",
-                                        valign=Gtk.Align.CENTER))
-        group.add(terms)
-
         # 一般用不着的放进折叠项
         more = Adw.ExpanderRow(title="更多选项")
-        idle = Adw.SpinRow.new_with_range(0, 240, 1)
+        idle = Adw.SpinRow.new_with_range(*RANGES["TranslateIdleMinutes"], 1)
         idle.set_title("不用几分钟后释放内存")
-        idle.set_subtitle("0 表示一直留着，再翻译时不用重新载入")
+        idle.set_subtitle("0 表示一直留着")
         try:
             idle.set_value(int(self.values["TranslateIdleMinutes"]))
         except ValueError:
-            idle.set_value(5)
+            idle.set_value(int(DEFAULTS["TranslateIdleMinutes"]))
         idle.connect("notify::value", lambda row, _p: self.set_value(
             "TranslateIdleMinutes", str(int(row.get_value()))))
         more.add_row(idle)
         self.llama_status = Adw.ActionRow(title="运行模型的程序（llama-server）")
         more.add_row(self.llama_status)
-        self.llama_row = Adw.EntryRow(title="自己指定 llama-server 的位置（一般不用填）",
+        self.llama_row = Adw.EntryRow(title="llama-server 的位置（一般不用填）",
                                       show_apply_button=False)
         self.llama_row.set_text(self.values["TranslateLlamaServer"])
         self.llama_row.connect("changed", lambda row: (
@@ -3854,16 +3927,14 @@ class SettingsWindow(Adw.ApplicationWindow):
             pass  # 进度由下载线程更新
         elif not want_model and server:
             self.local_model_row.set_subtitle(GLib.markup_escape_text(
-                f"已下载，可以用了（{human_size(os.path.getsize(path))}）"))
+                f"已下载（{human_size(os.path.getsize(path))}）"))
         elif not want_model and want_llama:
             self.local_model_row.set_subtitle(GLib.markup_escape_text(
-                f"模型有了，还差运行它的程序（{human_size(size)}），点下载补上"))
+                f"还差运行模型的程序（{human_size(size)}）"))
         elif not want_model:
-            self.local_model_row.set_subtitle(
-                "模型有了，但这台电脑上没有运行它的程序，要先装 llama.cpp，见「更多选项」")
+            self.local_model_row.set_subtitle("还差 llama.cpp，见「更多选项」")
         else:
-            self.local_model_row.set_subtitle(GLib.markup_escape_text(
-                f"还没下载，要下载 {human_size(size)}"))
+            self.local_model_row.set_subtitle(GLib.markup_escape_text(f"要下载 {human_size(size)}"))
         self.local_download.set_label("取消" if downloading else "下载")
         self.local_download.set_visible(downloading or want_model or want_llama)
         self.local_delete.set_visible(
@@ -3871,15 +3942,14 @@ class SettingsWindow(Adw.ApplicationWindow):
             and (os.path.isfile(path) or bool(mine)))
         if server and server == mine:
             self.llama_status.set_subtitle(GLib.markup_escape_text(
-                f"WowType 下载的：{_home(server)}（llama.cpp {LLAMA_BUILD}）"))
+                f"已下载 llama.cpp {LLAMA_BUILD}：{_home(server)}"))
         elif server:
             self.llama_status.set_subtitle(GLib.markup_escape_text(f"用系统里装的：{server}"))
         elif llama_asset():
-            self.llama_status.set_subtitle("还没有，下载模型时一起下载")
+            self.llama_status.set_subtitle("下载模型时一起下载")
         else:
             self.llama_status.set_subtitle(
-                "没找到，这台电脑也没有现成的可以下载。请装发行版的 llama.cpp 包"
-                "（NixOS：pkgs.llama-cpp），或者在下面填它的位置")
+                "没找到，请装发行版的 llama.cpp（NixOS：pkgs.llama-cpp）或在下面填位置")
         self.refresh_translate_status()
 
     def on_local_download(self, _button):
@@ -3887,8 +3957,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.local_cancel.set()
             return
         want_model, want_llama, size = self.local_missing()
-        if not want_model:
-            self.start_local_download()  # 只差 llama-server，不用再确认模型的许可
+        if not want_model or os.path.exists(local_model_path(self.values) + ".part"):
+            # 只差 llama-server，或者模型下到一半（开始下时已经同意过许可）：不用再确认，接着下（和 macOS 一样）
+            self.start_local_download()
             return
         extra = ("同时下载运行模型的程序 llama-server（llama.cpp 官方发布，MIT 许可）。"
                  if want_llama else "")
@@ -3907,8 +3978,11 @@ class SettingsWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def start_local_download(self):
-        """把还差的都下了：模型，和系统里没有时的 llama-server。进度都显示在「翻译模型」那一行。"""
-        dest = os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
+        """把还差的都下了：模型，和系统里没有时的 llama-server。进度都显示在「翻译模型」那一行。
+
+        模型下到现在用的位置：设置里写了 TranslateLocalModel 就下到那里，没写下到 models/（和 macOS 一样），
+        下完就能用，不会出现下好了却还显示缺模型。"""
+        dest = local_model_path(self.values)
         want_model, want_llama, _size = self.local_missing()
         if self.local_cancel is not None or not (want_model or want_llama):
             return
@@ -4105,16 +4179,15 @@ class SettingsWindow(Adw.ApplicationWindow):
                   if s not in {bare_shift(k) for _o, k in conflicts}]
         if not self.translate_ready():
             self.translate_row.set_subtitle(
-                "先在下面下载翻译模型，Shift 才切得到「译」"
-                if self.values.get("TranslateLocal") == "True"
-                else "先填好下面的翻译服务，Shift 才切得到「译」")
+                "先在下面下载翻译模型" if self.values.get("TranslateLocal") == "True"
+                else "先在下面填好翻译服务")
         elif toggle == "Off":
-            self.translate_row.set_subtitle("「输入」页里关掉了 Shift 切换，切不到「译」")
+            self.translate_row.set_subtitle("「输入」页关掉了 Shift 切换，切不到「译」")
         elif conflicts:
             taken = shift_side_names(conflicts)
             self.translate_row.set_subtitle(
                 f"{taken} 被 fcitx5 占着；" + (f"用{'、'.join(usable)}，" if usable else "")
-                + "或到「输入」页把它让给 WowType")
+                + "或到「输入」页让给 WowType")
         else:
             self.translate_row.set_subtitle("单按 Shift：中 → 英 → 译 → 中")
 
@@ -4146,7 +4219,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         message = f"✓ 你好 → {text}（{seconds:.1f} 秒）"
         if seconds > 2.5:
-            message += "。有点慢，打字时得等一会儿，可以换个小一点的模型"
+            message += "，有点慢，可以换个小一点的模型"
         self.test_row.set_subtitle(GLib.markup_escape_text(message))
         log(f"测试翻译服务成功（{seconds:.1f} 秒）")
 
@@ -4154,15 +4227,15 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def build_words(self):
         page = self.new_page()
-        add = Adw.PreferencesGroup(
-            title="添加自定义词",
-            description="人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总是排在候选第一个，"
-                        "简拼也能打出来。编码也可以是 mail、addr 这类字母，正好打这几个字母时出现。"
-                        "词里写 \\n 表示换行，比如「四川省\\n宜宾市」。")
+        add = Adw.PreferencesGroup(title="添加自定义词")
+        add.set_header_suffix(self.info_button(
+            "人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总排在候选第一个，简拼也能打出来。\n\n"
+            "编码按词自动填好拼音，多音字请检查；也可以是 mail、addr 这类字母，正好打这几个字母时出现。\n\n"
+            "词里写 \\n 表示换行，比如「四川省\\n宜宾市」。"))
         self.word_entry = Adw.EntryRow(title="词")
         self.word_entry.connect("changed", self.on_word_changed)
         self.word_entry.connect("entry-activated", self.on_add_word)
-        self.pinyin_entry = Adw.EntryRow(title="编码：拼音（自动填好，多音字请检查）或字母")
+        self.pinyin_entry = Adw.EntryRow(title="编码：拼音或字母")
         self.pinyin_entry.connect("changed", self.on_pinyin_changed)
         self.pinyin_entry.connect("entry-activated", self.on_add_word)
         self.add_button = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="添加",
@@ -4275,7 +4348,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         query = self.search.get_text().strip().lower()
         shown = [(p, w) for p, w in reversed(self.words)
                  if not query or query in w.lower() or query.replace(" ", "") in p.replace(" ", "")]
-        self.list_group.set_title(f"我的词（{len(self.words)}）" if self.words else "我的词")
+        self.list_group.set_title(f"已添加（{len(self.words)}）" if self.words else "已添加")
         self.search.set_visible(len(self.words) > 8)
         if not shown:
             empty = Adw.ActionRow(title="还没有自定义词" if not self.words else "没找到")
@@ -4363,9 +4436,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.progress = Gtk.ProgressBar(visible=False, margin_top=6, margin_bottom=6)
         group.add(self.progress)
 
-        self.restart_row = Adw.ActionRow(
-            title="已更新，重启输入法后生效（设置界面也会重新打开）",
-            subtitle="重启后，浏览器等正在打开的应用可能要重新打开才能打字", visible=False)
+        self.restart_row = Adw.ActionRow(title="已更新，重启输入法后生效", visible=False)
+        self.add_info(self.restart_row, "设置界面会跟着重新打开。"
+                                        "重启后，浏览器等正在打开的应用可能要重新打开才能打字。")
         restart = Gtk.Button(label="重启输入法", valign=Gtk.Align.CENTER)
         restart.add_css_class("suggested-action")
         restart.connect("clicked", self.on_restart_fcitx)
@@ -4386,8 +4459,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(self.notes_group)
 
         auto = Adw.PreferencesGroup()
-        auto.add(self.make_switch("CheckUpdate", "自动检查更新",
-                                  "切到 WowType 时在后台检查，最多一小时一次，有新版本发通知"))
+        check = self.make_switch("CheckUpdate", "自动检查更新", "有新版本时发通知")
+        self.add_info(check, "切到 WowType 时在后台检查，最多一小时一次。")
+        auto.add(check)
         page.add(auto)
         return page
 
@@ -4422,7 +4496,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         newer = is_newer(release)
         self.latest_row.set_title(
             f"有新版本 {release['version']}" if newer else "已经是最新版本")
-        self.latest_row.set_subtitle(f"最新版本 {release['version']}")
+        self.latest_row.set_subtitle("" if newer else f"最新版本 {release['version']}")
         self.install_row.set_visible(newer)
         if newer:
             self.install_row.set_title("更新到 " + release["version"])
@@ -4580,7 +4654,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.values = {**DEFAULTS, **keep}
             self.save_config()
             self.layout_row.set_selected(0)
-            self.page_row.set_value(9)
+            self.page_row.set_value(int(DEFAULTS["PageSize"]))
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")
             self.full_pinyin_check.set_active(True)

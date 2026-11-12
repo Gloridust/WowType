@@ -1,0 +1,107 @@
+{
+  "$comment": [
+    "可选词库包（万象拼音）的规矩。CI 用 scripts/make-wanxiang.sh 打包放到 Release 上，用户在设置里下载切换。",
+    "改这些规矩要先改这里，两端的测试拿它对照：",
+    "  settings settings/wowtype-config 的 WANXIANG_ASSET、LEXICON_PACK_FILES、LEXICON_PACK_MIN、find_lexicon_asset、",
+    "           download_updates（SHA256SUMS）、install_lexicon_pack、lexicon_pack_version（scripts/test-config-contract.py）",
+    "  macos    macos/Sources/Shared/LexiconPack.swift（macos/test.sh）",
+    "fcitx5 插件不管词库包，只读 wowtype.conf 里的 Lexicon 路径。",
+    "cases 是两端都要跑一遍的例子，结果要和这里写的一样。"
+  ],
+  "version": 1,
+  "name": "wanxiang",
+  "assetPrefix": "wowtype-data-wanxiang-",
+  "assetSuffix": ".tar.gz",
+  "versionPattern": "[0-9][0-9A-Za-z.]*",
+  "checksumFile": "SHA256SUMS",
+  "files": ["lexicon.tsv", "LICENSE", "SOURCE.txt", "VERSION"],
+  "minEntries": 100000,
+  "folder": "dicts/wanxiang",
+  "rules": [
+    "发布页上的文件名是 assetPrefix + 版本 + assetSuffix，版本整个符合 versionPattern；有好几个包时按数字段比版本，取最大的。",
+    "按同一页的 checksumFile 校验：每行「64 位十六进制校验值 空白 文件名」，文件名前的 * 去掉，校验值不分大小写；要的文件的条目重复、校验值无效、没有条目，都不装。别的文件的条目不管。",
+    "包里只许有 files 里的普通文件（开头的 ./ 去掉以后比）；包本身的目录项（./ 或 .）跳过；别的（子目录、../、绝对路径、链接）有一个就整个不装。",
+    "lexicon.tsv 每行「拼音<TAB>词[<TAB>频次]」，# 开头和空白行不算；有一行没有 TAB 就不装；条数少于 minEntries 当成没下完整，不装。",
+    "装在数据目录下的 folder 里；装好的版本是 VERSION 的内容（去掉空白，空的或没有这个文件算「?」），没有 lexicon.tsv 算没装。"
+  ],
+  "cases": {
+    "assetVersion": [
+      {"name": "wowtype-data-wanxiang-2026.11.12.0.tar.gz", "version": "2026.11.12.0"},
+      {"name": "wowtype-data-wanxiang-1.tar.gz", "version": "1"},
+      {"name": "wowtype-data-wanxiang-2026.11.12.0rc1.tar.gz", "version": "2026.11.12.0rc1"},
+      {"name": "wowtype-data-wanxiang-latest.tar.gz", "version": null},
+      {"name": "wowtype-data-wanxiang-.tar.gz", "version": null},
+      {"name": "wowtype-data-wanxiang-1.0.zip", "version": null},
+      {"name": "wowtype-data-wanxiang-1.0-beta.tar.gz", "version": null},
+      {"name": "wowtype-data-wanxiang-1.0/../x.tar.gz", "version": null},
+      {"name": "wowtype-data-rime-ice-2026.10.31.2.tar.gz", "version": null},
+      {"name": "SHA256SUMS", "version": null}
+    ],
+    "pickAsset": [
+      {"names": ["SHA256SUMS", "wowtype-data-wanxiang-2026.9.1.tar.gz", "wowtype-data-wanxiang-2026.10.31.2.tar.gz",
+                 "wowtype-data-wanxiang-2026.10.31.tar.gz"],
+       "pick": "wowtype-data-wanxiang-2026.10.31.2.tar.gz"},
+      {"names": ["wowtype-data-wanxiang-2026.11.9.3.tar.gz", "wowtype-data-wanxiang-2026.11.10.0.tar.gz"],
+       "pick": "wowtype-data-wanxiang-2026.11.10.0.tar.gz"},
+      {"names": ["SHA256SUMS", "wowtype_0.3.10_debian13_amd64.deb", "wowtype-data-rime-ice-2026.10.31.2.tar.gz"],
+       "pick": null},
+      {"names": [], "pick": null},
+      {"names": ["wowtype-data-wanxiang-2026.11.12.tar.gz", "wowtype-data-wanxiang-2026.11.12.0.tar.gz"],
+       "pick": "wowtype-data-wanxiang-2026.11.12.0.tar.gz"}
+    ],
+    "checksums": {
+      "$comment": "wanted 是要校验的文件；它的内容是空的，所以对得上的校验值是空串的 SHA256。digest 是取到的校验值（小写），null 表示不装。",
+      "wanted": "wowtype-data-wanxiang-1.tar.gz",
+      "cases": [
+        {"text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  wowtype-data-wanxiang-1.tar.gz\n",
+         "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"text": "E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855  wowtype-data-wanxiang-1.tar.gz\n",
+         "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 *wowtype-data-wanxiang-1.tar.gz\r\n",
+         "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"text": "ffff  other.tar.gz\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  wowtype-data-wanxiang-1.tar.gz\n",
+         "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+        {"text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  wowtype-data-wanxiang-1.tar.gz\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  wowtype-data-wanxiang-1.tar.gz\n",
+         "digest": null},
+        {"text": "bad  wowtype-data-wanxiang-1.tar.gz\n", "digest": null},
+        {"text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85  wowtype-data-wanxiang-1.tar.gz\n", "digest": null},
+        {"text": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  other.tar.gz\n", "digest": null},
+        {"text": "", "digest": null}
+      ]
+    },
+    "entryName": [
+      {"raw": "lexicon.tsv", "name": "lexicon.tsv"},
+      {"raw": "./lexicon.tsv", "name": "lexicon.tsv"},
+      {"raw": "VERSION", "name": "VERSION"},
+      {"raw": "./LICENSE", "name": "LICENSE"},
+      {"raw": "SOURCE.txt", "name": "SOURCE.txt"},
+      {"raw": "./", "name": ""},
+      {"raw": ".", "name": ""},
+      {"raw": "././lexicon.tsv", "name": null},
+      {"raw": "../lexicon.tsv", "name": null},
+      {"raw": "/etc/passwd", "name": null},
+      {"raw": "dicts/lexicon.tsv", "name": null},
+      {"raw": "evil.sh", "name": null},
+      {"raw": "Lexicon.tsv", "name": null}
+    ],
+    "lexicon": {
+      "$comment": "count 是数出来的条数（最少条数就设成它时能装，再多一条就不装）；null 表示格式不对，不装。",
+      "cases": [
+        {"text": "# 注释\n\nni hao\t你好\t100\nzhong guo\t中国\n", "count": 2},
+        {"text": "ni hao\t你好\r\nhao\t好\t1\r\n", "count": 2},
+        {"text": "  \n\t\nni\t你\n", "count": 1},
+        {"text": "ni hao\t\n", "count": 1},
+        {"text": "ni hao 你好\n", "count": null},
+        {"text": "ni\t你\nhao 好\n", "count": null}
+      ]
+    },
+    "installedVersion": [
+      {"files": {"lexicon.tsv": "ni\t你\n", "VERSION": "2026.11.12.0\n"}, "version": "2026.11.12.0"},
+      {"files": {"lexicon.tsv": "ni\t你\n", "VERSION": " 2026.11.12.0 \n"}, "version": "2026.11.12.0"},
+      {"files": {"lexicon.tsv": "ni\t你\n", "VERSION": ""}, "version": "?"},
+      {"files": {"lexicon.tsv": "ni\t你\n"}, "version": "?"},
+      {"files": {"VERSION": "2026.11.12.0\n"}, "version": null},
+      {"files": {}, "version": null}
+    ]
+  }
+}
