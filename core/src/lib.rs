@@ -1482,7 +1482,7 @@ impl Engine {
 }
 
 /// 输入正好是一个完整音节（xian、ji、zhe）时：本音节的字排在补全出来的字（想、就、真）前面，
-/// 纠错出来的（gei → 被、飞）不要。
+/// 纠错出来的（gei → 被、飞；si → 是，漏按 h）再往后。
 ///
 /// 补全每个字母只罚 1.4 左右，高频字补全以后常常比本音节的字分还高；已经打全的音节，
 /// 用户要的是这个音节的字。多音节输入、没打全的音节不动。
@@ -1496,13 +1496,17 @@ fn exact_syllable_first(candidates: Vec<Candidate>) -> Vec<Candidate> {
     }
     let (mut out, rest): (Vec<Candidate>, Vec<Candidate>) = candidates.into_iter().partition(exact);
     lift_split_word(&mut out);
-    let floor = out.last().map_or(0.0, |c| c.score);
-    let completions = rest.into_iter().filter(|c| c.features.typo_count == 0.0);
-    // 分数也压到精确候选下面，后面按分数合并、排序的地方不会再把它们换上来
-    out.extend(completions.enumerate().map(|(i, mut c)| {
-        c.score = c.score.min(floor - 1e-3 * (i + 1) as f64);
-        c
-    }));
+    // 补全的在前、纠错的在后，各自按分数
+    let (completions, typos): (Vec<Candidate>, Vec<Candidate>) =
+        rest.into_iter().partition(|c| c.features.typo_count == 0.0);
+    // 分数也压到前面的下面，后面按分数合并、排序的地方不会再把它们换上来
+    for c in completions.into_iter().chain(typos) {
+        let floor = out.last().map_or(0.0, |last| last.score);
+        out.push(Candidate {
+            score: c.score.min(floor - 1e-3),
+            ..c
+        });
+    }
     out
 }
 
@@ -2442,8 +2446,8 @@ mod tests {
 
     #[test]
     fn complete_syllable_keeps_its_own_characters_first() {
-        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面，
-        // 纠错出来的不要；切成 xi'an 的整词「西安」分数差得不多，抬到第五个
+        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面；
+        // 切成 xi'an 的整词「西安」分数差得不多，抬到第五个
         let mut tsv = String::from("xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\n");
         for (i, c) in "先现显线险仙咸鲜".chars().enumerate() {
             tsv.push_str(&format!("xian\t{c}\t{}\n", 1_000_000 - i * 100_000));

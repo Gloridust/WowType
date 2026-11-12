@@ -397,6 +397,21 @@ fn date_time_after_first() {
 }
 
 #[test]
+fn date_time_follows_trigger_word_even_when_it_is_not_first() {
+    // 接着前文打（刚上屏一个日期）时，「事件」可能排在「时间」前面；时间的写法是给「时间」的，
+    // 「时间」挪到第一，写法跟在它后面
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("shi jian\t事件\t900000\nshi jian\t时间\t500000\n").unwrap(),
+    );
+    let engine: &'static Engine =
+        Box::leak(Box::new(Engine::new(lexicon, Arc::new(BigramLm::default()))));
+    let mut session = with(engine);
+    type_keys(&mut session, "shijian");
+    assert_eq!(texts(&mut session)[..3], ["时间", "10:20", "10:20:30"]);
+    assert!(texts(&mut session).contains(&"事件".to_string()));
+}
+
+#[test]
 fn insertion_order_emoji_keycap_date_time() {
     // 外壳的顺序：emoji 推荐插第 3 个，然后在第一页里找数字字跟按键 emoji，
     // 最后日期时间插在首选后面（把前面插的往后挤）

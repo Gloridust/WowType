@@ -1090,9 +1090,21 @@ impl<'e> Session<'e> {
         let Some(now) = (self.clock)() else {
             return;
         };
-        let extra = crate::datetime::candidates(&key, &now)
+        let extra: Vec<Candidate> = crate::datetime::candidates(&key, &now)
             .into_iter()
-            .map(|text| Candidate::plain(text, input.len()));
+            .map(|text| Candidate::plain(text, input.len()))
+            .collect();
+        if extra.is_empty() {
+            return;
+        }
+        // 写法是给「时间」这个词的：接着前文打时它可能不在第一（日期后面接 shijian，
+        // 语料里「…日事件」多，事件排第一），先把它挪到第一，写法再跟在后面
+        if let Some(word) = crate::datetime::trigger_word(&key) {
+            if let Some(at) = all.iter().position(|c| c.text == word).filter(|&at| at > 0) {
+                let trigger = all.remove(at);
+                all.insert(0, trigger);
+            }
+        }
         all.splice(1..1, extra);
     }
 
