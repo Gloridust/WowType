@@ -19,6 +19,7 @@
 //! [`Session::choose`]，表情面板往编辑区加搜索词用 [`Session::append`]，这些过渡用法挪完以后会删掉。
 
 use crate::datetime::LocalTime;
+pub use crate::symbols::PunctStyle;
 use crate::Engine;
 
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
@@ -93,10 +94,19 @@ pub struct Key {
     pub modifiers: u32,
     /// 松开（按下是 false）。
     pub release: bool,
-    /// 光标前一个字符，不知道是 None（以后挪标点、小数点时用）。
+    /// 应用里光标前一个字符（外壳读周围文字得到），读不到是 None。
+    /// 数字后面的标点保持英文、自动空格都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
     pub prev_char: Option<char>,
     /// 外壳认出来的全局热键（翻页、移光标），没有是 None。
     pub action: KeyAction,
+    /// 输入框的情况，[`key_hints`] 的位掩码。
+    pub hints: u32,
+}
+
+/// 外壳告诉会话的输入框情况（[`Key::hints`]）。
+pub mod key_hints {
+    /// 密码框、网址框、邮箱框：不自动补空格。
+    pub const NO_AUTO_SPACE: u32 = 1 << 0;
 }
 
 impl Key {
@@ -208,6 +218,9 @@ pub struct Frame {
     pub has_next: bool,
     /// 这次调用忘掉了一个学过的词（Ctrl+Delete）：外壳该马上存用户词库和输入习惯。
     pub forgot: bool,
+    /// 这次上屏里有引擎学到的选词（选了引擎的候选、原样上屏输入）：外壳攒够次数存一次用户词库。
+    /// 只上屏了标点、emoji、计算结果、日期时间的是 false。
+    pub learned: bool,
 }
 
 /// 候选框的样子。
@@ -280,6 +293,10 @@ pub struct Config {
     /// 以词定字：打拼音途中 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字（#83）。
     /// `[ ]` 设成翻页键时让给翻页。
     pub pick_char: bool,
+    /// 标点样式：全角（中文标点）或半角（原样交给应用）。
+    pub punct_style: PunctStyle,
+    /// 中英文之间自动补空格，[`crate::autospace`] 的 `LETTERS | DIGITS` 位掩码，0 是关。
+    pub auto_space: u32,
 }
 
 impl Default for Config {
@@ -293,6 +310,8 @@ impl Default for Config {
             page_keys: page_keys::MINUS,
             select_keys: SelectKeys::Off,
             pick_char: true,
+            punct_style: PunctStyle::Fullwidth,
+            auto_space: 0,
         }
     }
 }
@@ -342,6 +361,8 @@ pub type Clock = fn() -> Option<LocalTime>;
 
 /// 选了开头的词以后，拿已上屏的字 + 已选的词当上文，最多这么多字节。
 const CONTEXT_BYTES: usize = 24;
+/// 会话自己记的上文最多留几个字（排序用的上文、学搭配都只看最后几个字）。
+const CONTEXT_CHARS: usize = 20;
 /// emoji 推荐插在第几个（首选和次选后面）。
 const EMOJI_SLOT: usize = 2;
 
@@ -374,6 +395,17 @@ pub struct Session<'e> {
     last_choice: Option<Candidate>,
     /// 这次调用忘掉了学过的词（frame 取走）。
     forgot: bool,
+    /// 这次调用上屏的里有学到的选词（frame 取走）。
+    learned: bool,
+    /// 双引号、单引号各自上一次给的是不是左引号（每个会话一份）。
+    quotes: [bool; 2],
+    /// 应用里光标前的字（这次按键时外壳给的；上屏以后是上屏的最后一个字）。自动空格看它，不知道是 None。
+    prev_char: Option<char>,
+    /// 会话自己记的上一个字：上屏的最后一个字，或者交给应用的数字、标点。
+    /// 外壳读不到周围文字时，标点看它（3.14 的点）。
+    last_char: Option<char>,
+    /// 这次按键时外壳给的输入框情况（[`key_hints`]）。
+    hints: u32,
 }
 
 impl Default for Session<'_> {
@@ -395,6 +427,11 @@ impl Default for Session<'_> {
             pending: None,
             last_choice: None,
             forgot: false,
+            learned: false,
+            quotes: [false; 2],
+            prev_char: None,
+            last_char: None,
+            hints: 0,
         }
     }
 }
@@ -465,6 +502,13 @@ impl<'e> Session<'e> {
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
         self.last_choice = None;
+        if !key.release {
+            self.prev_char = key.prev_char;
+            self.hints = key.hints;
+            if key.prev_char.is_some() {
+                self.last_char = key.prev_char;
+            }
+        }
         let handled = self.handle_key(key);
         self.frame(handled)
     }
@@ -486,6 +530,10 @@ impl<'e> Session<'e> {
             }
         }
         let sym = key.keysym;
+        // 打字途中的隔音符（xi'an）下面单独处理
+        if let Some(c) = visible_symbol(sym).filter(|&c| !(c == '\'' && self.composing())) {
+            return self.symbol_key(c, key);
+        }
         if (u32::from(b'a')..=u32::from(b'z')).contains(&sym)
             || (u32::from(b'A')..=u32::from(b'Z')).contains(&sym)
         {
@@ -499,6 +547,81 @@ impl<'e> Session<'e> {
             return true;
         }
         false
+    }
+
+    /// 字母、隔音符以外的可见 ASCII 字符（标点、符号、数字），会话的选词、翻页规则都没用上它时。
+    ///
+    /// - 正在输入：先上屏候选（光标停在句首词上时接着选，直到整句上屏），再上屏这个字符
+    ///   （全角样式下有中文标点的换成中文标点，数字后面的保持英文）
+    /// - 没在输入：有中文标点的换成中文标点上屏；数字前面要补空格（汉字后面打数字）就自己上屏；
+    ///   别的交给应用
+    fn symbol_key(&mut self, c: char, key: &Key) -> bool {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return false;
+        }
+        if self.composing() {
+            for _ in 0..16 {
+                if !self.composing() {
+                    break;
+                }
+                self.commit_current();
+            }
+            let prev = self.last_char;
+            let text = self.punct_text(c, prev).unwrap_or_else(|| c.to_string());
+            self.emit(&text);
+            return true;
+        }
+        if c.is_ascii_digit() {
+            if self.space_before(c) {
+                self.emit(&c.to_string());
+                return true;
+            }
+            self.last_char = Some(c);
+            return false;
+        }
+        match self.punct_text(c, self.last_char) {
+            Some(text) => {
+                self.emit(&text);
+                true
+            }
+            None => {
+                self.last_char = Some(c);
+                false
+            }
+        }
+    }
+
+    /// c 在全角样式下换成的中文标点；半角样式、数字后面、没有中文标点的是 None。
+    fn punct_text(&mut self, c: char, prev: Option<char>) -> Option<String> {
+        crate::symbols::punct_with(c, self.config.punct_style, prev, &mut self.quotes).map(str::to_owned)
+    }
+
+    /// 上屏 text 之前要不要补一个空格（汉字和字母、数字之间，设置里的 AutoSpace）。
+    /// 只看应用里光标前那个字，读不到（外壳没给）、密码框网址框邮箱框都不补。
+    fn space_before(&self, first: char) -> bool {
+        self.config.auto_space != 0
+            && self.hints & key_hints::NO_AUTO_SPACE == 0
+            && self
+                .prev_char
+                .is_some_and(|prev| crate::autospace::needs_space(prev, first, self.config.auto_space))
+    }
+
+    /// 上屏一段字（接在这次调用已经要上屏的后面）：要补空格就补，记下光标前的字和上文。
+    fn emit(&mut self, text: &str) {
+        let Some(first) = text.chars().next() else {
+            return;
+        };
+        let spaced = if self.space_before(first) {
+            format!(" {text}")
+        } else {
+            text.to_owned()
+        };
+        self.pending.get_or_insert_with(String::new).push_str(&spaced);
+        let last = text.chars().last();
+        self.prev_char = last;
+        self.last_char = last;
+        self.context = char_tail(&(self.context.clone() + text), CONTEXT_CHARS);
+        self.fresh = false;
     }
 
     /// 正在输入时的键（字母、隔音符除外）。Some：处理完了（handled 是里面的值）；
@@ -939,6 +1062,7 @@ impl<'e> Session<'e> {
             handled,
             commit: self.pending.take(),
             forgot: std::mem::take(&mut self.forgot),
+            learned: std::mem::take(&mut self.learned),
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()
@@ -1191,6 +1315,7 @@ impl<'e> Session<'e> {
         let shown = self.frame(false);
         self.pending = shown.commit;
         self.forgot = shown.forgot;
+        self.learned = shown.learned;
         let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
         self.frame(handled)
     }
@@ -1244,6 +1369,7 @@ impl<'e> Session<'e> {
     fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
         if self.engine.is_some() && !text.is_empty() {
+            self.learned = true;
             if !tail.is_empty() {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
                 self.learn(tail, tail_pinyin);
@@ -1290,7 +1416,7 @@ impl<'e> Session<'e> {
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。
     fn finish(&mut self, text: String) {
         self.clear();
-        self.pending = (!text.is_empty()).then_some(text);
+        self.emit(&text);
     }
 
     /// 选了句首词，压进已选栈（测试里不带引擎时用）。
@@ -1362,6 +1488,18 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
 }
 
 /// 只留尾部 max_bytes 字节，起点对齐到字符边界。
+/// text 最后 max_chars 个字。
+fn char_tail(text: &str, max_chars: usize) -> String {
+    let skip = text.chars().count().saturating_sub(max_chars);
+    text.chars().skip(skip).collect()
+}
+
+/// 字母、空格以外的可见 ASCII 字符（标点、符号、数字）。
+fn visible_symbol(sym: u32) -> Option<char> {
+    let c = char::from_u32(sym).filter(|c| c.is_ascii_graphic())?;
+    (!c.is_ascii_alphabetic()).then_some(c)
+}
+
 fn utf8_tail(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;
@@ -1417,10 +1555,11 @@ mod tests {
     fn letters_and_apostrophe() {
         let session = typed("xi'an");
         assert_eq!(session.input(), "xi'an");
-        // 开头的隔音符不进编辑区
+        // 开头的隔音符不进编辑区：没在打字时它是单引号，换成中文引号上屏
         let mut session = Session::new();
-        assert!(!session.key(&Key::char('\'')).handled);
+        let frame = session.key(&Key::char('\''));
         assert!(!session.composing());
+        assert_eq!(frame.commit.as_deref(), Some("‘"));
     }
 
     #[test]

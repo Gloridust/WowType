@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 9
+#define WOWTYPE_ABI_VERSION_MINOR 10
 
 #ifdef __cplusplus
 extern "C" {
@@ -347,9 +347,15 @@ typedef struct {
     uint32_t keysym;
     uint32_t modifiers; /* WOWTYPE_MOD_* */
     uint32_t release;   /* 0 按下，1 松开 */
-    uint32_t prev_char; /* 光标前一个字符（Unicode 码位），不知道给 0 */
+    uint32_t prev_char; /* 应用里光标前一个字符（Unicode 码位），读不到给 0。1.10 起会话按它决定
+                         * 数字后面的标点保持英文（读不到时看会话自己记的上一个字）、要不要自动补空格
+                         * （读不到就不补） */
     uint32_t action;    /* WOWTYPE_KEY_ACTION_*（1.6 起） */
+    uint32_t hints;     /* 1.10 起：WOWTYPE_KEY_HINT_*，输入框的情况 */
 } WowtypeKey;
+
+/* WowtypeKey.hints（1.10 起）。 */
+#define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格 */
 
 /* 设置里能选的翻页键（WowtypeSessionConfig.page_keys 的位掩码）。PgUp PgDn 一直能用；
  * 横排时上下键翻页、竖排时左右键翻页。 */
@@ -377,6 +383,9 @@ typedef struct {
     int select_keys;    /* 1.6 起：WOWTYPE_SELECT_KEYS_*，默认 OFF */
     int pick_char;      /* 1.8 起：以词定字，打拼音途中 [ 上屏光标处候选的第一个字、] 最后一个字，
                          * 默认 1；page_keys 带 [ ] 时让给翻页 */
+    int punct_style;    /* 1.10 起：0 全角（中文标点，默认）、1 半角（标点原样交给应用） */
+    uint32_t auto_space; /* 1.10 起：中英文之间自动补空格，1 汉字和字母之间、2 汉字和数字之间，
+                          * 可以相加；0 关（默认） */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -396,6 +405,8 @@ typedef struct {
     uint32_t wake_after_ms; /* >0：这么久后再调会话（还没用，恒为 0） */
     int forgot;             /* 1.7 起：这次按键（Ctrl+Delete）让引擎忘掉了一个学过的词，
                              * 外壳该马上存用户词库和输入习惯（和上屏后存的一样） */
+    int learned;            /* 1.10 起：这次上屏里有引擎学到的选词（选了引擎的候选、原样上屏输入），
+                             * 外壳攒够次数存一次用户词库；只上屏了标点、emoji、计算结果、日期时间是 0 */
 } WowtypeFrame;
 
 /* 建会话。engine 可以传 NULL（词库没载入好时也能打字，载入好了用 set_engine 补上）；
