@@ -1265,6 +1265,7 @@ impl Engine {
                 .total_cmp(&a.score)
                 .then_with(|| a.text.cmp(&b.text))
         });
+        let mut deduped = exact_syllable_first(deduped);
         deduped.truncate(self.config.max_candidates.max(1));
         Ok(deduped)
     }
@@ -1477,6 +1478,56 @@ impl Engine {
         }
     }
 }
+
+/// 输入正好是一个完整音节（xian、ji、zhe）时：本音节的字排在补全出来的字（想、就、真）前面，
+/// 纠错出来的（gei → 被、飞）不要。
+///
+/// 补全每个字母只罚 1.4 左右，高频字补全以后常常比本音节的字分还高；已经打全的音节，
+/// 用户要的是这个音节的字。多音节输入、没打全的音节不动。
+fn exact_syllable_first(candidates: Vec<Candidate>) -> Vec<Candidate> {
+    let exact = |c: &Candidate| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0;
+    let one_syllable = candidates
+        .iter()
+        .any(|c| exact(c) && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' '));
+    if !one_syllable {
+        return candidates;
+    }
+    let (mut out, rest): (Vec<Candidate>, Vec<Candidate>) = candidates.into_iter().partition(exact);
+    lift_split_word(&mut out);
+    let floor = out.last().map_or(0.0, |c| c.score);
+    let completions = rest.into_iter().filter(|c| c.features.typo_count == 0.0);
+    // 分数也压到精确候选下面，后面按分数合并、排序的地方不会再把它们换上来
+    out.extend(completions.enumerate().map(|(i, mut c)| {
+        c.score = c.score.min(floor - 1e-3 * (i + 1) as f64);
+        c
+    }));
+    out
+}
+
+/// 一个音节也能切成两个音节的整词（xian → 西安）：分数和第一名差得不多时，至少排到第 [`SPLIT_WORD_SLOT`] 位。
+/// 单字太多，按分数它常常排在十几位以后，第一页看不到。
+fn lift_split_word(exact: &mut Vec<Candidate>) {
+    let Some(top) = exact.first().map(|c| c.score) else {
+        return;
+    };
+    let found = exact.iter().position(|c| {
+        c.words.len() == 1 && c.pinyin.contains(' ') && top - c.score <= SPLIT_WORD_MARGIN
+    });
+    let Some(at) = found.filter(|&at| at > SPLIT_WORD_SLOT) else {
+        return;
+    };
+    let mut word = exact.remove(at);
+    // 分数夹在前后两个之间，后面再按分数排也不会变
+    let (above, below) = (exact[SPLIT_WORD_SLOT - 1].score, exact[SPLIT_WORD_SLOT].score);
+    word.score = (above + below) / 2.0;
+    exact.insert(SPLIT_WORD_SLOT, word);
+}
+
+/// [`lift_split_word`]：最多和第一名差多少（自然对数）。实测 xian 的「西安」差 3.0，
+/// 别的音节能切出来的整词（提案、彼岸、立案、堤岸）差 4 以上，不抬。
+const SPLIT_WORD_MARGIN: f64 = 3.5;
+/// [`lift_split_word`]：抬到第几位（从 0 数，4 是第五个）。
+const SPLIT_WORD_SLOT: usize = 4;
 
 /// 第 k 个字母之后在原始串里的字节位置（跳过紧随其后的隔音符）。
 fn letters_to_bytes(raw: &str, letters: usize) -> usize {
@@ -2385,6 +2436,26 @@ mod tests {
             let texts: Vec<String> = e.input("yao").into_iter().map(|c| c.text).collect();
             assert_eq!(texts.first().map(String::as_str), Some("要"), "{context}: {texts:?}");
         }
+    }
+
+    #[test]
+    fn complete_syllable_keeps_its_own_characters_first() {
+        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面，
+        // 纠错出来的不要；切成 xi'an 的整词「西安」分数差得不多，抬到第五个
+        let mut tsv = String::from("xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\n");
+        for (i, c) in "先现显线险仙咸鲜".chars().enumerate() {
+            tsv.push_str(&format!("xian\t{c}\t{}\n", 1_000_000 - i * 100_000));
+        }
+        let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
+        let e = Engine::new(lexicon, Arc::new(BigramLm::default()));
+        let texts: Vec<String> = e.input("xian").into_iter().map(|c| c.text).collect();
+        let at = |w: &str| texts.iter().position(|t| t == w);
+        assert_eq!(texts.first().map(String::as_str), Some("先"), "{texts:?}");
+        assert!(at("鲜") < at("想"), "补全的字排到了本音节的字前面：{texts:?}");
+        assert_eq!(at("西安"), Some(4), "{texts:?}");
+        // 没打全时照样出补全
+        let texts: Vec<String> = e.input("xia").into_iter().map(|c| c.text).collect();
+        assert!(texts.iter().any(|t| t == "想"), "{texts:?}");
     }
 
     #[test]
