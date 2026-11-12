@@ -22,15 +22,19 @@ func selfTest() -> Bool {
     print("WowType \(appVersion)，核心接口版本 \(Engine.abiVersion)")
     print("资源目录 \(AppState.shared.resourceDir.path)")
     print("数据目录 \(AppState.shared.supportDir.path)")
-    for name in ["lexicon.tsv", "english.txt", "words.lm"] {
+    for name in ["lexicon.tsv", "english.txt", "words.lm", "s2t.tsv"] {
         print("  \(name)：\(AppState.shared.resource(name) == nil ? "没有" : "有")")
     }
     let start = Date()
-    guard let engine = AppState.shared.makeEngine() else {
+    guard let engine = AppState.shared.makeConfiguredEngine() else {
         print("FAIL 载入词库")
         return false
     }
     print(String(format: "词库载入 %.1f 秒", Date().timeIntervalSince(start)))
+    let config = AppState.shared.config
+    print("设置 \(AppState.shared.configPath)：\(config == WowtypeConfig() ? "默认" : "改过")，双拼 \(config.shuangpin ? config.shuangpinScheme : "关")")
+    // 下面照默认设置打一句（设置里开了双拼 nihao 就不是你好了）
+    engine.apply(WowtypeConfig())
     let client = SelfTestClient()
     let composer = Composer(engine: engine, client: client)
     for c in "nihao" {

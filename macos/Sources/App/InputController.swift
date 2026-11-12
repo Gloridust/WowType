@@ -13,12 +13,28 @@ final class WowTypeInputController: IMKInputController {
     /// 最近上屏或交给应用的最后一个字。很多应用读不到光标前的字（attributedSubstring 返回 nil），用它兜底。
     private var lastInserted: UInt32 = 0
     private var lastFlags: UInt = 0
+    /// 照哪一版设置配的会话（AppState.configGeneration）
+    private var configGeneration = -1
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
         composer.onForget = { AppState.shared.didForget() }
+        syncComposer()
+    }
+
+    /// 词库载入完了、换了词库、改了设置：照 AppState 更新这个输入框的会话。
+    private func syncComposer(force: Bool = false) {
+        let state = AppState.shared
+        state.checkForChanges(force: force)
+        if let engine = state.engine, composer.currentEngine !== engine {
+            composer.setEngine(engine)
+        }
+        if configGeneration != state.configGeneration {
+            configGeneration = state.configGeneration
+            composer.apply(state.config)
+        }
     }
 
     override func recognizedEvents(_ sender: Any!) -> Int {
@@ -27,9 +43,7 @@ final class WowTypeInputController: IMKInputController {
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event else { return false }
-        if !composer.hasEngine, let engine = AppState.shared.engine {
-            composer.setEngine(engine)
-        }
+        syncComposer()
         switch event.type {
         case .flagsChanged:
             handleFlags(event)
@@ -65,7 +79,7 @@ final class WowTypeInputController: IMKInputController {
         let isShiftKey = event.keyCode == VirtualKey.shiftLeft || event.keyCode == VirtualKey.shiftRight
         if isShiftKey && changed & shiftMask != 0 {
             composer.shiftChanged(down: flags & shiftMask != 0, otherModifiers: flags & others != 0,
-                                  now: event.timestamp)
+                                  now: event.timestamp, right: event.keyCode == VirtualKey.shiftRight)
         } else {
             composer.otherModifierChanged()
         }
@@ -76,9 +90,7 @@ final class WowTypeInputController: IMKInputController {
         lastMarked = ""
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
-        if !composer.hasEngine, let engine = AppState.shared.engine {
-            composer.setEngine(engine)
-        }
+        syncComposer(force: true)
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -103,10 +115,23 @@ final class WowTypeInputController: IMKInputController {
         let item = NSMenuItem(title: "WowType \(appVersion)", action: nil, keyEquivalent: "")
         item.isEnabled = false
         menu.addItem(item)
-        let folder = NSMenuItem(title: "打开数据目录", action: #selector(openDataFolder), keyEquivalent: "")
-        folder.target = self
-        menu.addItem(folder)
+        menu.addItem(.separator())
+        for (title, action) in [("编辑设置（wowtype.conf）…", #selector(openConfig)),
+                                ("编辑自定义词（custom.tsv）…", #selector(openCustomWords)),
+                                ("打开数据目录", #selector(openDataFolder))] {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self
+            menu.addItem(entry)
+        }
         return menu
+    }
+
+    @objc private func openConfig() {
+        AppState.shared.openConfigFile()
+    }
+
+    @objc private func openCustomWords() {
+        AppState.shared.openCustomWordsFile()
     }
 
     @objc private func openDataFolder() {
@@ -156,16 +181,27 @@ extension WowTypeInputController: TextClient {
         panel.show(page, below: line)
     }
 
-    var previousCharacter: UInt32 {
-        if let client = textInput {
-            let selection = client.selectedRange()
-            if selection.location != NSNotFound, selection.location > 0,
-               let text = client.attributedSubstring(from: NSRange(location: selection.location - 1, length: 1))?.string,
-               let scalar = text.unicodeScalars.last {
-                return scalar.value
-            }
+    /// 应用告诉的光标前一个字；读不到是 nil。打字途中光标在编辑区里，要看编辑区前面那个字。
+    private var clientPreviousCharacter: UInt32? {
+        guard let client = textInput else { return nil }
+        let marked = client.markedRange()
+        let location = marked.location != NSNotFound && marked.length > 0
+            ? marked.location : client.selectedRange().location
+        guard location != NSNotFound, location > 0,
+              let text = client.attributedSubstring(from: NSRange(location: location - 1, length: 1))?.string,
+              let scalar = text.unicodeScalars.last
+        else {
+            return nil
         }
-        return lastInserted
+        return scalar.value
+    }
+
+    var previousCharacterIsReliable: Bool {
+        clientPreviousCharacter != nil
+    }
+
+    var previousCharacter: UInt32 {
+        clientPreviousCharacter ?? lastInserted
     }
 }
 

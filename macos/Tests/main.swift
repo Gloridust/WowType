@@ -52,6 +52,15 @@ func type(_ composer: Composer, _ text: String) {
     }
 }
 
+func writeFile(_ path: String, _ text: String) {
+    guard let f = fopen(path, "w") else {
+        print("FAIL 写文件 \(path)")
+        exit(1)
+    }
+    fputs(text, f)
+    fclose(f)
+}
+
 /// 测试用的小词库：你好、ni/hao 的单字、略（lve），加上 shi 的 24 个字（9 个一页，3 页）。
 func writeTestLexicon() -> String {
     var lines = ["nihao\t你好\t50000", "ni\t你\t40000", "ni\t尼\t3000", "hao\t好\t40000", "hao\t号\t5000",
@@ -79,6 +88,11 @@ guard let engine = Engine(lexicon: lexicon) else {
 }
 if args.count > 2 {
     engine.loadEnglish(args[2])
+} else {
+    let english = "/tmp/wowtype-macos-harness-\(getpid()).en.txt"
+    writeFile(english, "hello\niPhone\n")
+    engine.loadEnglish(english)
+    unlink(english)
 }
 if ownLexicon {
     // 已经读进内存了；词库旁边的快照也一起删
@@ -261,11 +275,23 @@ do {
 
 do {
     let (c, client) = fresh()
-    // 不在打字时数字、大写字母交给应用
+    // 不在打字时数字、快捷键交给应用
     check(!c.handle(.char("1")), "数字交给应用")
-    check(!c.handle(.char("A", .shift)), "大写字母交给应用")
     check(!c.handle(.char("c", .command)), "Command+C 交给应用")
     check(client.committed.isEmpty, "没有上屏")
+}
+
+do {
+    // 没在打字时的大写字母和 Linux 一样进编辑区（大写原样保留），出英文候选
+    let (c, client) = fresh()
+    check(c.handle(.char("H", .shift)) && c.isComposing, "大写字母开始编辑区", c.input)
+    type(c, "ello")
+    check(c.input == "Hello", "大写原样保留", c.input)
+    check(c.allCandidates().contains("Hello"), "Hello 有英文候选", "\(c.allCandidates().prefix(5))")
+    _ = c.handle(.key(Keysym.returnKey))
+    check(client.committed == "Hello", "回车上屏 Hello", client.committed)
+    _ = c.handle(.char("A", [.shift, .caps]))
+    check(c.input == "A", "Caps Lock 下的大写也进编辑区", c.input)
 }
 
 do {
@@ -371,6 +397,246 @@ do {
     check((after.firstIndex(of: "尼号") ?? Int.max) > was, "忘掉以后 尼号 不再排在原来的位置", "\(learned) -> \(after)")
     _ = c.handle(.key(Keysym.escape))
     check(!c.handle(.key(Keysym.backspace, .control)), "没在打字时 Control+Delete 交给应用")
+}
+
+// MARK: 设置（wowtype.conf）
+
+/// 照设置配好引擎和会话；测完把引擎改回默认（所有测试共用一个引擎）。
+func withConfig(_ change: (inout WowtypeConfig) -> Void, _ body: (Composer, FakeClient) -> Void) {
+    var config = WowtypeConfig()
+    change(&config)
+    let problems = engine.apply(config, conversion: "core/data/s2t.tsv")
+    if !problems.isEmpty {
+        print("     \(problems)")
+    }
+    let (c, client) = fresh()
+    c.apply(config)
+    body(c, client)
+    engine.apply(WowtypeConfig())
+}
+
+do {
+    // 默认值和 Linux 的 WowtypeConfig 一样
+    let d = WowtypeConfig()
+    check(d.horizontal && d.pageSize == 9 && d.pageKeys == 1, "默认横排、每页 9 个、- = 翻页")
+    check(!d.fuzzy && d.fuzzyGroups == 1 | 2 | 4 | 64 | 128 | 256 | 512 | 1024, "默认模糊音关，分组同核心默认", "\(d.fuzzyGroups)")
+    check(d.typoCorrection && !d.rareExtChars && !d.shuangpin && d.shuangpinScheme == "Ziranma", "默认纠错开、双拼关（自然码）")
+    check(d.shiftToggle == .both && !d.traditional && !d.halfwidthPunct && d.selectKeys == .off, "默认 Shift 切换、简体、全角标点")
+    check(d.pickChar && d.dateTime && d.calculator && d.emojiSuggest && d.autoSpaceFlags == 0 && d.lexicon.isEmpty,
+          "默认以词定字、日期、计算器、emoji 推荐开，自动空格关，自带词库")
+    check(WowtypeConfig.parse(WowtypeConfig.template()) == d, "写出来的设置模板读回来是默认值")
+    check(WowtypeConfig.load(path: "/nonexistent/wowtype.conf") == d, "没有设置文件用默认值")
+
+    let text = """
+    # 注释
+    CandidateLayout=Vertical
+    PageSize=20
+    Fuzzy=True
+    FuzzyNL=True
+    FuzzyZh=False
+      TypoCorrection = False
+    Shuangpin=True
+    ShuangpinScheme=xiaohe
+    ShiftToggle=Right
+    PunctuationStyle=Halfwidth
+    SelectKeys=SemicolonQuote
+    PageKeysBracket=True
+    PageKeysMinusEqual=False
+    AutoSpace=True
+    AutoSpaceDigits=False
+    Lexicon="~/dicts/my lexicon.tsv"
+    CandidateFontSize=20
+    Voice=True
+    Traditional=maybe
+    [Hotkey]
+    PageSize=4
+    """
+    let c = WowtypeConfig.parse(text)
+    check(!c.horizontal && c.pageSize == 9, "竖排；每页个数超出 3–9 取 9；[分组] 里的不算", "\(c.pageSize)")
+    check(c.fuzzy && c.fuzzyGroups == (1 | 2 | 4 | 64 | 128 | 256 | 512 | 1024) & ~1 | 8, "模糊音分组", "\(c.fuzzyGroups)")
+    check(!c.typoCorrection, "键值两边的空格不算")
+    check(c.shuangpin && c.shuangpinScheme == "Xiaohe", "双拼方案不分大小写", c.shuangpinScheme)
+    check(c.shiftToggle == .right && c.halfwidthPunct && c.selectKeys == .semicolonQuote, "枚举值")
+    check(c.pageKeys == 2, "翻页键", "\(c.pageKeys)")
+    check(c.autoSpaceFlags == 1, "自动空格只加字母", "\(c.autoSpaceFlags)")
+    check(c.lexicon == "~/dicts/my lexicon.tsv" && c.candidateFontSize == 20, "带引号的值、字号", c.lexicon)
+    check(!c.traditional, "认不出的值保持默认")
+}
+
+withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client in
+    // 小鹤双拼：ni = ni，hao = hc
+    type(c, "nihc")
+    check(client.page?.texts.first == "你好", "小鹤双拼 nihc 出你好", "\(client.page?.texts ?? [])")
+    _ = c.handle(.char(" "))
+    check(client.committed == "你好", "双拼空格上屏", client.committed)
+}
+
+withConfig({ $0.shuangpin = true }) { c, client in
+    // 默认方案自然码：hao = hk
+    type(c, "nihk")
+    check(client.page?.texts.first == "你好", "自然码 nihk 出你好", "\(client.page?.texts ?? [])")
+}
+
+do {
+    var config = WowtypeConfig()
+    config.shuangpin = true
+    config.shuangpinScheme = "Dvorak"
+    check(!engine.apply(config).isEmpty, "不认识的双拼方案报出来（改用自然码）")
+    engine.apply(WowtypeConfig())
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "nihk")
+    check(client.page?.texts.first != "你好", "关掉双拼后 nihk 不是你好", "\(client.page?.texts ?? [])")
+}
+
+// 纠错也会把 si 纠成 shi，测模糊音时关掉
+withConfig({ $0.fuzzy = true; $0.typoCorrection = false }) { c, _ in
+    // s = sh 默认开：si 也能出 是
+    type(c, "si")
+    check(c.allCandidates().contains("是"), "模糊音 si 出是", "\(c.allCandidates().prefix(9))")
+}
+
+withConfig({ $0.fuzzy = true; $0.fuzzySh = false; $0.typoCorrection = false }) { c, _ in
+    type(c, "si")
+    check(!c.allCandidates().contains("是"), "关掉 s=sh 这一组 si 不出是", "\(c.allCandidates().prefix(9))")
+}
+
+withConfig({ $0.typoCorrection = false }) { c, _ in
+    type(c, "si")
+    check(!c.allCandidates().contains("是"), "模糊音默认关", "\(c.allCandidates().prefix(9))")
+}
+
+withConfig({ _ in }) { c, _ in
+    type(c, "si")
+    check(c.allCandidates().contains("是"), "纠错默认开（si 纠成 shi）", "\(c.allCandidates().prefix(9))")
+}
+
+withConfig({ $0.pageSize = 5 }) { c, client in
+    type(c, "shi")
+    check(client.page?.texts.count == 5 && c.pageSize == 5, "每页 5 个", "\(client.page?.texts.count ?? 0)")
+}
+
+withConfig({ $0.horizontal = false }) { c, client in
+    // 竖排：下键移光标，不展开面板
+    type(c, "shi")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.expanded == false && client.page?.cursor == 1, "竖排下键移光标", "\(client.page?.cursor ?? -1)")
+}
+
+withConfig({ $0.selectKeys = .semicolon }) { c, client in
+    type(c, "shi")
+    let second = client.page?.texts[1] ?? ""
+    _ = c.handle(.char(";"))
+    check(client.committed == second, "分号选第 2 个", client.committed)
+}
+
+withConfig({ $0.pageKeysMinus = false; $0.pageKeysBracket = true }) { c, client in
+    // [ ] 翻页时以词定字让给翻页；- 不再翻页，打字途中按 - 先上屏候选再上屏
+    type(c, "shi")
+    let all = c.allCandidates()
+    _ = c.handle(.char("]"))
+    check(client.page?.texts.first == all[c.pageSize] && client.committed.isEmpty, "] 翻页", "\(client.page?.texts.first ?? "")")
+    _ = c.handle(.char("-"))
+    check(client.committed.hasSuffix("-") || client.committed.hasSuffix("－"), "- 不翻页", client.committed)
+}
+
+withConfig({ $0.pickChar = false }) { c, client in
+    type(c, "nihao")
+    _ = c.handle(.char("["))
+    check(client.committed == "你好【", "关掉以词定字：[ 先上屏候选再出【", client.committed)
+}
+
+withConfig({ $0.halfwidthPunct = true }) { c, client in
+    _ = c.handle(.char(","))
+    type(c, "nihao")
+    _ = c.handle(.char("."))
+    check(client.committed == ",你好.", "半角标点", client.committed)
+}
+
+withConfig({ $0.shiftToggle = .right }) { c, _ in
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 1.0, right: false)
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 1.1, right: false) && c.mode == .chinese, "只用右 Shift：左 Shift 不切")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 2.0, right: true)
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 2.1, right: true) && c.mode == .english, "右 Shift 切英文")
+    var off = c.config
+    off.shiftToggle = .off
+    c.apply(off)
+    check(c.mode == .chinese, "关掉 Shift 切换时回到中文")
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 3.0, right: true)
+    check(!c.shiftChanged(down: false, otherModifiers: false, now: 3.1, right: true), "关掉以后单按 Shift 不切")
+}
+
+withConfig({ $0.autoSpace = true }) { c, client in
+    // 汉字后面打数字、汉字前面是字母：补一个空格
+    client.committed = "第"
+    check(c.handle(.char("5")), "汉字后面的数字自己上屏")
+    client.committed += "章abc"
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    check(client.committed == "第 5章abc 你好", "自动加空格", client.committed)
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
+    _ = c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
+    check(c.handle(.char("x")) && client.committed.hasSuffix("你好 x"), "英文模式汉字后面的字母补空格", client.committed)
+    check(!c.handle(.char("y")), "字母后面的字母照常交给应用")
+}
+
+withConfig({ _ in }) { c, client in
+    client.committed = "第"
+    check(!c.handle(.char("5")), "自动加空格默认关")
+}
+
+withConfig({ $0.traditional = true }) { c, _ in
+    type(c, "shi")
+    let all = c.allCandidates()
+    check(all.contains("時") && !all.contains("时"), "繁体输出", "\(all.prefix(9))")
+}
+
+withConfig({ _ in }) { c, _ in
+    type(c, "shi")
+    check(c.allCandidates().contains("时"), "关掉繁体回到简体")
+}
+
+do {
+    // custom.tsv：自定义词排第一，简拼、非拼音编码也行；文件删掉就清空
+    let path = "/tmp/wowtype-macos-harness-\(getpid()).custom.tsv"
+    writeFile(path, "# 注释\nni hao\t你好呀\nmail\thello@example.com\n")
+    check(engine.loadCustomWords(path) == 2, "载入 2 条自定义词")
+    let (c, client) = fresh()
+    type(c, "nihao")
+    check(client.page?.texts.first == "你好呀", "自定义词排第一", "\(client.page?.texts ?? [])")
+    _ = c.handle(.key(Keysym.escape))
+    type(c, "nh")
+    check(c.allCandidates().contains("你好呀"), "自定义词简拼也能打", "\(c.allCandidates().prefix(5))")
+    _ = c.handle(.key(Keysym.escape))
+    type(c, "mail")
+    check(client.page?.texts.first == "hello@example.com", "非拼音编码", "\(client.page?.texts ?? [])")
+    _ = c.handle(.key(Keysym.escape))
+    unlink(path)
+    check(engine.loadCustomWords(path) == 0, "文件不在了：清空")
+    type(c, "nihao")
+    check(client.page?.texts.first == "你好", "清空后 nihao 又是你好", "\(client.page?.texts ?? [])")
+}
+
+do {
+    // 换引擎（换词库）：打到一半的清掉，接着用新引擎打
+    let otherPath = ownLexicon ? writeTestLexicon() : lexicon
+    guard let other = Engine(lexicon: otherPath) else {
+        check(false, "载入第二个引擎")
+        exit(1)
+    }
+    if ownLexicon {
+        unlink(otherPath)
+        unlink(otherPath + ".wcache")
+    }
+    let (c, client) = fresh()
+    type(c, "ni")
+    c.setEngine(other)
+    check(!c.isComposing && client.marked.isEmpty && client.committed.isEmpty && c.currentEngine === other,
+          "换引擎时清掉编辑区", client.committed)
+    type(c, "nihao")
+    _ = c.handle(.char(" "))
+    check(client.committed == "你好", "换了引擎照常打字", client.committed)
 }
 
 if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {

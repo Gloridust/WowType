@@ -55,6 +55,40 @@ public final class Engine {
         wowtype_engine_save_history(handle, path) == 0
     }
 
+    /// 自定义词（custom.tsv）：替换上一次载入的，文件不存在就清空。返回条数，-1 出错。
+    @discardableResult
+    public func loadCustomWords(_ path: String) -> Int {
+        Int(wowtype_engine_load_custom_words(handle, path))
+    }
+
+    /// 简繁对照表载入过没有（繁体输出要用，第一次打开繁体时才读）。
+    public private(set) var conversionLoaded = false
+
+    /// 设置里管引擎的部分（模糊音、纠错、双拼、生僻字、繁体），和 Linux 的 applyCoreSettings 一样。
+    /// conversion 是简繁对照表 s2t.tsv 的路径，没有就不出繁体。返回要记日志的问题。
+    @discardableResult
+    public func apply(_ config: WowtypeConfig, conversion: String? = nil) -> [String] {
+        var problems: [String] = []
+        wowtype_engine_set_fuzzy(handle, config.fuzzy ? 1 : 0)
+        wowtype_engine_set_fuzzy_groups(handle, config.fuzzyGroups)
+        wowtype_engine_set_shuangpin(handle, config.shuangpin ? 1 : 0)
+        if wowtype_engine_set_shuangpin_scheme(handle, config.shuangpinScheme) != 0 {
+            problems.append("不认识双拼方案 \(config.shuangpinScheme)，用自然码")
+            wowtype_engine_set_shuangpin_scheme(handle, "ziranma")
+        }
+        wowtype_engine_set_typo_correction(handle, config.typoCorrection ? 1 : 0)
+        wowtype_engine_set_rare_ext_chars(handle, config.rareExtChars ? 1 : 0)
+        if config.traditional && !conversionLoaded {
+            if let conversion, wowtype_engine_load_conversion(handle, conversion) > 0 {
+                conversionLoaded = true
+            } else {
+                problems.append("简繁表载入失败 \(conversion ?? "（没有 s2t.tsv）")")
+            }
+        }
+        wowtype_engine_set_traditional(handle, config.traditional && conversionLoaded ? 1 : 0)
+        return problems
+    }
+
     public static var abiVersion: Int {
         Int(wowtype_abi_version())
     }
@@ -82,6 +116,13 @@ public protocol TextClient: AnyObject {
     func showCandidates(_ page: CandidatePage?)
     /// 光标前一个字符（Unicode 码位），不知道给 0。数字后面的符号（3.14、20:22）要原样上屏。
     var previousCharacter: UInt32 { get }
+    /// previousCharacter 是应用告诉的（不是外壳猜的）。中英文之间自动加空格只信应用告诉的，
+    /// 和 Linux 一样：读不到光标前的文字就不猜。
+    var previousCharacterIsReliable: Bool { get }
+}
+
+extension TextClient {
+    public var previousCharacterIsReliable: Bool { true }
 }
 
 public final class Composer {
@@ -91,16 +132,20 @@ public final class Composer {
     }
 
     public private(set) var mode: Mode = .chinese
+    /// 设置（wowtype.conf）里管会话和外壳的部分；管引擎的部分用 Engine.apply。
+    public private(set) var config = WowtypeConfig()
     /// 一页几个候选
-    public var pageSize = 9 {
-        didSet { configure() }
+    public var pageSize: Int {
+        get { config.pageSize }
+        set { config.pageSize = newValue; configure() }
     }
     /// 候选横排（左右键移光标、上下键翻页、下键展开面板）；false 竖排（上下键移光标、左右键翻页）
-    public var horizontal = true {
-        didSet { configure() }
+    public var horizontal: Bool {
+        get { config.horizontal }
+        set { config.horizontal = newValue; configure() }
     }
     /// 0 全角中文标点，1 半角
-    public var punctStyle: Int32 = 0
+    public var punctStyle: Int32 { config.halfwidthPunct ? 1 : 0 }
 
     private let session: OpaquePointer
     private var engine: Engine?
@@ -126,10 +171,28 @@ public final class Composer {
 
     public var hasEngine: Bool { engine != nil }
 
+    /// 现在用的引擎（外壳换了词库以后拿来比，换成新的）。
+    public var currentEngine: Engine? { engine }
+
     public func setEngine(_ engine: Engine?) {
-        self.engine = engine
+        guard engine !== self.engine else { return }
+        if self.engine != nil && isComposing {
+            // 换词库：编辑区、候选都是旧词库算的，清掉（和 Linux 一样）
+            wowtype_session_reset(session, 0)
+        }
+        // 先让会话换上新的，再放掉旧的（旧引擎可能就此释放）
         wowtype_session_set_engine(session, engine?.handle)
+        self.engine = engine
         refresh()
+    }
+
+    /// 换设置。Shift 切换关掉时回到中文（和 Linux 一样）。
+    public func apply(_ config: WowtypeConfig) {
+        self.config = config
+        if config.shiftToggle == .off {
+            mode = .chinese
+        }
+        configure()
     }
 
     public func setClient(_ client: TextClient) {
@@ -154,7 +217,8 @@ public final class Composer {
         }
         shiftTap.interrupt()
         if mode == .english {
-            return false
+            // 英文模式：按键原样交给应用；汉字后面打字母、数字要补空格时自己上屏
+            return autoSpaceKey(key)
         }
         let composing = isComposing
         if engine == nil && !composing {
@@ -173,8 +237,20 @@ public final class Composer {
     }
 
     /// Shift 的按下 / 松开（macOS 的 flagsChanged）。单按切中英文时返回 true。
+    /// right 是右 Shift（设置里 ShiftToggle 可以只用一边，或者不用 Shift 切换）。
     @discardableResult
-    public func shiftChanged(down: Bool, otherModifiers: Bool, now: Double) -> Bool {
+    public func shiftChanged(down: Bool, otherModifiers: Bool, now: Double, right: Bool = false) -> Bool {
+        let allowed: Bool
+        switch config.shiftToggle {
+        case .both: allowed = true
+        case .left: allowed = !right
+        case .right: allowed = right
+        case .off: allowed = false
+        }
+        guard allowed else {
+            shiftTap.interrupt()
+            return false
+        }
         guard shiftTap.shift(down: down, otherModifiers: otherModifiers, now: now) else {
             return false
         }
@@ -222,15 +298,16 @@ public final class Composer {
 
     private func configure() {
         var config = WowtypeSessionConfig()
+        let settings = self.config
         config.size = UInt32(MemoryLayout<WowtypeSessionConfig>.size)
-        config.page_size = UInt32(max(pageSize, 1))
-        config.calculator = 1
-        config.date_time = 1
-        config.emoji_suggest = 1
-        config.horizontal = horizontal ? 1 : 0
-        config.page_keys = UInt32(WOWTYPE_PAGE_KEYS_MINUS)
-        config.select_keys = Int32(WOWTYPE_SELECT_KEYS_OFF)
-        config.pick_char = 1
+        config.page_size = UInt32(max(settings.pageSize, 1))
+        config.calculator = settings.calculator ? 1 : 0
+        config.date_time = settings.dateTime ? 1 : 0
+        config.emoji_suggest = settings.emojiSuggest ? 1 : 0
+        config.horizontal = settings.horizontal ? 1 : 0
+        config.page_keys = settings.pageKeys
+        config.select_keys = settings.selectKeysValue
+        config.pick_char = settings.pickChar ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -241,12 +318,13 @@ public final class Composer {
         guard let c = key.ascii else {
             return false
         }
-        if c >= 0x61 && c <= 0x7a {
+        if key.isLetter {
+            // 大小写字母都开始编辑区（和 Linux 一样）：大写原样保留，Hello、iPhone 出英文候选
             return sendToSession(key)
         }
-        if c >= 0x41 && c <= 0x5a {
-            // 大写字母：交给应用（Caps Lock、Shift+字母打英文）
-            return false
+        if key.isDigit {
+            // 数字交给应用；汉字后面要补空格时自己上屏（第 5 章）
+            return autoSpaceKey(key)
         }
         if let text = punctuation(for: c) {
             insert(text)
@@ -326,9 +404,36 @@ public final class Composer {
         refresh()
     }
 
+    /// 汉字和字母、数字之间要不要补一个空格（设置里的 AutoSpace，只看这一处边界）。
+    private func needsAutoSpace(before next: String) -> Bool {
+        let flags = config.autoSpaceFlags
+        guard flags != 0, let client, let first = next.unicodeScalars.first,
+              client.previousCharacterIsReliable
+        else {
+            return false
+        }
+        let prev = client.previousCharacter
+        return prev != 0 && wowtype_autospace(Int32(bitPattern: prev), Int32(bitPattern: first.value), flags) == 1
+    }
+
+    /// 英文模式、没在打字时直接打的字母和数字：要补空格就连空格一起上屏，吃掉这个键。
+    private func autoSpaceKey(_ key: KeyInput) -> Bool {
+        guard key.modifiers.isDisjoint(with: [.control, .option, .command]),
+              key.isLetter || key.isDigit, let c = key.ascii
+        else {
+            return false
+        }
+        let text = String(UnicodeScalar(c))
+        guard needsAutoSpace(before: text) else {
+            return false
+        }
+        client?.insertText(" " + text)
+        return true
+    }
+
     private func insert(_ text: String) {
         guard !text.isEmpty else { return }
-        client?.insertText(text)
+        client?.insertText(needsAutoSpace(before: text) ? " " + text : text)
         recent = String((recent + text).suffix(20))
         wowtype_session_set_context(session, recent)
         onCommit?(text)
