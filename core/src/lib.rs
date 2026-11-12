@@ -1832,9 +1832,9 @@ fn sentence_head(result: &[Candidate], normalized: &str) -> Option<Candidate> {
             break;
         }
     }
-    let chars: usize = head_words.iter().map(|w| w.text.chars().count()).sum();
+    // 用分词本身拼出前半截，不按字数切整句：繁体词组转换可能改变字数（计算机 -> 電腦）
     Some(Candidate {
-        text: top.text.chars().take(chars).collect(),
+        text: head_words.iter().map(|w| w.text.as_str()).collect(),
         pinyin: syllables.join(" "),
         score: top.score,
         features: Feature::default(),
@@ -2796,6 +2796,30 @@ mod tests {
         assert_eq!(e.input("zhongguo")[0].text, "中國");
         // 分词文本也要跟着转
         assert_eq!(e.input("zhongguo")[0].words[0].text, "中國");
+    }
+
+    #[test]
+    fn traditional_phrase_candidates() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "tou fa\t头发\t8000\ngan jing\t干净\t8000\nruan jian\t软件\t8000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.install_converter(
+            Converter::from_tsv_str(
+                "发\t發\n干\t幹\n头\t頭\n净\t淨\n软\t軟\n头发\t頭髮\n干净\t乾淨\n软件\t軟體\n",
+            )
+            .unwrap(),
+        );
+        e.set_traditional(true);
+        assert_eq!(e.input("toufa")[0].text, "頭髮");
+        assert_eq!(e.input("ganjing")[0].text, "乾淨");
+        // 词组可以换成台湾用语，字数也可以不同
+        assert_eq!(e.input("ruanjian")[0].text, "軟體");
+        assert_eq!(e.input("ruanjian")[0].words[0].text, "軟體");
     }
 
     #[test]
