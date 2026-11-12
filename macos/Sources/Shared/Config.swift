@@ -2,7 +2,7 @@
 //
 // 键名、取值、默认值和 Linux 的 ~/.config/fcitx5/conf/wowtype.conf 一样（fcitx5-addon/src/wowtype_engine.h
 // 的 WowtypeConfig，说明见 docs/CONFIG.md），一份配置两边都能用。文件不存在、少写了哪一项就用默认值；
-// 不认识的键（工具栏、语音、互译这些 macOS 还没有的）不管。
+// 不认识的键（语音、互译这些 macOS 还没有的）不管。只有 EmojiKey 的默认值不一样（见 Shortcut）。
 //
 // 不依赖 Foundation / AppKit：按键测试在 Linux 上也编。
 
@@ -59,6 +59,13 @@ public struct WowtypeConfig: Equatable {
     public var autoSpace = false
     public var autoSpaceLetters = true
     public var autoSpaceDigits = true
+    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）
+    public var toolbar = true
+    /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
+    public var clipboardHistory = false
+    /// 打开表情面板的快捷键，nil 不用快捷键。Linux 默认 Super+period；macOS 上 Command 组合键
+    /// 多半到不了输入法，默认 Control+period（Super 也当 Control，见 Shortcut）
+    public var emojiKey: Shortcut? = .emojiDefault
     /// 词库文件，空串用安装包里的雾凇词库；文件不在也用自带的
     public var lexicon = ""
     /// 候选字号（磅），只有 macOS 有：Linux 上字号跟着 fcitx5 主题
@@ -174,6 +181,15 @@ public struct WowtypeConfig: Equatable {
         case "AutoSpace": setBool(&autoSpace, value)
         case "AutoSpaceLetters": setBool(&autoSpaceLetters, value)
         case "AutoSpaceDigits": setBool(&autoSpaceDigits, value)
+        case "Toolbar": setBool(&toolbar, value)
+        case "ClipboardHistory": setBool(&clipboardHistory, value)
+        case "EmojiKey":
+            // 留空是不用快捷键；写错了保持默认
+            if value.isEmpty {
+                emojiKey = nil
+            } else if let key = Shortcut(name: value) {
+                emojiKey = key
+            }
         case "Lexicon": lexicon = value
         case "CandidateFontSize":
             if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
@@ -247,6 +263,14 @@ public struct WowtypeConfig: Equatable {
         AutoSpaceLetters=\(b(d.autoSpaceLetters))
         AutoSpaceDigits=\(b(d.autoSpaceDigits))
 
+        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（只在全拼下）
+        Toolbar=\(b(d.toolbar))
+        # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
+        ClipboardHistory=\(b(d.clipboardHistory))
+        # 打开表情面板的快捷键，键名同 fcitx5：Control+period、Control+semicolon、Control+Shift+E；留空不用。
+        # Command 组合键多半到不了输入法，写 Super 的当 Control
+        EmojiKey=\(d.emojiKey?.name ?? "")
+
         # 词库文件（拼音<TAB>词<TAB>频次），留空用自带的雾凇词库；文件不在也用自带的
         Lexicon=
 
@@ -296,7 +320,8 @@ private func setBool(_ target: inout Bool, _ value: String) {
     }
 }
 
-private func readFile(_ path: String) -> String? {
+/// 读整个文本文件；打不开返回 nil。
+func readFile(_ path: String) -> String? {
     guard let f = fopen(path, "rb") else {
         return nil
     }

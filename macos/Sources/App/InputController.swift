@@ -21,6 +21,7 @@ final class WowTypeInputController: IMKInputController {
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
         composer.onForget = { AppState.shared.didForget() }
+        composer.sampleClipboard = { AppState.shared.sampleClipboard() }
         syncComposer()
     }
 
@@ -54,8 +55,9 @@ final class WowTypeInputController: IMKInputController {
                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                                              cocoaFlags: event.modifierFlags.rawValue)
             else {
+                // 翻不出来的键（F 键、别的键盘布局打出的非 ASCII 字符）：打字途中、工具栏和表情面板开着时吃掉
                 composer.otherModifierChanged()
-                return composer.isComposing
+                return composer.isComposing || composer.openPanel != nil
             }
             let handled = composer.handle(key)
             if !handled {
@@ -91,6 +93,8 @@ final class WowTypeInputController: IMKInputController {
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
         syncComposer(force: true)
+        // 剪贴板历史（设置里打开时）：切换输入框时看一眼（和 Linux 一样，另外打开工具栏的剪贴板页时也看）
+        AppState.shared.sampleClipboard()
     }
 
     override func deactivateServer(_ sender: Any!) {

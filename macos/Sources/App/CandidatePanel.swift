@@ -1,8 +1,9 @@
 // 候选框：一个不抢焦点的小窗口，照 WowType 主题自己画。颜色、圆角、边距和 Linux 上的
 // themes/fcitx5/wowtype、wowtype-dark 一样，系统换深色模式时跟着换：圆角白底（深色是深灰底），
 // 当前候选绿底白字，序号灰色，最右边是绿色的翻页箭头（翻不动的那边变淡）。
-// 横排一行「1 是  2 十 …」。展开面板（横排按下键）一行 6 个排成网格：光标所在行浅绿底、
-// 标 1–6（数字选这一行的第几个），光标处的词绿底白字，翻页箭头在右下角。
+// 横排一行「1 是  2 十 …」，竖排（设置里 CandidateLayout=Vertical、v + 空格的工具栏）一行一个。
+// 展开面板（横排按下键）和表情面板一行 6 个排成网格：光标所在行浅绿底、标 1–6（数字选这一行的第几个），
+// 光标处的词绿底白字，翻页箭头在右下角。工具栏、表情面板在候选上方多一行灰色的提示。
 
 import AppKit
 
@@ -49,6 +50,8 @@ struct CandidateLayout {
         /// 展开面板里只有光标所在行标序号，别的行留出序号的位置，各行的词才对得齐
         var showLabel: Bool
         var current: Bool
+        /// 靠左摆（竖排）；false 在高亮底里居中
+        var leading = false
     }
 
     static let cornerRadius: CGFloat = 12
@@ -66,9 +69,14 @@ struct CandidateLayout {
     static let arrowGap: CGFloat = 4
     /// 展开面板最底下放箭头的那一行有多高
     static let arrowRowHeight: CGFloat = 16
+    /// 提示和候选之间
+    static let auxGap: CGFloat = 3
 
     let textFont: NSFont
     let labelFont: NSFont
+    /// 候选上方的提示（工具栏、表情面板）
+    let aux: String?
+    private(set) var auxFrame: NSRect?
     private(set) var size = NSSize.zero
     private(set) var cells: [Cell] = []
     /// 展开面板光标所在行；没有时 nil
@@ -83,11 +91,34 @@ struct CandidateLayout {
         labelFont = .monospacedDigitSystemFont(ofSize: (fontSize * 0.76).rounded(), weight: .regular)
         hasPrev = page.hasPrev
         hasNext = page.hasNext
-        if page.expanded {
-            layOutGrid(page)
-        } else {
-            layOutRow(page)
+        aux = page.aux
+        var top = Self.inset.height
+        if let aux {
+            let size = auxContent(aux, color: .clear).size()
+            let frame = NSRect(x: Self.inset.width + Self.cellPadding.width, y: top,
+                               width: ceil(size.width), height: ceil(size.height))
+            auxFrame = frame
+            top = frame.maxY + Self.auxGap
         }
+        if page.texts.isEmpty {
+            // 只有提示（剪贴板还没有记录、表情没找到）
+            let bottom = auxFrame.map { $0.maxY } ?? top
+            size = NSSize(width: Self.inset.width, height: bottom + Self.inset.height)
+        } else if page.expanded {
+            layOutGrid(page, top: top)
+        } else if page.vertical {
+            layOutColumn(page, top: top)
+        } else {
+            layOutRow(page, top: top)
+        }
+        // 提示比候选宽时框跟着宽
+        if let auxFrame {
+            size.width = max(size.width, auxFrame.maxX + Self.cellPadding.width + Self.inset.width)
+        }
+    }
+
+    func auxContent(_ text: String, color: NSColor) -> NSAttributedString {
+        NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: color])
     }
 
     /// 序号和词连成一串（序号用小一号的字，基线对齐）。
@@ -109,9 +140,9 @@ struct CandidateLayout {
         ceil(content(label: label, text: text, labelColor: .clear, textColor: .clear).size().width)
     }
 
-    private mutating func layOutRow(_ page: CandidatePage) {
+    private mutating func layOutRow(_ page: CandidatePage, top: CGFloat) {
         let height = cellHeight
-        let y = Self.inset.height
+        let y = top
         var x = Self.inset.width
         for (i, text) in page.texts.enumerated() {
             let label = "\(i + 1)"
@@ -130,7 +161,29 @@ struct CandidateLayout {
         size = NSSize(width: x + Self.inset.width, height: y + height + Self.inset.height)
     }
 
-    private mutating func layOutGrid(_ page: CandidatePage) {
+    /// 竖排：一行一个，都和最宽的一样宽，翻页箭头在右下角。
+    private mutating func layOutColumn(_ page: CandidatePage, top: CGFloat) {
+        let height = cellHeight
+        let widest = page.texts.enumerated().map { contentWidth(label: "\($0.offset + 1)", text: $0.element) }.max() ?? 0
+        let width = max(widest + Self.cellPadding.width * 2, Self.arrowWidth * 2)
+        var y = top
+        for (i, text) in page.texts.enumerated() {
+            cells.append(Cell(frame: NSRect(x: Self.inset.width, y: y, width: width, height: height),
+                              label: "\(i + 1)", text: text, showLabel: true, current: i == page.cursor, leading: true))
+            y += height + Self.spacing
+        }
+        var bottom = y - Self.spacing
+        let right = Self.inset.width + width
+        if page.hasPrev || page.hasNext {
+            let next = NSRect(x: right - Self.arrowWidth, y: bottom + Self.spacing,
+                              width: Self.arrowWidth, height: Self.arrowRowHeight)
+            arrows = (next.offsetBy(dx: -Self.arrowWidth, dy: 0), next)
+            bottom = next.maxY
+        }
+        size = NSSize(width: right + Self.inset.width, height: bottom + Self.inset.height)
+    }
+
+    private mutating func layOutGrid(_ page: CandidatePage, top: CGFloat) {
         let columns = CandidatePage.columns
         let height = cellHeight
         let cursorRow = page.cursor >= 0 ? page.cursor / columns : -1
@@ -147,10 +200,10 @@ struct CandidateLayout {
             x += width + Self.cellPadding.width * 2 + Self.spacing
         }
         let right = x - Self.spacing
-        var bottom = Self.inset.height
+        var bottom = top
         for (i, text) in page.texts.enumerated() {
             let (r, column) = (i / columns, i % columns)
-            let y = Self.inset.height + CGFloat(r) * (height + Self.spacing)
+            let y = top + CGFloat(r) * (height + Self.spacing)
             let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
             cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, showLabel: r == cursorRow,
                               current: i == page.cursor))
@@ -195,6 +248,9 @@ final class CandidateView: NSView {
         panel.lineWidth = 1
         panel.stroke()
 
+        if let aux = layout.aux, let frame = layout.auxFrame {
+            layout.auxContent(aux, color: theme.label).draw(at: frame.origin)
+        }
         if let row = layout.row {
             theme.row.setFill()
             roundedRect(row).fill()
@@ -208,7 +264,8 @@ final class CandidateView: NSView {
             let content = layout.content(label: cell.label, text: cell.text, labelColor: label,
                                          textColor: cell.current ? theme.highlightText : theme.text)
             let size = content.size()
-            content.draw(at: NSPoint(x: cell.frame.midX - size.width / 2, y: cell.frame.midY - size.height / 2))
+            let x = cell.leading ? cell.frame.minX + CandidateLayout.cellPadding.width : cell.frame.midX - size.width / 2
+            content.draw(at: NSPoint(x: x, y: cell.frame.midY - size.height / 2))
         }
         if let arrows = layout.arrows {
             drawChevron(in: arrows.prev, pointingLeft: true, color: theme.arrow, enabled: layout.hasPrev)
