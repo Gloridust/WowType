@@ -1,0 +1,10 @@
+#!/bin/bash
+# pkg 安装前：停掉正在跑的 WowType，新版装好后由 postinstall 重新登记。
+# 安装器可能以 root 跑脚本，这时只停当前登录用户的那个。
+user=$(/usr/bin/stat -f%Su /dev/console 2>/dev/null || true)
+if [ "$(id -u)" -eq 0 ] && [ -n "$user" ] && [ "$user" != root ]; then
+  /usr/bin/pkill -x -u "$user" WowType 2>/dev/null || true
+else
+  /usr/bin/pkill -x WowType 2>/dev/null || true
+fi
+exit 0
