@@ -1294,7 +1294,14 @@ impl Engine {
         let mut feature = self.make_feature(&path, best_score, at_ms);
         feature.head_word_nnlm = nnlm;
         let rank_score = self.ranker.score(&feature) as f64;
-        let score = path.score + rank_score;
+        // 单个音节打全时只有一个字：句首 LM 分反映的是语料里谁常出现在句首，
+        // 没有上下文时不该压过字频（否则 he 会先出「何」）。
+        let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
+        let score = if single_word {
+            path.score - path.lm_score + rank_score
+        } else {
+            path.score + rank_score
+        };
         Candidate {
             text: path.text,
             pinyin: path.pinyin,
@@ -2218,6 +2225,32 @@ mod tests {
             .find(|c| c.text == "我今天晚上要")
             .unwrap_or_else(|| panic!("{:?}", list.iter().map(|c| &c.text).collect::<Vec<_>>()));
         assert_eq!(head.consumed, "wojintianwanshangyao".len());
+    }
+
+    /// 模拟词级 LM 的句首（`<s>`）分：只给「何」一个很大的提升。
+    struct SentenceStartBoost;
+
+    impl LanguageModel for SentenceStartBoost {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            if prev.is_none() && cur == "何" {
+                5.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    #[test]
+    fn single_syllable_candidates_follow_word_frequency() {
+        // 打 he 时「和」比「何」常用，句首 LM 分不该把「何」抬上来。
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("he\t和\t100000\nhe\t何\t10000\nhe\t合\t1000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(SentenceStartBoost));
+        let texts: Vec<String> = e.input("he").into_iter().map(|c| c.text).collect();
+        let at = |word: &str| texts.iter().position(|t| t == word);
+        assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
+        assert!(at("何") < at("合"), "{texts:?}");
     }
 
     #[test]
