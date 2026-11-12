@@ -529,9 +529,13 @@ jobs:
 
           ## 安装（macOS 12 以上，Apple 芯片和 Intel）
 
-          下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\`，双击安装：只装给当前用户，不要管理员密码，装完自动切到 WowType。
-          安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
-          不想点这一步也可以在终端运行上面那行一键安装命令，它会下载这个 pkg、校验后装好。
+          在「终端」里运行同一行命令（推荐）：下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\`、校验后只装给当前用户，不要管理员密码，也不用到「隐私与安全性」里放行，装完自动切到 WowType。
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
+          \`\`\`
+
+          或者下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\` 双击安装。安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
 
