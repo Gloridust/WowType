@@ -113,7 +113,7 @@ DEFAULTS = {
     "TranslateBaseUrl": "",
     "TranslateModel": "",
     "TranslateFormal": "False",
-    "TranslateLocal": "False",
+    "TranslateLocal": "True",
     "TranslateLocalModel": "",
     "TranslateLlamaServer": "",
     "TranslateIdleMinutes": "5",
@@ -301,6 +301,10 @@ def read_config():
             values[key] = value.strip().strip('"')
         elif line.strip():
             extra.append(line)
+    # 0.3.10 及以前没有 TranslateLocal：已经填好翻译接口的，接着用接口（设置里默认是本地模型）
+    if not any(line.partition("=")[0].strip() == "TranslateLocal" for line in lines) \
+            and values["TranslateBaseUrl"].strip():
+        values["TranslateLocal"] = "False"
     return values, extra
 
 
@@ -1922,6 +1926,12 @@ LOCAL_MODEL_TERMS = ("HY-MT 用的是《腾讯混元社区许可协议》：不�
 MODELS_DIR = os.path.join(DATA_DIR, "models")
 
 
+TRANSLATE_ENGINES = [
+    ("本地模型（离线）", "不联网、不用账号，打的字不出这台电脑；一句话等 1–3 秒"),
+    ("自定义翻译服务", "填你自己的翻译接口（DeepSeek、通义千问、Ollama……），要联网"),
+]
+
+
 def local_model_path(values):
     custom = values.get("TranslateLocalModel", "").strip()
     return os.path.expanduser(custom) if custom else os.path.join(MODELS_DIR, LOCAL_MODEL_FILE)
@@ -2220,6 +2230,29 @@ def llama_self_test():
     assert llama_asset("x86_64", True) is None and llama_asset("riscv64", False) is None
     assert llama_asset("aarch64", False)[2] == (
         os.environ.get("WOWTYPE_LLAMA_SHA256") or LLAMA_ASSETS["aarch64"][2])
+
+
+def translate_engine_self_test():
+    """默认本地模型；0.3.10 的配置（没有 TranslateLocal、填了接口）接着用接口。"""
+    global CONFIG_FILE
+    import tempfile
+    saved = CONFIG_FILE
+    with tempfile.TemporaryDirectory() as tmp:
+        CONFIG_FILE = os.path.join(tmp, "wowtype.conf")
+        try:
+            assert read_config()[0]["TranslateLocal"] == "True"  # 没有配置文件
+            for text, local in (("Translate=True\nTranslateBaseUrl=https://api.example.com/v1\n", "False"),
+                                ("Translate=True\nTranslateBaseUrl=\n", "True"),
+                                ("TranslateBaseUrl=https://a/v1\nTranslateLocal=True\n", "True"),
+                                ("TranslateLocal=False\n", "False")):
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    f.write(text)
+                assert read_config()[0]["TranslateLocal"] == local, text
+            values, extra = read_config()
+            write_config(values, extra)  # 写回去以后这一项是明确的，不再靠推断
+            assert "TranslateLocal=False" in open(CONFIG_FILE, encoding="utf-8").read()
+        finally:
+            CONFIG_FILE = saved
 
 
 def download_self_test():
@@ -3720,33 +3753,24 @@ class SettingsWindow(Adw.ApplicationWindow):
         service.add(privacy)
         self.service_group = service
 
-        # 用什么翻译：二选一，下面只显示选中的那一种的设置
-        engine = Adw.PreferencesGroup(title="用什么翻译")
-        self.online_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
-        self.local_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.online_check)
-        online_row = Adw.ActionRow(title="网上的翻译服务",
-                                   subtitle="翻得快，要联网；打的字会发给你选的服务")
-        online_row.add_prefix(self.online_check)
-        online_row.set_activatable_widget(self.online_check)
-        local_row = Adw.ActionRow(
-            title="这台电脑上的模型（离线）",
-            subtitle="不联网、不用账号，打的字不出这台电脑。要先下载约 1.2 GB，一句话等 1–3 秒")
-        local_row.add_prefix(self.local_check)
-        local_row.set_activatable_widget(self.local_check)
-        engine.add(online_row)
-        engine.add(local_row)
-        (self.local_check if self.values["TranslateLocal"] == "True"
-         else self.online_check).set_active(True)
-        self.local_check.connect("toggled", self.on_translate_engine_toggled)
-        page.add(engine)
+        # 用什么翻译：下拉菜单，默认本地模型；选「自定义」才出现填接口的地方
+        self.engine_row = Adw.ComboRow(
+            title="用什么翻译",
+            model=Gtk.StringList.new([label for label, _ in TRANSLATE_ENGINES]))
+        self.engine_row.set_selected(0 if self.values["TranslateLocal"] == "True" else 1)
+        self.engine_row.connect("notify::selected", self.on_translate_engine_changed)
+        intro.add(self.engine_row)
         self.local_group = self.build_local_translate()
         page.add(self.local_group)
         page.add(service)
         self.refresh_local_translate()
         return page
 
-    def on_translate_engine_toggled(self, check):
-        self.set_value("TranslateLocal", "True" if check.get_active() else "False")
+    def translate_local_selected(self):
+        return self.engine_row.get_selected() == 0
+
+    def on_translate_engine_changed(self, row, _param):
+        self.set_value("TranslateLocal", "True" if row.get_selected() == 0 else "False")
         self.refresh_local_translate()
 
     def build_local_translate(self):
@@ -3814,7 +3838,8 @@ class SettingsWindow(Adw.ApplicationWindow):
     def refresh_local_translate(self):
         if not hasattr(self, "local_group"):
             return
-        local = self.local_check.get_active()
+        local = self.translate_local_selected()
+        self.engine_row.set_subtitle(TRANSLATE_ENGINES[0 if local else 1][1])
         self.local_group.set_visible(local)
         self.service_group.set_visible(not local)
         path = local_model_path(self.values)
@@ -4689,6 +4714,7 @@ if __name__ == "__main__":
         assert font_with_size("", 13) == "Sans 13"
         download_self_test()
         llama_self_test()
+        translate_engine_self_test()
         voice_model_self_test()
         lexicon_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」
