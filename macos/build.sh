@@ -50,7 +50,15 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
 res="$app/Contents/Resources"
-cp icons/hicolor/32x32/apps/wowtype.png "$res/menu.png"
+# 菜单栏图标：16pt，一张 16×16（72 dpi）加一张 32×32（144 dpi，Retina）。
+# 直接给 32×32、72 dpi 的 PNG，系统当成 32pt 来摆，图标会往下掉出菜单栏。
+cp icons/hicolor/32x32/apps/wowtype.png "$work/menu@2x.png"
+sips -s dpiWidth 144 -s dpiHeight 144 "$work/menu@2x.png" >/dev/null
+tiffutil -cathidpicheck icons/hicolor/16x16/apps/wowtype.png "$work/menu@2x.png" -out "$res/menu.tiff" 2>/dev/null
+for lproj in macos/Resources/*.lproj; do
+  cp -R "$lproj" "$res/"
+  plutil -lint "$res/$(basename "$lproj")/InfoPlist.strings"
+done
 cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$res/"
 [[ -f "$DATA/words.lm" ]] && cp "$DATA/words.lm" "$res/"
 [[ -f "$DATA/LICENSE" ]] && cp "$DATA/LICENSE" "$res/DATA-LICENSE"
@@ -58,7 +66,7 @@ cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$res/"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.png|lexicon\.tsv|english\.txt|words\.lm|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.tiff|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2

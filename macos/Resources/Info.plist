@@ -5,7 +5,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>zh_CN</string>
+	<string>zh-Hans</string>
 	<key>CFBundleDisplayName</key>
 	<string>WowType</string>
 	<key>CFBundleExecutable</key>
@@ -38,6 +38,9 @@
 	<string>WowTypeInputController</string>
 	<key>InputMethodServerDelegateClass</key>
 	<string>WowTypeInputController</string>
+	<!-- 菜单栏图标按 16pt 摆：menu.tiff 里是 16×16 和 32×32（Retina）两张，build.sh 生成 -->
+	<key>tsInputMethodIconFileKey</key>
+	<string>menu.tiff</string>
 	<key>TICapsLockLanguageSwitchCapable</key>
 	<true/>
 	<key>ComponentInputModeDict</key>
@@ -61,11 +64,11 @@
 				<key>tsInputModeKeyEquivalentModifiersKey</key>
 				<integer>4608</integer>
 				<key>tsInputModeMenuIconFileKey</key>
-				<string>menu.png</string>
+				<string>menu.tiff</string>
 				<key>tsInputModeAlternateMenuIconFileKey</key>
-				<string>menu.png</string>
+				<string>menu.tiff</string>
 				<key>tsInputModePaletteIconFileKey</key>
-				<string>menu.png</string>
+				<string>menu.tiff</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<true/>
 				<key>tsInputModeScriptKey</key>

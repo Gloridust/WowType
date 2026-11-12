@@ -1,0 +1,5 @@
+/* 输入法菜单和「系统设置 → 键盘 → 输入法」里显示的名字（键是 Info.plist 里的输入模式 ID） */
+"CFBundleName" = "WowType";
+"CFBundleDisplayName" = "WowType";
+"io.github.gloridust.inputmethod.WowType" = "WowType";
+"io.github.gloridust.inputmethod.WowType.Hans" = "WowType";
