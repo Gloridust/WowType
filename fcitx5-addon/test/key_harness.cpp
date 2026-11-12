@@ -1306,6 +1306,36 @@ void runCases(Instance &instance) {
     check(join(page(ic.get())).find("牛奶") != std::string::npos, "打开 n=l 后 liunai 出牛奶：" + join(page(ic.get())));
     fresh(ic.get());
 
+    // 扩展 B 区以后的生僻字默认不列（常见字体显示成方块），RareExtChars 打开才列
+    {
+        // 返回（候选总数，有没有 𠯜）。𠯜 在扩展 B 区，Noto CJK 没有；𬭤 这种规范字表里的照常出
+        auto houChars = [&]() {
+            auto list = ic->inputPanel().candidateList();
+            auto *all = list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
+            int total = 0;
+            bool ext = false;
+            for (int i = 0; all && i < all->totalSize(); ++i) {
+                ++total;
+                ext = ext || all->candidateFromAll(i).text().toString() == "𠯜";
+            }
+            return std::make_pair(total, ext);
+        };
+        std::ofstream(configDir + "/wowtype.conf") << "";
+        addon->reloadConfig();
+        type(ic.get(), "hou");
+        const auto [total, ext] = houChars();
+        check(total > 40 && !ext, "hou 默认不列扩展 B 区以后的字（𠯜）：共 " + std::to_string(total) + " 个");
+        fresh(ic.get());
+        std::ofstream(configDir + "/wowtype.conf") << "RareExtChars=True\n";
+        addon->reloadConfig();
+        type(ic.get(), "hou");
+        const auto [totalOn, extOn] = houChars();
+        check(extOn && totalOn > total, "打开 RareExtChars 后列出 𠯜：共 " + std::to_string(totalOn) + " 个");
+        fresh(ic.get());
+        std::ofstream(configDir + "/wowtype.conf") << "";
+        addon->reloadConfig();
+    }
+
     // 标点样式：半角（#51）
     {
         std::ofstream(configDir + "/wowtype.conf") << "PunctuationStyle=Halfwidth\n";

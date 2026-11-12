@@ -23,6 +23,7 @@
 | 1.6 | 0.3.11 | 空格、回车、数字、分号引号选词、翻页和展开面板挪进 `_key`：`WowtypeKey` 加 `action`（`WOWTYPE_KEY_ACTION_*`，外壳的全局翻页 / 移光标键），`WowtypeSessionConfig` 加 `horizontal`、`page_keys`（`WOWTYPE_PAGE_KEYS_*`）、`select_keys`（`WOWTYPE_SELECT_KEYS_*`），frame 的 `panel`、`cand_count`、`cand_cursor`、`has_prev`、`has_next` 开始填；加 `_select`（按显示的序号选）、`_candidate`；过渡函数加 `_view`、`_last_choice`，删掉 `_commit_input`（用 `_key` 发回车或 `_reset(s, 1)`） |
 | 1.7 | 0.3.11 | 打字途中 `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete` 忘掉光标处学错的词（会话里处理，带 Ctrl 的这几个键外壳也要交给 `_key`），`WowtypeFrame` 末尾加 `forgot`：1 时外壳马上存用户词库和输入习惯；`wowtype_engine_save_user_dict` 用户词库空的时候也写（只有注释行）、返回 0，以前返回 -1 |
 | 1.8 | 0.3.11 | 以词定字：`WowtypeSessionConfig` 末尾加 `pick_char`（默认 1），打拼音途中 `[` `]` 上屏光标处候选的第一个、最后一个字（`page_keys` 带 `[ ]` 时让给翻页） |
+| 1.9 | 0.3.11 | 加 `wowtype_engine_set_rare_ext_chars`：是否出 CJK 扩展 B 区及以后的单字（通用规范汉字表里的除外），默认不出（以前总是出） |
 
 ## 所有权和生命周期
 

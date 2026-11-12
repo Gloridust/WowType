@@ -156,6 +156,7 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> fuzzyUan{this, "FuzzyUan", "模糊音：uan = uang", true};
     fcitx::Option<bool> fuzzyUn{this, "FuzzyUn", "模糊音：un = ong", false};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
+    fcitx::Option<bool> rareExt{this, "RareExtChars", "候选末尾列出扩展 B 区以后的生僻字", false};
     fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
@@ -431,6 +432,7 @@ private:
     /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
     unsigned fuzzyGroups_ = 0;
     bool typo_ = true;
+    bool rareExt_ = false;
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool pickChar_ = true;
     bool dateTime_ = true;
