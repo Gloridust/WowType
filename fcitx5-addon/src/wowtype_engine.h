@@ -39,7 +39,6 @@ class KeyEvent;
 class WowtypeState;
 
 /// v + 空格打开的工具栏里现在是哪一页（符号、表情直接用表情面板）。
-enum class WowtypeTool { None, Menu, Clipboard, Phrases };
 
 enum class WowtypeLayout { Horizontal, Vertical };
 FCITX_CONFIG_ENUM_NAME(WowtypeLayout, "Horizontal", "Vertical");
@@ -276,6 +275,8 @@ public:
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
                          std::size_t index);
+    /// 点了工具栏 / 表情面板的第 index 项（会话做：菜单进下一层，别的上屏）。
+    void choosePanelItem(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
     /// 展开的候选面板里点了第 row 行：光标在这行就选光标处的词，否则选这行第一个。
     void selectGridRow(fcitx::InputContext *ic, WowtypeState *state, std::size_t row);
     /// 互译：上屏译文；还没译好就记下来，好了再上屏。
@@ -332,27 +333,13 @@ private:
     void fillTranslateView(fcitx::InputContext *ic, WowtypeState *state, fcitx::InputPanel &panel);
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
-    void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
-    /// 打开表情面板，但空搜索词时列全部符号（工具栏的「符号」）。
-    void openSymbolPanel(fcitx::InputContext *ic, WowtypeState *state);
-    void openTool(fcitx::InputContext *ic, WowtypeState *state, WowtypeTool tool);
-    bool handleToolKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
     /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
     void sampleClipboard(fcitx::InputContext *ic);
 
 public:
-    void selectTool(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
 
 private:
-    void closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
-    void refreshEmojiPanel(WowtypeState *state);
-    /// 面板开着时的按键，处理了返回 true。
-    bool handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
-                             const fcitx::Key &key);
-    /// 上屏选中的 emoji 候选（打字推荐的或面板里的）。
-    void commitEmoji(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
-    void rememberEmoji(const std::string &emoji);
     std::string recentEmojiPath() const;
     /// 把引擎、上文、设置同步给会话（引擎是后台载入的，设置可能刚改过）。
     void syncSession(WowtypeState *state);
@@ -461,8 +448,6 @@ private:
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
-    std::vector<std::string> recentEmoji_;
-    bool recentEmojiLoaded_ = false;
 
     WowtypeVoice *voice_ = nullptr;
     /// 语音结果同时复制到剪贴板（默认关）。
