@@ -1084,11 +1084,13 @@ impl Engine {
             .first()
             .map(|c| c.words.iter().any(|w| w.known))
             .unwrap_or(false);
+        // 第一名是几个词凑的整句（ok -> 哦 | 可）：不是「一个词还没打完」
+        let top_sentence = candidates.first().is_some_and(is_sentence);
         let position = if english.is_some() {
             if exact {
                 // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
                 Some(5)
-            } else if top_typos == 0.0 && has_known_word && !inner_abbrev {
+            } else if top_typos == 0.0 && has_known_word && !inner_abbrev && !top_sentence {
                 // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
                 // 用户多半还在打拼音，英文排第二
                 Some(1)
@@ -2906,6 +2908,19 @@ mod tests {
         assert!(pos == 5 || (pos >= 1 && pos == she.len() - 1), "{she:?}");
         // 缩写编码（Jan -> January）不当作英文词
         assert!(!texts("jan").iter().any(|t| t == "January"));
+    }
+
+    #[test]
+    fn english_word_beats_chinese_sentence_made_of_abbreviations() {
+        // ok -> 哦 | 可（o + k）是两个词硬凑的；bug -> 不过（bu + g）是一个词还没打完
+        let e = engine("o\t哦\t900000\nke\t可\t900000\nbu guo\t不过\t500000\nbu\t不\t1000000\n");
+        e.load_english_str("ok\nbug\n");
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        assert_eq!(texts("ok").first().map(String::as_str), Some("ok"), "{:?}", texts("ok"));
+        let bug = texts("bug");
+        assert_eq!(bug.first().map(String::as_str), Some("不过"), "{bug:?}");
+        assert_eq!(bug.get(1).map(String::as_str), Some("bug"), "{bug:?}");
     }
 
     #[test]
