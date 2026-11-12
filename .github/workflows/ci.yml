@@ -97,7 +97,10 @@ jobs:
           cargo rustc --release -q -p wowtype-core --no-default-features --lib --crate-type staticlib \
             --target-dir target/macos-libs -- --print native-static-libs 2>&1 | grep native-static-libs || true
       - name: 打包
-        run: macos/build.sh dist/data dist/macos
+        # 发版时版本号跟 tag 走（和 Linux 的包一样），一键安装脚本按 tag 找 WowType-<版本>-macos.pkg
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then export WOWTYPE_VERSION=${GITHUB_REF_NAME#v}; fi
+          macos/build.sh dist/data dist/macos
       - name: 检查安装包
         run: |
           app=dist/macos/WowType.app
