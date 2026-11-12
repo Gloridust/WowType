@@ -1,0 +1,42 @@
+#!/bin/bash
+# pkg 装完：登记输入法、打开、切过去（和 macos/install.sh 做的一样）。
+# 这些要在登录用户自己的会话里做；安装器以 root 跑脚本时切到那个用户。
+# 这里出错也不让安装失败：文件已经装好，最多要用户自己到系统设置里添加。
+#
+# $2 是安装位置；只装给当前用户时是 ~/Library/Input Methods。
+user=$(/usr/bin/stat -f%Su /dev/console 2>/dev/null || true)
+if [ "$(id -u)" -eq 0 ] && [ -n "$user" ] && [ "$user" != root ]; then
+  home=$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | /usr/bin/sed 's/^NFSHomeDirectory: //')
+  uid=$(id -u "$user")
+  as_user() { /bin/launchctl asuser "$uid" /usr/bin/sudo -u "$user" "$@"; }
+else
+  home=$HOME
+  as_user() { "$@"; }
+fi
+
+app=
+for candidate in "${2:-}/WowType.app" "$home/Library/Input Methods/WowType.app" "/Library/Input Methods/WowType.app"; do
+  if [ -x "$candidate/Contents/MacOS/WowType" ]; then app=$candidate; break; fi
+done
+if [ -z "$app" ]; then
+  echo "WowType postinstall: 找不到装好的 WowType.app（\$2=${2:-}）"
+  exit 0
+fi
+# 安装器装出来的本来就没有隔离标记；保险起见再去一次
+/usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null || true
+
+bin="$app/Contents/MacOS/WowType"
+as_user "$bin" --register || echo "WowType postinstall: 登记失败"
+# 菜单栏的输入法菜单会缓存图标：升级换了图标时不重启它，菜单栏还是旧图标，要注销才变。系统会马上把它拉起来。
+as_user /usr/bin/killall TextInputMenuAgent 2>/dev/null || true
+# 刚登记完系统可能还没列出来，等一下再打开
+for _ in 1 2 3 4 5; do
+  if as_user "$bin" --enable >/dev/null 2>&1; then
+    as_user "$bin" --select >/dev/null 2>&1 || true
+    echo "WowType postinstall: 已打开 $app"
+    exit 0
+  fi
+  sleep 1
+done
+echo "WowType postinstall: 没能自动打开，要注销重新登录或到系统设置里添加"
+exit 0

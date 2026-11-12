@@ -461,6 +461,8 @@ do {
     check(c.autoSpaceFlags == 1, "自动空格只加字母", "\(c.autoSpaceFlags)")
     check(c.lexicon == "~/dicts/my lexicon.tsv" && c.candidateFontSize == 20, "带引号的值、字号", c.lexicon)
     check(!c.traditional, "认不出的值保持默认")
+    check(WowtypeConfig.parse("PageSize=5\r\nFuzzy=True\r\n") == { var w = WowtypeConfig(); w.pageSize = 5; w.fuzzy = true; return w }(),
+          "Windows 换行（\\r\\n）")
 }
 
 withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client in
@@ -595,6 +597,173 @@ withConfig({ $0.traditional = true }) { c, _ in
 withConfig({ _ in }) { c, _ in
     type(c, "shi")
     check(c.allCandidates().contains("时"), "关掉繁体回到简体")
+}
+
+do {
+    // 设置窗口写回 wowtype.conf：只改认识的键，别的行原样留着；读回来就是写进去的设置
+    let d = WowtypeConfig()
+    check(d.serialized(into: nil) == WowtypeConfig.template(), "没有设置文件：写出来的是模板")
+    check(Set(WowtypeConfig.keys).count == WowtypeConfig.keys.count
+          && WowtypeConfig.keys.allSatisfy { d.value(forKey: $0) != nil }, "每个键都有写法")
+    let template = WowtypeConfig.template()
+    check(WowtypeConfig.keys.allSatisfy { template.contains("\n" + $0 + "=") }, "模板里每个键都有")
+    // 加了新设置（模板里多了一行）却没加进 keys / setValue / value(forKey:)：设置窗口写不回去
+    let templateKeys = template.split(separator: "\n").compactMap { line -> String? in
+        guard !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { return nil }
+        return String(line[..<eq])
+    }
+    check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
+          "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
+    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+
+    // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
+    var all = WowtypeConfig()
+    for key in WowtypeConfig.keys {
+        if d.value(forKey: key) == "True" { all.setValue("False", forKey: key) }
+        if d.value(forKey: key) == "False" { all.setValue("True", forKey: key) }
+    }
+    all.horizontal = false
+    all.pageSize = 4
+    all.candidateFontSize = 22
+    all.shuangpinScheme = "PinyinJiajia"
+    all.shiftToggle = .off
+    all.halfwidthPunct = true
+    all.selectKeys = .semicolonQuote
+    all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
+    all.emojiKey = Shortcut(name: "Control+semicolon")
+    check(WowtypeConfig.keys.allSatisfy { all.value(forKey: $0) != d.value(forKey: $0) }, "每一项都改了")
+    for (name, base) in [("模板", nil), ("空文件", ""), ("只有注释", "# 我的设置\n")] as [(String, String?)] {
+        let out = all.serialized(into: base)
+        check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
+        check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
+    }
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+          "文件里没有的键照模板顺序补在后面")
+    check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
+          "带空格、引号的值加引号转义", all.serialized(into: nil))
+
+    // Linux 拷过来的文件：注释、不认识的键、[分组]、大小写、引号、空格都在
+    let linux = """
+    # 自己写的注释
+    CandidateLayout=horizontal
+    PageSize=20
+      TypoCorrection = False
+    Voice=True
+    VoiceKey=Alt_R
+    TranslateBaseUrl=https://api.deepseek.com/v1
+    Lexicon="~/dicts/my lexicon.tsv"
+    Traditional=maybe
+    ShuangpinScheme=xiaohe
+
+    [Hotkey]
+    PageSize=4
+
+    """
+    let parsed = WowtypeConfig.parse(linux)
+    check(parsed.serialized(into: linux) == linux, "设置没改：文件一个字都不动")
+
+    var changed = parsed
+    changed.pageSize = 5
+    changed.typoCorrection = true
+    changed.fuzzy = true
+    changed.fuzzyNL = true
+    changed.traditional = true
+    let out = changed.serialized(into: linux)
+    check(WowtypeConfig.parse(out) == changed, "改过的设置读回来一样", out)
+    check(out.contains("\nPageSize=5\n") && out.contains("\n  TypoCorrection = True\n")
+          && out.contains("\nTraditional=True\n"), "改的行只换值，前面的空格留着", out)
+    check(out.contains("CandidateLayout=horizontal\n") && out.contains("Lexicon=\"~/dicts/my lexicon.tsv\"\n")
+          && out.contains("ShuangpinScheme=xiaohe\n"), "没改的行原样（大小写、引号）", out)
+    check(out.hasPrefix("# 自己写的注释\n") && out.contains("Voice=True\nVoiceKey=Alt_R\nTranslateBaseUrl=https://api.deepseek.com/v1\n"),
+          "注释和不认识的键留着", out)
+    check(out.hasSuffix("ShuangpinScheme=xiaohe\nFuzzy=True\nFuzzyNL=True\n\n[Hotkey]\nPageSize=4\n"),
+          "新加的键补在 [分组] 前面，分组原样", out)
+
+    var back = changed
+    back.traditional = false
+    let unparsable = back.serialized(into: linux)
+    check(unparsable.contains("\nTraditional=maybe\n") && WowtypeConfig.parse(unparsable) == back,
+          "认不出的值：要的是默认值就不动", unparsable)
+
+    // 同一个键写了两次：都改；Windows 换行留着
+    let twice = "PageSize=5\r\nFuzzy=False\r\nPageSize=7\r\n"
+    var three = WowtypeConfig.parse(twice)
+    three.pageSize = 3
+    three.traditional = true
+    check(three.serialized(into: twice) == "PageSize=3\r\nFuzzy=False\r\nPageSize=3\r\nTraditional=True\r\n",
+          "重复的键都改，\\r\\n 留着", three.serialized(into: twice))
+
+    // 窗口开着时文件在别处改了：窗口只写自己改的键
+    let opened = "PageSize=7\nFuzzy=False\nVoice=True\n"
+    let base = WowtypeConfig.parse(opened)
+    var window = base
+    window.pageSize = 4
+    let edited = "PageSize=7\nFuzzy=True\nVoice=True\nTraditional=True\n"
+    let merged = window.merged(changesFrom: base, into: edited)
+    let mergedConfig = WowtypeConfig.parse(merged)
+    check(merged == "PageSize=4\nFuzzy=True\nVoice=True\nTraditional=True\n", "合并：别处改的留着，窗口改的写上", merged)
+    check(mergedConfig.pageSize == 4 && mergedConfig.fuzzy && mergedConfig.traditional, "合并后读回来")
+    check(window.merged(changesFrom: base, into: nil) == window.serialized(into: nil), "文件被删了：从模板写")
+}
+
+do {
+    // custom.tsv：没动的行原样写回去，加词、删词、导入照 Linux 设置界面的规则
+    let text = "# 我的常用语\r\nni hao\t你好呀\t100\nmail\thello@example.com\n\n坏行\nzhang san\t \nbjdx\t北京大学\n"
+    var words = CustomWords(text: text)
+    check(words.entries == [.init(code: "ni hao", word: "你好呀"), .init(code: "mail", word: "hello@example.com"),
+                            .init(code: "bjdx", word: "北京大学")], "读自定义词", "\(words.entries)")
+    check(words.text == text, "没改：原样写回去（注释、频次、坏行都在）", words.text)
+    check(CustomWords(text: "\u{FEFF}mail\ta@b.c").text == "mail\ta@b.c\n", "去掉 BOM，补上末尾换行")
+
+    check(!words.add(code: "gs", word: "公司名"), "加新词")
+    check(words.add(code: "ni hao ya", word: "你好呀"), "加已有的词：换编码")
+    check(words.text == "# 我的常用语\r\nmail\thello@example.com\n\n坏行\nzhang san\t \nbjdx\t北京大学\ngs\t公司名\nni hao ya\t你好呀\n",
+          "换编码的词挪到最后", words.text)
+    check(words.remove(word: "北京大学") == [.init(code: "bjdx", word: "北京大学")] && words.remove(word: "没有") == [],
+          "删词")
+    check(!words.text.contains("北京大学") && words.text.hasPrefix("# 我的常用语\r\n"), "删掉的行没了，注释还在")
+
+    let incoming = CustomWords.parseImport("# 注释\nNi Hǎo Ya\t你好呀\nzhang'san\t张三\nMAIL\thello@example.com\n123\t数字\nxyz?\t问号\n")
+    check(incoming == [.init(code: "ni hao ya", word: "你好呀"), .init(code: "zhang san", word: "张三"),
+                       .init(code: "mail", word: "hello@example.com")], "导入时整理编码，不对的不要", "\(incoming)")
+    var imported = CustomWords(text: "mail\thello@example.com\nni hao\t你好呀\n")
+    let counts = imported.merge(incoming)
+    check(counts.added == 1 && counts.updated == 1, "导入：新增 1 个，更新 1 个，一样的不算", "\(counts)")
+    check(imported.entries.map(\.word) == ["hello@example.com", "你好呀", "张三"], "导入后的顺序", "\(imported.entries)")
+
+    let empty = CustomWords(text: nil)
+    check(empty.entries.isEmpty && empty.text == CustomWords.header + "\n", "新文件只有说明")
+    var fresh = empty
+    fresh.add(code: "gs", word: "公司")
+    check(CustomWords(text: fresh.text).entries == [.init(code: "gs", word: "公司")], "新文件加词读回来")
+    check(CustomWords.isValidWord("四川省\\n宜宾市") && !CustomWords.isValidWord("a\tb")
+          && !CustomWords.isValidWord("a\nb") && !CustomWords.isValidWord(""), "词里不能有 TAB、换行")
+
+    for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
+                          ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
+                          ("hua r", "hua r"), ("zhongguo", "zhong guo")] {
+        check(CustomWords.normalizePinyin(input) == want, "拼音整理 \(input)", CustomWords.normalizePinyin(input) ?? "nil")
+    }
+    check(CustomWords.normalizePinyin("mail") == nil && CustomWords.normalizeCode("mail") == "mail"
+          && CustomWords.normalizeCode("Addr") == "addr" && CustomWords.normalizeCode("a b?") == nil
+          && CustomWords.normalizeCode("  ") == nil, "非拼音的字母编码")
+
+    // 从词库猜拼音：整词取频次最高的，没有就逐字
+    let lexiconText = "# 注释\nni hao\t你好\t500\nnihao\t你好\t10\nzhong\t重\t100\nchong\t重\t300\nni\t你\t1\nhao\t好\t1\nshi\t是\t9"
+    func guess(_ word: String) -> String? {
+        Array(lexiconText.utf8).withUnsafeBytes { CustomWords.guessPinyin(word, lexicon: $0) }
+    }
+    check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
+    check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
+    if !ownLexicon, let f = fopen(lexicon, "rb") {
+        var bytes: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 1 << 16)
+        while case let n = fread(&buffer, 1, buffer.count, f), n > 0 { bytes.append(contentsOf: buffer[0..<n]) }
+        fclose(f)
+        let real = bytes.withUnsafeBytes { CustomWords.guessPinyin("字节跳动", lexicon: $0) }
+        check(real == "zi jie tiao dong", "真实词库猜拼音", real ?? "nil")
+    }
 }
 
 do {

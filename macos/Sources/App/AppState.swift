@@ -102,7 +102,7 @@ final class AppState {
         return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
-    /// 读设置文件。没有就用默认值（和 Linux 一样，不自动建文件；菜单里「编辑设置」才建）。
+    /// 读设置文件。没有就用默认值（和 Linux 一样，不自动建文件；设置窗口改了设置、或者用文本编辑打开时才建）。
     func loadConfig() {
         configStamp = FileStamp(configPath)
         let loaded = WowtypeConfig.load(path: configPath)
@@ -240,7 +240,7 @@ final class AppState {
         }
     }
 
-    /// 菜单「编辑设置」：没有设置文件就写一份全是默认值的，用文本编辑打开。
+    /// 设置窗口「文件」菜单「用文本编辑打开设置文件」：没有设置文件就写一份全是默认值的，用文本编辑打开。
     func openConfigFile() {
         if !FileManager.default.fileExists(atPath: configPath) {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
@@ -249,7 +249,7 @@ final class AppState {
         openInTextEditor(configPath)
     }
 
-    /// 菜单「编辑自定义词」：custom.tsv，格式同 Linux。
+    /// 设置窗口「文件」菜单「用文本编辑打开自定义词」：custom.tsv，格式同 Linux。
     func openCustomWordsFile() {
         if !FileManager.default.fileExists(atPath: customWordsPath) {
             try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
