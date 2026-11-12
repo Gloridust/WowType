@@ -2009,11 +2009,28 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
     // 排第一的没纠错时，纠错出来的整句/整词放到句首词后面：`bujianyi` 打的就是
     // 不建议，「古剑一」（b 当 g）不该排在「不见」前面
     let exact_first = kept.first().is_some_and(|c| c.features.typo <= 0.0);
-    let (kept, corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
+    let (mut kept, mut corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
         kept.into_iter().partition(|c| c.features.typo <= 0.0)
     } else {
         (kept, Vec::new())
     };
+    // 但第一名只是几个单字硬凑的整句（tianqu -> 天 | 去），而纠一处错就是个词（天气）时，
+    // 这个词放第二位：打的多半是这个词，只是按错了一个键
+    let weak_top = kept.first().is_some_and(|c| {
+        is_sentence(c)
+            && c.features.history_use_count == 0.0
+            && c.words.iter().all(|w| w.pinyin.split_whitespace().count() == 1)
+    });
+    if weak_top {
+        let top = kept[0].score;
+        let found = corrected.iter().position(|c| {
+            c.words.len() == 1 && c.features.typo_count == 1.0 && top - c.score <= TYPO_WORD_GAP
+        });
+        if let Some(i) = found {
+            let word = corrected.remove(i);
+            kept.insert(1, word);
+        }
+    }
     let long_sentence = syllables >= 4 && kept.first().map(is_sentence).unwrap_or(false);
     let mut merged: Vec<Candidate> =
         Vec::with_capacity(kept.len() + prefix.len() + corrected.len());
@@ -2043,6 +2060,10 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
 /// [`compose_candidates`]：整句比排第一的整词差多少（自然对数）就算硬凑的。
 /// 实测 你好 −6.6 vs 泥 | 好 −15.5，电脑 −7.6 vs 点 | 脑 −14.8；整句评测不受影响。
 const JUNK_SENTENCE_MARGIN: f64 = 3.0;
+
+/// [`compose_candidates`]：纠一处错得到的词最多比单字硬凑的第一名差多少，还能排第二。
+/// 实测 tianqu：天 | 去 −11.1，天气（纠一处）−15.9，差 4.8。
+const TYPO_WORD_GAP: f64 = 6.5;
 
 /// 第一个候选是英文词表里的词（iPhone、hello）时，去掉硬解出来的中文：两处纠错的（屁 | 好呢）、
 /// 中间夹着只打了声母的音节的（合理[he l] | 了哦）。返回是不是只剩英文了。
@@ -2968,6 +2989,24 @@ mod tests {
         let texts: Vec<String> = e.input("nihao").into_iter().map(|c| c.text).collect();
         assert_eq!(texts.first().map(String::as_str), Some("你好"), "{texts:?}");
         assert!(!texts.iter().any(|t| t == "泥好"), "{texts:?}");
+    }
+
+    #[test]
+    fn swapped_keys_beat_a_wrong_key() {
+        // meiyuo：两键按反是「没有」，按错一个键（y 当 g）是「美国」；美国词频高一些，
+        // 但打反比按错常见，没有排第一
+        let e = engine("mei you\t没有\t500000\nmei guo\t美国\t900000\n");
+        let texts: Vec<String> = e.input("meiyuo").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("没有"), "{texts:?}");
+    }
+
+    #[test]
+    fn one_typo_word_follows_a_sentence_of_single_characters() {
+        // tianqu：第一名「天 | 去」是两个单字硬凑的，纠一处错（u 当 i）就是「天气」，排第二
+        let e = engine("tian\t天\t100000\nqu\t去\t100000\ntian qi\t天气\t1000000\n");
+        let texts: Vec<String> = e.input("tianqu").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("天去"), "{texts:?}");
+        assert_eq!(texts.get(1).map(String::as_str), Some("天气"), "{texts:?}");
     }
 
     #[test]
