@@ -30,6 +30,11 @@ pub const MAGIC: &[u8; 4] = b"WTLM";
 pub const VERSION: u32 = 1;
 pub const BOS: &str = "<s>";
 
+/// 模型里没有的词，回退分最低给到这里（自然对数）。
+/// 实测（rime-ice + words.lm）：不设下限时中低频词 top1 82.5%、整句 84.8%，−1.5 时 87.8%、86.2%；
+/// 再高（−0.5）中低频 88.8%，但整句回落到 84.8%、简拼也降。设成 0 以前出过「分崩离兮」。
+pub const OOV_FLOOR: f64 = -1.5;
+
 pub struct WordLm {
     ids: HashMap<String, u32>,
     words: Vec<String>,
@@ -116,8 +121,10 @@ impl LanguageModel for WordLm {
         // 结果模型不认识的冷僻词、错字词反而比常用词分高：
         // fenbenglixi 首选成了「分崩离兮」，pingwenguodu 成了「平稳过度」。
         // 不再额外罚分：实测再罚会把这类词所在的整句挤出前几名（日常句 90.6% -> 87.7%）。
+        // 回退分再设个下限 OOV_FLOOR：句首的回退分低到 −4.2，热词表里补的新词（大模型、黑神话、
+        // 永远的神）都不在模型里，30000 的词频实际只顶 450 用。
         let Some(&c) = self.ids.get(cur) else {
-            return self.backoff[p as usize] as f64;
+            return (self.backoff[p as usize] as f64).max(OOV_FLOOR);
         };
         match self.pair(p, c) {
             Some(s) => s as f64,
