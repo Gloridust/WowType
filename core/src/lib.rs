@@ -93,6 +93,9 @@ pub struct EngineConfig {
     pub fuzzy_groups: u32,
     /// 每用一处模糊音（一个声母或韵母）多出的代价（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
+    /// 模糊音关着时的兜底：精确读音只能凑出硬拼的结果（yingai -> 因该），而按模糊音
+    /// 是个常用词（应该）时，把这个词也给出来。见 [`Engine::fuzzy_fallback`]。
+    pub fuzzy_fallback: bool,
     /// 是否使用双拼。
     pub shuangpin: bool,
     /// 双拼方案（自然码、小鹤……）。
@@ -132,6 +135,7 @@ impl Default for EngineConfig {
             fuzzy: false,
             fuzzy_groups: crate::syllable::fuzzy::DEFAULT,
             fuzzy_penalty: 2.5,
+            fuzzy_fallback: true,
             shuangpin: false,
             shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
             english_candidate: true,
@@ -411,6 +415,17 @@ impl Engine {
     /// 开关模糊音。
     pub fn set_fuzzy(&mut self, on: bool) {
         self.config.fuzzy = on;
+    }
+
+    /// 把模糊音索引先建好。模糊音打开或者兜底（默认开）都要用；不先建的话，第一次碰到
+    /// 要查模糊音的输入时现建，会卡一下（55 万条约 0.2 秒）。载入词库的后台线程里调。
+    pub fn prepare_fuzzy(&self) {
+        self.base_lexicon.prepare_fuzzy();
+    }
+
+    /// 模糊音关着时的兜底（见 [`EngineConfig::fuzzy_fallback`]），默认开。
+    pub fn set_fuzzy_fallback(&mut self, on: bool) {
+        self.config.fuzzy_fallback = on;
     }
 
     /// 设置打开的模糊音分组（`syllable::fuzzy::*` 位掩码）。不用重建索引。
@@ -1182,7 +1197,10 @@ impl Engine {
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
-            let found = self.query_once(&full, at_ms, fuzzy)?;
+            let mut found = self.query_once(&full, at_ms, fuzzy)?;
+            if !fuzzy && self.config.fuzzy_fallback && !self.config.shuangpin {
+                self.fuzzy_fallback(&full, &mut found);
+            }
             let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
             if !self.config.jianpin_fallback || any_known {
                 return Ok(found);
@@ -1211,6 +1229,85 @@ impl Engine {
         });
         result.truncate(self.config.max_candidates.max(1));
         Ok(result)
+    }
+
+    /// 模糊音关着时的兜底：精确读音的第一名偏弱（几个词硬凑的、纠错或补全出来的），
+    /// 而输入按模糊音读是个常用词（yingai -> 应该、shengme -> 什么、zidao -> 知道、
+    /// penyou -> 朋友）时，把这个词（最多两个）加进候选，比第一名高出
+    /// [`FUZZY_FALLBACK_LEAD`] 才加。
+    ///
+    /// 只查 2–4 个音节的精确切分，每种切分一次模糊查表，不再跑一遍束搜索。
+    fn fuzzy_fallback(&self, graph: &SyllableGraph, found: &mut Vec<Candidate>) {
+        let weak = found.first().is_none_or(|c| {
+            c.words.len() >= 2
+                || c.features.typo_count > 0.0
+                || c.features.prefix_completion > 0.0
+                || c.words.iter().any(|w| !w.known)
+        });
+        let syllables = found
+            .first()
+            .map_or(0, |c| c.pinyin.split_whitespace().count());
+        if !weak || !(2..=4).contains(&syllables) {
+            return;
+        }
+        let top = found.first().map_or(f64::NEG_INFINITY, |c| c.score);
+        let view = FuzzyLexicon::new(
+            self.lexicon.as_ref(),
+            self.config.fuzzy_groups,
+            self.config.fuzzy_penalty,
+        );
+        // 接着前文打时第一个词不在句首，和精确候选一样不加句首分
+        let mid_sentence = !self.context().trim().is_empty();
+        let mut segmentations = Vec::new();
+        exact_segmentations(graph, 0, 4, &mut Vec::new(), &mut segmentations);
+        let mut extra: Vec<Candidate> = Vec::new();
+        for segmentation in segmentations.iter().filter(|s| (2..=4).contains(&s.len())) {
+            let query: Vec<SyllableQuery> = segmentation.iter().map(|e| e.query()).collect();
+            let exact = self.lexicon.lookup_common(&query);
+            let pinyin = query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ");
+            for entry in view.lookup_common(&query) {
+                // 精确读音也有这个词、而且更常用：不是靠模糊音才有的
+                if exact.iter().any(|e| e.word == entry.word && e.freq >= entry.freq) {
+                    continue;
+                }
+                if found.iter().chain(&extra).any(|c| c.text == entry.word) {
+                    continue;
+                }
+                let lm = if mid_sentence { 0.0 } else { self.lm.score(None, &entry.word) };
+                let feature = Feature {
+                    coverage_score: 1.0,
+                    lm_score_with_previous_txt: lm as f32,
+                    ..Feature::default()
+                };
+                let score = -view.cost(&entry)
+                    + self.config.beam.lm_weight * lm
+                    + self.ranker.score(&feature) as f64;
+                if score < top + FUZZY_FALLBACK_LEAD {
+                    continue;
+                }
+                extra.push(Candidate {
+                    text: entry.word.clone(),
+                    pinyin: pinyin.clone(),
+                    score,
+                    features: feature,
+                    words: vec![CandidateWord {
+                        text: entry.word.clone(),
+                        pinyin: pinyin.clone(),
+                        freq: entry.freq,
+                        known: true,
+                    }],
+                    consumed: 0,
+                });
+            }
+        }
+        if extra.is_empty() {
+            return;
+        }
+        extra.sort_by(|a, b| b.score.total_cmp(&a.score));
+        extra.truncate(2);
+        found.extend(extra);
+        found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+        found.truncate(self.config.max_candidates.max(1));
     }
 
     fn query_once(&self, graph: &SyllableGraph, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
@@ -2082,6 +2179,35 @@ fn drop_forced_chinese(result: &mut Vec<Candidate>) -> bool {
     result.len() == 1
 }
 
+/// [`Engine::fuzzy_fallback`]：模糊音读出的词要比精确读音的第一名高出多少（自然对数）才给出来。
+const FUZZY_FALLBACK_LEAD: f64 = 2.0;
+
+/// 只走精确全拼边（不纠错、不补全、不带儿化）、最多 depth 个音节的切法，最多 8 种。
+fn exact_segmentations(
+    graph: &SyllableGraph,
+    pos: usize,
+    depth: usize,
+    path: &mut Vec<crate::graph::Edge>,
+    out: &mut Vec<Vec<crate::graph::Edge>>,
+) {
+    if pos == graph.len() {
+        out.push(path.clone());
+        return;
+    }
+    if depth == 0 || out.len() >= 8 {
+        return;
+    }
+    for edge in graph.edges_from(pos) {
+        let plain = matches!(edge.kind, crate::graph::EdgeKind::Full { erhua: false, .. });
+        if edge.typo || edge.completion > 0 || !plain {
+            continue;
+        }
+        path.push(*edge);
+        exact_segmentations(graph, edge.end, depth - 1, path, out);
+        path.pop();
+    }
+}
+
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
     let mut best: HashMap<String, Candidate> = HashMap::new();
     for candidate in candidates {
@@ -2637,8 +2763,9 @@ mod tests {
             Arc::new(MemoryLexicon::from_tsv_str("zhi dao\t知道\t5000\n").unwrap());
         let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
         let mut e = Engine::new(lexicon, lm);
-        // 纠错会把 zidao 当成漏按 h，这里只测模糊音开关
+        // 纠错会把 zidao 当成漏按 h，这里只测模糊音开关；关着时的兜底另测
         e.set_typo_correction(false);
+        e.set_fuzzy_fallback(false);
         assert!(
             !e.input("zidao").iter().any(|c| c.text == "知道"),
             "默认关闭模糊音时不应命中"
@@ -2775,10 +2902,35 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_off_still_offers_common_word_when_exact_reading_is_junk() {
+        // 模糊音关着：yingai 精确读音只能凑出「因 | 该」，按模糊音是「应该」，给出来排第一；
+        // 精确读音本身有词时（dansi -> 单丝）不兜底
+        let mut e = Engine::new(
+            Arc::new(
+                MemoryLexicon::from_tsv_str(concat!(
+                    "yin\t因\t50000\n",
+                    "gai\t该\t50000\n",
+                    "ying gai\t应该\t5000000\n",
+                    "dan si\t单丝\t5\n",
+                    "dan shi\t但是\t3000000\n",
+                ))
+                .unwrap(),
+            ),
+            Arc::new(BigramLm::default()),
+        );
+        e.set_typo_correction(false);
+        assert_eq!(position(&e, "yingai", "应该"), Some(0));
+        assert_eq!(position(&e, "dansi", "但是"), None);
+        e.set_fuzzy_fallback(false);
+        assert_eq!(position(&e, "yingai", "应该"), None);
+    }
+
+    #[test]
     fn fuzzy_competes_with_exact_reading() {
         let mut e = fuzzy_rank_engine();
         e.set_typo_correction(false);
-        // 关掉模糊音时照旧只有精确读音
+        e.set_fuzzy_fallback(false);
+        // 关掉模糊音（也不兜底）时照旧只有精确读音
         assert_eq!(position(&e, "zong", "中"), None);
         assert_eq!(position(&e, "si", "是"), None);
         assert_eq!(position(&e, "dansi", "但是"), None);

@@ -176,6 +176,9 @@ pub trait Lexicon: Send + Sync {
         Vec::new()
     }
 
+    /// 把模糊音查询要用的索引先建好（载入词库的后台线程里调，免得第一次按键时现建）。默认什么都不做。
+    fn prepare_fuzzy(&self) {}
+
     /// 是否存在比 query 更长、且以 query 开头的词。
     ///
     /// 束搜索靠它剪掉不可能成词的音节串；不确定时返回 true（只影响速度，不影响结果）。
@@ -642,6 +645,11 @@ impl Lexicon for MemoryLexicon {
         self.full_prefixes.contains(&hash)
     }
 
+    fn prepare_fuzzy(&self) {
+        // 55 万条的词库约 0.2 秒
+        self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
+    }
+
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
         if query.is_empty() || groups == 0 {
             return Vec::new();
@@ -1024,6 +1032,10 @@ impl Lexicon for UserLexicon {
                 .read()
                 .map(|s| s.has_longer(query))
                 .unwrap_or(true)
+    }
+
+    fn prepare_fuzzy(&self) {
+        self.base.prepare_fuzzy();
     }
 
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
