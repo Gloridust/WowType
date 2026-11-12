@@ -1301,9 +1301,11 @@ impl Engine {
         let rank_score = self.ranker.score(&feature) as f64;
         // 单个音节打全时只有一个字：句首 LM 分反映的是语料里谁常出现在句首，
         // 没有上下文时不该压过字频（否则 he 会先出「何」）。
+        // 只减基础模型的句首分：path.lm_score 里还有用户学过的搭配加成，学过的字要照样靠前。
         let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
         let score = if single_word {
-            path.score - path.lm_score + rank_score
+            let start = self.lm.score(None, &path.words[0].text);
+            path.score - self.config.beam.lm_weight * start + rank_score
         } else {
             path.score + rank_score
         };
@@ -2284,6 +2286,36 @@ mod tests {
         let at = |word: &str| texts.iter().position(|t| t == word);
         assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
         assert!(at("何") < at("合"), "{texts:?}");
+    }
+
+    #[test]
+    fn single_syllable_keeps_learned_pair_bonus() {
+        // 去掉的只是基础模型的句首分：用户在「快」后面选过「乐」，这个搭配加成要留着。
+        // 两个引擎都选过一次「乐」（热度一样），只有 a 是在「快」后面选的。
+        let make = || {
+            let lexicon: Arc<dyn Lexicon> = Arc::new(
+                MemoryLexicon::from_tsv_str("le\t了\t100000\nle\t乐\t10000\n").unwrap(),
+            );
+            Engine::new(lexicon, Arc::new(SentenceStartBoost))
+        };
+        // 搭配只认「上一次选的词，且光标前正好以它结尾」，所以先选前一个字
+        let pick = |e: &Engine, prev: &str, word: &str| {
+            e.set_context("");
+            e.record_selection(prev);
+            e.set_context(prev);
+            e.record_selection(word);
+        };
+        let (a, b) = (make(), make());
+        pick(&a, "快", "乐");
+        pick(&b, "慢", "乐");
+        let score = |e: &Engine| {
+            e.set_context("");
+            e.record_selection("快");
+            e.set_context("快");
+            e.input("le").into_iter().find(|c| c.text == "乐").map(|c| c.score)
+        };
+        let (sa, sb) = (score(&a).unwrap(), score(&b).unwrap());
+        assert!(sa > sb, "学过的搭配没起作用：{sa} vs {sb}");
     }
 
     #[test]
