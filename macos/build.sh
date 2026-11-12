@@ -4,7 +4,8 @@
 #   macos/build.sh <数据目录> [输出目录]
 #
 # 数据目录是 scripts/make-data.sh 的输出（lexicon.tsv、english.txt、words.lm、LICENSE、SOURCE.txt、VERSION）。
-# 产物：<输出目录>/WowType.app 和 WowType-<版本>-macos.zip（arm64 + x86_64 通用，ad-hoc 签名）。
+# 产物：<输出目录>/WowType.app、WowType-<版本>-macos.pkg（给普通用户双击安装）和 WowType-<版本>-macos.zip
+# （给 macos/install.sh 用）。arm64 + x86_64 通用，ad-hoc 签名，没有 Apple 开发者签名和公证。
 #
 # 环境变量：WOWTYPE_VERSION（默认取 core/Cargo.toml），WOWTYPE_MACOS_ARCHS（默认 "arm64 x86_64"）。
 # 核心不带语音（--no-default-features）：语音用的是微信输入法的模型，不能随安装包分发。
@@ -50,11 +51,9 @@ plutil -lint "$app/Contents/Info.plist"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 
 res="$app/Contents/Resources"
-# 菜单栏图标：16pt，一张 16×16（72 dpi）加一张 32×32（144 dpi，Retina）。
-# 直接给 32×32、72 dpi 的 PNG，系统当成 32pt 来摆，图标会往下掉出菜单栏。
-cp icons/hicolor/32x32/apps/wowtype.png "$work/menu@2x.png"
-sips -s dpiWidth 144 -s dpiHeight 144 "$work/menu@2x.png" >/dev/null
-tiffutil -cathidpicheck icons/hicolor/16x16/apps/wowtype.png "$work/menu@2x.png" -out "$res/menu.tiff" 2>/dev/null
+# 图标是单色模板图（黑色 + 透明的矢量 PDF，icons/macos/make-icons.swift 生成）：系统按菜单栏深浅色上色。
+# menu.pdf 16pt，菜单栏和输入法菜单用；caret@2x.pdf 是切换输入法时光标旁提示气泡里的字形。
+cp icons/macos/menu.pdf icons/macos/caret@2x.pdf "$res/"
 for lproj in macos/Resources/*.lproj; do
   cp -R "$lproj" "$res/"
   plutil -lint "$res/$(basename "$lproj")/InfoPlist.strings"
@@ -68,7 +67,7 @@ cp "${WOWTYPE_S2T:-core/data/s2t.tsv}" "$res/s2t.tsv"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.tiff|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.pdf|caret@2x\.pdf|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2
@@ -83,3 +82,25 @@ zip="$OUT/WowType-$VERSION-macos.zip"
 rm -f "$zip"
 ditto -c -k --keepParent "$app" "$zip"
 echo "$zip"
+
+# 双击安装的 pkg：只装给当前用户（~/Library/Input Methods，不要管理员密码，和 install.sh 装的是同一个位置），
+# 装完 postinstall 自动登记、打开、切到 WowType。
+# 没有开发者签名：从网上下载的 pkg 第一次打开时要到「系统设置 → 隐私与安全性」点「仍要打开」。
+# 安装器装出来的文件不带隔离标记，输入法装好就能跑；zip 解出来的要去掉隔离标记（install.sh 做了）。
+pkgroot="$work/pkgroot"
+mkdir -p "$pkgroot"
+ditto "$app" "$pkgroot/WowType.app"
+pkgbuild --analyze --root "$pkgroot" "$work/component.plist" >/dev/null
+# 不许「搬家」：机器上别处（比如构建目录）有同 ID 的 WowType.app 时，安装器会去升级那个，装不到输入法目录
+plutil -replace 0.BundleIsRelocatable -bool NO "$work/component.plist"
+plutil -replace 0.BundleIsVersionChecked -bool NO "$work/component.plist"
+pkgbuild --quiet --root "$pkgroot" --component-plist "$work/component.plist" \
+  --identifier io.github.gloridust.inputmethod.WowType.pkg --version "$VERSION" \
+  --install-location "/Library/Input Methods" --scripts macos/pkg/scripts \
+  "$work/WowType-component.pkg"
+sed "s/@VERSION@/$VERSION/g" macos/pkg/distribution.xml > "$work/distribution.xml"
+pkg="$OUT/WowType-$VERSION-macos.pkg"
+rm -f "$pkg"
+productbuild --quiet --distribution "$work/distribution.xml" --package-path "$work" \
+  --resources macos/pkg/resources "$pkg"
+echo "$pkg"

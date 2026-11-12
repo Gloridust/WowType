@@ -88,16 +88,17 @@ https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
 - Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.1 或更新**。Arch 的安装包只有 x86_64
 - 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
 - Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
+- **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora 上，在终端里运行：
+Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 ```
 
-它会：
+在 Linux 上它会（macOS 上见[下面](#macos)）：
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
 2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
@@ -113,6 +114,22 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 > GNOME（Ubuntu 默认桌面）在 Wayland 下，建议再装 GNOME Shell 扩展
 > [Input Method Panel](https://extensions.gnome.org/extension/261/kimpanel/)，
 > 活动概览的搜索框等地方才能显示候选框。
+
+### macOS
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `WowType-<版本>-macos.pkg`，双击安装：
+
+- 只装给你自己（装到 `~/Library/Input Methods`），**不要管理员密码**；装完自动加进输入法并切到 WowType
+- 安装包**没有 Apple 开发者签名**，第一次打开时系统会说「无法验证」：点「完成」，打开「系统设置 → 隐私与安全性」，
+  往下找到 WowType 那一条，点「仍要打开」，输入开机密码后安装器就会打开。之后升级还是同样的步骤
+- 也可以不点这一步：在终端里运行上面那行一键安装命令，它在 Mac 上会下载同一个 pkg，按 `SHA256SUMS` 校验后装好
+- 菜单栏里没出现 WowType：「系统设置 → 键盘 → 输入法 → 编辑」，点左下角 `+`，在「简体中文」里添加 WowType；
+  还是没有就注销重新登录一次
+
+设置在菜单栏的输入法菜单里（切到 WowType 后点菜单栏的输入法图标），设置文件是
+`~/Library/Application Support/WowType/wowtype.conf`，见 [docs/CONFIG.md](docs/CONFIG.md#macos)。
+卸载：菜单栏的输入法里先换成别的输入法，在访达里按 `⇧⌘G` 打开 `~/Library/Input Methods`，把 WowType 拖到废纸篓，
+再到「系统设置 → 键盘 → 输入法」里把它移除。
 
 ### 手动安装
 
