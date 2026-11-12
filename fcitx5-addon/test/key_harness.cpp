@@ -231,6 +231,13 @@ void runCases(Instance &instance) {
               std::string(text) + " 原样（数字后的符号不换成中文标点），实际 上屏「" + ic->committed +
                   "」交给应用「" + ic->passed + "」");
     }
+    // 以词定字（#83）：[ 取首选的第一个字，] 取最后一个字；单字时照常先上屏再出【】
+    fresh(ic.get());
+    type(ic.get(), "nihao[");
+    check(ic->committed == "你", "以词定字 nihao [ → 你，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "nihao]");
+    check(ic->committed == "好", "以词定字 nihao ] → 好，实际 " + ic->committed);
     // @ # % & * 没有中文写法，原样（#91）；{ } 是直角引号（#96）
     fresh(ic.get());
     type(ic.get(), "@#%&*");

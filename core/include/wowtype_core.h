@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 7
+#define WOWTYPE_ABI_VERSION_MINOR 8
 
 #ifdef __cplusplus
 extern "C" {
@@ -371,6 +371,8 @@ typedef struct {
                          * 0 竖排（上下键移光标、左右键翻页） */
     uint32_t page_keys; /* 1.6 起：WOWTYPE_PAGE_KEYS_*，默认 WOWTYPE_PAGE_KEYS_MINUS */
     int select_keys;    /* 1.6 起：WOWTYPE_SELECT_KEYS_*，默认 OFF */
+    int pick_char;      /* 1.8 起：以词定字，打拼音途中 [ 上屏光标处候选的第一个字、] 最后一个字，
+                         * 默认 1；page_keys 带 [ ] 时让给翻页 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。

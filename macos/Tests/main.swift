@@ -223,6 +223,17 @@ do {
 
 do {
     let (c, client) = fresh()
+    // 以词定字：[ 取首选的第一个字，] 取最后一个字
+    type(c, "nihao")
+    _ = c.handle(.char("["))
+    check(client.committed == "你", "以词定字 [ 取第一个字", client.committed)
+    type(c, "nihao")
+    _ = c.handle(.char("]"))
+    check(client.committed == "你好", "以词定字 ] 取最后一个字", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
     // @ # % 没有中文写法，交给应用；{ } 是直角引号
     check(!c.handle(.char("@", .shift)), "@ 交给应用")
     check(!c.handle(.char("%", .shift)), "% 交给应用")

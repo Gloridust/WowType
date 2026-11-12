@@ -22,6 +22,7 @@
 | 1.5 | 0.3.11 | 选词、整句上屏和学习挪进会话：加 `_choose`（按候选序号选，句首词进已选栈，选完上屏并记选词）、`_commit_input`（已选的词 + 原始输入上屏）；删掉过渡函数 `_selection_count`、`_selection_pinyin`、`_push_selection` |
 | 1.6 | 0.3.11 | 空格、回车、数字、分号引号选词、翻页和展开面板挪进 `_key`：`WowtypeKey` 加 `action`（`WOWTYPE_KEY_ACTION_*`，外壳的全局翻页 / 移光标键），`WowtypeSessionConfig` 加 `horizontal`、`page_keys`（`WOWTYPE_PAGE_KEYS_*`）、`select_keys`（`WOWTYPE_SELECT_KEYS_*`），frame 的 `panel`、`cand_count`、`cand_cursor`、`has_prev`、`has_next` 开始填；加 `_select`（按显示的序号选）、`_candidate`；过渡函数加 `_view`、`_last_choice`，删掉 `_commit_input`（用 `_key` 发回车或 `_reset(s, 1)`） |
 | 1.7 | 0.3.11 | 打字途中 `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete` 忘掉光标处学错的词（会话里处理，带 Ctrl 的这几个键外壳也要交给 `_key`），`WowtypeFrame` 末尾加 `forgot`：1 时外壳马上存用户词库和输入习惯；`wowtype_engine_save_user_dict` 用户词库空的时候也写（只有注释行）、返回 0，以前返回 -1 |
+| 1.8 | 0.3.11 | 以词定字：`WowtypeSessionConfig` 末尾加 `pick_char`（默认 1），打拼音途中 `[` `]` 上屏光标处候选的第一个、最后一个字（`page_keys` 带 `[ ]` 时让给翻页） |
 
 ## 所有权和生命周期
 
@@ -68,6 +69,7 @@
 | 空格 | 选光标处的候选（光标不在这一页上时选这一页第一个）；没有候选就原样上屏 |
 | 回车（含小键盘） | 已选的词 + 原始输入上屏，原始输入也记一次选词 |
 | 数字（含小键盘，不带 Shift 等修饰键） | 选这一页的第几个；这一页没这么多也吃掉 |
+| `[` `]`（`pick_char`，1.8） | 以词定字：光标处的多字词只取第一个 / 最后一个字；句首词取的字进已选栈，剩下的接着选，否则连同已选的词上屏；不记选词。光标处是单字、emoji、计算结果这类时不管（外壳照常当标点）；`page_keys` 带 `[ ]` 时是翻页 |
 | `;` `'`（`select_keys`） | 选这一页第 2、3 个；微软、搜狗、紫光双拼里 `;` 是韵母键，不拿来选词，等第二个键时进编辑区 |
 | V 模式的数字、运算符 | 进编辑区；`=` 上屏计算结果 |
 | 方向键 | 横排：左右移光标（整个列表首尾相接，跨页时跟着翻页），上下翻页，下键展开面板（两个以上候选）；竖排：上下移光标，左右翻页 |

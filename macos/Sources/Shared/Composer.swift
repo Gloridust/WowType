@@ -230,6 +230,7 @@ public final class Composer {
         config.horizontal = horizontal ? 1 : 0
         config.page_keys = UInt32(WOWTYPE_PAGE_KEYS_MINUS)
         config.select_keys = Int32(WOWTYPE_SELECT_KEYS_OFF)
+        config.pick_char = 1
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
