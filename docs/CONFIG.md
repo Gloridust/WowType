@@ -204,15 +204,15 @@ Lexicon=
 
 macOS 上的设置在 `~/Library/Application Support/WowType/wowtype.conf`，**键名、取值、默认值和上面一样**（只有 `EmojiKey` 的默认值不同，见下），Linux 上的文件拷过去就能用。
 点菜单栏里的 WowType 图标 →「WowType 设置…」打开设置窗口（页面和 Linux 的设置界面一样：常规、输入、表情、自定义词，
-macOS 还没有的功能不列）。窗口只改它认识的键，文件里的注释、不认识的键（语音、互译这些）、`[分组]` 原样留着，
+macOS 还没有的功能不列；互译还没有页面，在文件里改）。窗口只改它认识的键，文件里的注释、不认识的键（语音这些）、`[分组]` 原样留着，
 改过的文件拿回 Linux 照样能用。也可以直接改文件：设置窗口的「文件」菜单 →「用文本编辑打开设置文件」，
 还没有文件时会写出一份全是默认值、带说明的。窗口开着时在别处改了文件，切回窗口会重新读，不会被窗口里的旧值盖掉。
 改完下一次按键时生效，不用重启；换了 `Lexicon` 会在后台重新载入词库，载完之前照旧用原来的。
 
 现在认的项：`CandidateLayout`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
 `Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
-`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
-语音、互译、检查更新这些 macOS 还没做，对应的项写了也不起作用。
+`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
+语音、检查更新这些 macOS 还没做，对应的项写了也不起作用。
 
 [工具栏](#v--空格工具栏)和表情面板和 Linux 上一样用，不同的是：
 
@@ -227,6 +227,13 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 - 自定义词在同一个目录的 `custom.tsv`，格式和 [Linux 的](#自定义词)一样；菜单里「自定义词…」打开设置窗口的自定义词页
   （加词时自动填拼音，能删、导入、导出），保存后下一次按键时生效。
 - `AutoSpace` 只在应用告诉输入法光标前是什么字时才加（很多应用不告诉，这时不猜）。
+- [互译](#互译)用法和 Linux 一样（单按 Shift 中 → 英 → 译 → 中，原文在候选框顶上，译文写在输入框里）。在 `wowtype.conf` 里写
+  `Translate=True` 和 `TranslateBaseUrl`、`TranslateModel`（设置窗口的「文件」菜单能用文本编辑打开它）；API Key 用菜单里的「设置互译 API Key…」填，
+  存在同一个目录的 `translate.key`（0600，只有自己能读），不写进 `wowtype.conf`。系统开着安全输入（密码框）时照常打中文，不翻译。
+- 本地模型（`TranslateLocal=True`）：macOS 上还没有下载按钮，要自己从 [Hugging Face](https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF)
+  下载 `HY-MT1.5-1.8B-Q4_K_M.gguf`，放到数据目录的 `models/` 下（或在 `TranslateLocalModel` 写路径），再装 llama.cpp（`brew install llama.cpp`）。
+  `TranslateLlamaServer` 留空时依次找数据目录的 `llama/llama-server`、`/opt/homebrew/bin`、`/usr/local/bin`、`/opt/local/bin`（输入法是系统启动的，
+  `PATH` 里没有 Homebrew）。模型的许可和上面[本地模型](#本地模型离线)说的一样：不是开源协议，**不适用于欧盟、英国和韩国**。
 - 上面的环境变量 macOS 不认（输入法是系统启动的，拿不到你设的环境变量）。
 
 ## 数据文件
