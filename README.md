@@ -328,7 +328,7 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 
 翻译要等服务回话，挑又小又快的模型（各家的 mini、flash、turbo 版）；设置里的「测试连接」会显示一次要多久。详见 [docs/CONFIG.md](docs/CONFIG.md#互译)。
 
-不想联网，可以在「翻译」页打开「用本地模型翻译」：装好 llama.cpp（`sudo apt install llama.cpp`），点「下载」获取 HY-MT 1.5 1.8B（1.13 GB）。
+不想联网，可以在「翻译」页打开「用本地模型翻译」：点「下载」获取 HY-MT 1.5 1.8B（1.13 GB），跑模型用的 llama-server 系统里没有时会一起下载（约 22 MB），不用另外装东西。
 第一次翻译时才载入，闲置 5 分钟释放内存。模型是腾讯混元社区许可，不适用于欧盟、英国和韩国，WowType 不分发它，见 [本地模型](docs/CONFIG.md#本地模型离线)。
 
 ### 设置
