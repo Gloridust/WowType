@@ -71,8 +71,8 @@ jobs:
         run: ./scripts/abi-smoke.sh
 
   macos-app:
-    # macOS 输入法外壳（macos/）：按键测试、打通用安装包、用安装包里的词库自检。
-    # 还在开发，不在 release 的 needs 里，安装包只放在 Artifacts（macos-preview）。
+    # macOS 输入法外壳（macos/）：按键测试、打通用安装包、用安装包里的词库自检、真装一遍 pkg。
+    # 发版时 WowType-<版本>-macos.pkg 跟 Linux 的包一起进 Release（artifact 叫 pkg-macos）。
     name: macOS 输入法
     needs: data
     runs-on: macos-latest
@@ -117,10 +117,31 @@ jobs:
         run: WOWTYPE_DATA_DIR="$RUNNER_TEMP/wowtype-data" dist/macos/WowType.app/Contents/MacOS/WowType --selftest
       - name: 自检以后安装包没被改过（词库快照要写在数据目录，不能写进签过名的安装包）
         run: codesign --verify --strict dist/macos/WowType.app
+      - name: 装一遍 pkg（只装给当前用户，不用 sudo）
+        run: |
+          pkg=$(ls dist/macos/WowType-*-macos.pkg)
+          pkgutil --payload-files "$pkg" | grep -qx './WowType.app/Contents/MacOS/WowType'
+          if pkgutil --payload-files "$pkg" | grep -Ei 'wtlocal|nnlm|gguf|HY-MT|wetype'; then
+            echo "pkg 里有不能分发的模型"; exit 1
+          fi
+          # 模拟从网上下载：带上隔离标记。安装器装出来的文件不能带，不然输入法跑不起来
+          xattr -w com.apple.quarantine "0083;00000000;Safari;" "$pkg"
+          installer -pkg "$pkg" -target CurrentUserHomeDirectory
+          app="$HOME/Library/Input Methods/WowType.app"
+          codesign --verify --strict "$app"
+          if xattr -r "$app" | grep -q com.apple.quarantine; then echo "装出来的文件带隔离标记"; exit 1; fi
+          [[ -O "$app/Contents/MacOS/WowType" ]] || { echo "装出来的文件不归当前用户"; exit 1; }
+          "$app/Contents/MacOS/WowType" --version
+          xattr -d com.apple.quarantine "$pkg"
       - uses: actions/upload-artifact@v4
         with:
-          # 不叫 pkg-*：发版任务按 pkg-* 收安装包，macOS 版在真机试过之前不进 Release
-          name: macos-preview
+          # 叫 pkg-*：发版任务按 pkg-* 收安装包
+          name: pkg-macos
+          path: dist/macos/*.pkg
+      - uses: actions/upload-artifact@v4
+        with:
+          # zip 给 macos/install.sh 用（开发、测试），不进 Release
+          name: macos-zip
           path: dist/macos/*.zip
 
   data:
@@ -471,7 +492,7 @@ jobs:
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [installer, core, data, data-wanxiang, addon, arch, fedora, nix]
+    needs: [installer, core, data, data-wanxiang, addon, arch, fedora, nix, macos-app]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -505,6 +526,16 @@ jobs:
           Manjaro：按安装说明在本机用 makepkg 打包；openSUSE Tumbleweed：按安装说明从源码构建。
           NixOS（x86_64、aarch64）：flake 输入写 \`github:${GITHUB_REPOSITORY}/release\`（跟正式版）或 \`github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`（锁这一版），把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md#nixos--nix)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
+
+          ## 安装（macOS 12 以上，Apple 芯片和 Intel）
+
+          在「终端」里运行同一行命令（推荐）：下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\`、校验后只装给当前用户，不要管理员密码，也不用到「隐私与安全性」里放行，装完自动切到 WowType。
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh | bash
+          \`\`\`
+
+          或者下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\` 双击安装。安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
 

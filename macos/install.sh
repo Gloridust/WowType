@@ -39,6 +39,8 @@ xattr -dr com.apple.quarantine "$dest" 2>/dev/null || true
 
 bin="$dest/Contents/MacOS/WowType"
 "$bin" --register
+# 菜单栏的输入法菜单会缓存图标，升级换了图标时重启一下它才会刷新（系统会马上把它拉起来）
+killall TextInputMenuAgent 2>/dev/null || true
 # 刚登记完系统可能还没列出来，等一下再打开
 for _ in 1 2 3 4 5; do
   if "$bin" --enable >/dev/null 2>&1; then

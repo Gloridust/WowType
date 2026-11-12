@@ -10,7 +10,7 @@
 	<string>WowType</string>
 	<key>CFBundleExecutable</key>
 	<string>WowType</string>
-	<!-- 设置窗口（WowType --settings）在程序坞里的图标，build.sh 生成；菜单栏里的图标是下面的 menu.tiff -->
+	<!-- 设置窗口（WowType --settings）在程序坞里的图标，build.sh 生成；菜单栏里的图标是下面的 menu.pdf -->
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -41,9 +41,13 @@
 	<string>WowTypeInputController</string>
 	<key>InputMethodServerDelegateClass</key>
 	<string>WowTypeInputController</string>
-	<!-- 菜单栏图标按 16pt 摆：menu.tiff 里是 16×16 和 32×32（Retina）两张，build.sh 生成 -->
+	<!-- 图标是单色模板图（icons/macos/make-icons.swift 生成的矢量 PDF）：黑色 + 透明，系统按菜单栏深浅色上色，
+	     和系统自带的输入法、微信输入法一样。menu.pdf 是 16pt 的圆里挖出 W；caret@2x.pdf 只有 W，
+	     切换输入法时光标旁的提示气泡用它（TISIconLabels → CustomIcon，照系统自带的 AinuIM 写）。 -->
+	<key>TISIconIsTemplate</key>
+	<true/>
 	<key>tsInputMethodIconFileKey</key>
-	<string>menu.tiff</string>
+	<string>menu.pdf</string>
 	<key>TICapsLockLanguageSwitchCapable</key>
 	<true/>
 	<key>ComponentInputModeDict</key>
@@ -66,12 +70,17 @@
 				<true/>
 				<key>tsInputModeKeyEquivalentModifiersKey</key>
 				<integer>4608</integer>
+				<key>TISIconLabels</key>
+				<dict>
+					<key>CustomIcon</key>
+					<string>caret@2x.pdf</string>
+				</dict>
 				<key>tsInputModeMenuIconFileKey</key>
-				<string>menu.tiff</string>
+				<string>menu.pdf</string>
 				<key>tsInputModeAlternateMenuIconFileKey</key>
-				<string>menu.tiff</string>
+				<string>menu.pdf</string>
 				<key>tsInputModePaletteIconFileKey</key>
-				<string>menu.tiff</string>
+				<string>menu.pdf</string>
 				<key>tsInputModePrimaryInScriptKey</key>
 				<true/>
 				<key>tsInputModeScriptKey</key>

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# WowType 一键安装：Ubuntu / Debian、Fedora（x86_64、arm64），Arch Linux（x86_64）。
+# WowType 一键安装：Ubuntu / Debian、Fedora（x86_64、arm64），Arch Linux（x86_64），macOS 12 以上。
 #
 #   curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
+#
+# macOS：下载 WowType-<版本>-macos.pkg，按 SHA256SUMS 校验，用系统的 installer 只装给当前用户
+# （~/Library/Input Methods，不要密码），装完自动加进输入法并切过去。下面的 1–4 是 Linux 的步骤。
 #
 # 做这几件事：
 #   1. 从 GitHub Release 下载和你系统对应的最新安装包（词库已经在包里），按 SHA256SUMS 校验
@@ -67,13 +70,14 @@ usage() {
 
 支持 Ubuntu 24.04 / 26.04、Debian 13 及有明确兼容基线的衍生版，
 Arch Linux / EndeavourOS / Garuda / CachyOS，Fedora；预编译包有 x86_64，
-deb 和 rpm 另有 arm64（aarch64）。
+deb 和 rpm 另有 arm64（aarch64）。macOS 12 以上（Apple 芯片和 Intel）装 pkg。
 Manjaro 请在本机用 scripts/package-arch.sh 构建；NixOS 使用 flake。
 Fedora Atomic 桌面使用 rpm-ostree。其他发行版见 docs/INSTALL.md 的源码构建。
 
 环境变量：WOWTYPE_VERSION、WOWTYPE_REPO、WOWTYPE_YES、WOWTYPE_NO_IM_CONFIG、
           WOWTYPE_NO_RESTART。
-测试夹具：WOWTYPE_OS_RELEASE 指定 os-release 文件，WOWTYPE_ARCH 指定机器架构，
+测试夹具：WOWTYPE_SYSTEM 代替 uname -s（Linux / Darwin），
+          WOWTYPE_OS_RELEASE 指定 os-release 文件，WOWTYPE_ARCH 指定机器架构，
           WOWTYPE_BASE_URL 指定资产目录（可用 file:///...）。
 EOF
 }
@@ -105,8 +109,49 @@ source_install() {
   die "$1。安装与源码构建说明：https://github.com/$REPO/blob/main/docs/INSTALL.md"
 }
 
+# macOS：下载 pkg、校验，用系统的 installer 只装给当前用户（不要密码）。curl 下载的文件没有隔离标记，
+# 不用到「隐私与安全性」里放行。macOS 自带的是 bash 3.2：这里不能用 ${x,,} 这类 bash 4 的写法。
+macos_install() { # <只打印计划：0 / 1>
+  local machine=${WOWTYPE_ARCH:-$(uname -m)}
+  case "$machine" in
+    arm64|aarch64|x86_64) ;;
+    *) source_install "macOS 版只有 Apple 芯片（arm64）和 Intel（x86_64）两种" ;;
+  esac
+  if [[ "$1" == 1 ]]; then
+    local requested=${WOWTYPE_VERSION:-<版本>}
+    printf '系统：macOS %s\n仓库：%s\n包文件：WowType-%s-macos.pkg\n' "$machine" "$REPO" "${requested#v}"
+    return
+  fi
+  [[ $EUID -ne 0 ]] || die "请直接用普通用户运行，不要加 sudo（WowType 只装给当前用户）"
+  command -v curl >/dev/null || die "需要 curl"
+  local tag version package base expected actual
+  tag=${WOWTYPE_VERSION:-$(latest_tag)}
+  [[ "$tag" == v* ]] || tag="v$tag"
+  version=${tag#v}
+  [[ "$version" =~ ^[a-zA-Z0-9][a-zA-Z0-9._+~^-]*$ ]] || die "无效的版本号：$version"
+  base=${WOWTYPE_BASE_URL:-"https://github.com/$REPO/releases/download/$tag"}
+  package="WowType-$version-macos.pkg"
+  tmp=$(mktemp -d)
+  trap 'rm -rf "${tmp:-}"' EXIT
+
+  say "WowType $version（macOS）"
+  fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null ||
+    die "下载 $base/SHA256SUMS 失败，请检查版本和网络；发布页：https://github.com/$REPO/releases"
+  expected=$(manifest_hash "$package" "$tmp/SHA256SUMS") ||
+    die "WowType $version 没有 macOS 安装包（$package）；发布页：https://github.com/$REPO/releases"
+  say "下载并校验 $package"
+  fetch "$base/$package" "$tmp/$package"
+  actual=$(shasum -a 256 "$tmp/$package")
+  [[ "${actual%% *}" == "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]] || die "$package 校验和对不上，请重新下载"
+
+  say "安装到 ~/Library/Input Methods（只装给当前用户）"
+  installer -pkg "$tmp/$package" -target CurrentUserHomeDirectory
+  say "装好了。菜单栏的输入法里选 WowType 就能用。"
+  echo "菜单栏里没有的话：系统设置 → 键盘 → 输入法 → 编辑 → +，在「简体中文」里添加 WowType；还没有就注销重新登录一次。"
+}
+
 select_platform() {
-  [[ "$(uname -s)" == Linux ]] || source_install "WowType 的 fcitx5 插件需要 Linux"
+  [[ "${WOWTYPE_SYSTEM:-$(uname -s)}" == Linux ]] || source_install "WowType 的 fcitx5 插件需要 Linux"
   read_os_release
   machine=${WOWTYPE_ARCH:-$(uname -m)}
   # deb 和 rpm 对同一种架构叫法不同：amd64 / x86_64、arm64 / aarch64
@@ -234,6 +279,10 @@ main() {
   esac
   [[ $# -le 1 ]] || die "参数过多（用 --help 查看用法）"
   [[ "$REPO" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] || die "WOWTYPE_REPO 必须是 owner/repo"
+  if [[ "${WOWTYPE_SYSTEM:-$(uname -s)}" == Darwin ]]; then
+    macos_install "$plan"
+    return
+  fi
   select_platform
   if ((plan)); then
     local requested=${WOWTYPE_VERSION:-<版本>}
