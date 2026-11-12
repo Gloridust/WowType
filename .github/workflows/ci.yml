@@ -1,13 +1,14 @@
 name: CI
 
-# PR 和推送到 main：验证安装器、更新器及各发行版构建，安装包保存在 Artifacts。
+# PR 和推送到 main、pre-release：验证安装器、更新器及各发行版构建，安装包保存在 Artifacts。
+# pre-release 是下一版的集成分支：功能 PR 先合进这里，攒够了再整体合进 main 发版。
 # 只改了文档（*.md、docs/、截图）的提交不跑。
 # 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：总是跑，并把这些包发到 GitHub Release。
 # 其他分支想跑一次：Actions 页手动运行（workflow_dispatch）。
 
 on:
   push:
-    branches: [main]
+    branches: [main, pre-release]
     tags: ["v*"]
     paths-ignore:
       - "**.md"
