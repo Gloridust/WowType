@@ -236,7 +236,9 @@ final class TranslateBridge {
                       _ error: UnsafeMutablePointer<UnsafePointer<CChar>?>?) -> Int32 {
         let snapshot = backend.poll()
         strings.forEach { free($0) }
-        strings = [snapshot.source, snapshot.text, snapshot.error].map { strdup($0) }
+        strings = [snapshot.source, snapshot.text, snapshot.error].map { (text: String) -> UnsafeMutablePointer<CChar> in
+            strdup(text)!
+        }
         source?.pointee = UnsafePointer(strings[0])
         text?.pointee = UnsafePointer(strings[1])
         error?.pointee = UnsafePointer(strings[2])
