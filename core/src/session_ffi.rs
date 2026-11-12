@@ -810,6 +810,16 @@ pub unsafe extern "C" fn wowtype_session_commit_text(
     handle.run("commit_text", |session| session.commit_text(&text, prev))
 }
 
+/// 攒着的原文（互译），没有是空串。在同一个会话下一次调用前有效。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_translate_source(session: *mut WowtypeSession) -> *const c_char {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return EMPTY.as_ptr();
+    };
+    let source = handle.session.translate_source().to_owned();
+    handle.text(&source)
+}
+
 /// 丢掉互译攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。（1.10 起）
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_session_translate_clear(

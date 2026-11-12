@@ -485,6 +485,8 @@ const WowtypeFrame *wowtype_session_tick(WowtypeSession *session, uint64_t now_m
  * frame->commit。prev_char 是应用里光标前的字，读不到给 0。 */
 const WowtypeFrame *wowtype_session_commit_text(WowtypeSession *session, const char *text,
                                                 uint32_t prev_char);
+/* 攒着的原文，没有是空串；在同一个会话下一次调用前有效。 */
+const char *wowtype_session_translate_source(WowtypeSession *session);
 /* 丢掉攒着的原文、取消这个会话的翻译请求（输入框失去焦点）。 */
 const WowtypeFrame *wowtype_session_translate_clear(WowtypeSession *session);
 /* 点候选（1.6 起）：index 是显示的这些（frame 的 cand_count 个）里的序号。和按数字键一样：

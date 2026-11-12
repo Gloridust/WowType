@@ -1,6 +1,6 @@
 // 互译：核心的翻译器（wowtype_translate_*）包一层，组字（Composer）只认 TranslationBackend，
 // 按键测试换成假的。和 Linux 一样一个进程只有一个翻译器（本地模型的 llama-server 也只起一个），
-// 所有输入框共用；哪个输入框在用由 owner 记着。
+// 所有输入框共用；每个输入框的会话只取消自己发的请求。
 //
 // 不依赖 Foundation / AppKit：按键测试在 Linux 上也编。
 
@@ -40,8 +40,6 @@ public struct TranslateSnapshot: Equatable {
 public protocol TranslationBackend: AnyObject {
     /// 填了地址和模型，或者用本地模型且模型文件在
     var isReady: Bool { get }
-    /// 现在是哪个输入框（Composer）在用；别的输入框清空原文时不取消它的请求
-    var owner: AnyObject? { get set }
     /// 开始翻译，取消别的请求；正在译或已经译好同一句话时什么也不做
     func start(_ text: String)
     func cancel()
@@ -53,7 +51,6 @@ public protocol TranslationBackend: AnyObject {
 /// 核心的翻译器。
 public final class Translator: TranslationBackend {
     private let handle: OpaquePointer
-    public weak var owner: AnyObject?
 
     public init() {
         handle = wowtype_translate_new()
@@ -184,5 +181,70 @@ extension String {
         while let c = s.first, blank(c) { s.removeFirst() }
         while let c = s.last, blank(c) { s.removeLast() }
         return String(s)
+    }
+}
+
+/// 把 TranslationBackend 包成会话要的函数表（wowtype_session_set_translate_backend）。
+/// 会话借用它：换翻译器时外壳先让会话换掉，再放掉旧的。
+final class TranslateBridge {
+    let backend: TranslationBackend
+    /// poll / tag 交出去的 C 字符串，下一次调用前有效
+    private var strings: [UnsafeMutablePointer<CChar>] = []
+    private var tagString: UnsafeMutablePointer<CChar>?
+
+    init(_ backend: TranslationBackend) {
+        self.backend = backend
+    }
+
+    deinit {
+        strings.forEach { free($0) }
+        free(tagString)
+    }
+
+    var table: WowtypeTranslateBackend {
+        var table = WowtypeTranslateBackend()
+        table.size = UInt32(MemoryLayout<WowtypeTranslateBackend>.size)
+        table.user = Unmanaged.passUnretained(self).toOpaque()
+        table.start = { user, text in
+            guard let user, let text else { return }
+            TranslateBridge.of(user).backend.start(String(cString: text))
+        }
+        table.cancel = { user in
+            guard let user else { return }
+            TranslateBridge.of(user).backend.cancel()
+        }
+        table.poll = { user, source, text, error in
+            guard let user else { return 0 }
+            return TranslateBridge.of(user).poll(source, text, error)
+        }
+        table.tag = { user, text in
+            guard let user else { return nil }
+            let bridge = TranslateBridge.of(user)
+            free(bridge.tagString)
+            bridge.tagString = strdup(bridge.backend.tag(for: text.map { String(cString: $0) } ?? ""))
+            return UnsafePointer(bridge.tagString)
+        }
+        return table
+    }
+
+    private static func of(_ user: UnsafeMutableRawPointer) -> TranslateBridge {
+        Unmanaged<TranslateBridge>.fromOpaque(user).takeUnretainedValue()
+    }
+
+    private func poll(_ source: UnsafeMutablePointer<UnsafePointer<CChar>?>?,
+                      _ text: UnsafeMutablePointer<UnsafePointer<CChar>?>?,
+                      _ error: UnsafeMutablePointer<UnsafePointer<CChar>?>?) -> Int32 {
+        let snapshot = backend.poll()
+        strings.forEach { free($0) }
+        strings = [snapshot.source, snapshot.text, snapshot.error].map { strdup($0) }
+        source?.pointee = UnsafePointer(strings[0])
+        text?.pointee = UnsafePointer(strings[1])
+        error?.pointee = UnsafePointer(strings[2])
+        switch snapshot.phase {
+        case .idle: return 0
+        case .running: return 1
+        case .done: return 2
+        case .error: return 3
+        }
     }
 }
