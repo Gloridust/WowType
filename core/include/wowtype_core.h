@@ -200,6 +200,18 @@ void wowtype_candidates_free(WowtypeCandidates *candidates);
  * 切不了（英文、双拼、差得太多）返回 NULL；返回的串在同一线程下一次调用前有效。 */
 const char *wowtype_segment_input(const char *input, const char *pinyin);
 
+/* 自定义词的编码整理（设置界面加词、导入用，规则在核心里一份）：pinyin_only 非 0 时只认拼音，
+ * Ni Hǎo、nihao、ni'hao、ni3hao3 -> "ni hao"，ü、u:、u 加分音符写成 v，单独的 r 是儿化；
+ * 否则不是拼音但全是字母的（mail）也行，去掉隔音符、小写。不合法返回 NULL；
+ * 返回的串在同一线程下一次调用本函数或 wowtype_guess_pinyin 前有效。（1.10） */
+const char *wowtype_custom_code(const char *text, int pinyin_only);
+
+/* 在词库原文（lexicon 起 len 个字节，拼音<TAB>词<TAB>频次，一行一条）里猜 word 的拼音，
+ * 设置界面加词时自动填编码：整个词有就取频次最高的那条，没有就一个字一个字找，结果整理成
+ * 空格分开的音节。猜不出（有词库里没有的字、英文）返回 NULL；返回的串在同一线程下一次调用
+ * 本函数或 wowtype_custom_code 前有效。（1.10） */
+const char *wowtype_guess_pinyin(const char *lexicon, size_t len, const char *word);
+
 /* 最近一次错误信息，可能为空串。 */
 const char *wowtype_last_error(void);
 

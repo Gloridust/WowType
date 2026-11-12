@@ -1031,6 +1031,59 @@ pub unsafe extern "C" fn wowtype_segment_input(
     }
 }
 
+thread_local! {
+    static CUSTOM_CODE: RefCell<CString> = RefCell::new(CString::default());
+}
+
+/// 自定义词的编码整理（设置界面加词、导入用）。pinyin_only 非 0 时只认拼音（Ni Hǎo、nihao、
+/// ni3hao3 -> ni hao），否则不是拼音但全是字母的（mail）也行（小写）。不合法返回 NULL；
+/// 返回的串在同一线程下一次调用本函数或 wowtype_guess_pinyin 前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_custom_code(
+    text: *const c_char,
+    pinyin_only: c_int,
+) -> *const c_char {
+    let Some(text) = (unsafe { cstr_to_str(text) }) else {
+        return ptr::null();
+    };
+    let code = if pinyin_only != 0 {
+        crate::lexicon::normalize_pinyin(text)
+    } else {
+        crate::lexicon::normalize_code(text)
+    };
+    match code.and_then(|s| CString::new(s).ok()) {
+        Some(code) => CUSTOM_CODE.with(|slot| {
+            *slot.borrow_mut() = code;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
+}
+
+/// 在词库原文（拼音<TAB>词<TAB>频次）里猜词的拼音，整理成空格分开的音节；猜不出返回 NULL。
+/// 返回的串在同一线程下一次调用本函数或 wowtype_custom_code 前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_guess_pinyin(
+    lexicon: *const c_char,
+    len: usize,
+    word: *const c_char,
+) -> *const c_char {
+    let Some(word) = (unsafe { cstr_to_str(word) }) else {
+        return ptr::null();
+    };
+    if lexicon.is_null() || len == 0 {
+        return ptr::null();
+    }
+    let lexicon = unsafe { std::slice::from_raw_parts(lexicon.cast::<u8>(), len) };
+    match crate::lexicon::guess_pinyin(lexicon, word).and_then(|s| CString::new(s).ok()) {
+        Some(code) => CUSTOM_CODE.with(|slot| {
+            *slot.borrow_mut() = code;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
+}
+
 /// 最近一次错误。返回的指针在下一次调用本 API 前有效。
 #[no_mangle]
 pub extern "C" fn wowtype_last_error() -> *const c_char {

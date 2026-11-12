@@ -274,6 +274,18 @@ int main(int argc, char **argv) {
         wowtype_session_free(s);
     }
 
+    /* ABI 1.10：自定义词的编码整理 */
+    {
+        const char *code = wowtype_custom_code("Ni H\xC7\x8Eo", 1);
+        check(code && strcmp(code, "ni hao") == 0, "custom code: pinyin");
+        code = wowtype_custom_code("Mail", 0);
+        check(code && strcmp(code, "mail") == 0, "custom code: letters");
+        check(wowtype_custom_code("Mail", 1) == NULL, "custom code: pinyin only");
+        const char lex[] = "ni\t\xE4\xBD\xA0\t1\nhao\t\xE5\xA5\xBD\t1\n";
+        code = wowtype_guess_pinyin(lex, sizeof lex - 1, "\xE4\xBD\xA0\xE5\xA5\xBD");
+        check(code && strcmp(code, "ni hao") == 0, "custom code: guess pinyin");
+    }
+
     if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {
         fprintf(stderr, "ABI 主版本不一致：库 %d，头文件 %d\n", wowtype_abi_version(),
                 WOWTYPE_ABI_VERSION_MAJOR);

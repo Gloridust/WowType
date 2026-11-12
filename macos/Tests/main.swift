@@ -754,7 +754,7 @@ do {
 
     for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
                           ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
-                          ("hua r", "hua r"), ("zhongguo", "zhong guo")] {
+                          ("hua r", "hua r"), ("zhongguo", "zhong guo"), ("Biáng biáng miàn", "biang biang mian")] {
         check(CustomWords.normalizePinyin(input) == want, "拼音整理 \(input)", CustomWords.normalizePinyin(input) ?? "nil")
     }
     check(CustomWords.normalizePinyin("mail") == nil && CustomWords.normalizeCode("mail") == "mail"
