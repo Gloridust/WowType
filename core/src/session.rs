@@ -2326,6 +2326,8 @@ impl<'e> Session<'e> {
             CandidateKind::Emoji => {
                 let text = self.selected_text() + &chosen.commit;
                 self.finish(text);
+                // 打字推荐的 emoji：记进最近用过（表情面板里排最前）
+                crate::recent_emoji::remember(&chosen.emoji);
                 self.last_choice = Some(chosen);
             }
             CandidateKind::Plain if chosen.consumed >= remaining => {
