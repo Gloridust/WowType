@@ -347,6 +347,7 @@ final class AppState {
         ClipboardHistory.remember(text)
     }
 
+    /// 上屏里有学到的选词（Composer.onCommit 只在 frame->learned 时调）。
     func didCommit() {
         commitsSinceSave += 1
         if commitsSinceSave >= saveEvery {
@@ -362,13 +363,18 @@ final class AppState {
 
     func save(force: Bool = false) {
         guard let engine, force || commitsSinceSave > 0 else { return }
-        commitsSinceSave = 0
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-        if !engine.saveUserDict(userDictPath) {
+        let dictSaved = engine.saveUserDict(userDictPath)
+        if !dictSaved {
             NSLog("WowType: 保存用户词库失败")
         }
-        if !engine.saveHistory(historyPath) {
+        let historySaved = engine.saveHistory(historyPath)
+        if !historySaved {
             NSLog("WowType: 保存输入习惯失败")
+        }
+        // 两样都存上了才清零：存失败的那批下次接着存（和 Linux 一样）
+        if dictSaved && historySaved {
+            commitsSinceSave = 0
         }
     }
 }

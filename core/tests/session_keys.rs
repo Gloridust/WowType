@@ -16,7 +16,7 @@ use std::sync::Arc;
 use wowtype_core::datetime::LocalTime;
 use wowtype_core::lm::BigramLm;
 use wowtype_core::session::{
-    keysym, modifier, CandidateKind, Config, Frame, Key, Panel, Selection, Session,
+    keysym, modifier, CandidateKind, Config, Frame, Key, Panel, PunctStyle, Selection, Session,
 };
 use wowtype_core::{Engine, Lexicon, MemoryLexicon};
 
@@ -160,18 +160,22 @@ fn uppercase_kept_and_apostrophe() {
     assert_eq!(type_keys(&mut session, "Hello").preedit, "Hello");
     let mut session = fresh();
     assert_eq!(type_keys(&mut session, "xi'an").preedit, "xi'an");
+    // 开头的 ' 不是隔音符：没在打字，它是单引号，换成中文引号上屏
     let mut session = fresh();
-    assert!(!type_keys(&mut session, "'").handled);
+    assert_eq!(type_keys(&mut session, "'").commit.as_deref(), Some("‘"));
     assert!(!session.composing());
 }
 
 #[test]
 fn keys_without_candidates() {
     // 不带引擎（词库还没载入）：没有候选。空格、回车上屏原始输入，数字吃掉；
-    // 标点、翻页键、方向键还交给外壳（外壳先上屏再出标点，或者吃掉）
+    // 标点上屏原始输入再上屏标点；翻页键、方向键还交给外壳（外壳吃掉）
     let mut session = fresh();
     type_keys(&mut session, "shi");
-    for keys in [",", "<down>", "<pgdn>", "<tab>", "-"] {
+    assert_eq!(type_keys(&mut session, ",").commit.as_deref(), Some("shi，"));
+    let mut session = fresh();
+    type_keys(&mut session, "shi");
+    for keys in ["<down>", "<pgdn>", "<tab>"] {
         let frame = type_keys(&mut session, keys);
         assert!(!frame.handled, "{keys} 没有候选时归外壳");
         assert_eq!(frame.preedit, "shi");
@@ -770,12 +774,13 @@ fn digits_choose_on_the_page() {
     let (mut session, all) = default_paged();
     let frame = session.key(&Key::press(keysym::KP_0 + 2));
     assert_eq!(frame.commit.as_deref(), Some(all[1].as_str()));
-    let (mut session, _) = default_paged();
+    // 带 Shift 的数字（法语键盘打数字要按 Shift）不选词：先上屏光标处的候选，再上屏这个数字
+    let (mut session, all) = default_paged();
     let frame = session.key(&Key {
         modifiers: wowtype_core::session::modifier::SHIFT,
         ..Key::char('2')
     });
-    assert!(!frame.handled);
+    assert_eq!(frame.commit, Some(format!("{}2", all[0])));
 
     // 翻到第二页，数字按第二页选
     let (mut session, all) = default_paged();
@@ -822,17 +827,17 @@ fn paging_keys() {
         "最后一页再按 = 也吃掉"
     );
 
-    // 没打开的翻页键交给外壳（, . [ ] Tab 默认不翻页）
-    let (mut session, _) = default_paged();
-    for keys in [",", "[", "<tab>"] {
-        assert!(!type_keys(&mut session, keys).handled, "{keys}");
-    }
+    // 没打开的翻页键（, . [ ] Tab 默认不翻页）：标点先上屏候选再上屏标点，Tab 交给外壳
+    let (mut session, all) = default_paged();
+    assert!(!type_keys(&mut session, "<tab>").handled);
+    assert_eq!(type_keys(&mut session, ",").commit, Some(format!("{}，", all[0])));
 
-    // 只有一页：- 交给外壳（当标点）
+    // 只有一页：- 没页可翻，当符号：先上屏候选再上屏 -
     let mut session = with(many_engine());
     type_keys(&mut session, "nihao");
     assert!(session.frame(false).cand_count < 9 && !session.frame(false).has_next);
-    assert!(!type_keys(&mut session, "-").handled);
+    let frame = type_keys(&mut session, "-");
+    assert!(frame.commit.is_some_and(|c| c.ends_with('-')));
 }
 
 #[test]
@@ -853,8 +858,10 @@ fn configured_page_keys() {
     assert_eq!(session.key(&Key::press(keysym::ISO_LEFT_TAB)).cand_start, 5);
     assert_eq!(type_keys(&mut session, ",").cand_start, 0);
     assert_eq!(type_keys(&mut session, "[").cand_start, 0);
-    // - = 没打开：交给外壳
-    assert!(!type_keys(&mut session, "-").handled);
+    // - = 没打开：当符号，先上屏候选
+    let frame = type_keys(&mut session, "-");
+    assert!(frame.handled);
+    assert!(frame.commit.is_some_and(|c| c.ends_with('-')));
 }
 
 #[test]
@@ -1115,9 +1122,9 @@ fn semicolon_and_quote_select() {
     });
     assert_eq!(type_keys(&mut session, "'").preedit, "shi'");
 
-    // 不开：分号交给外壳（当标点）
-    let (mut session, _) = default_paged();
-    assert!(!type_keys(&mut session, ";").handled);
+    // 不开：分号是标点，先上屏候选
+    let (mut session, all) = default_paged();
+    assert_eq!(type_keys(&mut session, ";").commit, Some(format!("{}；", all[0])));
 
     // 第 2 个以后是第二页的：按这一页数
     let (mut session, all) = paged(Config {
@@ -1151,8 +1158,13 @@ fn shuangpin_semicolon_is_a_key_on_odd_count() {
     assert!(frame.handled);
     assert_eq!(session.input(), "x;");
     let frame = type_keys(&mut session, ";");
-    assert!(!frame.handled, "成对了：分号交给外壳");
-    assert_eq!(session.input(), "x;");
+    assert!(frame.handled);
+    assert!(
+        frame.commit.as_deref().is_some_and(|c| c.ends_with('；')),
+        "成对了：分号是标点，先上屏候选：{:?}",
+        frame.commit
+    );
+    assert!(!session.composing());
 }
 
 /// 分几次选出来的词，用一次就记住（https://x.com/so1v3/status/2120415675969896729）。
@@ -1400,11 +1412,11 @@ fn brackets_pick_first_or_last_char() {
 
 #[test]
 fn brackets_fall_through_when_nothing_to_pick() {
-    // 单字候选：交给外壳（外壳先上屏再出【】）
+    // 单字候选：没有字可取，[ 是标点：先上屏候选再上屏【
     let mut session = with(engine());
     type_keys(&mut session, "ba");
     assert_eq!(texts(&mut session)[0], "吧");
-    assert!(!type_keys(&mut session, "[").handled);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("吧【"));
 
     // 关掉以词定字，或者 [ ] 是翻页键：不取字
     let mut session = with(engine());
@@ -1413,13 +1425,120 @@ fn brackets_fall_through_when_nothing_to_pick() {
         ..Config::default()
     });
     type_keys(&mut session, "nihao");
-    assert!(!type_keys(&mut session, "[").handled);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("你好【"));
 
     let mut session = with(engine());
     session.configure(Config {
         page_keys: wowtype_core::session::page_keys::BRACKET,
         ..Config::default()
     });
+    // [ ] 是翻页键时不取字；第一页上按 [ 没页可翻，当标点（和只有一页时按 - 一样）
     type_keys(&mut session, "nihao");
-    assert_eq!(type_keys(&mut session, "[").commit, None);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("你好【"));
+}
+
+fn key_after(c: char, prev: Option<char>, hints: u32) -> Key {
+    Key {
+        prev_char: prev,
+        hints,
+        ..Key::char(c)
+    }
+}
+
+#[test]
+fn punctuation_when_not_composing() {
+    // 没在打字：有中文标点的换成中文标点上屏；没有的（/ + @）交给应用
+    let mut session = with(engine());
+    let frame = type_keys(&mut session, ",");
+    assert_eq!(frame.commit.as_deref(), Some("，"));
+    assert!(!frame.learned, "只上屏标点不算学到了词");
+    for keys in ["/", "+", "@"] {
+        assert!(!type_keys(&mut session, keys).handled, "{keys}");
+    }
+    // 半角样式：都交给应用
+    let mut session = with(engine());
+    session.configure(Config {
+        punct_style: PunctStyle::Halfwidth,
+        ..Config::default()
+    });
+    assert!(!type_keys(&mut session, ",").handled);
+}
+
+#[test]
+fn punctuation_after_digit_stays_ascii() {
+    // 应用给了光标前的字：数字后面的 . : , 保持英文（3.14、20:22、3,000）
+    let mut session = with(engine());
+    assert!(!session.key(&key_after('.', Some('3'), 0)).handled);
+    assert_eq!(session.key(&key_after('.', Some('好'), 0)).commit.as_deref(), Some("。"));
+    // 读不到周围文字：看会话自己记的上一个字（交给应用的数字也记）
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    assert!(!type_keys(&mut session, ".").handled, "3 后面的点保持英文");
+    assert!(!type_keys(&mut session, "1").handled);
+    assert!(!type_keys(&mut session, "4").handled);
+    assert_eq!(type_keys(&mut session, "nihao<sp>").commit.as_deref(), Some("你好"));
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+    // 数字交给应用以后又按了退格（也交给应用）：光标前是什么不知道了，点是句号
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    assert!(!type_keys(&mut session, "<bs>").handled);
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+}
+
+#[test]
+fn quotes_alternate_per_session() {
+    let mut a = with(engine());
+    let mut b = with(engine());
+    assert_eq!(type_keys(&mut a, "\"").commit.as_deref(), Some("“"));
+    // 另一个输入框里不受 a 的影响
+    assert_eq!(type_keys(&mut b, "\"").commit.as_deref(), Some("“"));
+    assert_eq!(type_keys(&mut a, "\"").commit.as_deref(), Some("”"));
+    assert_eq!(type_keys(&mut a, "'").commit.as_deref(), Some("‘"));
+    assert_eq!(type_keys(&mut a, "'").commit.as_deref(), Some("’"));
+}
+
+#[test]
+fn punctuation_while_composing_commits_candidate_first() {
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    let frame = type_keys(&mut session, ",");
+    assert_eq!(frame.commit.as_deref(), Some("你好，"));
+    assert!(frame.learned, "上屏的有引擎的候选");
+    assert!(!session.composing());
+    // 没有中文标点的符号原样跟在后面
+    type_keys(&mut session, "nihao");
+    assert_eq!(type_keys(&mut session, "/").commit.as_deref(), Some("你好/"));
+    // 数字后面的标点：候选上屏以后光标前是汉字，照样换成中文标点
+    type_keys(&mut session, "nihao");
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("你好。"));
+}
+
+#[test]
+fn auto_space_between_han_and_ascii() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::key_hints::NO_AUTO_SPACE;
+    let config = Config {
+        auto_space: LETTERS | DIGITS,
+        ..Config::default()
+    };
+    // 汉字后面打数字：会话自己上屏，补一个空格
+    let mut session = with(engine());
+    session.configure(config);
+    assert_eq!(session.key(&key_after('5', Some('第'), 0)).commit.as_deref(), Some(" 5"));
+    // 光标前是字母、读不到光标前的字、密码框：不补，数字交给应用
+    assert!(!session.key(&key_after('5', Some('a'), 0)).handled);
+    assert!(!session.key(&key_after('5', None, 0)).handled);
+    assert!(!session.key(&key_after('5', Some('第'), NO_AUTO_SPACE)).handled);
+    // 英文后面上屏汉字：前面补空格
+    let mut session = with(engine());
+    session.configure(config);
+    type_keys(&mut session, "niha");
+    session.key(&key_after('o', Some('x'), 0));
+    let frame = session.key(&key_after(' ', Some('x'), 0));
+    assert_eq!(frame.commit.as_deref(), Some(" 你好"));
+    // 关着（默认）不补
+    let mut session = with(engine());
+    type_keys(&mut session, "niha");
+    session.key(&key_after('o', Some('x'), 0));
+    assert_eq!(session.key(&key_after(' ', Some('x'), 0)).commit.as_deref(), Some("你好"));
 }

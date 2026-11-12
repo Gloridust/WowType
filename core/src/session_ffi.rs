@@ -12,6 +12,7 @@ use std::panic;
 use std::ptr;
 
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
+use crate::symbols::PunctStyle;
 use crate::session::{
     Candidate, CandidateKind, Config, Frame, Key, KeyAction, Panel, SelectKeys, Session,
 };
@@ -28,7 +29,11 @@ pub struct WowtypeKey {
     pub prev_char: u32,
     /// `WOWTYPE_KEY_ACTION_*`：外壳认出来的全局热键、候选框上的翻页按钮。
     pub action: u32,
+    /// 1.10 起：`WOWTYPE_KEY_HINT_*`。
+    pub hints: u32,
 }
+
+pub const WOWTYPE_KEY_HINT_NO_AUTO_SPACE: u32 = crate::session::key_hints::NO_AUTO_SPACE;
 
 pub const WOWTYPE_KEY_ACTION_NONE: u32 = 0;
 pub const WOWTYPE_KEY_ACTION_PREV_PAGE: u32 = 1;
@@ -68,6 +73,10 @@ pub struct WowtypeSessionConfig {
     pub select_keys: c_int,
     /// 1.8 起：以词定字（`[ ]` 取候选的第一个、最后一个字），默认 1。
     pub pick_char: c_int,
+    /// 1.10 起：0 全角、1 半角。
+    pub punct_style: c_int,
+    /// 1.10 起：自动补空格，`autospace::LETTERS | DIGITS`，0 关。
+    pub auto_space: u32,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -87,6 +96,8 @@ impl Default for WowtypeSessionConfig {
                 SelectKeys::SemicolonQuote => WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE,
             },
             pick_char: c_int::from(config.pick_char),
+            punct_style: c_int::from(config.punct_style == PunctStyle::Halfwidth),
+            auto_space: config.auto_space,
         }
     }
 }
@@ -110,6 +121,12 @@ impl WowtypeSessionConfig {
                 _ => SelectKeys::Off,
             },
             pick_char: self.pick_char != 0,
+            punct_style: if self.punct_style == 1 {
+                PunctStyle::Halfwidth
+            } else {
+                PunctStyle::Fullwidth
+            },
+            auto_space: self.auto_space,
         }
     }
 }
@@ -200,6 +217,8 @@ pub struct WowtypeFrame {
     pub wake_after_ms: u32,
     /// 1.7 起：这次调用忘掉了一个学过的词（Ctrl+Delete），外壳该马上存用户词库和输入习惯。
     pub forgot: c_int,
+    /// 1.10 起：这次上屏里有引擎学到的选词。
+    pub learned: c_int,
 }
 
 impl Default for WowtypeFrame {
@@ -218,6 +237,7 @@ impl Default for WowtypeFrame {
             has_next: 0,
             wake_after_ms: 0,
             forgot: 0,
+            learned: 0,
         }
     }
 }
@@ -295,6 +315,7 @@ impl WowtypeSession {
             has_prev: c_int::from(frame.has_prev),
             has_next: c_int::from(frame.has_next),
             forgot: c_int::from(frame.forgot),
+            learned: c_int::from(frame.learned),
             ..WowtypeFrame::default()
         };
         &self.frame
@@ -460,6 +481,7 @@ pub unsafe extern "C" fn wowtype_session_key(
         release: raw.release != 0,
         prev_char: char::from_u32(raw.prev_char).filter(|&c| c != '\0'),
         action: key_action(raw.action),
+        hints: raw.hints,
     };
     handle.run("key", |session| session.key(&key))
 }
@@ -699,6 +721,7 @@ mod tests {
             release: 1,
             prev_char: 0,
             action: 0,
+            hints: 0,
         };
         let frame = unsafe { &*wowtype_session_key(session, &key) };
         assert_eq!(frame.handled, 1);

@@ -186,9 +186,8 @@ public final class Composer {
     private(set) var engine: Engine?
     private(set) weak var client: TextClient?
     private var shiftTap = ShiftTap()
-    /// 最近上屏的字（给会话当上文排序），只留末尾一小段。
-    private var recent = ""
-    /// 每次上屏后调用（外壳用来定时保存学习数据）。
+    /// 上屏里有引擎学到的选词时调用（frame->learned；外壳攒够次数存一次学习数据）。
+    /// 只上屏了标点、emoji、计算结果的不调。
     public var onCommit: ((String) -> Void)?
     /// Ctrl+Delete 忘掉了学错的词以后调用（外壳马上存学习数据，免得重启又回来）。
     public var onForget: (() -> Void)?
@@ -450,6 +449,8 @@ public final class Composer {
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
+        config.punct_style = settings.halfwidthPunct ? 1 : 0
+        config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -460,16 +461,18 @@ public final class Composer {
         guard let c = key.ascii else {
             return false
         }
-        if key.isLetter {
-            // 大小写字母都开始编辑区（和 Linux 一样）：大写原样保留，Hello、iPhone 出英文候选
-            return sendToSession(key)
+        guard c > 0x20, c < 0x7f else {
+            return false
         }
-        if key.isDigit {
-            // 数字交给应用；汉字后面要补空格时自己上屏（第 5 章）
-            return autoSpaceKey(key)
+        // 都交给会话：字母开始编辑区（大写原样保留，Hello、iPhone 出英文候选）；
+        // 标点换成中文标点（半角样式、数字后面的、没有中文写法的交给应用）；
+        // 汉字后面打数字要补空格时会话自己上屏（第 5 章）
+        if sendToSession(key) {
+            return true
         }
-        if let text = punctuation(for: c) {
-            insert(text)
+        // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
+        if translating && !key.isLetter {
+            insert(String(UnicodeScalar(c)))
             return true
         }
         return false
@@ -482,31 +485,10 @@ public final class Composer {
         if sendToSession(key) {
             return true
         }
-        // 会话不管的键。展开面板里按了这种键，会话已经把面板收起来了，先重画
+        // 会话不管的键（标点、符号也是会话处理：先上屏候选再上屏标点）。展开面板里按了这种键，
+        // 会话已经把面板收起来了，先重画；其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
         refresh()
-        guard let c = key.ascii, c > 0x20, c < 0x7f, c != 0x27 else {
-            // 其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
-            return true
-        }
-        // 打字途中按标点、其他可见字符（/ + 等）：先上屏当前候选（光标停在句首词上时，
-        // 选完它还剩半句，接着选第一个候选，直到整句上屏），再上屏标点或这个字符
-        for _ in 0..<16 where isComposing {
-            commitCurrent()
-        }
-        insert(punctuation(for: c) ?? String(UnicodeScalar(c)))
         return true
-    }
-
-    /// 没在打拼音时 ' 是单引号（‘ ’ 交替）；打拼音途中它是隔音符，进不到这里。
-    /// 引号左右交替的状态在核心里，所以一个键只能调一次 wowtype_punct。
-    private func punctuation(for c: UInt8) -> String? {
-        guard wowtype_fullwidth_punct(Int32(c)) != nil else {
-            return nil
-        }
-        guard let text = wowtype_punct(Int32(c), punctStyle, Int32(bitPattern: previousCharacter)) else {
-            return String(UnicodeScalar(c))
-        }
-        return String(cString: text)
     }
 
     /// 光标前一个字：互译时是攒着的原文的最后一个字（3.14 的点、20:22 的冒号要原样进原文）。
@@ -524,7 +506,14 @@ public final class Composer {
         raw.keysym = key.keysym
         raw.modifiers = key.modifiers.rawValue
         raw.release = key.release ? 1 : 0
-        raw.prev_char = previousCharacter
+        if translating {
+            // 互译时上屏的字进原文：光标前的字是原文的最后一个字（3.14 的点、20:22 的冒号原样进原文），不补空格
+            raw.prev_char = previousCharacter
+            raw.hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE
+        } else {
+            // 应用告诉的才给（自己猜的给 0）：会话按它决定要不要补空格；数字后面的标点它自己也记
+            raw.prev_char = client.map { $0.previousCharacterIsReliable ? $0.previousCharacter : 0 } ?? 0
+        }
         guard let frame = wowtype_session_key(session, &raw) else {
             return false
         }
@@ -548,7 +537,12 @@ public final class Composer {
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
     private func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         if let frame, let commit = frame.pointee.commit {
-            insert(String(cString: commit))
+            // 会话已经补好了空格（insert 不再补）；互译时进原文
+            let text = String(cString: commit)
+            insert(text, spaced: true)
+            if frame.pointee.learned != 0 {
+                onCommit?(text)
+            }
             // 选的是打字推荐的 emoji：记进最近用过（表情面板里排最前）
             var info = WowtypeCandidateInfo()
             info.size = UInt32(MemoryLayout<WowtypeCandidateInfo>.size)
@@ -590,19 +584,17 @@ public final class Composer {
         return true
     }
 
-    /// 上屏：交给应用（要补空格时带上空格）；互译时进原文。
-    func insert(_ text: String) {
+    /// 上屏：交给应用（要补空格时带上空格；spaced：会话上屏的已经补过了）；互译时进原文。
+    /// 上文由会话自己记；存学习数据的回调只在会话上屏学到的词时调（见 apply）。
+    func insert(_ text: String, spaced: Bool = false) {
         guard !text.isEmpty else { return }
         if translating {
             translateSource += text
             translateSourceChanged(now: endsSentence(text))
             refresh()
         } else {
-            client?.insertText(needsAutoSpace(before: text) ? " " + text : text)
+            client?.insertText(!spaced && needsAutoSpace(before: text) ? " " + text : text)
         }
-        recent = String((recent + text).suffix(20))
-        wowtype_session_set_context(session, recent)
-        onCommit?(text)
     }
 
     func refresh() {

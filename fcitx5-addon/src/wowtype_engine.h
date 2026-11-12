@@ -295,8 +295,6 @@ private:
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
-    /// 按标点样式和光标前一个字符取标点；返回空串表示原样上屏 ASCII。
-    std::string punctFor(fcitx::InputContext *ic, WowtypeState *state, unsigned sym) const;
     bool handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
                            fcitx::KeyEvent &event);
     /// Shift 循环切换：中 → 英 → 译（配置了翻译服务才有）→ 中。
@@ -312,7 +310,8 @@ private:
     bool translateAvailable() const;
     std::string translateKeyFile() const;
     /// 上屏一段文字：互译模式下攒进原文，否则直接交给应用。所有上屏都走这里。
-    void emit(fcitx::InputContext *ic, const std::string &text);
+    /// autoSpace：要不要按光标前的字补空格（会话上屏的已经补过了，传 false）。
+    void emit(fcitx::InputContext *ic, const std::string &text, bool autoSpace = true);
     /// 上屏 next 之前要不要先补一个空格（光标前是汉字、next 是字母数字，或反过来）。
     bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
     /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
@@ -361,8 +360,12 @@ private:
     void syncSession(WowtypeState *state);
     /// 同步后交给会话处理一个按下的键；action 是 WOWTYPE_KEY_ACTION_*（fcitx5 全局的翻页、
     /// 移动候选热键）。返回会话的 frame（会话没建好时为 NULL）。
-    const WowtypeFrame *sessionKey(WowtypeState *state, const fcitx::Key &key,
+    /// 带上应用里光标前的字（prevChar）和输入框情况（密码框、互译时不自动补空格）。
+    const WowtypeFrame *sessionKey(fcitx::InputContext *ic, WowtypeState *state,
+                                   const fcitx::Key &key,
                                    uint32_t action = WOWTYPE_KEY_ACTION_NONE);
+    /// 应用里光标前一个字（Unicode 码位）；应用不报告周围文字时 0。
+    uint32_t prevChar(fcitx::InputContext *ic) const;
     /// 这个键对应的 fcitx5 全局翻页、移动候选热键（方向键不算，照横排竖排的规则走）。
     uint32_t keyAction(const fcitx::Key &key) const;
     /// 会话处理了一个键以后：上屏、记 emoji、照会话的候选框重画（或只挪页码和光标）。
@@ -376,9 +379,8 @@ private:
     bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
-    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；learned 时攒着存用户词库。
-    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
-                      bool learned);
+    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
+    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame);
     /// 上屏已选的词 + 还没选的原始输入（切输入法、打到一半切英文），原始输入也记一次选词。
     void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。

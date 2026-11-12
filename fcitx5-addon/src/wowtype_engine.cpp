@@ -499,9 +499,7 @@ public:
     /// 按了回车但译文还没好：好了就上屏。
     bool tpending_ = false;
     /// 光标前一个字符是数字（应用不报告周围文字时，靠这个判断小数点）。
-    bool afterDigit_ = false;
     /// emit 上屏次数，用来判断一次按键有没有自己上屏东西。
-    unsigned emits_ = 0;
 
     /// 全部原始输入（包括已经选过词的部分）。
     std::string input() const { return wowtype_session_input(session_); }
@@ -519,12 +517,16 @@ public:
     }
     /// 交给会话处理一个按下的键（keysym 为 0 时只有动作）。先用 WowtypeEngine::sessionKey
     /// 同步引擎和设置。返回的 frame 归会话，下一次调会话前有效。
-    const WowtypeFrame *sessionKey(uint32_t keysym, uint32_t modifiers, uint32_t action) {
+    /// prev_char：应用里光标前一个字（读不到给 0）；hints：WOWTYPE_KEY_HINT_*。
+    const WowtypeFrame *sessionKey(uint32_t keysym, uint32_t modifiers, uint32_t action,
+                                   uint32_t prevChar = 0, uint32_t hints = 0) {
         WowtypeKey raw{};
         raw.size = sizeof(raw);
         raw.keysym = keysym;
         raw.modifiers = modifiers;
         raw.action = action;
+        raw.prev_char = prevChar;
+        raw.hints = hints;
         return wowtype_session_key(session_, &raw);
     }
     void clear() {
@@ -1110,11 +1112,12 @@ void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text
 }
 
 void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
-                                 const WowtypeFrame *frame, bool learned) {
-    // 会话已经清空编辑区、记过选词；这里上屏、记上文、攒着存用户词库
+                                 const WowtypeFrame *frame) {
+    // 会话已经清空编辑区、记过选词、补好了空格；这里上屏、记上文、攒着存用户词库
     const std::string text = frame && frame->commit ? frame->commit : "";
+    const bool learned = frame && frame->learned;
     if (ic && !text.empty()) {
-        emit(ic, text);
+        emit(ic, text, false);
     }
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
@@ -1132,12 +1135,12 @@ void WowtypeEngine::commitInput(fcitx::InputContext *ic, WowtypeState *state) {
     if (!ic) {
         return;
     }
-    finishCommit(ic, state, wowtype_session_reset(state->session_, 1), true);
+    finishCommit(ic, state, wowtype_session_reset(state->session_, 1));
 }
 
 void WowtypeEngine::syncSession(WowtypeState *state) {
     wowtype_session_set_engine(state->session_, core_);
-    wowtype_session_set_context(state->session_, recent_.c_str());
+    // 上文由会话自己记（每个输入框一份），这里不再用全局的 recent_ 覆盖
     WowtypeSessionConfig config{};
     config.size = sizeof(config);
     config.page_size = static_cast<uint32_t>(pageSize_);
@@ -1154,15 +1157,44 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                              ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
                              : WOWTYPE_SELECT_KEYS_OFF;
     config.pick_char = pickChar_ ? 1 : 0;
+    config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
+    config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
     wowtype_session_configure(state->session_, &config);
 }
 
-const WowtypeFrame *WowtypeEngine::sessionKey(WowtypeState *state, const fcitx::Key &key,
-                                              uint32_t action) {
+const WowtypeFrame *WowtypeEngine::sessionKey(fcitx::InputContext *ic, WowtypeState *state,
+                                              const fcitx::Key &key, uint32_t action) {
     coreReady();
     syncSession(state);
+    uint32_t hints = 0;
+    // 密码框、网址框、邮箱框不自动补空格；互译时上屏的字进原文，也不补
+    if (!ic || translating(ic) ||
+        ic->capabilityFlags().testAny(
+            fcitx::CapabilityFlags{fcitx::CapabilityFlag::PasswordOrSensitive,
+                                   fcitx::CapabilityFlag::Url, fcitx::CapabilityFlag::Email})) {
+        hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE;
+    }
     return state->sessionKey(static_cast<uint32_t>(key.sym()),
-                             static_cast<uint32_t>(key.states()), action);
+                             static_cast<uint32_t>(key.states()), action, prevChar(ic), hints);
+}
+
+uint32_t WowtypeEngine::prevChar(fcitx::InputContext *ic) const {
+    // 应用报告了周围文字才知道光标前是什么；选中了文字时看选区前面那个字
+    if (!ic || !ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText)) {
+        return 0;
+    }
+    const auto &surrounding = ic->surroundingText();
+    if (!surrounding.isValid()) {
+        return 0;
+    }
+    const unsigned pos = std::min(surrounding.cursor(), surrounding.anchor());
+    const std::string &before = surrounding.text();
+    if (pos == 0 || pos > fcitx::utf8::length(before)) {
+        return 0;
+    }
+    const auto offset = fcitx::utf8::ncharByteLength(before.begin(), pos - 1);
+    const uint32_t prev = fcitx::utf8::getChar(before.begin() + offset, before.end());
+    return fcitx::utf8::isValidChar(prev) ? prev : 0;
 }
 
 uint32_t WowtypeEngine::keyAction(const fcitx::Key &key) const {
@@ -1203,7 +1235,7 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         const bool chosen = wowtype_session_last_choice(state->session_, &info) == 0;
         const int kind = chosen ? info.kind : WOWTYPE_CAND_WORD;
         const std::string emoji = chosen && info.emoji ? info.emoji : "";
-        finishCommit(ic, state, frame, kind == WOWTYPE_CAND_WORD);
+        finishCommit(ic, state, frame);
         if (kind == WOWTYPE_CAND_EMOJI) {
             rememberEmoji(emoji);
         }
@@ -1998,7 +2030,7 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
         return;
     }
     if (frame->commit) {
-        finishCommit(ic, state, frame, !chosen.emoji && !chosen.plain);
+        finishCommit(ic, state, frame);
         if (chosen.emoji) {
             rememberEmoji(chosen.emojiText);
         }
@@ -2011,7 +2043,7 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
 
 void WowtypeEngine::commitCurrent(fcitx::InputContext *ic, WowtypeState *state) {
     // 和按空格一样：上屏光标处的候选，没有候选时上屏原始输入
-    const WowtypeFrame *frame = sessionKey(state, fcitx::Key(FcitxKey_space));
+    const WowtypeFrame *frame = sessionKey(ic, state, fcitx::Key(FcitxKey_space));
     if (frame && frame->handled) {
         applySessionFrame(ic, state, frame);
     }
@@ -2040,24 +2072,6 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 记下光标前是不是数字（数字后的 . 是小数点）：这次按键自己没上屏东西时，
-    // 原样交给应用的数字键算数字，其他键（退格、方向键……）就不知道了，当不是。
-    struct DigitTracker {
-        WowtypeState *state;
-        unsigned emits;
-        bool digit;
-        bool modifier;
-        ~DigitTracker() {
-            if (state->emits_ == emits && !modifier) {
-                state->afterDigit_ = digit;
-            }
-        }
-    } digitTracker{state, state->emits_,
-                   key.isDigit() && !state->composing() &&
-                       !key.states().testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl,
-                                                              fcitx::KeyState::Alt,
-                                                              fcitx::KeyState::Super}),
-                   key.isModifier()};
 
     if (isEmojiKey(key)) {
         if (state->emojiPanel_) {
@@ -2100,7 +2114,7 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     if (state->composing() && (key.states().test(fcitx::KeyState::Ctrl) ||
                                key.states().test(fcitx::KeyState::Alt) ||
                                key.states().test(fcitx::KeyState::Super))) {
-        if (const WowtypeFrame *frame = sessionKey(state, key); frame && frame->handled) {
+        if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
             applySessionFrame(ic, state, frame);
             event.filterAndAccept();
             return;
@@ -2126,7 +2140,7 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         // （[Hotkey/PrevPage] 等，比如 , . 翻页）翻成动作一起交给会话：按了就算翻不动也吃掉，
         // 不让它变成标点把字上屏
         const bool wasExpanded = state->expanded_;
-        const WowtypeFrame *frame = sessionKey(state, key, keyAction(key));
+        const WowtypeFrame *frame = sessionKey(ic, state, key, keyAction(key));
         if (frame && frame->handled) {
             applySessionFrame(ic, state, frame);
             event.filterAndAccept();
@@ -2138,69 +2152,31 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             updateInputPanel(ic, state);
         }
 
-        // 打字途中按标点：先上屏当前候选，再上屏标点（全角样式是中文标点）
-        if (wowtype_fullwidth_punct(static_cast<int>(sym)) && sym != FcitxKey_apostrophe) {
-            // 光标停在句首词上时，选完它还剩半句：接着选第一个候选，直到整句上屏
-            for (int guard = 0; state->composing() && guard < 16; ++guard) {
-                commitCurrent(ic, state);
-            }
-            std::string text = punctFor(ic, state, sym);
-            if (text.empty()) {
-                text.assign(1, static_cast<char>(sym));
-            }
-            commitPlain(ic, text);
-            if (translating(ic)) {
-                updateInputPanel(ic, state);
-            }
-            event.filterAndAccept();
-            return;
-        }
-
-        // 其他可见字符（/ " + _ 等）：先上屏当前候选，再原样上屏这个字符
-        if (sym > FcitxKey_space && sym < FcitxKey_asciitilde + 1 && sym != FcitxKey_apostrophe &&
-            !((sym >= FcitxKey_a && sym <= FcitxKey_z) || (sym >= FcitxKey_A && sym <= FcitxKey_Z))) {
-            const std::string text(1, static_cast<char>(sym));
-            for (int guard = 0; state->composing() && guard < 16; ++guard) {
-                commitCurrent(ic, state);
-            }
-            commitPlain(ic, text);
-            if (translating(ic)) {
-                updateInputPanel(ic, state);
-            }
-            event.filterAndAccept();
-            return;
-        }
-
+        // 标点、符号（先上屏候选再上屏标点）也由会话处理了；会话不管的只剩下面这些
         // 编辑区里光标没法移动，这些键吃掉，免得应用里的光标乱跑
         if (key.isCursorMove() || sym == FcitxKey_Tab || sym == FcitxKey_Delete) {
             event.filterAndAccept();
             return;
         }
-    } else {
-        // 汉字后面直接打数字（第5章）：要补空格就自己上屏，否则照常交给应用
-        if (key.isDigit() && autoSpaceKey(ic, key)) {
-            event.filterAndAccept();
-            return;
-        }
-        // 没有正在输入的拼音时，把 ASCII 标点转成中文标点（映射表在 Rust 侧）。
-        // 没收录的（/ " + 等）、半角样式、数字后的小数点不处理，原样交给应用。
-        if (const std::string punct = punctFor(ic, state, sym); !punct.empty()) {
-            commitPlain(ic, punct);
-            if (translating(ic)) {
-                updateInputPanel(ic, state);
-            }
-            event.filterAndAccept();
-            return;
-        }
     }
 
-    // 没在打字时，字母（大写原样保留，Hello、iPhone 要用到）开始编辑区，由会话处理
+    // 没在打字时也交给会话：字母（大写原样保留，Hello、iPhone 要用到）开始编辑区；
+    // 标点换成中文标点（半角样式、数字后面的、没有中文写法的 / + 交给应用）；
+    // 汉字后面打数字要补空格时会话自己上屏（第5章）
     // （打字途中的键上面已经交给过会话了，会话不管的交给应用）
     if (state->composing()) {
         return;
     }
-    if (const WowtypeFrame *frame = sessionKey(state, key); frame && frame->handled) {
+    if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
         applySessionFrame(ic, state, frame);
+        event.filterAndAccept();
+        return;
+    }
+    // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
+    if (translating(ic) && sym > FcitxKey_space && sym <= FcitxKey_asciitilde &&
+        !((sym >= FcitxKey_a && sym <= FcitxKey_z) || (sym >= FcitxKey_A && sym <= FcitxKey_Z))) {
+        commitPlain(ic, std::string(1, static_cast<char>(sym)));
+        updateInputPanel(ic, state);
         event.filterAndAccept();
     }
 }
@@ -2288,37 +2264,6 @@ std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*en
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
-std::string WowtypeEngine::punctFor(fcitx::InputContext *ic, WowtypeState *state,
-                                    unsigned sym) const {
-    int prev = state->afterDigit_ ? '0' : 0;
-    // 没在打拼音时，应用报告了周围文字就以它为准（鼠标挪过光标也对）
-    if (!state->composing() &&
-        ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText) &&
-        ic->surroundingText().isValid()) {
-        const auto &surrounding = ic->surroundingText();
-        const std::string &text = surrounding.text();
-        const unsigned cursor = surrounding.cursor();
-        // cursor 按字符数算：找到光标前那个字符的首字节。只关心它是不是 ASCII 数字，
-        // 非 ASCII 字符一律当成「不是数字」。
-        prev = 0;
-        unsigned chars = 0;
-        std::size_t last = std::string::npos;
-        for (std::size_t i = 0; i < text.size() && chars < cursor; ++i) {
-            if ((static_cast<unsigned char>(text[i]) & 0xC0) != 0x80) {
-                last = i;
-                ++chars;
-            }
-        }
-        if (chars == cursor && last != std::string::npos) {
-            const auto byte = static_cast<unsigned char>(text[last]);
-            prev = byte < 0x80 ? byte : 0x4E00;
-        }
-    }
-    const char *punct = wowtype_punct(static_cast<int>(sym),
-                                      punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0, prev);
-    return punct ? punct : std::string();
-}
-
 bool WowtypeEngine::handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
                                       fcitx::KeyEvent &event) {
     const auto sym = event.key().sym();
@@ -2653,15 +2598,12 @@ std::string WowtypeEngine::translateKeyFile() const {
     return dir.empty() ? std::string() : dir + "/translate.key";
 }
 
-void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
+void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text, bool autoSpace) {
     if (!ic || text.empty()) {
         return;
     }
-    auto *st = ic->propertyFor(&factory_);
-    st->afterDigit_ = text.back() >= '0' && text.back() <= '9';
-    ++st->emits_;
     if (!translating(ic)) {
-        ic->commitString(needsAutoSpace(ic, text) ? " " + text : text);
+        ic->commitString(autoSpace && needsAutoSpace(ic, text) ? " " + text : text);
         return;
     }
     auto *state = ic->propertyFor(&factory_);
