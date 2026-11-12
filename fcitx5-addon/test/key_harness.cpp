@@ -732,9 +732,12 @@ void runCases(Instance &instance) {
         check(list && !list->hasNext() && list->currentPage() == list->totalPages() - 1 &&
                   list->usedNextBefore(),
               "列表 next 翻到最后一页");
+        // 最后一页有几个看词库（新词库下 shi 的最后一页可能只剩一个）：有第二个就按 2，否则按 1
         const auto last = page(ic.get());
-        type(ic.get(), "2");
-        check(last.size() > 1 && ic->committed == last[1], "接着数字按最后一页选，实际 " + ic->committed);
+        const std::size_t pick = last.size() > 1 ? 2 : 1;
+        type(ic.get(), std::to_string(pick));
+        check(!last.empty() && ic->committed == last[pick - 1],
+              "接着数字按最后一页选，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");

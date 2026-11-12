@@ -90,7 +90,10 @@ pub unsafe extern "C" fn wowtype_engine_new(
             Some(path) if !path.is_empty() => crate::lm::load_lm(path)?,
             _ => Arc::new(BigramLm::default()),
         };
-        Ok(Engine::new(lexicon, lm))
+        let engine = Engine::new(lexicon, lm);
+        // 外壳都在后台线程里载入引擎：模糊音索引（兜底默认开）也在这时建好，不留到第一次按键
+        engine.prepare_fuzzy();
+        Ok(engine)
     })();
 
     match result {
