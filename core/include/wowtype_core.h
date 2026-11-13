@@ -449,7 +449,7 @@ typedef struct {
                           * frame->aux 提示没有码表。引擎的双拼开关要关着 */
     int wubi_auto_commit; /* 1.10 起：五笔打满四码、只有一个候选时直接上屏，默认 1 */
     int wubi_hint;       /* 1.10 起：五笔逐码提示的候选后面显示还要打的码（WowtypeCandidateInfo.comment），默认 1 */
-    int prediction;      /* 1.10 起：联想，默认 0。选词上屏（空格、数字、点候选）以后，中文模式、光标前是汉字、
+    int prediction;      /* 1.10 起：联想，默认 0。选词上屏（空格、数字、点候选；五笔的自动上屏、顶字不算）以后，中文模式、光标前是汉字、
                           * 不是密码框（WOWTYPE_KEY_HINT_SENSITIVE）时，接着给出可能的下一个词：
                           * frame->panel 是 WOWTYPE_PANEL_PREDICTION，编辑区是空的，没有光标（cand_cursor = -1）。
                           * 数字键选（上屏、学这个搭配、接着联想），Esc 收起；别的键都收起联想再照常处理，
