@@ -14,8 +14,8 @@ use std::ptr;
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
 use crate::symbols::PunctStyle;
 use crate::session::{
-    Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys, Session,
-    ShiftToggle, Tool,
+    ArrowKeys, Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys,
+    Session, ShiftToggle, Tool,
 };
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
@@ -182,6 +182,9 @@ pub const WOWTYPE_SELECT_KEYS_OFF: c_int = 0;
 pub const WOWTYPE_SELECT_KEYS_SEMICOLON: c_int = 1;
 pub const WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE: c_int = 2;
 
+pub const WOWTYPE_ARROW_KEYS_CANDIDATES: c_int = 0;
+pub const WOWTYPE_ARROW_KEYS_CARET: c_int = 1;
+
 /// 会话的设置（C 布局）。外壳没填的字段（size 比我们认识的短）用默认值。
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -216,6 +219,8 @@ pub struct WowtypeSessionConfig {
     pub clipboard_history: c_int,
     /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
     pub shuangpin_keys: c_int,
+    /// 1.10 起：打字途中方向键做什么，`WOWTYPE_ARROW_KEYS_*`（#129），默认挑候选。
+    pub arrow_keys: c_int,
     /// 1.10 起：五笔（引擎要载入五笔码表），默认 0。
     pub wubi: c_int,
     /// 1.10 起：五笔四码唯一自动上屏，默认 1。
@@ -254,6 +259,10 @@ impl Default for WowtypeSessionConfig {
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
             shuangpin_keys: c_int::from(config.shuangpin_keys),
+            arrow_keys: match config.arrow_keys {
+                ArrowKeys::Candidates => WOWTYPE_ARROW_KEYS_CANDIDATES,
+                ArrowKeys::Caret => WOWTYPE_ARROW_KEYS_CARET,
+            },
             wubi: c_int::from(config.wubi),
             wubi_auto_commit: c_int::from(config.wubi_auto_commit),
             wubi_hint: c_int::from(config.wubi_hint),
@@ -302,6 +311,10 @@ impl WowtypeSessionConfig {
             toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
+            arrow_keys: match self.arrow_keys {
+                WOWTYPE_ARROW_KEYS_CARET => ArrowKeys::Caret,
+                _ => ArrowKeys::Candidates,
+            },
             wubi: self.wubi != 0,
             wubi_auto_commit: self.wubi_auto_commit != 0,
             wubi_hint: self.wubi_hint != 0,

@@ -45,3 +45,13 @@ dist/
 
 # onetake 宣发片工作目录（工具与成片都不入库）
 onetake/
+
+# 微信输入法本地资产：tools/wetype-assets/ 的导出、从安装目录拷出的文件，只在本机研究，一律不入库
+wetype-dump/
+*_vocab.tsv
+*.tokens.tsv
+imeData.bundle/
+swbd*.bin
+decgnr.bin
+mpd_e2e.bin
+nlrgpt2_nnlm.bin

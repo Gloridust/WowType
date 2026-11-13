@@ -221,7 +221,7 @@ def check_settings(spec, wc, home):
 
     # 选项列表：(界面上的名字, 存盘名)
     lists = {"ShuangpinScheme": wc.SHUANGPIN_SCHEMES, "ShiftToggle": wc.SHIFT_TOGGLES,
-             "InitialMode": wc.INITIAL_MODES,
+             "InitialMode": wc.INITIAL_MODES, "ArrowKeys": wc.ARROW_KEYS,
              "SelectKeys": wc.SELECT_KEYS, "PunctuationStyle": wc.PUNCT_STYLES}
     for key, items in lists.items():
         same([value for _label, value in items], enum_values(by_key[key]), f"设置界面：{key} 的选项")
@@ -237,6 +237,8 @@ def check_settings(spec, wc, home):
          "设置界面：EMOJI_KEYS")
     same([value for _label, value in wc.VOICE_KEYS], by_key["VoiceKey"]["presets"]["settings"],
          "设置界面：VOICE_KEYS")
+    same([value for _label, value in wc.TOGGLE_KEYS], by_key["ToggleKey"]["presets"]["settings"],
+         "设置界面：TOGGLE_KEYS")
     same_set([key for key, _label in wc.FUZZY_GROUPS], [s["key"] for s in mine if s.get("group") == "fuzzy"],
              "设置界面：FUZZY_GROUPS 的键")
 
