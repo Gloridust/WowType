@@ -276,7 +276,8 @@ if [[ -n "$NOTICES" ]]; then
 fi
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
-REV=4
+# 5：发布的词库开了 corpus（CI 的 data job 设 WOWTYPE_DATA_EXTRAS=corpus）。本机不开时内容和 4 一样、版本号却是 5。
+REV=5
 echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)

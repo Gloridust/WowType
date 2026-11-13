@@ -155,7 +155,22 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # 发布的词库开了可选数据源 corpus（Tatoeba 语料词频，评测见 docs/DATA.md §3.3）。
+      # Python 包版本和哈希钉死；下载的语料按 sha256 缓存，少连 archive.org（make-data.sh 照样校验）。
+      - name: 词库可选数据源要的 Python 包
+        run: |
+          python3 -m venv "$RUNNER_TEMP/data-venv"
+          "$RUNNER_TEMP/data-venv/bin/pip" install --require-hashes -r tools/requirements-data.txt
+          echo "$RUNNER_TEMP/data-venv/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/wowtype-data
+          key: wowtype-data-${{ hashFiles('scripts/make-data.sh') }}
+          restore-keys: wowtype-data-
       - run: scripts/make-data.sh "" dist/data
+        env:
+          WOWTYPE_DATA_EXTRAS: corpus
+          WOWTYPE_DATA_CACHE: ${{ runner.temp }}/wowtype-data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
         # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会开 issue 写好要改的内容。
@@ -554,7 +569,7 @@ jobs:
 
           或者下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\` 双击安装。安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
 
-          安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
+          安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词频另用了 [Tatoeba](https://tatoeba.org) 的中文句子（CC BY 2.0 FR）统计，词级语言模型 words.lm 是 CC BY-SA 4.0；详见安装包里的 DATA-SOURCE.txt。
 
           可选词库：\`wowtype-data-wanxiang-*.tar.gz\` 是从[万象拼音](https://github.com/amzxyz/rime_wanxiang)（CC BY 4.0）转换的词库，不在安装包里。
           想用的话在「WowType 设置 → 输入 → 词库」里选「万象拼音」并下载，或运行 \`wowtype-config --install-lexicon wanxiang\`；随时可以切回默认的雾凇。

@@ -231,6 +231,15 @@ jieba 新词的读音抽查（固定种子各抽 300 个，人工核对）：
 
 结论：只有 `corpus` 在三组留出用例上都不掉、短输入首选不变；`jieba`、`cedict` 在整句上看不出好处，留作可选。
 
+发布的词库（`.github/workflows/ci.yml` 的 data job）开了 `corpus`，词库修订号从 4 加到 5。本机想得到和发布一样的词库：
+
+```bash
+python3 -m pip install --require-hashes -r tools/requirements-data.txt   # 最好在 venv 里
+WOWTYPE_DATA_EXTRAS=corpus scripts/make-data.sh "" dist/data
+```
+
+不设时得到的是只有雾凇 + 手工表的词库，版本号（`VERSION`）却和发布的一样，别拿它去对发布包的 sha256。
+
 ## 4. Cell 词典（`cell_dict.*.zh`）
 
 运行中的 WeType 从
