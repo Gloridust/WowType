@@ -872,10 +872,8 @@ void WowtypeEngine::applyConfig() {
                        : name == "off" || name == "0" ? WowtypeShiftToggle::Off
                                                       : WowtypeShiftToggle::Both;
     }
-    // 关了 Shift 切换、也没另设切换键 / 互译键：切不回中文了，回到中文
-    const bool noModeKey = (*config_.toggleKey).sym() == FcitxKey_None &&
-                           (*config_.translateModeKey).sym() == FcitxKey_None;
-    if (shiftToggle_ == WowtypeShiftToggle::Off && noModeKey) {
+    toggleKey_ = *config_.toggleKey;
+    if (!canToggleMode()) { // 切不回中文了，回到中文
         asciiMode_ = false;
         translateMode_ = false;
     }
@@ -889,8 +887,6 @@ void WowtypeEngine::applyConfig() {
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
     emojiKey_ = *config_.emojiKey;
-    toggleKey_ = *config_.toggleKey;
-    translateModeKey_ = *config_.translateModeKey;
 
     // 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8）优先，none 关掉
     fcitx::Key key = *config_.voice ? *config_.voiceKey : fcitx::Key();
@@ -959,7 +955,7 @@ void WowtypeEngine::applyConfig() {
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
-             << " 中英键=" << toggleKey_.toString() << " 互译键=" << translateModeKey_.toString()
+             << " 中英键=" << toggleKey_.toString()
              << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
              << " 计算器=" << calculator_ << " 工具栏=" << toolbar_
              << " 剪贴板历史=" << clipboardHistory_ << " 互译=" << translateEnabled_ << "("
@@ -1032,33 +1028,12 @@ bool WowtypeEngine::isEmojiKey(const fcitx::Key &key) const {
     return emojiKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{emojiKey_});
 }
 
-bool WowtypeEngine::handleModeKey(fcitx::InputContext *ic, WowtypeState *state,
-                                  const fcitx::Key &key) {
-    auto is = [&key](const fcitx::Key &want) {
-        return want.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{want});
-    };
-    // 两个设成同一个键时算互译键
-    const bool translateKey = is(translateModeKey_);
-    if (!translateKey && !is(toggleKey_)) {
-        return false;
-    }
-    coreReady();
-    syncSession(state);
-    syncMode(ic, state);
-    bool ascii = false;
-    bool translate = false;
-    if (translateKey) {
-        // 在「译」里按：回中文；不在：进「译」（没开互译、没配好就不接）
-        if (!translateMode_ && !translateAvailable()) {
-            return false;
-        }
-        translate = !translateMode_;
-    } else {
-        // 中 ↔ 英；在「译」里按回中文
-        ascii = !asciiMode_ && !translateMode_;
-    }
-    switchMode(ic, state, ascii, translate, true);
-    return true;
+bool WowtypeEngine::isToggleKey(const fcitx::Key &key) const {
+    return toggleKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{toggleKey_});
+}
+
+bool WowtypeEngine::canToggleMode() const {
+    return shiftToggle_ != WowtypeShiftToggle::Off || toggleKey_.sym() != FcitxKey_None;
 }
 
 WowtypeEngine::~WowtypeEngine() {
@@ -1775,7 +1750,12 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         event.filterAndAccept();
         return;
     }
-    if (state->panel() == WOWTYPE_TOOL_NONE && handleModeKey(ic, state, key)) {
+    if (state->panel() == WOWTYPE_TOOL_NONE && isToggleKey(key)) {
+        // 另设的切换键：中 ↔ 英；在「译」里按回中文
+        coreReady();
+        syncSession(state);
+        syncMode(ic, state);
+        switchMode(ic, state, !asciiMode_ && !translateMode_, false, true);
         event.filterAndAccept();
         return;
     }
@@ -2019,10 +1999,8 @@ void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *stat
     if (initialMode_ == WowtypeInitialMode::Last) {
         return;
     }
-    // 关了 Shift 切换、也没另设切换键时不进英文：切不回中文
-    const bool english =
-        initialMode_ == WowtypeInitialMode::English &&
-        (shiftToggle_ != WowtypeShiftToggle::Off || toggleKey_.sym() != FcitxKey_None);
+    // 切不回中文时不进英文
+    const bool english = initialMode_ == WowtypeInitialMode::English && canToggleMode();
     if (english == asciiMode_ && !translateMode_) {
         return;
     }

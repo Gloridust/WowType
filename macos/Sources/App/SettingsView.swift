@@ -244,13 +244,6 @@ private let fuzzyGroups: [(String, WritableKeyPath<WowtypeConfig, Bool>)] = [
     ("uan = uang", \.fuzzyUan), ("en = eng", \.fuzzyEn), ("in = ing", \.fuzzyIn), ("un = ong", \.fuzzyUn),
 ]
 
-/// 快捷键下拉框的选项：预设几个键，文件里写了别的键时多一项「其他」（和 Linux 设置一样）。
-/// 键名同 wowtype.conf，空串是不用快捷键。
-private func shortcutOptions(_ presets: [(String, String)], current: Shortcut?) -> [(String, String)] {
-    let name = current?.name ?? ""
-    return presets.contains { $0.1 == name } ? presets : presets + [("其他（\(name)）", name)]
-}
-
 private struct InputPage: View {
     @ObservedObject var model: SettingsModel
     @Environment(\.palette) private var palette
@@ -319,11 +312,7 @@ private struct InputPage: View {
                       info: "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
                           + "Control+空格是 macOS 切换输入法的快捷键，系统先拿走，WowType 收不到："
                           + "要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里把它关掉。",
-                      selection: Binding(get: { model.config.toggleKey?.name ?? "" },
-                                         set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) }),
-                      options: shortcutOptions([("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
-                                                ("Control + Shift + 空格", "Control+Shift+space")],
-                                               current: model.config.toggleKey))
+                      selection: toggleKey, options: toggleKeyOptions)
         }
 
         PrefGroup("拼音") {
@@ -376,6 +365,19 @@ private struct InputPage: View {
                 SwitchRow(title: "汉字和数字之间", isOn: $model.config.autoSpaceDigits)
             }
         }
+    }
+
+    /// 键名同 wowtype.conf 的 ToggleKey；空串是不用
+    private var toggleKey: Binding<String> {
+        Binding(get: { model.config.toggleKey?.name ?? "" },
+                set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) })
+    }
+
+    private var toggleKeyOptions: [(String, String)] {
+        let options = [("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
+                       ("Control + Shift + 空格", "Control+Shift+space")]
+        let current = toggleKey.wrappedValue
+        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
     }
 
     private var schemeOptions: [(String, String)] {
@@ -515,15 +517,6 @@ private struct TranslatePage: View {
                   + "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。") {
             SwitchRow(title: "互译", subtitle: translateStatus, isOn: $model.config.translate)
             RowDivider()
-            PickerRow(title: "进出互译的快捷键",
-                      info: "按它直接进「译」，在「译」里再按回到中文，不用单按 Shift 一路切过去。"
-                          + "互译没打开、翻译没配好时这个键交给应用。",
-                      selection: Binding(get: { model.config.translateModeKey?.name ?? "" },
-                                         set: { model.config.translateModeKey = $0.isEmpty ? nil : Shortcut(name: $0) }),
-                      options: shortcutOptions([("不用（单按 Shift 照常）", ""), ("Control + Shift + Y", "Control+Shift+Y"),
-                                                ("Control + Shift + 空格", "Control+Shift+space")],
-                                               current: model.config.translateModeKey))
-            RowDivider()
             PickerRow(title: "翻译成", info: "中文翻成这种语言；这种语言（和别的外文）翻成中文。",
                       selection: $model.config.translateTarget, options: translateLanguages)
             RowDivider()
@@ -551,13 +544,8 @@ private struct TranslatePage: View {
         if !ready {
             return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
         }
-        if let key = model.config.translateModeKey {
-            let label = key.name.replacingOccurrences(of: "+", with: " + ")
-                .replacingOccurrences(of: "space", with: "空格")
-            return "按 \(label) 进出「译」" + (model.config.shiftToggle == .off ? "" : "；单按 Shift：中 → 英 → 译 → 中")
-        }
         if model.config.shiftToggle == .off {
-            return "「输入」页关掉了 Shift 切换，切不到「译」；可以设一个进出互译的快捷键"
+            return "「输入」页关掉了 Shift 切换，切不到「译」"
         }
         return "单按 Shift：中 → 英 → 译 → 中"
     }

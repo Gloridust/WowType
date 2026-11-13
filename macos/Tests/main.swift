@@ -642,7 +642,6 @@ do {
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
     all.toggleKey = Shortcut(name: "Control+space")
-    all.translateModeKey = Shortcut(name: "Control+Shift+Y")
     all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
@@ -1259,33 +1258,15 @@ do {
 }
 
 do {
-    // 另设的切换键、互译键（#143、#87），和 Linux 一样
-    let d = WowtypeConfig()
-    check(d.toggleKey == nil && d.translateModeKey == nil, "默认不用另设的切换键、互译键")
-    let parsed = WowtypeConfig.parse("ToggleKey=Control+space\nTranslateModeKey=Control+Shift+y")
-    check(parsed.toggleKey?.name == "Control+space" && parsed.translateModeKey?.name == "Control+Shift+Y",
-          "读出切换键、互译键", "\(parsed.toggleKey?.name ?? "nil") \(parsed.translateModeKey?.name ?? "nil")")
+    // 另设的切换键（#143），和 Linux 一样
+    check(WowtypeConfig().toggleKey == nil, "默认不用另设的切换键")
+    check(WowtypeConfig.parse("ToggleKey=Control+space").toggleKey?.name == "Control+space", "读出切换键")
     check(WowtypeConfig.parse("ToggleKey=Hyper+F12").toggleKey == nil, "认不出的键保持不用")
 
-    let r = translateRig {
-        $0.toggleKey = Shortcut(name: "Control+space")
-        $0.translateModeKey = Shortcut(name: "Control+Shift+Y")
-    }
-    check(r.c.handle(.char("Y", [.control, .shift])) && r.c.mode == .chinese, "在「译」里按互译键回中文")
-    check(r.c.handle(.char("Y", [.control, .shift])) && r.c.mode == .translate, "再按互译键进「译」")
+    let r = translateRig { $0.toggleKey = Shortcut(name: "Control+space") }
     check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "在「译」里按切换键回中文")
     check(r.c.handle(.char(" ", [.control])) && r.c.mode == .english, "切换键：中 → 英")
     check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "切换键：英 → 中")
-    r.t.isReady = false
-    check(!r.c.handle(.char("Y", [.control, .shift])) && r.c.mode == .chinese, "翻译没配好：互译键交给应用")
-
-    // 两个设成同一个键：算互译键
-    let same = translateRig {
-        $0.toggleKey = Shortcut(name: "Control+space")
-        $0.translateModeKey = Shortcut(name: "Control+space")
-    }
-    check(same.c.handle(.char(" ", [.control])) && same.c.mode == .chinese, "同一个键：在「译」里回中文")
-    check(same.c.handle(.char(" ", [.control])) && same.c.mode == .translate, "同一个键：再按进「译」")
 }
 
 withConfig({ $0.toggleKey = Shortcut(name: "Control+space") }) { c, client in

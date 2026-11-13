@@ -249,11 +249,10 @@ public final class Composer {
         refresh()
     }
 
-    /// 换设置。Shift 切换关掉、也没另设切换键 / 互译键时回到中文；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
+    /// 换设置。Shift 切换关掉、也没另设切换键时回到中文（切不回来了）；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
     public func apply(_ config: WowtypeConfig) {
         self.config = config
-        // 关了 Shift 切换、也没另设切换键 / 互译键：切不回中文了，回到中文
-        let noWayBack = config.shiftToggle == .off && config.toggleKey == nil && config.translateModeKey == nil
+        let noWayBack = config.shiftToggle == .off && config.toggleKey == nil
         if noWayBack || (mode == .translate && !translateAvailable) {
             switchMode(to: .chinese)
         }
@@ -341,7 +340,9 @@ public final class Composer {
         if openPanel != nil {
             return handleToolKey(key)
         }
-        if handleModeKey(key) {
+        if let toggleKey = config.toggleKey, toggleKey.matches(key) {
+            // 另设的切换键：中 ↔ 英；在「译」里按回中文
+            switchMode(to: mode == .chinese ? .english : .chinese)
             return true
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
@@ -407,27 +408,6 @@ public final class Composer {
         raw.modifiers = key.modifiers.rawValue
         raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
         wowtype_session_key(session, &raw)
-    }
-
-    /// 设置里另设的切换中 / 英、进出「译」快捷键（#143、#87），和 Linux 一样：两个一样时算进出「译」；
-    /// 进不了「译」（没开互译、没配好）时不接，交给应用。
-    private func handleModeKey(_ key: KeyInput) -> Bool {
-        if let translateModeKey = config.translateModeKey, translateModeKey.matches(key) {
-            if mode == .translate {
-                switchMode(to: .chinese)
-                return true
-            }
-            if translateAvailable {
-                switchMode(to: .translate)
-                return true
-            }
-            return false
-        }
-        if let toggleKey = config.toggleKey, toggleKey.matches(key) {
-            switchMode(to: mode == .chinese ? .english : .chinese)
-            return true
-        }
-        return false
     }
 
     /// 单按 Shift：中 → 英 → 译 → 中（没配好互译时只在中英之间切），和 Linux 一样。
