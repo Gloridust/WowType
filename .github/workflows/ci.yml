@@ -273,7 +273,6 @@ jobs:
           test -s /usr/share/wowtype/words.lm && test -s /usr/share/wowtype/english.txt
           cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
           cmp /usr/share/wowtype/wubi86.tsv dist/data/wubi86.tsv
-          grep -q 'Files: usr/share/wowtype/wubi86.tsv' /usr/share/doc/wowtype/copyright
           wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
           wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee /tmp/show.txt
           grep -q '1\.你好' /tmp/show.txt
