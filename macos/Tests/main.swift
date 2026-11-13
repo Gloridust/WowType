@@ -655,7 +655,7 @@ do {
         check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
         check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
     }
-    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nArrowKeys=Caret\nPageSize=4\n"),
           "文件里没有的键照模板顺序补在后面")
     check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
           "带空格、引号的值加引号转义", all.serialized(into: nil))
@@ -1078,6 +1078,8 @@ withConfig({ $0.arrowKeys = .caret }) { c, client in
     type(c, "x")
     check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nixhao",
           "字母插在光标处", client.marked)
+    _ = c.handle(.key(Keysym.backspace))
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nihao", "退格删光标前一个", client.marked)
     _ = c.handle(.key(Keysym.end))
     check(c.handle(.key(Keysym.right)) && client.page?.cursor == 0, "末尾的右键吃掉，不挑候选")
     _ = c.handle(.key(Keysym.down))
