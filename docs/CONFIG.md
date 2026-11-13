@@ -121,6 +121,7 @@ FuzzyUn=False
 TypoCorrection=True
 RareExtChars=False
 Shuangpin=False
+Wubi=False
 ShuangpinScheme=Ziranma
 ShiftToggle=Both
 Traditional=False
@@ -155,7 +156,7 @@ Lexicon=
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Wubi`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
 | `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |

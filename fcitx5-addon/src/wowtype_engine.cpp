@@ -790,6 +790,7 @@ void WowtypeEngine::maybeSwitchLexicon() {
     if (core_) {
         wowtype_engine_free(core_);
         core_ = nullptr;
+        wubiLoaded_ = false;
     }
     if (lexicon_ == wantedLexicon_) {
         WLOG_I() << "WowType: 词库文件换了，重新载入 " << lexicon_;
@@ -854,6 +855,7 @@ void WowtypeEngine::applyConfig() {
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     rareExt_ = envOr("WOWTYPE_RARE_EXT", *config_.rareExt);
     shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
+    wubi_ = envOr("WOWTYPE_WUBI", *config_.wubi);
     shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
     if (const char *env = std::getenv("WOWTYPE_SHUANGPIN_SCHEME"); env && *env) {
         // 环境变量设了方案就当作打开双拼（方便测试）
@@ -967,6 +969,19 @@ void WowtypeEngine::applyCoreSettings() {
     wowtype_engine_set_fuzzy(core_, fuzzy_ ? 1 : 0);
     wowtype_engine_set_fuzzy_groups(core_, fuzzyGroups_);
     wowtype_engine_set_shuangpin(core_, shuangpin_ ? 1 : 0);
+    wowtype_engine_set_wubi(core_, wubi_ ? 1 : 0);
+    if (wubi_ && !wubiLoaded_) {
+        const std::string path = findDataFile("WOWTYPE_WUBI", "wubi86.tsv");
+        if (!path.empty()) {
+            const int loaded = wowtype_engine_load_wubi(core_, path.c_str());
+            if (loaded > 0) {
+                wubiLoaded_ = true;
+                WLOG_I() << "WowType: 载入五笔码表 " << loaded << " 条";
+            } else {
+                WLOG_W() << "WowType: 五笔码表载入失败 " << path;
+            }
+        }
+    }
     if (wowtype_engine_set_shuangpin_scheme(core_, shuangpinScheme_.c_str()) != 0) {
         WLOG_W() << "WowType: 不认识双拼方案 " << shuangpinScheme_ << "，用自然码";
         wowtype_engine_set_shuangpin_scheme(core_, "ziranma");

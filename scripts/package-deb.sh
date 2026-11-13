@@ -100,6 +100,16 @@ engine)
   for f in lexicon.tsv english.txt words.lm; do
     install -Dm644 "$data/$f" "$stage/usr/share/wowtype/$f"
   done
+  # 五笔码表可选（scripts/make-wubi.sh 生成）
+  if [[ -f "$data/wubi86.tsv" ]]; then
+    install -Dm644 "$data/wubi86.tsv" "$stage/usr/share/wowtype/wubi86.tsv"
+  fi
+  if [[ -f "$data/WUBI-LICENSE" ]]; then
+    install -Dm644 "$data/WUBI-LICENSE" "$stage/usr/share/doc/wowtype/WUBI-LICENSE"
+  fi
+  if [[ -f "$data/WUBI-SOURCE.txt" ]]; then
+    install -Dm644 "$data/WUBI-SOURCE.txt" "$stage/usr/share/doc/wowtype/WUBI-SOURCE.txt"
+  fi
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
   install -Dm644 "$data/SOURCE.txt" "$doc/DATA-SOURCE.txt"

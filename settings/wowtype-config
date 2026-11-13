@@ -92,6 +92,7 @@ DEFAULTS = {
     "TypoCorrection": "True",
     "RareExtChars": "False",
     "Shuangpin": "False",
+    "Wubi": "False",
     "ShuangpinScheme": "Ziranma",
     "ShiftToggle": "Both",
     "Traditional": "False",
@@ -3230,6 +3231,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
             "ShuangpinScheme", self.scheme_names[row.get_selected()]))
         mode.add(self.scheme_row)
+        self.wubi_row = self.make_switch(
+            "Wubi", "五笔输入", "按五笔码出候选，需要 wubi86.tsv（scripts/make-wubi.sh 生成）")
+        mode.add(self.wubi_row)
         (self.shuangpin_check if self.values["Shuangpin"] == "True"
          else self.full_pinyin_check).set_active(True)
         self.shuangpin_check.connect("toggled", self.on_shuangpin_toggled)

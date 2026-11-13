@@ -74,6 +74,7 @@ public struct WowtypeConfig: Equatable {
     public var typoCorrection = true
     public var rareExtChars = false
     public var shuangpin = false
+    public var wubi = false
     public var shuangpinScheme = "Ziranma"
     public var shiftToggle = ShiftToggle.both
     public var traditional = false
@@ -201,7 +202,7 @@ public struct WowtypeConfig: Equatable {
         "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
-        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShiftToggle", "Traditional",
+        "TypoCorrection", "RareExtChars", "Shuangpin", "Wubi", "ShuangpinScheme", "ShiftToggle", "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
@@ -216,7 +217,7 @@ public struct WowtypeConfig: Equatable {
         "FuzzyNL": \.fuzzyNL, "FuzzyFH": \.fuzzyFH, "FuzzyRL": \.fuzzyRL, "FuzzyAn": \.fuzzyAn,
         "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
         "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
-        "Shuangpin": \.shuangpin, "Traditional": \.traditional, "PickChar": \.pickChar,
+        "Shuangpin": \.shuangpin, "Wubi": \.wubi, "Traditional": \.traditional, "PickChar": \.pickChar,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
@@ -419,6 +420,7 @@ public struct WowtypeConfig: Equatable {
         # 双拼；方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
         # Ziguang 紫光、PinyinJiajia 拼音加加
         Shuangpin=\(b(d.shuangpin))
+        Wubi=\(b(d.wubi))
         ShuangpinScheme=\(d.shuangpinScheme)
 
         # 单按哪个 Shift 切中英文：Both、Left、Right、Off

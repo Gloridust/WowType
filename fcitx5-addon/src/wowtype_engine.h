@@ -160,6 +160,7 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
     fcitx::Option<bool> rareExt{this, "RareExtChars", "候选末尾列出扩展 B 区以后的生僻字", false};
     fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
+    fcitx::Option<bool> wubi{this, "Wubi", "五笔输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
         shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
@@ -506,6 +507,9 @@ private:
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;
+    /// 五笔模式；码表载入成功才算可用。
+    bool wubi_ = false;
+    bool wubiLoaded_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
