@@ -157,7 +157,7 @@ jobs:
       - run: scripts/make-data.sh "" dist/data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
-        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会开 issue 写好要改的内容。
+        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会自动开 PR 改好（.github/scripts/nix-data-pr.sh）。
         run: |
           built=$(<dist/data/VERSION)
           pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
