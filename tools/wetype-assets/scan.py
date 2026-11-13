@@ -60,6 +60,8 @@ def main():
         info = meta.get(name, {})
         rows.append({"name": name, **stats(path),
                      "dict_type": info.get("dict_type"), "is_cell": info.get("is_cell")})
+    if not rows:
+        sys.exit(f"{args.dir} 里没有文件：目录不对？")
 
     if args.json:
         print_json(rows)

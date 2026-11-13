@@ -15,8 +15,9 @@ import collections
 import os
 import re
 
-from _common import IME_DATA, need, print_json, read_bytes, run
+from _common import IME_DATA, FormatError, need, print_json, read_bytes, run
 
+MAGIC = bytes.fromhex("029d300300130001")  # 3.0.x 的 swbd86/98/nc 开头都是这 8 字节
 TAIL = 0x21  # 构造函数用 size - 0x21 切出正文，末尾 33 字节是单独的结构
 CODE_RUN = re.compile(rb"[a-y]{2,4}(?=[^a-z])")
 
@@ -57,6 +58,8 @@ def ascii_code_region(data):
 def analyse(path):
     data = read_bytes(path)
     need(data, 0, 16 + TAIL, "文件头和尾部")
+    if not data.startswith(MAGIC):
+        raise FormatError(f"{path}：开头是 {data[:8].hex()}，不是五笔词典容器（应为 {MAGIC.hex()}）")
     count, first, last, lengths = scan_records(data)
     return {
         "path": path,

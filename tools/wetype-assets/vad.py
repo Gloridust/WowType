@@ -11,6 +11,7 @@
 
 import argparse
 import os
+import sys
 
 from _common import VAD_DIR, FormatError, need_dir, print_json, read_bytes, run, unpack
 
@@ -76,18 +77,22 @@ def main():
         path = os.path.join(args.dir, name)
         if not os.path.isfile(path):
             continue
-        report["files"].append(name)
         if name.startswith("configure"):
             report["config"] = parse_config(path)
         elif name.startswith("CMS"):
             report["cms"] = parse_cms(path)
         elif name.startswith("model"):
             report["model"] = parse_model(path)
+        else:
+            continue
+        report["files"].append(name)
+    if not report["files"]:
+        sys.exit(f"{args.dir} 里没有 configure*/CMS*/model* 文件：目录不对或版本变了")
 
     if args.json:
         print_json(report)
         return
-    print("文件：", "、".join(report["files"]) or "（空）")
+    print("文件：", "、".join(report["files"]))
     if report["config"]:
         section = report["config"].get("wx_asr_vad") or next(iter(report["config"].values()), {})
         print("配置：")
@@ -105,8 +110,6 @@ def main():
             print(f"  {c['name']} {c['shape']}：{c['floats']:,} 个 float{mark}")
         if not any(c["match"] for c in m["candidates"]):
             print("  （没有完全吻合的层结构，文件里还有别的段）")
-    if not (report["config"] or report["cms"] or report["model"]):
-        print("没认出 configure*/CMS*/model* 文件，目录不对或版本变了")
 
 
 if __name__ == "__main__":

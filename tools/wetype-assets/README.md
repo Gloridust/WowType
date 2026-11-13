@@ -28,7 +28,7 @@ WowType 的发行包和任何构建脚本都不会包含或获取它们。WowTyp
 | `scan.py [imeData.bundle]` | 词典目录 | 每个文件的大小、`index.json` 里的 dict_type、头 16 字节、可打印比例 |
 | `dump_xllm.py [decgnr.bin] [--tokens 路径]` | XLLM 模型容器 | 头、配置 JSON（超参数）、分词器类型和词表条数、张量蓝图（名字/形状/dtype） |
 | `vad.py [vad 目录]` | `Resources/vad/` | VAD 时序配置、CMS 维度、DNN 头部和几种层结构的参数量比对 |
-| `wubi.py [swbd*.bin …]` | 五笔词典容器 | 文件头、`50 01` 值记录的条数/偏移范围/字数分布、ASCII 码区范围（**不输出词条**） |
+| `wubi.py [swbd*.bin …]` | 五笔词典容器 | 文件头、`50 01` 值记录的条数/偏移范围/字数分布、ASCII 码区范围（**不输出词条**）；开头不是 `029d300300130001` 时报格式不符 |
 
 `_common.py` 是共用的读文件、边界检查、安全写出。
 
@@ -75,9 +75,15 @@ swbd98.bin：38,624 条；swbdnc.bin：37,766 条
 
 ### 行为规则（只记选项，不取数据）
 
-微信输入法的五笔设置（设置项文字和本机设置存储里的键名）：输入方案是**一个单选**（拼音 / 双拼 / 五笔……），
-五笔另有「方案」（86 / 98 / 新世纪）和四个开关——五笔编码提示（`enableComment`）、四码唯一上屏（`emitUniqueCandidate`）、
-五笔拼音混输（`enablePinyin`）、第五码首选词上屏（`emitWhenInputNextRune`）。本机存储里的值依次是 开、开、开、关。
+看到的（只读）：
+- 程序里有「五笔编码提示」「四码唯一上屏」「五笔拼音混输」「第五码首选词上屏」四个设置项文字，和「86五笔」；
+- 用户设置存储（`~/Library/Application Support/WeType/mmkv/wetype.settings`，不在安装目录里）有 `InputScheme`、
+  `ShuangpinScheme`、`WubiScheme` 三个方案键，和一个 `WubiConfig` JSON，键为 `enableComment`、`emitUniqueCandidate`、
+  `enablePinyin`、`emitWhenInputNextRune`，本机值依次是 开、开、开、关。
+
+推断的（没有直接看到）：输入方案是一个单选；四个 JSON 键按名字对应上面四个设置项；
+`WubiScheme` 对应 86 / 98 / 新世纪，因为词典目录里有 `swbd86/98/nc.bin`，98、新世纪的文字没找到；
+本机值是不是出厂默认也无法确认。
 这些规则用于 WowType 五笔模式的设计，见 `docs/plans/wubi-design.md`（随 #193 合入）。
 
 ## 贡献注意
