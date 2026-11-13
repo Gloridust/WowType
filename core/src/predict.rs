@@ -51,6 +51,7 @@ impl Engine {
         }
         found.retain(|(word, score, _)| {
             let floor = if word.chars().count() == 1 { MIN_SINGLE_LOGP } else { MIN_LOGP };
+            // 刚打过的不再给（明天见 → 明天见）
             *score >= floor && *word != prev && word.chars().all(is_han)
         });
         // 和最好的差多少按语言模型给的分比：用过的词排到前面，但不把别的挤掉
@@ -64,8 +65,8 @@ impl Engine {
                 break;
             }
             let shown = self.shown_text(&word);
-            // 刚打过的（明天见 → 明天见）、繁体转换后重了的不给
-            if context.ends_with(&shown) || out.iter().any(|(w, _)| *w == shown) {
+            // 繁体转换后重了的不给
+            if out.iter().any(|(w, _)| *w == shown) {
                 continue;
             }
             out.push((shown, score));
