@@ -66,6 +66,12 @@ LEXICON_CANDIDATES = [
     os.path.join(DATA_DIR, "lexicon.tsv"),
     "/usr/share/wowtype/lexicon.tsv",
 ]
+# 五笔码表，和插件找数据文件的顺序一样：环境变量、用户数据目录、系统目录
+WUBI_CANDIDATES = [
+    os.environ.get("WOWTYPE_WUBI", ""),
+    os.path.join(DATA_DIR, "wubi86.tsv"),
+    "/usr/share/wowtype/wubi86.tsv",
+]
 
 # 键名、默认值、范围、下面各选项列表以 spec/config.json 为准（设置契约，插件和 macOS 也对照它）；
 # 改这些要先改规格，scripts/test-config-contract.py 对照
@@ -96,9 +102,13 @@ DEFAULTS = {
     "FuzzyEngOng": "False",
     "TypoCorrection": "True",
     "RareExtChars": "False",
+    "InputScheme": "Quanpin",
+    # 旧版的双拼开关：写文件时跟着 InputScheme 写，旧版本读得懂；读的时候只在没有 InputScheme 时看它
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
     "ShuangpinShowKeys": "False",
+    "WubiAutoCommit": "True",
+    "WubiHint": "True",
     "ShiftToggle": "Both",
     "InitialMode": "Chinese",
     "Traditional": "False",
@@ -168,6 +178,13 @@ TRANSLATE_PROVIDERS = [
     ("其他（自己填地址）", "", ""),
 ]
 
+# 输入方案（存盘名和插件的 WowtypeInputScheme 一致）
+INPUT_SCHEMES = [
+    ("拼音输入", "Quanpin"),
+    ("双拼输入", "Shuangpin"),
+    ("五笔输入", "Wubi86"),
+]
+
 # 双拼方案（存盘名和插件的 WowtypeShuangpinScheme 一致）
 SHUANGPIN_SCHEMES = [
     ("自然码", "Ziranma"),
@@ -233,6 +250,7 @@ INITIAL_MODES = [
 ENUMS = {
     "CandidateLayout": ("Horizontal", "Vertical"),
     "ArrowKeys": tuple(value for _label, value in ARROW_KEYS),
+    "InputScheme": tuple(value for _label, value in INPUT_SCHEMES),
     "ShuangpinScheme": tuple(value for _label, value in SHUANGPIN_SCHEMES),
     "ShiftToggle": tuple(value for _label, value in SHIFT_TOGGLES),
     "InitialMode": tuple(value for _label, value in INITIAL_MODES),
@@ -394,7 +412,20 @@ def read_config():
     # 0.3.10 及以前没有 TranslateLocal：已经填好翻译接口的，接着用接口（设置里默认是本地模型）
     if "TranslateLocal" not in seen and values["TranslateBaseUrl"].strip():
         values["TranslateLocal"] = "False"
-    return values, extra
+    # 0.3.12 及以前没有 InputScheme，只有 Shuangpin 开关
+    if "InputScheme" not in seen and values["Shuangpin"] == "True":
+        values["InputScheme"] = "Shuangpin"
+    return with_legacy_shuangpin(values), extra
+
+
+def with_legacy_shuangpin(values):
+    """Shuangpin（旧版的双拼开关）跟着 InputScheme：旧版本读到的也是现在的方案（五笔在旧版本里是全拼）。"""
+    return {**values, "Shuangpin": "True" if values["InputScheme"] == "Shuangpin" else "False"}
+
+
+def find_wubi_table():
+    """五笔码表的路径，找不到是 None（设置里五笔灰掉，说清楚为什么）。"""
+    return next((path for path in WUBI_CANDIDATES if path and os.path.isfile(path)), None)
 
 
 def write_atomic(path, text):
@@ -413,6 +444,7 @@ def quote_value(value):
 
 
 def write_config(values, extra):
+    values = with_legacy_shuangpin(values)
     lines = [f"{key}={quote_value(values[key])}" for key in DEFAULTS]
     write_atomic(CONFIG_FILE, "\n".join(lines + extra) + "\n")
 
@@ -1378,6 +1410,7 @@ def collect_diagnostics():
                  os.path.join(DATA_DIR, "english.txt"), "/usr/share/wowtype/english.txt",
                  os.environ.get("WOWTYPE_LM", ""),
                  os.path.join(DATA_DIR, "words.lm"), "/usr/share/wowtype/words.lm",
+                 *WUBI_CANDIDATES,
                  os.path.join(DATA_DIR, "lexicon.tsv.wcache"),
                  os.path.join(DATA_DIR, "wetype", "nlrgpt2_nnlm.bin"),
                  VOICE_MODEL_DIR]:
@@ -3556,17 +3589,11 @@ class SettingsWindow(Adw.ApplicationWindow):
         page = self.new_page()
         page.add(self.build_lexicon())
 
-        mode = Adw.PreferencesGroup(title="输入方式")
-        self.full_pinyin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
-        self.shuangpin_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.full_pinyin_check)
-        full_row = Adw.ActionRow(title="拼音输入", subtitle="全拼，也能只打声母")
-        full_row.add_prefix(self.full_pinyin_check)
-        full_row.set_activatable_widget(self.full_pinyin_check)
-        sp_row = Adw.ActionRow(title="双拼输入", subtitle="每个字打两个键")
-        sp_row.add_prefix(self.shuangpin_check)
-        sp_row.set_activatable_widget(self.shuangpin_check)
-        mode.add(full_row)
-        mode.add(sp_row)
+        mode = Adw.PreferencesGroup(title="输入方案")
+        has_wubi = find_wubi_table() is not None
+        subtitles = {"Quanpin": "全拼，也能只打声母", "Shuangpin": "每个字打两个键",
+                     "Wubi86": "86 版，z 键临时打拼音" if has_wubi
+                     else "没有找到五笔码表 wubi86.tsv，重新安装 WowType 可以修好"}
         self.scheme_names = [name for _, name in SHUANGPIN_SCHEMES]
         self.scheme_row = Adw.ComboRow(
             title="双拼方案", model=Gtk.StringList.new([label for label, _ in SHUANGPIN_SCHEMES]))
@@ -3575,13 +3602,27 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.scheme_names.index(current) if current in self.scheme_names else 0)
         self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
             "ShuangpinScheme", self.scheme_names[row.get_selected()]))
-        mode.add(self.scheme_row)
-        self.show_keys_row = self.make_switch(
-            "ShuangpinShowKeys", "编辑区显示打的键", "不翻成全拼，中英混打时看得出打了什么")
-        mode.add(self.show_keys_row)
-        (self.shuangpin_check if self.values["Shuangpin"] == "True"
-         else self.full_pinyin_check).set_active(True)
-        self.shuangpin_check.connect("toggled", self.on_shuangpin_toggled)
+        # 选了这个方案才出的设置
+        self.scheme_rows = {
+            "Shuangpin": [self.scheme_row, self.make_switch(
+                "ShuangpinShowKeys", "编辑区显示打的键", "不翻成全拼，中英混打时看得出打了什么")],
+            "Wubi86": [self.make_switch("WubiAutoCommit", "四码唯一自动上屏", "打满四码、只有一个字词时直接上屏"),
+                       self.make_switch("WubiHint", "编码提示", "候选后面显示还要打的码")],
+        }
+        self.scheme_checks = {}
+        for label, scheme in INPUT_SCHEMES:
+            check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.scheme_checks.get("Quanpin"))
+            row = Adw.ActionRow(title=label, subtitle=subtitles[scheme])
+            row.add_prefix(check)
+            row.set_activatable_widget(check)
+            row.set_sensitive(has_wubi or scheme != "Wubi86")
+            mode.add(row)
+            for extra in self.scheme_rows.get(scheme, []):
+                mode.add(extra)
+            self.scheme_checks[scheme] = check
+        self.scheme_checks[self.values["InputScheme"]].set_active(True)
+        for scheme, check in self.scheme_checks.items():
+            check.connect("toggled", self.on_scheme_toggled, scheme)
         page.add(mode)
 
         switch = Adw.PreferencesGroup(title="中英文切换")
@@ -3656,7 +3697,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(pinyin)
 
         extras = Adw.PreferencesGroup(title="快捷输入")
-        extras.add(self.make_switch("DateTime", "日期和时间", "打 riqi、shijian、xingqi"))
+        extras.add(self.make_switch("DateTime", "日期和时间", "打 riqi、shijian、xingqi（五笔前面加 z）"))
         self.calc_row = self.make_switch("Calculator", "计算器", None)
         extras.add(self.calc_row)
         self.toolbar_row = self.make_switch("Toolbar", "工具栏", None)
@@ -3687,21 +3728,24 @@ class SettingsWindow(Adw.ApplicationWindow):
         auto_space.add_row(self.make_switch("AutoSpaceDigits", "汉字和数字之间", None))
         extras.add(auto_space)
         page.add(extras)
-        self.show_shuangpin(self.values["Shuangpin"] == "True")
+        self.show_scheme(self.values["InputScheme"])
         return page
 
-    def show_shuangpin(self, on):
-        """双拼方案只在双拼时显示；双拼时计算器换成大写 V，工具栏灰掉，副标题说为什么。"""
-        self.scheme_row.set_visible(on)
-        self.show_keys_row.set_visible(on)
-        self.calc_row.set_subtitle("双拼时打大写 V：V1+2*3 → 7" if on else "v1+2*3 → 7")
-        self.toolbar_row.set_sensitive(not on)
-        self.toolbar_row.set_subtitle("双拼时不可用" if on else "打 v 再按空格：剪贴板、常用语、符号、表情")
+    def show_scheme(self, scheme):
+        """双拼、五笔各自的设置只在选了它时显示；双拼、五笔时 v 是字母键：计算器换成大写 V，
+        工具栏灰掉，副标题说为什么。"""
+        for owner, rows in self.scheme_rows.items():
+            for row in rows:
+                row.set_visible(owner == scheme)
+        name = {"Shuangpin": "双拼", "Wubi86": "五笔"}.get(scheme)
+        self.calc_row.set_subtitle(f"{name}时打大写 V：V1+2*3 → 7" if name else "v1+2*3 → 7")
+        self.toolbar_row.set_sensitive(not name)
+        self.toolbar_row.set_subtitle(f"{name}时不可用" if name else "打 v 再按空格：剪贴板、常用语、符号、表情")
 
-    def on_shuangpin_toggled(self, check):
-        on = check.get_active()
-        self.show_shuangpin(on)
-        self.set_value("Shuangpin", "True" if on else "False")
+    def on_scheme_toggled(self, check, scheme):
+        if check.get_active():
+            self.show_scheme(scheme)
+            self.set_value("InputScheme", scheme)
 
     # ---------------- 表情
 
@@ -5067,7 +5111,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.page_row.set_value(int(DEFAULTS["PageSize"]))
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")
-            self.full_pinyin_check.set_active(True)
+            self.scheme_checks[DEFAULTS["InputScheme"]].set_active(True)
             self.scheme_row.set_selected(0)
             self.shift_row.set_selected(0)
             self.fuzzy_row.set_enable_expansion(False)

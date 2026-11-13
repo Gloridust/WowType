@@ -80,11 +80,14 @@ public final class Engine {
 
     /// 简繁对照表载入过没有（繁体输出要用，第一次打开繁体时才读）。
     public private(set) var conversionLoaded = false
+    /// 五笔码表载入过没有（选了五笔才读）。
+    public private(set) var wubiLoaded = false
 
-    /// 设置里管引擎的部分（模糊音、纠错、双拼、生僻字、繁体），和 Linux 的 applyCoreSettings 一样。
-    /// conversion 是简繁对照表 s2t.tsv 的路径，没有就不出繁体。返回要记日志的问题。
+    /// 设置里管引擎的部分（模糊音、纠错、双拼、生僻字、繁体、五笔码表），和 Linux 的 applyCoreSettings 一样。
+    /// conversion 是简繁对照表 s2t.tsv 的路径，没有就不出繁体；wubi 是五笔码表 wubi86.tsv 的路径，
+    /// 没有时五笔照全拼打（候选框上方会话会说）。返回要记日志的问题。
     @discardableResult
-    public func apply(_ config: WowtypeConfig, conversion: String? = nil) -> [String] {
+    public func apply(_ config: WowtypeConfig, conversion: String? = nil, wubi: String? = nil) -> [String] {
         var problems: [String] = []
         wowtype_engine_set_fuzzy(handle, config.fuzzy ? 1 : 0)
         wowtype_engine_set_fuzzy_groups(handle, config.fuzzyGroups)
@@ -103,6 +106,13 @@ public final class Engine {
             }
         }
         wowtype_engine_set_traditional(handle, config.traditional && conversionLoaded ? 1 : 0)
+        if config.wubi && !wubiLoaded {
+            if let wubi, wowtype_engine_load_wubi(handle, wubi) > 0 {
+                wubiLoaded = true
+            } else {
+                problems.append("五笔码表载入失败 \(wubi ?? "（没有 wubi86.tsv）")，先按全拼打")
+            }
+        }
         return problems
     }
 
@@ -114,6 +124,8 @@ public final class Engine {
 /// 候选框要画的东西（会话给的这一页，或展开面板的这一屏）。
 public struct CandidatePage: Equatable {
     public var texts: [String]
+    /// 每个候选后面的小字（五笔还要打的码、z 临时拼音反查的五笔码），和 texts 一样长；没有的是空串
+    public var comments: [String] = []
     /// 光标在 texts 里的第几个；-1 不在这一页上（翻页翻走以后）
     public var cursor: Int
     public var hasPrev: Bool
@@ -127,6 +139,11 @@ public struct CandidatePage: Equatable {
     /// 互译时候选上下多出来的两行；不在互译时 nil。互译时没有候选（只攒着原文）也画框
     public var translate: TranslatePanel? = nil
     public static let columns = 6
+
+    /// 第 i 个候选后面的小字，没有是空串。
+    public func comment(_ i: Int) -> String {
+        i < comments.count ? comments[i] : ""
+    }
 }
 
 /// 互译时的候选框（Linux 上是 fcitx5 面板的 auxUp + 原文框、auxDown）。
@@ -493,6 +510,9 @@ public final class Composer {
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
+        config.wubi = settings.wubi ? 1 : 0
+        config.wubi_auto_commit = settings.wubiAutoCommit ? 1 : 0
+        config.wubi_hint = settings.wubiHint ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -653,15 +673,21 @@ public final class Composer {
         let f = frame.pointee
         // 只读显示的这些：候选可能有上千个
         var texts: [String] = []
+        var comments: [String] = []
         texts.reserveCapacity(f.cand_count)
         for i in 0..<f.cand_count {
             if let text = wowtype_session_candidate(session, i) {
                 texts.append(String(cString: text))
+                comments.append(wowtype_session_candidate_comment(session, i).map { String(cString: $0) } ?? "")
             }
         }
-        guard !texts.isEmpty else { return nil }
-        return CandidatePage(texts: texts, cursor: Int(f.cand_cursor), hasPrev: f.has_prev != 0,
-                             hasNext: f.has_next != 0, expanded: f.panel == 1, vertical: !config.horizontal)
+        // 五笔空码、没有码表时没有候选，只有上方一行提示
+        let aux = f.aux.map { String(cString: $0) }
+        guard !texts.isEmpty || aux != nil else { return nil }
+        var page = CandidatePage(texts: texts, cursor: Int(f.cand_cursor), hasPrev: f.has_prev != 0,
+                                 hasNext: f.has_next != 0, expanded: f.panel == 1, aux: aux, vertical: !config.horizontal)
+        page.comments = comments
+        return page
     }
 
     // MARK: 互译

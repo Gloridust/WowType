@@ -278,7 +278,7 @@ if [[ -n "$NOTICES" ]]; then
 fi
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
-# 5：默认融进 Tatoeba 语料词频（data/tatoeba-freq.tsv）。
+# 5：默认融进 Tatoeba 语料词频（data/tatoeba-freq.tsv）；数据压缩包里加上五笔码表。
 REV=5
 echo "$DATE.$REV" > "$OUT/VERSION"
 

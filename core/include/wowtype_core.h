@@ -87,6 +87,11 @@ int wowtype_engine_set_traditional(WowtypeEngineHandle *engine, int on);
 /* 载入简繁映射表（简体<TAB>繁体）。返回条目数，失败返回 -1。 */
 int wowtype_engine_load_conversion(WowtypeEngineHandle *engine, const char *path);
 
+/* 载入五笔码表（ABI 1.10 起；数据目录里的 wubi86.tsv，码<TAB>词<TAB>频次），替换上一次载入的。
+ * 返回条数，失败返回 -1（原来载入的不动）。选了五笔（WowtypeSessionConfig.wubi）才要载入；
+ * 没载入时五笔会话照全拼打，候选框上方提示没有码表。 */
+int wowtype_engine_load_wubi(WowtypeEngineHandle *engine, const char *path);
+
 /* ASCII 标点转中文标点；未收录返回 NULL。指针在下一次调用前有效。 */
 const char *wowtype_fullwidth_punct(int ascii_codepoint);
 
@@ -435,6 +440,12 @@ typedef struct {
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
     int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
     int arrow_keys;      /* 1.10 起：WOWTYPE_ARROW_KEYS_*，默认 CANDIDATES */
+    int wubi;            /* 1.10 起：五笔 86，默认 0。字母是五笔码（最多四码，第五码顶字，空码丢掉），
+                          * z 开头临时打全拼（候选带五笔码，不学习），计算器用大写 V，v + 空格不开工具栏，
+                          * 五笔选的词不学习。引擎要先 wowtype_engine_load_wubi，没载入时照全拼打，
+                          * frame->aux 提示没有码表。引擎的双拼开关要关着 */
+    int wubi_auto_commit; /* 1.10 起：五笔打满四码、只有一个候选时直接上屏，默认 1 */
+    int wubi_hint;       /* 1.10 起：五笔逐码提示的候选后面显示还要打的码（WowtypeCandidateInfo.comment），默认 1 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -446,7 +457,8 @@ typedef struct {
     const char *preedit;   /* 编辑区文字（不为 NULL）：已选的词 + 还没选的输入（分好音节，
                             * nihao 显示成 ni'hao，双拼显示成全拼；没有引擎时是原始输入） */
     int preedit_cursor;    /* 编辑区光标，UTF-8 字节偏移 */
-    const char *aux;       /* 候选框上方的提示（1.10 起：工具栏、表情面板），没有为 NULL */
+    const char *aux;       /* 候选框上方的提示（1.10 起：工具栏、表情面板；打字时五笔的「空码」、
+                            * 选了五笔却没有码表），没有为 NULL。可以没有候选只有提示 */
     int panel;             /* WOWTYPE_PANEL_*：0 普通一页、1 展开面板（横排按下键，6 列，一屏 6 行）、
                             * 2 表情面板（1.10 起，同样的网格，preedit 是搜索词）、
                             * 3 工具栏（1.10 起，竖排一列，一页 9 个）；面板的提示在 aux */
@@ -545,6 +557,9 @@ const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index
 /* 显示的第 index 个候选的字（1.6 起），index < cand_count，不然返回 NULL。
  * 在同一会话下一次调用前有效。 */
 const char *wowtype_session_candidate(WowtypeSession *session, size_t index);
+/* 显示的第 index 个候选后面的小字（1.10 起：五笔还要打的码、z 临时拼音反查的五笔码），没有为空串；
+ * 越界返回 NULL。和 WowtypeCandidateInfo.comment 一样，画在字后面、不上屏。 */
+const char *wowtype_session_candidate_comment(WowtypeSession *session, size_t index);
 
 /* 读会话的状态（外壳判断在不在打字、拼编辑区用）。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */
@@ -569,6 +584,8 @@ typedef struct {
     int kind;           /* WOWTYPE_CAND_* */
     const char *commit; /* 选中时上屏的字（emoji 推荐在句尾对上时是「整句 + emoji」） */
     const char *emoji;  /* emoji 本身；不是 emoji 为空串 */
+    const char *comment; /* 1.10 起：画在候选后面的小字，不上屏（五笔还要打的码、z 临时拼音反查的五笔码），
+                          * 没有为空串 */
 } WowtypeCandidateInfo;
 /* 候选个数。没有引擎、没在打字时为 0。 */
 size_t wowtype_session_candidate_total(WowtypeSession *session);

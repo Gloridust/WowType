@@ -118,6 +118,7 @@ func checkConfigContract() {
         if let key = s["key"]?.string { byKey[key] = s }
     }
     let lists: [(String, [String])] = [
+        ("InputScheme", WowtypeConfig.InputScheme.allCases.map(\.rawValue)),
         ("ShuangpinScheme", WowtypeConfig.shuangpinSchemes),
         ("ShiftToggle", WowtypeConfig.ShiftToggle.allCases.map(\.rawValue)),
         ("SelectKeys", WowtypeConfig.SelectKeys.allCases.map(\.rawValue)),
@@ -126,6 +127,27 @@ func checkConfigContract() {
     for (key, values) in lists {
         let expected = byKey[key].map(enumValues) ?? []
         check(values == expected, "契约：\(key) 的可选值", "规格 \(expected)，macOS \(values)")
+    }
+    let schemeNames = (byKey["InputScheme"]?["values"]?.array ?? []).map {
+        ($0["name"]?.string ?? "", $0["value"]?.string ?? "")
+    }
+    check(WowtypeConfig.inputSchemes.map { $0.0 } == schemeNames.map { $0.0 }
+          && WowtypeConfig.inputSchemes.map { $0.1.rawValue } == schemeNames.map { $0.1 },
+          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(WowtypeConfig.inputSchemes)")
+    // 跟着别的项写的旧开关（Shuangpin 跟着 InputScheme）：读出来、写回去都跟着
+    for s in mine {
+        guard let key = s["key"]?.string, let target = s["mirrors"]?["key"]?.string,
+              let value = s["mirrors"]?["value"]?.string else { continue }
+        for c in byKey[target]?["whenMissing"]?["cases"]?.array ?? [] {
+            let file = (c["file"]?.object ?? [:]).sorted { $0.key < $1.key }
+                .map { "\($0.key)=\($0.value.string ?? "")\n" }.joined()
+            let parsed = WowtypeConfig.parse(file)
+            let want = parsed.value(forKey: target) == value ? "True" : "False"
+            check(parsed.value(forKey: key) == want, "契约：文件是 \(file.debugDescription) 时 \(key) 跟着 \(target)",
+                  parsed.value(forKey: key) ?? "nil")
+            let written = parsed.serialized(into: file)
+            check(written.contains("\(key)=\(want)"), "契约：文件是 \(file.debugDescription) 时写回去 \(key)=\(want)", written)
+        }
     }
     let languages = (byKey["TranslateTarget"]?["values"]?.array ?? []).map {
         ($0["name"]?.string ?? "", $0["value"]?.string ?? "")

@@ -30,6 +30,16 @@ public struct WowtypeConfig: Equatable {
         case candidates = "Candidates", caret = "Caret"
     }
 
+    /// 输入方案：全拼、双拼、五笔 86（见 spec/config.json 的 InputScheme）
+    public enum InputScheme: String, CaseIterable {
+        case quanpin = "Quanpin", shuangpin = "Shuangpin", wubi86 = "Wubi86"
+    }
+
+    /// 输入方案在设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）。
+    public static let inputSchemes: [(String, InputScheme)] = [
+        ("拼音输入", .quanpin), ("双拼输入", .shuangpin), ("五笔输入", .wubi86),
+    ]
+
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
 
@@ -83,10 +93,14 @@ public struct WowtypeConfig: Equatable {
     public var fuzzyEngOng = false
     public var typoCorrection = true
     public var rareExtChars = false
-    public var shuangpin = false
+    public var inputScheme = InputScheme.quanpin
     public var shuangpinScheme = "Ziranma"
     /// 双拼时编辑区显示打的键（uivs），不翻成全拼（#122）
     public var shuangpinShowKeys = false
+    /// 五笔打满四码、只有一个字词时直接上屏
+    public var wubiAutoCommit = true
+    /// 五笔候选后面显示还要打的码
+    public var wubiHint = true
     public var shiftToggle = ShiftToggle.both
     public var traditional = false
     public var halfwidthPunct = false
@@ -98,7 +112,7 @@ public struct WowtypeConfig: Equatable {
     public var autoSpace = false
     public var autoSpaceLetters = true
     public var autoSpaceDigits = true
-    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）
+    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情；双拼、五笔时不开）
     public var toolbar = true
     /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
     public var clipboardHistory = false
@@ -170,6 +184,9 @@ public struct WowtypeConfig: Equatable {
         }
     }
 
+    public var shuangpin: Bool { inputScheme == .shuangpin }
+    public var wubi: Bool { inputScheme == .wubi86 }
+
     /// wowtype_autospace 的 flags：1 汉字和字母之间、2 汉字和数字之间；总开关关着是 0
     public var autoSpaceFlags: Int32 {
         guard autoSpace else { return 0 }
@@ -192,6 +209,8 @@ public struct WowtypeConfig: Equatable {
         var config = WowtypeConfig()
         var inGroup = false
         var sawTranslateLocal = false
+        var sawInputScheme = false
+        var legacyShuangpin: String?
         // Swift 把 \r\n 当成一个字符，用 isNewline 才认得出 Windows 换行
         for raw in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
             let line = trim(Substring(raw))
@@ -207,11 +226,20 @@ public struct WowtypeConfig: Equatable {
             }
             let key = trim(line[..<eq])
             let value = unquote(trim(line[line.index(after: eq)...]))
+            if key == "Shuangpin" {
+                // 旧版的双拼开关只在没有 InputScheme 时算（0.3.12 及以前只有它），见下面
+                legacyShuangpin = value
+                continue
+            }
             config.setValue(value, forKey: key)
             sawTranslateLocal = sawTranslateLocal || key == "TranslateLocal"
+            sawInputScheme = sawInputScheme || key == "InputScheme"
         }
         if !sawTranslateLocal {
             config.translateLocal = impliedTranslateLocal(baseUrl: config.translateBaseUrl)
+        }
+        if !sawInputScheme, let legacyShuangpin {
+            config.setValue(legacyShuangpin, forKey: "Shuangpin")
         }
         return config
     }
@@ -230,7 +258,8 @@ public struct WowtypeConfig: Equatable {
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
         "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong", "FuzzyEngOng",
-        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys", "ShiftToggle",
+        "TypoCorrection", "RareExtChars", "InputScheme", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys",
+        "WubiAutoCommit", "WubiHint", "ShiftToggle",
         "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "Voice", "VoiceKey", "VoiceCopy", "EmojiKey",
@@ -249,7 +278,7 @@ public struct WowtypeConfig: Equatable {
         "FuzzyUn": \.fuzzyUn, "FuzzyAnAi": \.fuzzyAnAi, "FuzzyHuangWang": \.fuzzyHuangWang,
         "FuzzyUnIong": \.fuzzyUnIong, "FuzzyEngOng": \.fuzzyEngOng,
         "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
-        "Shuangpin": \.shuangpin, "ShuangpinShowKeys": \.shuangpinShowKeys,
+        "ShuangpinShowKeys": \.shuangpinShowKeys, "WubiAutoCommit": \.wubiAutoCommit, "WubiHint": \.wubiHint,
         "Traditional": \.traditional, "PickChar": \.pickChar,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
@@ -270,6 +299,15 @@ public struct WowtypeConfig: Equatable {
             if let v = matchName(value, ArrowKeys.allCases.map(\.rawValue)) { arrowKeys = ArrowKeys(rawValue: v)! }
         case "PageSize":
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
+        case "InputScheme":
+            if let v = matchName(value, InputScheme.allCases.map(\.rawValue)) { inputScheme = InputScheme(rawValue: v)! }
+        case "Shuangpin":
+            // 旧版的双拼开关，跟着 InputScheme（parse 只在文件里没有 InputScheme 时拿它来定方案）
+            if value == "True" {
+                inputScheme = .shuangpin
+            } else if value == "False", inputScheme == .shuangpin {
+                inputScheme = .quanpin
+            }
         case "ShuangpinScheme":
             if let v = matchName(value, WowtypeConfig.shuangpinSchemes) { shuangpinScheme = v }
         case "ShiftToggle":
@@ -318,6 +356,9 @@ public struct WowtypeConfig: Equatable {
         case "CandidateLayout": return horizontal ? "Horizontal" : "Vertical"
         case "ArrowKeys": return arrowKeys.rawValue
         case "PageSize": return String(pageSize)
+        case "InputScheme": return inputScheme.rawValue
+        // 写文件时跟着 InputScheme 写，旧版本读得懂（五笔在旧版本里是全拼）
+        case "Shuangpin": return shuangpin ? "True" : "False"
         case "ShuangpinScheme": return shuangpinScheme
         case "ShiftToggle": return shiftToggle.rawValue
         case "PunctuationStyle": return halfwidthPunct ? "Halfwidth" : "Fullwidth"
@@ -470,12 +511,19 @@ public struct WowtypeConfig: Equatable {
         # 候选末尾也列出扩展 B 区以后的生僻字（常见字体显示不了，默认关）
         RareExtChars=\(b(d.rareExtChars))
 
-        # 双拼；方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
-        # Ziguang 紫光、PinyinJiajia 拼音加加
+        # 输入方案：Quanpin 全拼、Shuangpin 双拼、Wubi86 五笔 86
+        InputScheme=\(d.inputScheme.rawValue)
+        # 旧版的双拼开关：跟着 InputScheme 写，给旧版本看的，改上面那行
         Shuangpin=\(b(d.shuangpin))
+        # 双拼方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
+        # Ziguang 紫光、PinyinJiajia 拼音加加
         ShuangpinScheme=\(d.shuangpinScheme)
         # 双拼时编辑区显示打的键（不翻成全拼）
         ShuangpinShowKeys=\(b(d.shuangpinShowKeys))
+        # 五笔打满四码、只有一个字词时直接上屏
+        WubiAutoCommit=\(b(d.wubiAutoCommit))
+        # 五笔候选后面显示还要打的码
+        WubiHint=\(b(d.wubiHint))
 
         # 单按哪个 Shift 切中英文：Both、Left、Right、Off
         ShiftToggle=Both
@@ -485,7 +533,7 @@ public struct WowtypeConfig: Equatable {
         PunctuationStyle=Fullwidth
         # 打 riqi、shijian、xingqi 时给出当前日期时间
         DateTime=\(b(d.dateTime))
-        # v 开头算算式（v1+2*3，只在全拼下）
+        # v 开头算算式（v1+2*3；双拼、五笔时是大写 V）
         Calculator=\(b(d.calculator))
         # 打字时推荐 emoji
         EmojiSuggest=\(b(d.emojiSuggest))
@@ -494,7 +542,7 @@ public struct WowtypeConfig: Equatable {
         AutoSpaceLetters=\(b(d.autoSpaceLetters))
         AutoSpaceDigits=\(b(d.autoSpaceDigits))
 
-        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（只在全拼下）
+        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（双拼、五笔时不开）
         Toolbar=\(b(d.toolbar))
         # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
         ClipboardHistory=\(b(d.clipboardHistory))

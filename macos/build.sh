@@ -3,7 +3,8 @@
 #
 #   macos/build.sh <数据目录> [输出目录]
 #
-# 数据目录是 scripts/make-data.sh 的输出（lexicon.tsv、english.txt、words.lm、LICENSE、SOURCE.txt、VERSION）。
+# 数据目录是 scripts/make-data.sh 的输出（lexicon.tsv、english.txt、words.lm、LICENSE、SOURCE.txt、VERSION），
+# 加上 scripts/make-wubi.sh 的输出（wubi86.tsv、WUBI-LICENSE、WUBI-AUTHORS、WUBI-SOURCE.txt）。
 # 产物：<输出目录>/WowType.app、WowType-<版本>-macos.pkg（给普通用户双击安装）和 WowType-<版本>-macos.zip
 # （给 macos/install.sh 用）。arm64 + x86_64 通用，ad-hoc 签名，没有 Apple 开发者签名和公证。
 #
@@ -20,7 +21,7 @@ ARCHS=${WOWTYPE_MACOS_ARCHS:-arm64 x86_64}
 export MACOSX_DEPLOYMENT_TARGET=12.0
 TARGET_DIR=target/macos
 
-for f in lexicon.tsv english.txt; do
+for f in lexicon.tsv english.txt wubi86.tsv WUBI-LICENSE WUBI-AUTHORS WUBI-SOURCE.txt; do
   [[ -f "$DATA/$f" ]] || { echo "数据目录里没有 $f" >&2; exit 1; }
 done
 
@@ -75,9 +76,14 @@ cp core/data/OPENCC-LICENSE "$res/OPENCC-LICENSE"
 [[ -f "$DATA/LICENSE" ]] && cp "$DATA/LICENSE" "$res/DATA-LICENSE"
 [[ -f "$DATA/SOURCE.txt" ]] && cp "$DATA/SOURCE.txt" "$res/DATA-SOURCE.txt"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
+# 五笔码表（rime-wubi，LGPL-3.0）：许可证、作者、来源随包带上，改名免得和词库的 LICENSE 混
+cp "$DATA/wubi86.tsv" "$res/"
+cp "$DATA/WUBI-LICENSE" "$res/DATA-WUBI-LICENSE"
+cp "$DATA/WUBI-AUTHORS" "$res/DATA-WUBI-AUTHORS"
+cp "$DATA/WUBI-SOURCE.txt" "$res/DATA-WUBI-SOURCE.txt"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.pdf|caret@2x\.pdf|AppIcon\.icns|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|OPENCC-LICENSE|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.pdf|caret@2x\.pdf|AppIcon\.icns|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|OPENCC-LICENSE|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION|wubi86\.tsv|DATA-WUBI-LICENSE|DATA-WUBI-AUTHORS|DATA-WUBI-SOURCE\.txt)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2

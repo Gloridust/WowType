@@ -35,6 +35,7 @@ pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
 pub mod wordlm;
+pub mod wubi;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -197,7 +198,10 @@ pub struct Engine {
     english: RwLock<Arc<HashMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
+    /// 五笔码表（选了五笔才载入，见 [`Engine::load_wubi`]）。
+    wubi: RwLock<Option<Arc<wubi::WubiTable>>>,
 }
+
 
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
@@ -217,6 +221,7 @@ impl Engine {
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
+            wubi: RwLock::new(None),
         }
     }
 
@@ -399,7 +404,7 @@ impl Engine {
     }
 
     /// 词库里的写法在候选里显示成什么：开着繁体就转一次。
-    fn shown_text(&self, text: &str) -> String {
+    pub(crate) fn shown_text(&self, text: &str) -> String {
         match self.converter.read() {
             Ok(conv) if self.config.traditional && !conv.is_empty() => conv.convert(text),
             _ => text.to_string(),
@@ -615,6 +620,26 @@ impl Engine {
         });
         list.truncate(self.config.max_candidates.max(1));
         *candidates = list;
+    }
+
+    /// 载入五笔码表（`wubi86.tsv`），替换上一次载入的，返回条数。
+    pub fn load_wubi<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let table = wubi::WubiTable::load_tsv(path)?;
+        let len = table.len();
+        self.set_wubi(Some(Arc::new(table)));
+        Ok(len)
+    }
+
+    /// 换五笔码表，None 卸掉。
+    pub fn set_wubi(&self, table: Option<Arc<wubi::WubiTable>>) {
+        if let Ok(mut slot) = self.wubi.write() {
+            *slot = table;
+        }
+    }
+
+    /// 载入了的五笔码表。
+    pub fn wubi(&self) -> Option<Arc<wubi::WubiTable>> {
+        self.wubi.read().ok().and_then(|t| t.clone())
     }
 
     pub fn set_max_candidates(&mut self, max_candidates: usize) {
