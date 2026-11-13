@@ -23,9 +23,14 @@ def main():
     ap.add_argument('corpus', nargs='+')
     ap.add_argument('--tatoeba', action='store_true', help='每行是 Tatoeba 的 id<TAB>lang<TAB>句子')
     ap.add_argument('--min-count', type=int, default=2)
+    ap.add_argument('--t2s', action='store_true', help='繁转简（需要 opencc）')
     args = ap.parse_args()
 
     import jieba
+    converter = None
+    if args.t2s:
+        import opencc
+        converter = opencc.OpenCC('t2s')
     counts = Counter()
     for path in args.corpus:
         source = bz2.open(path, 'rt', encoding='utf-8') if path.endswith('.bz2') else open(path, encoding='utf-8')
@@ -33,6 +38,8 @@ def main():
             line = line.rstrip()
             if not line or line.startswith('#'):
                 continue
+            if converter is not None:
+                line = converter.convert(line)
             columns = line.split(chr(9))
             text = columns[-1] if (args.tatoeba or len(columns) == 3) else line
             for word in jieba.cut(text):
