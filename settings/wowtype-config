@@ -1377,9 +1377,9 @@ def current_version():
 
 
 def parse_version(text):
-    """`v0.2.1`、`0.2.1-1~ubuntu26.04`、`2026.10.31` -> 数字元组。"""
-    text = text.strip().lstrip("vV").split("-")[0].split("~")[0]
-    return tuple(int(n) for n in re.findall(r"\d+", text))
+    """`v0.2.1`、`0.2.1-1~ubuntu26.04`、`2026.10.31`、`feat-fix-0.3.12.1` -> 数字元组。"""
+    match = re.search(r"\d+(?:\.\d+)*", text.strip())
+    return tuple(int(n) for n in match.group(0).split(".")) if match else ()
 
 
 def dpkg_version(package):
@@ -4833,6 +4833,8 @@ if __name__ == "__main__":
         assert parse_version("v0.2.10") > parse_version("0.2.9")
         assert parse_version("0.2.1-1~ubuntu26.04") == (0, 2, 1)
         assert parse_version("2026.10.31") < parse_version("2026.11.01")
+        assert parse_version("feat-fix-0.3.12.1") == (0, 3, 12, 1)
+        assert parse_version("feat-fix-0.3.12.1") > parse_version("0.3.12")
         notes = markdown_to_pango("## 标题\n\n- **粗** `a<b>` [链接](https://x.y/?a=1&b=2)\n  - 子项\n"
                                   "```bash\nsudo apt <x>\n```\nhttps://x.y/z")
         assert notes.startswith('<span lang="zh-cn">') and notes.endswith("</span>")
