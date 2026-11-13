@@ -289,8 +289,8 @@ impl WowtypeSessionConfig {
                 self.shift_tap_ms
             },
             translate_mode: self.translate_mode != 0,
-            // 旧外壳没填这一项（size 短，读出来是 0）时按默认开着
-            toolbar: self.toolbar != 0 || (self.size as usize) <= std::mem::offset_of!(Self, toolbar),
+            // 旧外壳给的结构体短、没有这一项时，read_sized 留着 Default 的值（开着）
+            toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
         }
@@ -467,7 +467,7 @@ unsafe fn arg(ptr: *const c_char) -> String {
         .into_owned()
 }
 
-/// 按 size 读一个带 size 字段的结构体：外壳给的比我们认识的短，缺的字段当 0。
+/// 按 size 读一个带 size 字段的结构体：外壳给的比我们认识的短时，缺的字段是 `T::default()` 的值。
 unsafe fn read_sized<T: Copy + Default>(ptr: *const T, size: u32) -> T {
     let mut value = T::default();
     let len = (size as usize).min(size_of::<T>());
@@ -1097,6 +1097,18 @@ mod tests {
         assert_eq!(frame.handled, 1);
         assert_eq!(c(frame.preedit), "a");
         unsafe { wowtype_session_free(session) };
+    }
+
+    #[test]
+    fn short_config_struct_keeps_defaults() {
+        // 旧外壳的 WowtypeSessionConfig 没有 toolbar 这一项：读出来照默认开着，不是 0
+        let mut config = WowtypeSessionConfig::default();
+        config.size = std::mem::offset_of!(WowtypeSessionConfig, toolbar) as u32;
+        config.toolbar = 0;
+        config.shuangpin_keys = 1;
+        let read = unsafe { read_sized(&config, config.size) }.to_config();
+        assert!(read.toolbar);
+        assert!(!read.shuangpin_keys, "size 之外的字段不该读进来");
     }
 
     #[test]

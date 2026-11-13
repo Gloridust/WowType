@@ -1,8 +1,9 @@
 # WowType 热词表：近几年 AI、工作、生活、网络上常用、但雾凇词库里词频偏低或没有的词。
 # 格式：拼音（空格分隔）<TAB>词[<TAB>词频]，没写词频的按 30000。scripts/make-data.sh 用
-# tools/add_hotwords.py 合进 lexicon.tsv：词库里已有的词沿用词库的读音、把词频提到不低于这里的词频
-# （只提不降）；没有的按这里的拼音加进去。只对雾凇词库的词频修正在 data/rime-ice-freq.tsv。
-# 这份表是 WowType 自己整理的（MIT），加词时注意多音字的读音。
+# tools/add_hotwords.py 合进 lexicon.tsv（万象词库也合）：词库里已有的读音把词频提到不低于这里的词频
+# （只提不降）；这里写了、词库里没有的读音（包括新词）按这里的拼音加进去。同一个词有几种读法就写几行。
+# 只对雾凇词库的词频修正在 data/rime-ice-freq.tsv。
+# 这份表是 WowType 自己整理的（MIT）。这里的读音会直接加进词库，写错了就多一个错读音：加词时注意多音字。
 da mo xing	大模型
 da yu yan mo xing	大语言模型
 zhi neng ti	智能体
@@ -11,7 +12,7 @@ ti shi ci	提示词
 ti shi gong cheng	提示工程
 shang xia wen chuang kou	上下文窗口
 chang shang xia wen	长上下文
-wei diao	微调
+wei tiao	微调
 yu xun lian	预训练
 hou xun lian	后训练
 qiang hua xue xi	强化学习
@@ -126,7 +127,7 @@ ju jia ban gong	居家办公
 hun he ban gong	混合办公
 mo yu	摸鱼
 jia ban	加班
-diao xiu	调休
+tiao xiu	调休
 shuang xiu	双休
 da xiao zhou	大小周
 da ka	打卡
@@ -350,3 +351,10 @@ lao tie	老铁
 ji mei	集美
 xue gao ci ke	雪糕刺客
 ti gong qing xu jia zhi	提供情绪价值
+# 象棋里的「车」读 jū，很多人照 chē 打：两个读音都收（#172）
+qi ju bao shuai	弃车保帅	1000
+qi che bao shuai	弃车保帅	1000
+diu che bao shuai	丢车保帅	1000
+she che bao shuai	舍车保帅	1000
+diu zu bao che	丢卒保车	1000
+qi zu bao che	弃卒保车	1000

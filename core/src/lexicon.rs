@@ -1198,8 +1198,15 @@ pub fn guess_pinyin(lexicon: &[u8], word: &str) -> Option<String> {
         .char_indices()
         .map(|(i, c)| &word[i..i + c.len_utf8()])
         .collect();
-    // best[0] 是整个词，best[1..] 是每个字：(频次, 拼音)
-    let mut best: Vec<Option<(f64, &[u8])>> = vec![None; chars.len() + 1];
+    // 词里出现过的不同的字：叠字（妈妈咪、试试看）共用一个槽位，按位置分槽的话第二个「妈」永远空着
+    let mut uniq: Vec<&str> = Vec::new();
+    for c in &chars {
+        if !uniq.contains(c) {
+            uniq.push(c);
+        }
+    }
+    // best[0] 是整个词，best[1..] 是每个不同的字：(频次, 拼音)
+    let mut best: Vec<Option<(f64, &[u8])>> = vec![None; uniq.len() + 1];
     for line in lexicon.split(|&b| b == b'\n') {
         if line.first() == Some(&b'#') {
             continue;
@@ -1211,7 +1218,7 @@ pub fn guess_pinyin(lexicon: &[u8], word: &str) -> Option<String> {
         };
         let slot = if text == word.as_bytes() {
             0
-        } else if let Some(i) = chars.iter().position(|c| c.as_bytes() == text) {
+        } else if let Some(i) = uniq.iter().position(|c| c.as_bytes() == text) {
             i + 1
         } else {
             continue;
@@ -1228,7 +1235,13 @@ pub fn guess_pinyin(lexicon: &[u8], word: &str) -> Option<String> {
     if let Some((_, reading)) = best[0] {
         return normalize_pinyin(&text(reading));
     }
-    let readings: Option<Vec<String>> = best[1..].iter().map(|b| b.map(|(_, r)| text(r))).collect();
+    let readings: Option<Vec<String>> = chars
+        .iter()
+        .map(|c| {
+            let slot = uniq.iter().position(|u| u == c)? + 1;
+            best[slot].map(|(_, r)| text(r))
+        })
+        .collect();
     normalize_pinyin(&readings?.join(" "))
 }
 
@@ -1469,6 +1482,10 @@ mod tests {
         assert_eq!(guess("你是好").as_deref(), Some("ni shi hao"));
         assert_eq!(guess("绿").as_deref(), Some("lv"));
         assert_eq!(guess("你x"), None);
+        // 叠字：整词不在词库里，逐字找时两个相同的字都有读音
+        assert_eq!(guess("你你好").as_deref(), Some("ni ni hao"));
+        assert_eq!(guess("好好").as_deref(), Some("hao hao"));
+        assert_eq!(guess("你你x"), None);
         assert_eq!(guess(""), None);
     }
 
