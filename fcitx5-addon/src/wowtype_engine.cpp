@@ -339,10 +339,11 @@ std::string shownText(const std::string &text) {
 
 class WowtypeCandidateWord final : public fcitx::CandidateWord {
 public:
+    /// shown 是 shownCandidate 画好的样子。
     WowtypeCandidateWord(WowtypeEngine *engine, WowtypeState *state,
-                         std::size_t index, const std::string &text)
+                         std::size_t index, const std::string &shown)
         : engine_(engine), state_(state), index_(index) {
-        setText(fcitx::Text(shownText(text)));
+        setText(fcitx::Text(shown));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -458,7 +459,22 @@ struct WowtypeCandidate {
     std::string emojiText;
     /// 日期时间、计算结果这类：选中时原样上屏，不学习选词。
     bool plain = false;
+    /// 画在字后面的编码提示（五笔还要打的码、z 临时拼音反查的五笔码），不上屏。
+    std::string comment;
 };
+
+namespace {
+
+/// 候选框里一个候选的样子：字（换行画成 ⏎），后面空一格是编码提示。fcitx5 5.0 的候选没有注释位，画在字后面。
+std::string shownCandidate(const WowtypeCandidate &candidate) {
+    std::string out = shownText(candidate.text);
+    if (!candidate.comment.empty()) {
+        out += " " + candidate.comment;
+    }
+    return out;
+}
+
+} // namespace
 
 /// 每个输入上下文独立保存的缓冲区和候选。
 class WowtypeState final : public fcitx::InputContextProperty {
@@ -516,10 +532,11 @@ public:
     /// 清空编辑区（也收起联想）。
     void clear() {
         wowtype_session_reset(session_, 0);
-        clearCopies();
+        forgetCandidates();
     }
-    /// 只清外壳抄的候选和候选框状态（会话上屏以后自己清好了编辑区，可能接着在联想）。
-    void clearCopies() {
+
+    /// 只丢掉外壳抄的候选和候选框状态，会话的编辑区不动。
+    void forgetCandidates() {
         candidates_.clear();
         candGeneration_ = UINT64_MAX;
         expanded_ = false;
@@ -771,6 +788,7 @@ void WowtypeEngine::checkOverlayAck(fcitx::InputContext *ic) {
 
 void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
     config_.load(config, true);
+    syncWowtypeLegacy(config_);
     fcitx::safeSaveAsIni(config_, kConfigFile);
     applyConfig();
 }
@@ -814,6 +832,9 @@ void WowtypeEngine::maybeSwitchLexicon() {
     if (core_) {
         wowtype_engine_free(core_);
         core_ = nullptr;
+        // 简繁表、五笔码表是载进这个引擎的，新引擎载好后 applyCoreSettings 再载
+        conversionLoaded_ = false;
+        wubiLoaded_ = false;
     }
     if (lexicon_ == wantedLexicon_) {
         WLOG_I() << "WowType: 词库文件换了，重新载入 " << lexicon_;
@@ -882,13 +903,15 @@ void WowtypeEngine::applyConfig() {
     }
     typo_ = envOr("WOWTYPE_TYPO", *config_.typo);
     rareExt_ = envOr("WOWTYPE_RARE_EXT", *config_.rareExt);
-    shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.shuangpin);
+    shuangpin_ = envOr("WOWTYPE_SHUANGPIN", *config_.inputScheme == WowtypeInputScheme::Shuangpin);
     shuangpinScheme_ = WowtypeShuangpinSchemeToString(*config_.shuangpinScheme);
     if (const char *env = std::getenv("WOWTYPE_SHUANGPIN_SCHEME"); env && *env) {
         // 环境变量设了方案就当作打开双拼（方便测试）
         shuangpinScheme_ = env;
         shuangpin_ = true;
     }
+    // 双拼和五笔只能选一个（环境变量打开了双拼时就不是五笔）
+    wubi_ = !shuangpin_ && *config_.inputScheme == WowtypeInputScheme::Wubi86;
     shiftToggle_ = *config_.shiftToggle;
     if (const char *env = std::getenv("WOWTYPE_SHIFT_TOGGLE"); env && *env) {
         const std::string name = env;
@@ -978,7 +1001,7 @@ void WowtypeEngine::applyConfig() {
     WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排")
              << (arrowKeys_ == WowtypeArrowKeys::Caret ? " 左右键移光标" : "") << " 每页" << pageSize_
              << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 扩展区生僻字=" << rareExt_ << " 双拼=" << shuangpin_
-             << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
+             << "(" << shuangpinScheme_ << ")" << " 五笔=" << wubi_ << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
              << " 中英键=" << toggleKey_.toString()
@@ -1018,6 +1041,18 @@ void WowtypeEngine::applyCoreSettings() {
         }
     }
     wowtype_engine_set_traditional(core_, traditional_ && conversionLoaded_ ? 1 : 0);
+    if (wubi_ && !wubiLoaded_) {
+        // 选了五笔才载（九万多条，约 20ms、3MB）；没有码表时会话照全拼打，候选框上方说为什么
+        const std::string wubi = findDataFile("WOWTYPE_WUBI", "wubi86.tsv");
+        const int loaded = wubi.empty() ? -1 : wowtype_engine_load_wubi(core_, wubi.c_str());
+        if (loaded > 0) {
+            wubiLoaded_ = true;
+            WLOG_I() << "WowType: 载入五笔码表 " << wubi << "，" << loaded << " 条";
+        } else {
+            WLOG_W() << "WowType: 五笔码表载入失败 " << (wubi.empty() ? "（没有 wubi86.tsv）" : wubi)
+                     << "，先按全拼打";
+        }
+    }
 
     if (const std::string custom = customWordsPath(); !custom.empty()) {
         const int loaded = wowtype_engine_load_custom_words(core_, custom.c_str());
@@ -1173,8 +1208,9 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
     }
-    // 不能 reset 会话：选词上屏以后可能接着在联想，离开「译」时正在打的拼音也留着接着打
-    state->clearCopies();
+    // 会话上屏时已经清好了它上屏的那部分，这里从不 reset 会话：选词上屏以后可能接着在联想，
+    // 五笔顶字（首选上屏，新打的字母开始下一个码）、离开「译」时留着的拼音还在打。只丢掉抄的候选，还在打字就重新抄
+    state->forgetCandidates();
     if (state->composing()) {
         syncView(state);
     }
@@ -1226,6 +1262,9 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.toolbar = toolbar_ ? 1 : 0;
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
     config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
+    config.wubi = wubi_ ? 1 : 0;
+    config.wubi_auto_commit = *config_.wubiAutoCommit ? 1 : 0;
+    config.wubi_hint = *config_.wubiHint ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
@@ -1314,7 +1353,7 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
     }
     if (!state->composing()) {
         // 收起了联想（Esc）、清空了编辑区：会话已经清好了，这里只清抄的候选
-        state->clearCopies();
+        state->forgetCandidates();
         updateInputPanel(ic, state);
         return;
     }
@@ -1392,6 +1431,7 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
             continue;
         }
         WowtypeCandidate candidate{info.text, info.pinyin, info.consumed};
+        candidate.comment = info.comment;
         candidate.plain = info.kind == WOWTYPE_CAND_PLAIN;
         if (info.kind == WOWTYPE_CAND_EMOJI) {
             candidate.emoji = true;
@@ -1543,6 +1583,10 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         const std::size_t cursor = frame && frame->preedit ? frame->preedit_cursor : preedit.textLength();
         preedit.setCursor(static_cast<int>(std::min(cursor, preedit.textLength())));
         sendPreedit(ic, preedit);
+        if (frame && frame->aux) {
+            // 五笔的「空码」、选了五笔却没有码表（可以没有候选，只有这一行）
+            panel.setAuxUp(fcitx::Text(frame->aux));
+        }
     }
 
     if (state->expanded_ && !state->candidates_.empty()) {
@@ -1561,7 +1605,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
             fcitx::CursorPositionAfterPaging::ResetToFirst);
         for (std::size_t i = 0; i < state->candidates_.size(); ++i) {
             candidates->append<WowtypeCandidateWord>(this, state, i,
-                                                    state->candidates_[i].text);
+                                                    shownCandidate(state->candidates_[i]));
         }
         // 页码和光标照会话的（展开面板里走到后面再收起时，会话翻到光标那一页）
         candidates->mirror(state->panelPage_,
@@ -1615,7 +1659,7 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
         std::size_t widths[kGridCols] = {};
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
-                widths[c] = std::max(widths[c], displayWidth(shownText(all[r * kGridCols + c].text)));
+                widths[c] = std::max(widths[c], displayWidth(shownCandidate(all[r * kGridCols + c])));
             }
         }
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
@@ -1625,12 +1669,12 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
                 const bool here = index == state->gridCursor_;
                 line += r == cursorRow ? kLabels[c] : "\u3000";
                 line += here ? "\u3014" : "\u3000";
-                line += shownText(all[index].text);
+                line += shownCandidate(all[index]);
                 if (here) {
                     line += "\u3015";
-                    padTo(line, displayWidth(shownText(all[index].text)), widths[c]);
+                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
                 } else {
-                    padTo(line, displayWidth(shownText(all[index].text)), widths[c]);
+                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
                     line += "\u3000";
                 }
             }
@@ -1663,7 +1707,7 @@ bool sameCandidate(WowtypeState *state, std::size_t index, const WowtypeCandidat
     if (wowtype_session_candidate_info(state->session_, index, &info) != 0) {
         return false;
     }
-    return shown.text == info.text && shown.pinyin == info.pinyin &&
+    return shown.text == info.text && shown.pinyin == info.pinyin && shown.comment == info.comment &&
            shown.consumed == info.consumed && shown.plain == (info.kind == WOWTYPE_CAND_PLAIN) &&
            shown.emoji == (info.kind == WOWTYPE_CAND_EMOJI);
 }
@@ -2003,7 +2047,7 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
     if (frame->commit) {
         finishCommit(ic, state, frame);
     } else if (wasPredicting) {
-        state->clearCopies(); // 切模式收起了联想
+        state->forgetCandidates(); // 切模式收起了联想
     }
     switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
     if (redraw) {
@@ -2041,7 +2085,7 @@ void WowtypeEngine::syncMode(fcitx::InputContext *ic, WowtypeState *state) {
         updateInputPanel(ic, state);
     } else if (wasPredicting && ic) {
         // 切模式收起了联想
-        state->clearCopies();
+        state->forgetCandidates();
         updateInputPanel(ic, state);
     }
 }

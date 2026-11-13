@@ -2168,6 +2168,488 @@ fn caret_shuangpin_shows_keys() {
     assert_eq!(texts(&mut session)[0], "中国", "候选照旧按整个输入算");
 }
 
+// ---- 五笔 ----
+
+/// 节选自 rime-wubi 的 wubi86（LGPL-3.0；scripts/make-wubi.sh 生成的 wubi86.tsv 里原样的几行）：
+/// 25 个一级简码，加上下面用例用到的字词。
+const WUBI: &str = "\
+a\t工\t99454797
+b\t了\t1477224452
+c\t以\t418261033
+d\t在\t1133790406
+e\t有\t976401164
+f\t地\t476035359
+g\t一\t2015124793
+h\t上\t783204383
+i\t不\t1435362894
+j\t是\t1632303407
+k\t中\t563673763
+l\t国\t410863159
+m\t同\t181109711
+n\t民\t103051753
+o\t为\t453944671
+p\t这\t884456705
+q\t我\t1603337138
+r\t的\t4220000000
+s\t要\t421242294
+t\t和\t427734734
+u\t产\t367591032
+v\t发\t395047607
+w\t人\t1002212710
+x\t经\t202277809
+y\t主\t521303258
+gany\t开心\t77500000
+ggl\t一\t2830000000
+ggll\t一\t2830000000
+jfuj\t时间\t1020000000
+jgh\t是\t2210000000
+jghu\t是\t2210000000
+jjad\t日期\t368000000
+khlg\t中国\t1220000000
+khlg\t跨国\t13100000
+lgy\t国\t526000000
+lgyi\t国\t526000000
+ntc\t发\t1140000000
+ntcy\t发\t1140000000
+vb\t好\t308909363
+vbg\t好\t1780000000
+wq\t你\t597727619
+wqi\t你\t1490000000
+wqin\t您\t3090000000
+wqiy\t你\t1490000000
+wqiy\t仰泳\t400000
+wqvb\t你好\t70500000
+wqvb\t您好\t34700000
+wty\t八\t440000000
+";
+
+/// 一级简码，按 a–y 的顺序。
+const WUBI_LEVEL1: &str = "工了以在有地一上不是中国同民为这我的要和产发人经主";
+
+fn wubi_table() -> Option<Arc<wowtype_core::wubi::WubiTable>> {
+    Some(Arc::new(wowtype_core::wubi::WubiTable::from_tsv_str(WUBI).unwrap()))
+}
+
+/// 带五笔码表的引擎（拼音词库照旧，z 临时拼音用）。
+fn wubi_engine() -> &'static Engine {
+    let engine = engine();
+    engine.set_wubi(wubi_table());
+    engine
+}
+
+fn wubi_config() -> Config {
+    Config { wubi: true, ..Config::default() }
+}
+
+fn wubi_with(engine: &'static Engine, config: Config) -> Session<'static> {
+    let mut session = with(engine);
+    session.configure(config);
+    session
+}
+
+fn wubi_session() -> Session<'static> {
+    wubi_with(wubi_engine(), wubi_config())
+}
+
+fn comments(session: &mut Session) -> Vec<(String, String)> {
+    session
+        .candidates()
+        .iter()
+        .map(|c| (c.text.clone(), c.comment.clone()))
+        .collect()
+}
+
+#[test]
+fn wubi_level1_codes_and_space() {
+    // 一级简码：一个键一个字，空格上屏
+    for (letter, expected) in ('a'..='y').zip(WUBI_LEVEL1.chars()) {
+        let mut session = wubi_session();
+        let frame = type_keys(&mut session, &format!("{letter}<sp>"));
+        assert_eq!(frame.commit, Some(expected.to_string()), "{letter}");
+        assert!(!frame.learned, "五笔不学");
+    }
+}
+
+#[test]
+fn wubi_unique_four_codes_commit_at_once() {
+    // ggll 只有「一」：打满四码直接上屏
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "ggl").commit, None);
+    let frame = type_keys(&mut session, "l");
+    assert_eq!(frame.commit.as_deref(), Some("一"));
+    assert!(!session.composing());
+    // 有重码（wqvb 你好、您好）不上屏，按码表顺序列着
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqvb");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, "wqvb");
+    assert_eq!(texts(&mut session)[..2], ["你好", "您好"]);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    // 关掉以后四码唯一也等空格
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "ggll").commit, None);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("一"));
+}
+
+#[test]
+fn wubi_fifth_letter_commits_first() {
+    // 第五码顶字：四码时再打字母，先上屏光标处的候选，字母开始新码
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqvb");
+    let frame = type_keys(&mut session, "g");
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert_eq!(frame.preedit, "g");
+    // 光标挪到第二个再顶，上屏的是看到的那个
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqvb<right>");
+    let frame = type_keys(&mut session, "w");
+    assert_eq!(frame.commit.as_deref(), Some("您好"));
+    assert_eq!(frame.preedit, "w");
+    // 不到四码时字母一律接上
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqv");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, "wqv");
+}
+
+#[test]
+fn wubi_empty_code() {
+    // 空码：编辑区留着、上方提示，可以退格改；再打字母丢掉空码重新开始；空格清空；回车上屏字母
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wx");
+    assert_eq!(frame.preedit, "wx");
+    assert_eq!(frame.cand_count, 0);
+    assert_eq!(frame.aux, "空码");
+    let frame = type_keys(&mut session, "<bs>");
+    assert_eq!(frame.aux, "");
+    assert_eq!(texts(&mut session)[0], "人");
+    let frame = type_keys(&mut session, "xg");
+    assert_eq!(frame.commit, None, "空码不上屏");
+    assert_eq!(frame.preedit, "g");
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wx<sp>");
+    assert_eq!(frame.commit, None);
+    assert!(!session.composing());
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wx<cr>").commit.as_deref(), Some("wx"));
+}
+
+#[test]
+fn wubi_punctuation_commits_first() {
+    // 标点顶字：先上屏首选再上屏标点；空码时只上屏标点
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wq,").commit.as_deref(), Some("你，"));
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wx.").commit.as_deref(), Some("。"));
+    // 引号在打码时也是标点，不是隔音符
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wq'").commit.as_deref(), Some("你‘"));
+    // 数字按当前页选
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wqvb2").commit.as_deref(), Some("您好"));
+}
+
+#[test]
+fn wubi_longer_codes_with_hints() {
+    // 不满四码时，码对上的在前（码表顺序），后面是以它开头的更长的码的词，带还要打的码
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let all = comments(&mut session);
+    assert_eq!(all[0], ("你".into(), "".into()));
+    assert!(all.contains(&("您".into(), "in".into())), "{all:?}");
+    assert!(all.contains(&("你好".into(), "vb".into())), "{all:?}");
+    assert_eq!(all.iter().filter(|(t, _)| t == "你").count(), 1, "同一个字只出一次");
+    // 一个码：带最短的码（你 是 wq，不是频次更高的 wqiy）
+    let mut session = wubi_session();
+    type_keys(&mut session, "w");
+    assert!(comments(&mut session).contains(&("你".into(), "q".into())));
+    // 没有精确码时首选是联想出来的词，空格上屏看到的那个
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqv");
+    assert_eq!(comments(&mut session)[0], ("你好".into(), "b".into()));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    // 关掉编码提示：候选照旧，不带码
+    let mut session = wubi_with(wubi_engine(), Config { wubi_hint: false, ..wubi_config() });
+    type_keys(&mut session, "wq");
+    assert!(comments(&mut session).iter().all(|(_, c)| c.is_empty()));
+    assert!(texts(&mut session).contains(&"您".to_string()));
+}
+
+#[test]
+fn wubi_uppercase_and_calculator() {
+    // 大写字母：打码时先顶字，再原样上屏；没在打字时直接上屏
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqA");
+    assert_eq!(frame.commit.as_deref(), Some("你A"));
+    assert!(!session.composing());
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "B").commit.as_deref(), Some("B"));
+    // 计算器用大写 V；小写 v 是「发」，v + 空格上屏「发」，不开工具栏
+    let mut session = wubi_session();
+    type_keys(&mut session, "V1+2*3");
+    assert_eq!(texts(&mut session)[0], "7");
+    assert_eq!(type_keys(&mut session, "=").commit.as_deref(), Some("7"));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "v<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("发"));
+    assert_eq!(session.open_panel(), None);
+    // 只打了 V：空格原样上屏 V；接着打码先把 V 上屏
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "V<sp>").commit.as_deref(), Some("V"));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "Vwq");
+    assert_eq!(frame.preedit, "wq");
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "Vw").commit.as_deref(), Some("V"));
+    // 计算器关了：V 就是大写字母
+    let mut session = wubi_with(wubi_engine(), Config { calculator: false, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "V").commit.as_deref(), Some("V"));
+}
+
+#[test]
+fn wubi_z_is_temporary_pinyin() {
+    let engine = wubi_engine();
+    // z 开头临时打全拼：编辑区 z + 分好音节的拼音，候选带五笔码（反查）
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "znihao");
+    assert_eq!(frame.preedit, "zni'hao");
+    assert_eq!(comments(&mut session)[0], ("你好".into(), "wqvb".into()));
+    let frame = type_keys(&mut session, "<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert!(!frame.learned);
+    assert_eq!(engine.history_count("你好"), 0, "临时拼音不学");
+    // 有简码的字显示「简码/全码」，只有一个码的就是它
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zba");
+    assert!(comments(&mut session).contains(&("八".into(), "wty".into())));
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zshi");
+    assert!(comments(&mut session).contains(&("是".into(), "j/jghu".into())));
+    // 打码途中按 z：先顶字，再开始临时拼音
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "wqz");
+    assert_eq!(frame.commit.as_deref(), Some("你"));
+    assert_eq!(frame.preedit, "z");
+    // 临时拼音里不限四码，隔音符照旧；退格到只剩 z 再退格清空
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "zkai'xin");
+    assert_eq!(frame.preedit, "zkai'xin");
+    assert_eq!(texts(&mut session)[0], "开心");
+    type_keys(&mut session, "<bs><bs><bs><bs><bs><bs><bs>");
+    assert_eq!(session.input(), "z");
+    type_keys(&mut session, "<bs>");
+    assert!(!session.composing());
+    // 先选句首词，剩下的接着选（剩下的不以 z 开头，也还是拼音）；上屏的整句不学
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "znihaozhongguo");
+    assert_eq!(choose_text(&mut session, "你好").preedit, "你好zhong'guo");
+    assert_eq!(texts(&mut session)[0], "中国");
+    let frame = type_keys(&mut session, "<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("你好中国"));
+    assert!(!frame.learned);
+    assert_eq!(engine.history_count("你好中国"), 0);
+    // 日期时间在临时拼音里照常
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zriqi");
+    assert_eq!(texts(&mut session)[..2], ["日期", "2026年11月11日"]);
+}
+
+#[test]
+fn wubi_arrow_keys_pick_candidates_even_in_caret_mode() {
+    // 方向键设成挪光标时：打五笔码还是左右挑候选（四码里挪光标没用）；临时拼音里照常挪光标，
+    // 但挪不到 z 前面（在 z 前面打字就不是拼音了）
+    let config = Config { arrow_keys: ArrowKeys::Caret, ..wubi_config() };
+    let mut session = wubi_with(wubi_engine(), config);
+    let frame = type_keys(&mut session, "wqvb<right>");
+    assert_eq!(frame.cand_cursor, Some(1));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("您好"));
+    let mut session = wubi_with(wubi_engine(), config);
+    let frame = type_keys(&mut session, "znihao<home>");
+    assert_eq!(frame.preedit_cursor, 1);
+    type_keys(&mut session, "<left>x");
+    assert_eq!(session.input(), "zxnihao");
+}
+
+#[test]
+fn wubi_extras_do_not_move_code_slots() {
+    // 日期、时间、星期的码都是四码唯一，一打就上屏，不出写法（要写法用 zriqi）
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "jjad").commit.as_deref(), Some("日期"));
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    type_keys(&mut session, "jjad");
+    let all = texts(&mut session);
+    assert_eq!(all[0], "日期");
+    assert!(!all.iter().any(|t| t.contains("2026")), "{all:?}");
+    // emoji 推荐跟在码对上的候选后面，不算进「唯一」
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    type_keys(&mut session, "gany");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "开心");
+    assert_eq!(all[1].kind, CandidateKind::Emoji);
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "gany").commit.as_deref(), Some("开心"));
+    // 数字字后面的按键 emoji 也在精确码之后
+    let mut session = wubi_session();
+    type_keys(&mut session, "wty");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "八");
+    assert!(all[1..].iter().all(|c| c.kind == CandidateKind::Emoji));
+    assert!(all.iter().any(|c| c.text == "8\u{fe0f}\u{20e3}"), "{all:?}");
+}
+
+#[test]
+fn wubi_custom_codes_come_first() {
+    let engine = wubi_engine();
+    // 自定义编码排最前；和码表撞码时不唯一，不自动上屏
+    engine.lexicon().set_custom_tsv("ggll\t壹\nbj\t北京市\\n海淀区\nli si\t李四\n");
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "ggll").commit, None);
+    assert_eq!(texts(&mut session)[..2], ["壹", "一"]);
+    // 编码像拼音（bj）的也照样是五笔下的自定义编码；带换行的原样上屏
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "bj");
+    assert_eq!(texts(&mut session)[0], "北京市\n海淀区");
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("北京市\n海淀区"));
+    // 分了音节的（li si）是拼音读法，不占五笔的码位
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "lisi");
+    assert!(!texts(&mut session).contains(&"李四".to_string()));
+}
+
+#[test]
+fn wubi_traditional_output() {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_traditional(true);
+    engine.install_converter(Converter::from_tsv_str("国\t國\n发\t發\n").unwrap());
+    engine.set_wubi(wubi_table());
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "l<sp>").commit.as_deref(), Some("國"));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "khlg").commit, None);
+    assert_eq!(texts(&mut session)[..2], ["中國", "跨國"]);
+}
+
+#[test]
+fn wubi_never_learns_or_forgets_pinyin_words() {
+    let engine = wubi_engine();
+    engine.add_user_word("ni hao", "你好", 5000.0).unwrap();
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "wqvb");
+    // Ctrl+Delete：五笔码的候选没有可忘的，拼音学过的「你好」不能顺手删掉
+    let forget = Key { modifiers: modifier::CTRL, ..Key::press(keysym::DELETE) };
+    let frame = session.key(&forget);
+    assert!(frame.handled && !frame.forgot);
+    assert!(engine.user_words().iter().any(|(_, w, _)| w == "你好"));
+    // 选词、数字选词、回车、切输入法都不学
+    for keys in ["wqvb<sp>", "wqvb2", "wq<cr>"] {
+        let mut session = wubi_with(engine, wubi_config());
+        let frame = type_keys(&mut session, keys);
+        assert!(frame.commit.is_some() && !frame.learned, "{keys}");
+    }
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "wq");
+    assert!(!session.reset(true).learned);
+    for word in ["你好", "您好", "wq", "你"] {
+        assert_eq!(engine.history_count(word), 0, "{word}");
+    }
+}
+
+#[test]
+fn wubi_pick_char_and_select_keys() {
+    // 以词定字：] 取最后一个字
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wqvb]").commit.as_deref(), Some("好"));
+    // 分号选第二个
+    let config = Config {
+        select_keys: wowtype_core::session::SelectKeys::Semicolon,
+        ..wubi_config()
+    };
+    let mut session = wubi_with(wubi_engine(), config);
+    assert_eq!(type_keys(&mut session, "wqvb;").commit.as_deref(), Some("您好"));
+}
+
+#[test]
+fn wubi_without_table_types_pinyin_and_says_why() {
+    // 选了五笔、码表没载入：照全拼打（不会打不了字），候选框上方说为什么
+    let mut session = wubi_with(engine(), wubi_config());
+    let frame = type_keys(&mut session, "nihao");
+    assert_eq!(frame.preedit, "ni'hao");
+    assert!(frame.aux.contains("没有五笔码表"), "{}", frame.aux);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    assert_eq!(session.frame(false).aux, "", "没在打字时不提示");
+}
+
+#[test]
+fn wubi_english_switch_and_emoji_panel() {
+    // 打码途中切英文：已经打的码原样上屏（和拼音一样），不学
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let frame = session.set_mode(wowtype_core::session::Mode::English);
+    assert_eq!(frame.commit.as_deref(), Some("wq"));
+    assert!(!frame.learned);
+    // 表情快捷键：五笔码不当搜索词，先顶字
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let frame = session.toggle_emoji_panel();
+    assert_eq!(frame.commit.as_deref(), Some("你"));
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(frame.preedit, "");
+    // 临时拼音的拼音能当搜索词（不带 z）
+    let mut session = wubi_session();
+    type_keys(&mut session, "zxiao");
+    assert_eq!(session.toggle_emoji_panel().preedit, "xiao");
+}
+
+/// 真码表（scripts/make-wubi.sh 生成的 wubi86.tsv）：WOWTYPE_WUBI 指着它时才跑。
+#[test]
+fn wubi_real_table() {
+    let Ok(path) = std::env::var("WOWTYPE_WUBI") else {
+        eprintln!("没设 WOWTYPE_WUBI，跳过真码表的用例");
+        return;
+    };
+    let engine = engine();
+    assert!(engine.load_wubi(&path).unwrap() > 90_000);
+    for (letter, expected) in ('a'..='y').zip(WUBI_LEVEL1.chars()) {
+        let mut session = wubi_with(engine, wubi_config());
+        let frame = type_keys(&mut session, &format!("{letter}<sp>"));
+        assert_eq!(frame.commit, Some(expected.to_string()), "一级简码 {letter}");
+    }
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "ggll").commit.as_deref(), Some("一"));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "wqvb<sp>").commit.as_deref(), Some("你好"));
+}
+
+#[test]
+fn wubi_with_translate_auto_space_and_grid() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::Mode;
+    // 「译」里顶字：上屏的进原文，新码留在编辑区
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = wubi_session();
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    let frame = type_keys(&mut session, "wqvbg");
+    assert_eq!(frame.commit, None);
+    assert_eq!(session.translate_source(), "你好");
+    assert_eq!(frame.preedit, "g");
+    // 自动空格：顶字上屏的汉字和后面的大写字母之间补空格
+    let mut session = wubi_with(wubi_engine(), Config { auto_space: LETTERS | DIGITS, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "wqA").commit.as_deref(), Some("你 A"));
+    // 横排下键展开面板，照常挪光标、选；接着打字母先收起再接上
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>");
+    assert_eq!(frame.panel, Panel::Expanded);
+    let second = texts(&mut session)[1].clone();
+    assert_eq!(type_keys(&mut session, "<right><sp>").commit, Some(second));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>q");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(frame.preedit, "wq");
+}
+
 // ---------------- 联想（#89）
 
 /// 联想用的小引擎：词级语言模型（和发版的 words.lm 同一种）+ 词频照着语料的小词库。
@@ -2491,4 +2973,50 @@ fn prediction_traditional_chains() {
     assert_eq!(shown(&mut session), ["天氣", "晚上"]);
     assert_eq!(type_keys(&mut session, "1").commit.as_deref(), Some("天氣"));
     assert_eq!(shown(&mut session), ["不錯"], "选了繁体的词接着联想");
+}
+
+#[test]
+fn prediction_wubi_explicit_commits_only() {
+    // 五笔：空格、数字选的词照常联想（联想的词不用打码就上屏）；顶字、四码唯一自动上屏是打字途中的，不联想
+    let engine: &'static Engine = Box::leak(Box::new(new_prediction_engine()));
+    engine.set_wubi(Some(Arc::new(
+        wowtype_core::wubi::WubiTable::from_tsv_str("jt\t今天\t100\njtjt\t今天\t90\nxx\t谢谢\t100\n").unwrap(),
+    )));
+    let config = Config {
+        wubi: true,
+        prediction: true,
+        ..Config::default()
+    };
+    let mut session = wubi_with(engine, config);
+    let frame = type_keys(&mut session, "jt<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.panel, Panel::Prediction);
+    assert_eq!(shown(&mut session), ["天气", "晚上"]);
+    let frame = type_keys(&mut session, "1");
+    assert_eq!(frame.commit.as_deref(), Some("天气"));
+    assert!(!frame.learned, "五笔不学，选联想的词也不学");
+    assert_eq!(shown(&mut session), ["不错"], "五笔不记选词：照光标前的字接着联想");
+
+    // 顶字：打满四码（关了自动上屏）再打第五码 x，「今天」上屏，x 开始下一个码，这个键不弹联想
+    let mut session = wubi_with(
+        engine,
+        Config {
+            wubi_auto_commit: false,
+            ..config
+        },
+    );
+    let frame = type_keys(&mut session, "jtjtx");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(frame.preedit, "x");
+    let frame = type_keys(&mut session, "x<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("谢谢"));
+    assert_eq!(shown(&mut session), ["大家", "你"], "空格上屏的照常联想");
+
+    // 四码唯一自动上屏：不联想，接着打的数字是数字
+    let mut session = wubi_with(engine, config);
+    let frame = type_keys(&mut session, "jtjt");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.cand_count, 0);
+    assert!(!type_keys(&mut session, "1").handled);
 }

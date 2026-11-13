@@ -676,6 +676,30 @@ pub unsafe extern "C" fn wowtype_engine_load_conversion(
     }
 }
 
+/// 载入五笔码表（`wubi86.tsv`：码<TAB>词<TAB>频次），替换上一次载入的，返回条数；失败返回 -1，
+/// 原来载入的不动。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_wubi(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = (unsafe { cstr_to_str(path) }) else {
+        set_last_error("path is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_wubi(path) {
+        Ok(n) => c_int::try_from(n).unwrap_or(c_int::MAX),
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 thread_local! {
     static PUNCT_BUF: RefCell<CString> =
         RefCell::new(CString::new("，").expect("static punct"));

@@ -223,6 +223,12 @@ pub struct WowtypeSessionConfig {
     pub shuangpin_keys: c_int,
     /// 1.10 起：打字途中方向键做什么，`WOWTYPE_ARROW_KEYS_*`（#129），默认挑候选。
     pub arrow_keys: c_int,
+    /// 1.10 起：五笔（引擎要载入五笔码表），默认 0。
+    pub wubi: c_int,
+    /// 1.10 起：五笔四码唯一自动上屏，默认 1。
+    pub wubi_auto_commit: c_int,
+    /// 1.10 起：五笔编码提示，默认 1。
+    pub wubi_hint: c_int,
     /// 1.10 起：联想（#89），默认 0。
     pub prediction: c_int,
 }
@@ -261,6 +267,9 @@ impl Default for WowtypeSessionConfig {
                 ArrowKeys::Candidates => WOWTYPE_ARROW_KEYS_CANDIDATES,
                 ArrowKeys::Caret => WOWTYPE_ARROW_KEYS_CARET,
             },
+            wubi: c_int::from(config.wubi),
+            wubi_auto_commit: c_int::from(config.wubi_auto_commit),
+            wubi_hint: c_int::from(config.wubi_hint),
             prediction: c_int::from(config.prediction),
         }
     }
@@ -311,6 +320,9 @@ impl WowtypeSessionConfig {
                 WOWTYPE_ARROW_KEYS_CARET => ArrowKeys::Caret,
                 _ => ArrowKeys::Candidates,
             },
+            wubi: self.wubi != 0,
+            wubi_auto_commit: self.wubi_auto_commit != 0,
+            wubi_hint: self.wubi_hint != 0,
             prediction: self.prediction != 0,
         }
     }
@@ -340,6 +352,8 @@ pub struct WowtypeCandidateInfo {
     pub kind: c_int,
     pub commit: *const c_char,
     pub emoji: *const c_char,
+    /// 1.10 起：候选后面的小字（五笔还要打的码、反查的五笔码），没有是空串。
+    pub comment: *const c_char,
 }
 
 pub const WOWTYPE_CAND_WORD: c_int = 0;
@@ -352,6 +366,7 @@ struct CCandidate {
     pinyin: CString,
     commit: CString,
     emoji: CString,
+    comment: CString,
     consumed: usize,
     kind: c_int,
 }
@@ -366,6 +381,7 @@ impl CCandidate {
             kind: self.kind,
             commit: self.commit.as_ptr(),
             emoji: self.emoji.as_ptr(),
+            comment: self.comment.as_ptr(),
         }
     }
 
@@ -375,6 +391,7 @@ impl CCandidate {
             pinyin: to_c(&c.pinyin),
             commit: to_c(&c.commit),
             emoji: to_c(&c.emoji),
+            comment: to_c(&c.comment),
             consumed: c.consumed,
             kind: match c.kind {
                 CandidateKind::Word => WOWTYPE_CAND_WORD,
@@ -747,17 +764,27 @@ pub unsafe extern "C" fn wowtype_session_candidate(
     session: *mut WowtypeSession,
     index: usize,
 ) -> *const c_char {
-    let Some(handle) = (unsafe { session.as_mut() }) else {
-        return ptr::null();
-    };
+    unsafe { shown_candidate(session, index) }.map_or(ptr::null(), |c| c.text.as_ptr())
+}
+
+/// 上一次返回的 frame 里显示的第 index 个候选后面的小字（1.10，五笔的编码提示），没有是空串。
+/// 越界或 NULL 返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_candidate_comment(
+    session: *mut WowtypeSession,
+    index: usize,
+) -> *const c_char {
+    unsafe { shown_candidate(session, index) }.map_or(ptr::null(), |c| c.comment.as_ptr())
+}
+
+/// 上一次的 frame 里显示的第 index 个候选。
+unsafe fn shown_candidate<'a>(session: *mut WowtypeSession, index: usize) -> Option<&'a CCandidate> {
+    let handle = unsafe { session.as_mut() }?;
     if index >= handle.frame.cand_count {
-        return ptr::null();
+        return None;
     }
     let at = handle.shown_start + index;
-    handle
-        .c_candidates()
-        .get(at)
-        .map_or(ptr::null(), |c| c.text.as_ptr())
+    handle.c_candidates().get(at)
 }
 
 /// 清空编辑区；commit_pending 非 0 时把已选的词和原始输入放进 frame->commit。
@@ -1129,6 +1156,8 @@ mod tests {
         let read = unsafe { read_sized(&config, config.size) }.to_config();
         assert!(read.toolbar);
         assert!(!read.shuangpin_keys, "size 之外的字段不该读进来");
+        // 1.10 加的五笔两个开关默认开着，五笔本身默认关
+        assert!(!read.wubi && read.wubi_auto_commit && read.wubi_hint);
     }
 
     #[test]

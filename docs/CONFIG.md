@@ -125,9 +125,12 @@ FuzzyUnIong=False
 FuzzyEngOng=False
 TypoCorrection=True
 RareExtChars=False
+InputScheme=Quanpin
 Shuangpin=False
 ShuangpinScheme=Ziranma
 ShuangpinShowKeys=False
+WubiAutoCommit=True
+WubiHint=True
 ShiftToggle=Both
 InitialMode=Chinese
 Traditional=False
@@ -165,13 +168,17 @@ Lexicon=
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `ArrowKeys` | 打字途中方向键做什么（#129），设置界面里叫「方向键」：`Candidates`「都用来选词」（默认），跟着候选排列，横排 `←` `→` 选词、`↑` 上一页、`↓` 展开更多候选，竖排 `↑` `↓` 选词、`←` `→` 翻页；`Caret`「左右键移动光标」，横排竖排都是 `↑` `↓` 选词（到了一页的两头接着翻页），`←` `→` 在拼音里移动光标：打的字母插在光标处，退格删光标前一个，`Home`、`End`、`Delete` 也管光标，到了两头再按什么也不做；方向键不翻页，翻页用 `PgUp` `PgDn` 和翻页键，横排也不展开面板。双拼时光标在中间，编辑区显示打的键；「译」里拼音在原文框里，没有光标。GNOME 的 Input Method Panel 扩展画不出编辑区里的光标（打字、删除照常对） |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
 | `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn`、`FuzzyAnAi`、`FuzzyHuangWang`、`FuzzyUnIong`、`FuzzyEngOng` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong、an=ai、huang=wang、un=iong、eng=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
 | `RareExtChars` | 也出 CJK 扩展 B 区及以后的单字（比如 `hou` 的 𠯜），默认关：常见中文字体（Noto CJK、思源、苹方）都没有这些字，列出来是方块。打开前先装能显示它们的字体，比如 Ubuntu / Debian 的 `fonts-hanazono`。通用规范汉字表里的扩展区字（𬭩、𫚔，约 200 个，常见字体都有）和含这些字的词（𩽾𩾌）不受这个开关影响 |
 | `PickChar` | 以词定字：打拼音时 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字，默认开；翻页键设成 `[ ]` 时让给翻页 |
 | `Prediction` | 联想（#89），默认关：选词上屏以后（中文模式，光标前是汉字），不用打字先给出接下来可能打的词，按数字键选，选了接着联想；没把握时不给。空格、回车、退格、方向键照常输入（空格不会选中联想的词，退格照常删字），打字母照常开始打字，Esc 收起。默认关是因为汉字后面直接打数字（第3章、8点）会选成联想的词。词来自词级语言模型（`words.lm`）加上你自己用过的搭配；密码框、「译」、英文模式里不联想 |
+| `InputScheme` | 输入方案，设置界面里是「输入方案」的单选：`Quanpin` 拼音（默认）、`Shuangpin` 双拼、`Wubi86` 五笔 86。五笔要数据目录里有五笔码表 `wubi86.tsv`（安装包里带着，查找顺序和词库一样，环境变量是 `WOWTYPE_WUBI`）；没有时设置里「五笔输入」灰掉，配置文件里写了 `Wubi86` 的照全拼打，候选框上方提示没有码表。五笔怎么打见 [README 的五笔](../README.md#五笔) |
+| `Shuangpin` | 旧版的双拼开关，设置界面里不出。文件里没有 `InputScheme` 时（0.3.12 及以前的配置），`Shuangpin=True` 读成 `InputScheme=Shuangpin`，否则是 `Quanpin`；有 `InputScheme` 时不看它。三端写文件时都把它写成「`InputScheme` 是不是 `Shuangpin`」，旧版本读得懂（五笔在旧版本里是全拼） |
+| `WubiAutoCommit` | 五笔打满四码、只有一个字词时直接上屏，默认 `True`。只在五笔时显示 |
+| `WubiHint` | 五笔的候选后面显示还要打的码（打 `wq` 时「您 in」「你好 vb」），默认 `True`。只在五笔时显示；`z` 临时拼音反查的五笔码总是显示 |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
 | `ShuangpinShowKeys` | 双拼时编辑区显示打的键（`uivs`），不翻成全拼（`shi'zhong`），中英混打时看得出打了什么。默认 `False` |
 | `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off`。fcitx5 自己的全局快捷键（「临时切换输入法」「切换输入法」「向前切换输入法」等任何一项）里用了同一个 Shift 时，fcitx5 先处理，WowType 收不到；设置界面「输入」页会提示，并能一键把 Shift 从 fcitx5 那边去掉（改的是 `~/.config/fcitx5/config`，关掉开关就还原；这个文件写不了时提示「只在这次有效」，NixOS 见[安装说明](INSTALL.md#单按-shift-在-nixos-上)） |
@@ -210,7 +217,8 @@ Lexicon=
 | `WOWTYPE_AUTOSPACE` | 自动加空格的位掩码：1 汉字和字母之间、2 汉字和数字之间，`3` 两种都加，`0` 关 |
 | `WOWTYPE_FUZZY_GROUPS` | 模糊音分组的位掩码（1 z/zh、2 c/ch、4 s/sh、8 n/l、16 f/h、32 r/l、64 an/ang、128 en/eng、256 in/ing、512 ian/iang、1024 uan/uang、2048 un/ong、4096 an/ai、8192 huang/wang、16384 un/iong、32768 eng/ong） |
 | `WOWTYPE_SELECT_KEYS` | `off`、`semicolon`、`quote` |
-| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼 |
+| `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案（`xiaohe`、`microsoft` 等，大小写都行），设了就当作打开双拼（这时不是五笔） |
+| `WOWTYPE_WUBI` | 五笔码表路径，默认按 `~/.local/share/wowtype/wubi86.tsv`、`/usr/share/wowtype/wubi86.tsv` 的顺序找 |
 | `WOWTYPE_SHIFT_TOGGLE` | `both`、`left`、`right`、`off` |
 | `WOWTYPE_VOICE_KEY` | 语音键（fcitx5 键名）；`none` 关掉语音 |
 | `WOWTYPE_VOICE_OVERLAY=0` | GNOME 上也不用语音浮条，用候选框里的文字提示 |
@@ -238,7 +246,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 改完下一次按键时生效，不用重启；换了 `Lexicon` 会在后台重新载入词库，载完之前照旧用原来的。
 
 现在认的项：`CandidateLayout`、`ArrowKeys`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Prediction`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
-`Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
+`InputScheme`、`Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
 `AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`ToggleKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
 检查更新 macOS 还没做，对应的项写了也不起作用。
 

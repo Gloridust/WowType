@@ -69,6 +69,27 @@ struct WowtypeArrowKeysAnnotation {
     }
 };
 
+/// 输入方案：全拼、双拼、五笔 86。
+enum class WowtypeInputScheme { Quanpin, Shuangpin, Wubi86 };
+FCITX_CONFIG_ENUM_NAME(WowtypeInputScheme, "Quanpin", "Shuangpin", "Wubi86");
+
+struct WowtypeInputSchemeAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "拼音输入");
+        config.setValueByPath("EnumI18n/1", "双拼输入");
+        config.setValueByPath("EnumI18n/2", "五笔输入");
+    }
+};
+
+/// 存盘、但不在 fcitx5 配置工具里列出来的项（旧版的 Shuangpin 开关，跟着 InputScheme 写）。
+struct WowtypeHiddenAnnotation {
+    bool skipDescription() const { return true; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &) const {}
+};
+
 enum class WowtypeShuangpinScheme { Ziranma, Xiaohe, Microsoft, Sogou, ABC, Ziguang, PinyinJiajia };
 FCITX_CONFIG_ENUM_NAME(WowtypeShuangpinScheme, "Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC",
                        "Ziguang", "PinyinJiajia");
@@ -193,12 +214,19 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> fuzzyEngOng{this, "FuzzyEngOng", "模糊音：eng = ong", false};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
     fcitx::Option<bool> rareExt{this, "RareExtChars", "候选末尾列出扩展 B 区以后的生僻字", false};
-    fcitx::Option<bool> shuangpin{this, "Shuangpin", "双拼输入", false};
+    fcitx::Option<WowtypeInputScheme, fcitx::NoConstrain<WowtypeInputScheme>,
+                  fcitx::DefaultMarshaller<WowtypeInputScheme>, WowtypeInputSchemeAnnotation>
+        inputScheme{this, "InputScheme", "输入方案", WowtypeInputScheme::Quanpin};
+    // 旧版的双拼开关：只为旧版本读得懂，见 loadWowtypeConfig
+    fcitx::Option<bool, fcitx::NoConstrain<bool>, fcitx::DefaultMarshaller<bool>, WowtypeHiddenAnnotation>
+        shuangpin{this, "Shuangpin", "双拼输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
         shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
     fcitx::Option<bool> shuangpinShowKeys{this, "ShuangpinShowKeys",
                                           "双拼时编辑区显示打的键（不翻成全拼）", false};
+    fcitx::Option<bool> wubiAutoCommit{this, "WubiAutoCommit", "五笔四码唯一自动上屏", true};
+    fcitx::Option<bool> wubiHint{this, "WubiHint", "五笔编码提示（候选后面显示还要打的码）", true};
     fcitx::Option<WowtypeShiftToggle, fcitx::NoConstrain<WowtypeShiftToggle>,
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
@@ -324,6 +352,11 @@ inline fcitx::RawConfig wowtypeTopLevel(const fcitx::RawConfig &raw) {
     return out;
 }
 
+/// 旧版的 Shuangpin 开关跟着 InputScheme（读完、存盘前都调）：旧版本读到的是现在的方案，五笔在旧版本里是全拼。
+inline void syncWowtypeLegacy(WowtypeConfig &config) {
+    config.shuangpin.setValue(*config.inputScheme == WowtypeInputScheme::Shuangpin);
+}
+
 inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &file) {
     const fcitx::RawConfig raw = wowtypeTopLevel(file);
     config.load(raw);
@@ -334,6 +367,11 @@ inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &fil
         (*config.translateBaseUrl).find_first_not_of(" \t\r\n") != std::string::npos) {
         config.translateLocal.setValue(false);
     }
+    // 0.3.12 及以前没有 InputScheme，只有 Shuangpin 开关
+    if (!raw.valueByPath("InputScheme") && *config.shuangpin) {
+        config.inputScheme.setValue(WowtypeInputScheme::Shuangpin);
+    }
+    syncWowtypeLegacy(config);
 }
 
 class WowtypeEngine;
@@ -552,6 +590,10 @@ private:
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;
+    /// 五笔（设置里选了五笔；码表在 applyCoreSettings 里载入，没载入时会话照全拼打并提示）。
+    bool wubi_ = false;
+    /// 现在的引擎载入了五笔码表。
+    bool wubiLoaded_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;

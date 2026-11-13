@@ -1450,6 +1450,81 @@ void runCases(Instance &instance) {
     addon->reloadConfig();
     fresh(ic.get());
 
+    // 五笔：码表用一小段（rime-wubi 的原样几行），WOWTYPE_WUBI 指过去
+    {
+        const auto auxUp = [&] { return ic->inputPanel().auxUp().toString(); };
+        const std::string table = configDir + "/wubi86.tsv";
+        std::ofstream(table) << "g\t一\t2015124793\nggl\t一\t2830000000\nggll\t一\t2830000000\n"
+                                "v\t发\t395047607\nw\t人\t1002212710\nwq\t你\t597727619\n"
+                                "wqin\t您\t3090000000\nwqvb\t你好\t70500000\nwqvb\t您好\t34700000\n";
+        // 先试没有码表：照全拼打，候选框上方说为什么
+        setenv("WOWTYPE_WUBI", (configDir + "/没有这个文件.tsv").c_str(), 1);
+        std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\n";
+        addon->reloadConfig();
+        type(ic.get(), "nihao");
+        check(auxUp().find("没有五笔码表") != std::string::npos, "五笔没有码表时提示：" + auxUp());
+        type(ic.get(), "<sp>");
+        check(ic->committed == "你好", "五笔没有码表时照全拼打：" + ic->committed);
+        fresh(ic.get());
+        setenv("WOWTYPE_WUBI", table.c_str(), 1);
+        addon->reloadConfig();
+        type(ic.get(), "ggll");
+        check(ic->committed == "一" && preedit(ic.get()).empty(), "五笔四码唯一自动上屏 ggll -> 一：" + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "wqvb");
+        {
+            const auto p = page(ic.get());
+            check(ic->committed.empty() && p.size() >= 2 && p[0] == "你好" && p[1] == "您好",
+                  "五笔重码按码表顺序：" + join(p));
+        }
+        type(ic.get(), "g");
+        check(ic->committed == "你好" && preedit(ic.get()) == "g", "五笔第五码顶字：" + ic->committed + " / " + preedit(ic.get()));
+        fresh(ic.get());
+        type(ic.get(), "wq");
+        {
+            const auto p = page(ic.get());
+            check(!p.empty() && p[0] == "你" && std::find(p.begin(), p.end(), "您 in") != p.end(),
+                  "五笔逐码提示带还要打的码：" + join(p));
+        }
+        type(ic.get(), ",");
+        check(ic->committed == "你，", "五笔标点顶字：" + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "wx");
+        check(auxUp() == "空码" && page(ic.get()).empty() && preedit(ic.get()) == "wx", "五笔空码提示：" + auxUp());
+        type(ic.get(), "<sp>");
+        check(ic->committed.empty() && preedit(ic.get()).empty() && auxUp().empty(), "五笔空码空格清空");
+        fresh(ic.get());
+        type(ic.get(), "znihao");
+        check(preedit(ic.get()) == "zni'hao" && !page(ic.get()).empty() && page(ic.get())[0] == "你好 wqvb",
+              "五笔 z 临时拼音带反查的五笔码：" + preedit(ic.get()) + " | " + join(page(ic.get())));
+        type(ic.get(), "<sp>");
+        check(ic->committed == "你好", "临时拼音上屏：" + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "v<sp>");
+        check(ic->committed == "发" && auxUp().empty(), "五笔 v + 空格上屏「发」，不开工具栏：" + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "V1+2*3=");
+        check(ic->committed == "7", "五笔计算器用大写 V：" + ic->committed);
+        fresh(ic.get());
+        // 四码唯一自动上屏关掉：ggll 等空格
+        std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\nWubiAutoCommit=False\nWubiHint=False\n";
+        addon->reloadConfig();
+        type(ic.get(), "ggll");
+        check(ic->committed.empty() && preedit(ic.get()) == "ggll", "关掉四码唯一自动上屏：" + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "wq");
+        {
+            const auto p = page(ic.get());
+            check(std::find(p.begin(), p.end(), "您") != p.end(), "关掉编码提示：候选不带码：" + join(p));
+        }
+        fresh(ic.get());
+        unsetenv("WOWTYPE_WUBI");
+        std::filesystem::remove(table);
+    }
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    fresh(ic.get());
+
     // 日期时间候选（#36）：只认全拼 riqi / shijian / xingqi，格式从第二个开始
     type(ic.get(), "riqi");
     {

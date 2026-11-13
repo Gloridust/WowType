@@ -486,6 +486,12 @@ pub struct Config {
     pub shuangpin_keys: bool,
     /// 打字途中方向键做什么（#129）。
     pub arrow_keys: ArrowKeys,
+    /// 五笔（86 版）：字母是五笔码，z 开头临时打拼音。引擎没载入五笔码表时照全拼打，编辑区上方提示。
+    pub wubi: bool,
+    /// 五笔打满四码、只有一个候选时直接上屏。
+    pub wubi_auto_commit: bool,
+    /// 五笔的逐码提示（以打的码开头的更长的码的词）后面显示还要打的码。
+    pub wubi_hint: bool,
     /// 联想（#89）：选词上屏以后接着给出可能的下一个词，数字键选，选了接着联想。
     pub prediction: bool,
 }
@@ -510,6 +516,9 @@ impl Default for Config {
             clipboard_history: false,
             shuangpin_keys: false,
             arrow_keys: ArrowKeys::Candidates,
+            wubi: false,
+            wubi_auto_commit: true,
+            wubi_hint: true,
             prediction: false,
         }
     }
@@ -541,6 +550,8 @@ pub struct Candidate {
     pub commit: String,
     /// emoji 本身（推荐候选显示的是「开心😊」，这里是「😊」）；不是 emoji 为空。
     pub emoji: String,
+    /// 候选后面的小字（不上屏）：五笔逐码提示还要打的码、z 临时拼音反查的五笔码；没有为空。
+    pub comment: String,
 }
 
 impl Candidate {
@@ -564,6 +575,8 @@ const CONTEXT_BYTES: usize = 24;
 const CONTEXT_CHARS: usize = 20;
 /// emoji 推荐插在第几个（首选和次选后面）。
 const EMOJI_SLOT: usize = 2;
+/// 五笔的逐码提示最多列几个（只打一码时以它开头的有四五千条，列多了没用）。
+const WUBI_MORE: usize = 50;
 
 /// 一个输入框的会话。只能在一个线程里用。
 ///
@@ -805,15 +818,20 @@ impl<'e> Session<'e> {
             }
         }
         let sym = key.keysym;
-        // 打字途中的隔音符（xi'an）下面单独处理
-        if let Some(c) = visible_symbol(sym).filter(|&c| !(c == '\'' && self.composing())) {
+        // 打拼音途中的隔音符（xi'an）下面单独处理；打五笔码时它是标点
+        if let Some(c) = visible_symbol(sym).filter(|&c| !(c == '\'' && self.composing() && !self.wubi_code())) {
             return self.symbol_key(c, key);
         }
         if (u32::from(b'a')..=u32::from(b'z')).contains(&sym)
             || (u32::from(b'A')..=u32::from(b'Z')).contains(&sym)
         {
-            // 大写字母原样保留：Hello、iPhone 这类英文候选要用到
-            self.push_input(char::from(sym as u8));
+            let c = char::from(sym as u8);
+            if self.wubi() && !self.temp_pinyin() {
+                self.wubi_letter(c);
+            } else {
+                // 大写字母原样保留：Hello、iPhone 这类英文候选要用到
+                self.push_input(c);
+            }
             return true;
         }
         if self.composing() && sym == keysym::APOSTROPHE {
@@ -1062,10 +1080,12 @@ impl<'e> Session<'e> {
             return self.frame(true);
         }
         let mut query = String::new();
-        if self.composing() {
+        if self.wubi_code() {
+            // 五笔码不能拿来搜：先顶字（空码丢掉），和打码途中按别的键一样
+            self.commit_current();
+        } else if self.composing() {
             if self.selections.is_empty() {
-                query = self
-                    .remaining()
+                query = self.remaining()[self.pinyin_skip()..]
                     .chars()
                     .filter(char::is_ascii_alphabetic)
                     .map(|c| c.to_ascii_lowercase())
@@ -1082,6 +1102,7 @@ impl<'e> Session<'e> {
     fn opens_toolbar(&self) -> bool {
         self.config.toolbar
             && !self.shuangpin()
+            && !self.wubi()
             && !self.translating()
             && !self.expanded
             && self.input == "v"
@@ -1758,7 +1779,7 @@ impl<'e> Session<'e> {
             }
             _ => {}
         }
-        if self.config.arrow_keys == ArrowKeys::Caret {
+        if self.arrow_moves_caret() {
             if let Some(handled) = self.caret_key(sym) {
                 return Some(handled);
             }
@@ -1825,7 +1846,7 @@ impl<'e> Session<'e> {
         }
         // 横排时左右键移动候选、上下键翻页；竖排反过来。左右键用来移拼音里的光标时（上面 caret_key
         // 处理完了，到不了这里）和竖排一样上下键选词，下键也不展开面板
-        let horizontal = self.config.horizontal && self.config.arrow_keys == ArrowKeys::Candidates;
+        let horizontal = self.config.horizontal && !self.arrow_moves_caret();
         let (prev_key, next_key, prev_page_key, next_page_key) = if horizontal {
             (keysym::LEFT, keysym::RIGHT, keysym::UP, keysym::DOWN)
         } else {
@@ -2011,10 +2032,15 @@ impl<'e> Session<'e> {
     }
 
     /// 空格：选光标处的候选（光标不在这一页上时选这一页第一个），没有候选就原样上屏。
+    /// 五笔空码不上屏字母，丢掉（空格清空；标点、顶字只上屏后面的）。
     fn commit_current(&mut self) -> bool {
         let n = self.candidates().len();
         if n == 0 {
-            self.commit_input_now();
+            if self.wubi_code() {
+                self.clear();
+            } else {
+                self.commit_input_now();
+            }
             return true;
         }
         let index = self.page * self.page_size() + self.cursor_on_page().unwrap_or(0);
@@ -2039,10 +2065,14 @@ impl<'e> Session<'e> {
     /// Ctrl+Delete：让引擎忘掉光标处的候选（用户词库里的词、选词热度、搭配），
     /// 候选原地重算，编辑区不动，候选框停在原来的页和位置。只管引擎的词（计算结果、
     /// emoji、日期时间这类没学过）；什么也没学过、是自定义词时什么也不做。
+    /// 五笔码的候选是码表里的，五笔也不学，没有可忘的（同一个词拼音学过的不能顺手删掉）。
     fn forget_current(&mut self) {
         let Some(engine) = self.engine else {
             return;
         };
+        if self.wubi_code() {
+            return;
+        }
         let Some(index) = self.current_index() else {
             return;
         };
@@ -2134,6 +2164,56 @@ impl<'e> Session<'e> {
         self.engine.is_some_and(|e| e.config().shuangpin)
     }
 
+    /// 五笔：设置里选了五笔，引擎也载入了码表。没有码表时照全拼打（编辑区上方提示），不会打不了字。
+    fn wubi(&self) -> bool {
+        self.config.wubi && self.engine.is_some_and(|e| e.wubi().is_some())
+    }
+
+    /// 五笔下 z 开头的临时拼音。看全部输入：选了句首词以后，剩下的就不以 z 开头了。
+    fn temp_pinyin(&self) -> bool {
+        self.wubi() && self.input.starts_with('z')
+    }
+
+    /// 正在打五笔码（不是临时拼音、计算器）。
+    fn wubi_code(&self) -> bool {
+        self.composing() && self.wubi() && !self.temp_pinyin() && !self.calc_active()
+    }
+
+    /// 还没选词的输入里，拼音前面要跳过几个字节：临时拼音还没选过词时是开头的 z。
+    fn pinyin_skip(&self) -> usize {
+        usize::from(self.temp_pinyin() && self.selections.is_empty())
+    }
+
+    /// 五笔下的字母（临时拼音以外）：
+    /// - 已经打了四码、空码、按了 z 或大写字母、在算算式：先顶字（光标处的候选上屏，空码丢掉）；
+    /// - 大写字母原样上屏（V 开头是计算器）；别的字母开始新码，z 开始临时拼音；
+    /// - 打满四码、只有一个候选时直接上屏（设置里能关）。四码没有更长的码，emoji 推荐不算。
+    fn wubi_letter(&mut self, c: char) {
+        if self.composing()
+            && (c == 'z'
+                || c.is_ascii_uppercase()
+                || self.calc_active()
+                || self.remaining().len() >= crate::wubi::MAX_CODE
+                || self.candidates().is_empty())
+        {
+            self.commit_current();
+        }
+        if c.is_ascii_uppercase() && !(c == 'V' && self.config.calculator) {
+            self.emit(&c.to_string());
+            return;
+        }
+        self.push_input(c);
+        if self.config.wubi_auto_commit
+            && self.wubi_code()
+            && self.input.len() == crate::wubi::MAX_CODE
+            && self.candidates().iter().filter(|c| c.kind != CandidateKind::Emoji).count() == 1
+        {
+            self.choose_now(0);
+            // 四码唯一自动上屏是打字途中的：不弹联想，接着打的数字也照常是数字
+            self.predict_due = false;
+        }
+    }
+
     /// 双拼方案拿分号当韵母键。
     fn shuangpin_semicolon(&self) -> bool {
         self.engine.is_some_and(|e| {
@@ -2149,6 +2229,8 @@ impl<'e> Session<'e> {
     }
 
     fn push_input(&mut self, c: char) {
+        // 同一个键上屏了又接着打（五笔顶字）：不联想，免得这个键刚弹出联想又得收起
+        self.predict_due = false;
         let at = self.caret();
         if at < self.input.len() {
             // 光标在拼音中间（#129）：插在光标处，光标跟着往后
@@ -2218,6 +2300,7 @@ impl<'e> Session<'e> {
             frame.translate = Some(view);
             frame.wake_after_ms = wake;
         }
+        frame.aux = self.notice(n);
         if n == 0 {
             return frame;
         }
@@ -2239,6 +2322,19 @@ impl<'e> Session<'e> {
             frame.has_next = self.has_next_page(n);
         }
         frame
+    }
+
+    /// 打字时候选框上方的提示（n 是候选个数）：选了五笔却没有码表（照全拼打，说清楚为什么）、五笔空码。
+    fn notice(&self, n: usize) -> String {
+        if !self.composing() || !self.config.wubi {
+            String::new()
+        } else if self.engine.is_some_and(|e| e.wubi().is_none()) {
+            "没有五笔码表，先按全拼打（重装 WowType 可以修好）".to_owned()
+        } else if n == 0 && self.wubi_code() {
+            "空码".to_owned()
+        } else {
+            String::new()
+        }
     }
 
     /// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
@@ -2290,9 +2386,20 @@ impl<'e> Session<'e> {
         self.selected_bytes().min(self.input.len())
     }
 
-    /// 编辑区光标在 input 里的字节位置：在还没选词的那段里，没移动过时在末尾。
+    /// 编辑区光标在 input 里的字节位置：在还没选词的那段里（临时拼音的 z 后面），没移动过时在末尾。
     fn caret(&self) -> usize {
-        self.caret.map_or(self.input.len(), |at| at.clamp(self.rest_start(), self.input.len()))
+        self.caret.map_or(self.input.len(), |at| at.clamp(self.caret_start(), self.input.len()))
+    }
+
+    /// 光标最多往前挪到哪：还没选词的那段的开头；五笔临时拼音的 z 前面不去（在 z 前面打字就不是拼音了）。
+    fn caret_start(&self) -> usize {
+        self.rest_start() + self.pinyin_skip()
+    }
+
+    /// 方向键挪拼音里的光标（[`ArrowKeys::Caret`]）。打五笔码时不挪：最多四码，在里面挪光标没什么用，
+    /// 方向键照「挑候选」用；五笔的临时拼音里照常挪。
+    fn arrow_moves_caret(&self) -> bool {
+        self.config.arrow_keys == ArrowKeys::Caret && !self.wubi_code()
     }
 
     /// 左右键移动拼音里的光标（[`ArrowKeys::Caret`]），Home、End、Delete 也管光标；到了两头照样吃掉。
@@ -2305,7 +2412,7 @@ impl<'e> Session<'e> {
             // 「译」里拼音显示在候选框的原文框里，那里画不出光标：光标留在末尾
             return Some(true);
         }
-        let start = self.rest_start();
+        let start = self.caret_start();
         let at = self.caret();
         let len = self.input.len();
         let prev = self.input[..at].chars().next_back().map_or(0, char::len_utf8);
@@ -2381,18 +2488,31 @@ impl<'e> Session<'e> {
                 .map(|text| Candidate::plain(text, input.len()))
                 .collect();
         }
+        if self.wubi() && !self.temp_pinyin() {
+            // 只打了一个 V（计算器）时还没有候选
+            return if self.calc_active() {
+                Vec::new()
+            } else {
+                self.wubi_candidates(engine, input)
+            };
+        }
 
+        let skip = self.pinyin_skip();
+        let pinyin = &input[skip..];
+        if pinyin.is_empty() {
+            return Vec::new();
+        }
         // 已经选了开头的词时，把它当上文，剩下的部分排序更准
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
-        let Ok(found) = engine.try_input(input) else {
+        let Ok(found) = engine.try_input(pinyin) else {
             return Vec::new();
         };
         let mut all: Vec<Candidate> = found
             .into_iter()
             .map(|c| {
-                let consumed = if c.consumed == 0 || c.consumed > input.len() {
-                    input.len()
+                let consumed = if c.consumed == 0 || c.consumed > pinyin.len() {
+                    pinyin.len()
                 } else {
                     c.consumed
                 };
@@ -2406,24 +2526,87 @@ impl<'e> Session<'e> {
                     commit: c.text.clone(),
                     text: c.text,
                     pinyin: c.pinyin,
-                    consumed,
+                    consumed: skip + consumed,
                     kind,
-                    emoji: String::new(),
+                    ..Candidate::default()
                 }
             })
             .collect();
+        if self.temp_pinyin() {
+            // 临时拼音反查：候选后面是它的五笔码，用来学码
+            if let Some(table) = engine.wubi() {
+                for c in all.iter_mut().filter(|c| c.kind == CandidateKind::Word) {
+                    c.comment = table.hint(&c.text).unwrap_or_default();
+                }
+            }
+        }
         if self.config.emoji_suggest {
             add_emoji_suggestion(&mut all, input.len());
             add_keycap(&mut all, input.len(), self.config.page_size);
         }
         if self.config.date_time && self.selections.is_empty() {
-            self.add_date_time(&mut all, input, engine.config().shuangpin);
+            self.add_date_time(&mut all, input, skip, engine.config().shuangpin);
         }
         all
     }
 
+    /// 五笔码的候选：自定义编码（用户定义的排最前）、码正好对上的码表词（码表的顺序），
+    /// 再是 emoji 推荐（不占重码的码位），最后是逐码提示（以这个码开头的更长的码的词，后面带还要打的码）。
+    /// 日期时间不在这里出：rq、sj 都是五笔码，日期、时间、星期的码又是四码唯一、一打就上屏了；
+    /// 要日期时间打 z 临时拼音（zriqi）。
+    fn wubi_candidates(&self, engine: &Engine, code: &str) -> Vec<Candidate> {
+        let len = code.len();
+        let candidate = |text: String, comment: String| Candidate {
+            // 自定义词里带换行的原样上屏（和拼音一样）
+            kind: if text.contains(['\n', '\t']) {
+                CandidateKind::Plain
+            } else {
+                CandidateKind::Word
+            },
+            commit: text.clone(),
+            text,
+            consumed: len,
+            comment,
+            ..Candidate::default()
+        };
+        // custom.tsv 里编码正好是这个码的，编码像不像拼音都算（dd → 地址）；分了音节的（li si → 李四）
+        // 是拼音的读法，不是要打的码，不算，免得占了码位
+        let mut all: Vec<Candidate> = engine
+            .lexicon()
+            .custom_phrases()
+            .into_iter()
+            .filter(|(custom, _)| !custom.contains(' ') && custom.chars().filter(|&c| c != '\'').eq(code.chars()))
+            .map(|(_, word)| candidate(crate::unescape_custom(&word), String::new()))
+            .collect();
+        let mut longer = Vec::new();
+        for hit in engine.wubi().iter().flat_map(|table| table.lookup(code, WUBI_MORE)) {
+            // 繁体输出时转完可能重复，自定义词也可能和码表的一样：只留前面那个，码位不动
+            let text = engine.shown_text(hit.word);
+            if all.iter().chain(&longer).any(|c: &Candidate| c.text == text) {
+                continue;
+            }
+            if hit.code.len() == len {
+                all.push(candidate(text, String::new()));
+            } else {
+                let rest = if self.config.wubi_hint { &hit.code[len..] } else { "" };
+                longer.push(candidate(text, rest.to_owned()));
+            }
+        }
+        if self.config.emoji_suggest {
+            let mut emoji = all
+                .first()
+                .map(|top| emoji_suggestions(&top.text, len))
+                .unwrap_or_default();
+            emoji.extend(all.iter().find_map(|c| keycap_candidate(&c.text, len)));
+            all.extend(emoji);
+        }
+        all.extend(longer);
+        all
+    }
+
     /// 日期时间：首选还是那个词（日期、时间），各种写法从第二个开始。
-    fn add_date_time(&self, all: &mut Vec<Candidate>, input: &str, shuangpin: bool) {
+    /// skip：input 开头不算拼音的字节数（临时拼音的 z）。
+    fn add_date_time(&self, all: &mut Vec<Candidate>, input: &str, skip: usize, shuangpin: bool) {
         let Some(first) = all.first() else {
             return;
         };
@@ -2434,7 +2617,7 @@ impl<'e> Session<'e> {
             }
             first.pinyin.clone()
         } else {
-            input.to_owned()
+            input[skip..].to_owned()
         };
         let Some(now) = (self.clock)() else {
             return;
@@ -2458,12 +2641,12 @@ impl<'e> Session<'e> {
     }
 
     /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。
-    /// 双拼时 v 是声母键（v1 是「选第一个候选」），改用大写 V（#160）。
+    /// 双拼时 v 是声母键（v1 是「选第一个候选」）、五笔时 v 是码（一级简码「发」），改用大写 V（#160）。
     fn calc_active(&self) -> bool {
         if !self.config.calculator || !self.selections.is_empty() {
             return false;
         }
-        let prefix = if self.shuangpin() { 'V' } else { 'v' };
+        let prefix = if self.shuangpin() || self.wubi() { 'V' } else { 'v' };
         let Some(rest) = self.input.strip_prefix(prefix) else {
             return false;
         };
@@ -2473,7 +2656,7 @@ impl<'e> Session<'e> {
 
     /// 还没选词那部分输入的显示：全拼分音节（nihao → ni hao），双拼显示成全拼
     /// （vsgo → zhong'guo），和微信输入法一样；设置了 `shuangpin_keys` 时双拼显示打的键。
-    /// 分不出来就原样。
+    /// 五笔码原样，临时拼音是 z + 分好音节的拼音。分不出来就原样。
     fn segmented_remaining(&mut self) -> String {
         let shown = self.segmented_remaining_shown();
         let input = self.remaining();
@@ -2487,7 +2670,7 @@ impl<'e> Session<'e> {
 
     fn segmented_remaining_shown(&mut self) -> String {
         let input = self.remaining().to_owned();
-        if self.calc_active() {
+        if self.calc_active() || self.wubi_code() {
             // 算式原样显示（双拼时不能当成按键换成全拼）
             return input;
         }
@@ -2507,8 +2690,11 @@ impl<'e> Session<'e> {
             .iter()
             .find(|c| c.consumed >= input.len())
             .map(|c| c.pinyin.clone());
-        full.and_then(|pinyin| crate::preedit::segment_input(&input, &pinyin))
-            .unwrap_or(input)
+        let skip = self.pinyin_skip();
+        match full.and_then(|full| crate::preedit::segment_input(&input[skip..], &full)) {
+            Some(shown) => format!("{}{shown}", &input[..skip]),
+            None => input,
+        }
     }
 
     /// 正在输入（编辑区不空）。
@@ -2633,7 +2819,7 @@ impl<'e> Session<'e> {
     /// 已选的词 + tail 上屏，记选词，清空。
     fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
-        if self.engine.is_some() && !text.is_empty() {
+        if self.engine.is_some() && !text.is_empty() && !self.wubi() {
             self.learned = true;
             if !tail.is_empty() {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
@@ -2667,8 +2853,9 @@ impl<'e> Session<'e> {
     }
 
     /// 记一次选词。上文和算候选时一样（已上屏的字 + 已选的词）。
+    /// 五笔（连同临时拼音）什么都不学：码位固定，选的词也不该进拼音的选词热度和用户词库。
     fn learn(&self, word: &str, pinyin: &str) {
-        let Some(engine) = self.engine else {
+        let Some(engine) = self.engine.filter(|_| !self.wubi()) else {
             return;
         };
         let context = self.context.clone() + &self.selected_text();
@@ -2684,7 +2871,7 @@ impl<'e> Session<'e> {
 
     /// 记分几次选出来拼成的词，见 [`Engine::record_composed_word`]。上文是还没选词时的上文。
     fn learn_composed(&self, word: &str, pinyin: &str) {
-        let Some(engine) = self.engine else {
+        let Some(engine) = self.engine.filter(|_| !self.wubi()) else {
             return;
         };
         engine.set_context(utf8_tail(&self.context, CONTEXT_BYTES));
@@ -2719,25 +2906,25 @@ fn add_emoji_suggestion(all: &mut Vec<Candidate>, input_len: usize) {
     if first.consumed < input_len {
         return;
     }
-    let top = first.text.clone();
-    let emoji: Vec<Candidate> = crate::emoji::recommend(&top, 1)
+    let emoji = emoji_suggestions(&first.text, input_len);
+    let at = EMOJI_SLOT.min(all.len());
+    all.splice(at..at, emoji);
+}
+
+/// 按 top 推荐的 emoji 候选（最多一个）。
+fn emoji_suggestions(top: &str, input_len: usize) -> Vec<Candidate> {
+    crate::emoji::recommend(top, 1)
         .into_iter()
         .map(|s| Candidate {
             // 句尾对上时 commit 是「整句 + emoji」
-            emoji: s
-                .commit
-                .strip_prefix(top.as_str())
-                .unwrap_or(&s.commit)
-                .to_owned(),
+            emoji: s.commit.strip_prefix(top).unwrap_or(&s.commit).to_owned(),
             text: s.display,
-            pinyin: String::new(),
             consumed: input_len,
             kind: CandidateKind::Emoji,
             commit: s.commit,
+            ..Candidate::default()
         })
-        .collect();
-    let at = EMOJI_SLOT.min(all.len());
-    all.splice(at..at, emoji);
+        .collect()
 }
 
 /// 第一页里有数字字就在它后面跟按键 emoji：打 ba 是「吧 八 8️⃣ 把」，和手机输入法一样。
@@ -2748,22 +2935,24 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
         if c.kind == CandidateKind::Emoji || c.consumed < input_len {
             continue;
         }
-        let Some(keycap) = crate::emoji::keycap(&c.text) else {
-            continue;
-        };
-        all.insert(
-            i + 1,
-            Candidate {
-                text: keycap.to_owned(),
-                pinyin: String::new(),
-                consumed: input_len,
-                kind: CandidateKind::Emoji,
-                commit: keycap.to_owned(),
-                emoji: keycap.to_owned(),
-            },
-        );
-        return;
+        if let Some(keycap) = keycap_candidate(&c.text, input_len) {
+            all.insert(i + 1, keycap);
+            return;
+        }
     }
+}
+
+/// 数字字（八、捌）的按键 emoji 候选；不是数字字是 None。
+fn keycap_candidate(text: &str, input_len: usize) -> Option<Candidate> {
+    let keycap = crate::emoji::keycap(text)?;
+    Some(Candidate {
+        text: keycap.to_owned(),
+        consumed: input_len,
+        kind: CandidateKind::Emoji,
+        commit: keycap.to_owned(),
+        emoji: keycap.to_owned(),
+        ..Candidate::default()
+    })
 }
 
 /// 只留尾部 max_bytes 字节，起点对齐到字符边界。

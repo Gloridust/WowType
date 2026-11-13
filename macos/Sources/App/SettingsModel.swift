@@ -86,6 +86,8 @@ final class SettingsModel: ObservableObject {
     private var releaseChecking = false
     /// 安装包里的雾凇词库（猜拼音用；设置里换了词库就用换的那个）
     private let bundledLexicon: String?
+    /// 安装包里有五笔码表（wubi86.tsv）：没有时「五笔输入」灰掉，说为什么（和 Linux 设置一样）
+    let wubiTableAvailable: Bool
 
     /// 文件里现在的设置（上次读或写的）：保存时只写 config 和它不一样的键
     private var saved: WowtypeConfig
@@ -108,6 +110,7 @@ final class SettingsModel: ObservableObject {
         translateKeySet = !TranslateKeyFile.read(state.translateKeyPath).isEmpty
         wanxiangVersion = LexiconPack.installedVersion(folder: LexiconPackInstaller.folder(in: state.supportDir).path)
         bundledLexicon = state.resource("lexicon.tsv")
+        wubiTableAvailable = state.resource("wubi86.tsv") != nil
         configStamp = FileStamp(state.configPath)
         let loaded = WowtypeConfig.parse(readText(state.configPath) ?? "")
         saved = loaded

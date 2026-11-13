@@ -285,6 +285,50 @@ int main(int argc, char **argv) {
         wowtype_session_free(s);
     }
 
+    /* ABI 1.10：五笔码表、会话的五笔设置、候选后面的编码提示（comment）、空码提示（aux） */
+    {
+        const char *path = "/tmp/wowtype_abi_wubi.tsv";
+        FILE *table = fopen(path, "w");
+        check(table != NULL, "wubi: write table");
+        if (table) {
+            fputs("w\t\xE4\xBA\xBA\t100\nwq\t\xE4\xBD\xA0\t90\n"               /* 人 你 */
+                  "wqvb\t\xE4\xBD\xA0\xE5\xA5\xBD\t80\nwqvb\t\xE6\x82\xA8\xE5\xA5\xBD\t70\n", /* 你好 您好 */
+                  table);
+            fclose(table);
+        }
+        check(wowtype_engine_load_wubi(e, "/nonexistent/wubi86.tsv") == -1, "wubi: missing table is -1");
+        check(wowtype_engine_load_wubi(e, path) == 4, "wubi: load table");
+        WowtypeSessionConfig config;
+        memset(&config, 0, sizeof config);
+        config.size = sizeof config;
+        config.page_size = 9;
+        config.wubi = 1;
+        config.wubi_auto_commit = 1;
+        config.wubi_hint = 1;
+        WowtypeSession *s = wowtype_session_new(e, &config);
+        const char *keys = "wq";
+        for (const char *k = keys; *k; k++) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        WowtypeCandidateInfo info;
+        memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "\xE4\xBD\xA0") == 0 &&
+                  info.comment && info.comment[0] == 0,
+              "wubi: exact candidate has no comment");
+        check(wowtype_session_candidate_info(s, 1, &info) == 0 && strcmp(info.comment, "vb") == 0,
+              "wubi: longer code shows the rest");
+        WowtypeKey x = {sizeof(WowtypeKey), 'x', 0, 0, 0};
+        const WowtypeFrame *f = wowtype_session_key(s, &x);
+        check(f && f->cand_count == 0 && f->aux && strcmp(f->aux, "\xE7\xA9\xBA\xE7\xA0\x81") == 0, /* 空码 */
+              "wubi: empty code notice");
+        WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0};
+        f = wowtype_session_key(s, &space);
+        check(f && f->handled && f->commit == NULL && f->preedit[0] == 0, "wubi: space clears empty code");
+        wowtype_session_free(s);
+    }
+
     /* ABI 1.10：自定义词的编码整理 */
     {
         const char *code = wowtype_custom_code("Ni H\xC7\x8Eo", 1);

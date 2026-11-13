@@ -48,6 +48,8 @@ struct CandidateLayout {
         var frame: NSRect
         var label: String
         var text: String
+        /// 词后面的小字（五笔的编码提示），空串不画
+        var comment = ""
         /// 展开面板里只有光标所在行标序号，别的行留出序号的位置，各行的词才对得齐
         var showLabel: Bool
         var current: Bool
@@ -170,12 +172,16 @@ struct CandidateLayout {
         NSAttributedString(string: text, attributes: [.font: labelFont, .foregroundColor: color])
     }
 
-    /// 序号和词连成一串（序号用小一号的字，基线对齐）。
-    func content(label: String, text: String, labelColor: NSColor, textColor: NSColor) -> NSAttributedString {
+    /// 序号、词、词后面的小字（编码提示）连成一串：序号和小字用小一号的字、序号的颜色，基线对齐。
+    func content(label: String, text: String, comment: String = "", labelColor: NSColor, textColor: NSColor,
+                 commentColor: NSColor = .clear) -> NSAttributedString {
         let out = NSMutableAttributedString(string: label, attributes: [
             .font: labelFont, .foregroundColor: labelColor, .kern: Self.labelGap,
         ])
         out.append(NSAttributedString(string: text, attributes: [.font: textFont, .foregroundColor: textColor]))
+        if !comment.isEmpty {
+            out.append(NSAttributedString(string: " " + comment, attributes: [.font: labelFont, .foregroundColor: commentColor]))
+        }
         return out
     }
 
@@ -185,8 +191,8 @@ struct CandidateLayout {
         return ceil(line) + Self.cellPadding.height * 2
     }
 
-    private func contentWidth(label: String, text: String) -> CGFloat {
-        ceil(content(label: label, text: text, labelColor: .clear, textColor: .clear).size().width)
+    private func contentWidth(label: String, text: String, comment: String = "") -> CGFloat {
+        ceil(content(label: label, text: text, comment: comment, labelColor: .clear, textColor: .clear).size().width)
     }
 
     private mutating func layOutRow(_ page: CandidatePage, top: CGFloat) {
@@ -195,9 +201,10 @@ struct CandidateLayout {
         var x = Self.inset.width
         for (i, text) in page.texts.enumerated() {
             let label = "\(i + 1)"
-            let width = contentWidth(label: label, text: text) + Self.cellPadding.width * 2
+            let comment = page.comment(i)
+            let width = contentWidth(label: label, text: text, comment: comment) + Self.cellPadding.width * 2
             cells.append(Cell(frame: NSRect(x: x, y: y, width: width, height: height), label: label, text: text,
-                              showLabel: true, current: i == page.cursor))
+                              comment: comment, showLabel: true, current: i == page.cursor))
             x += width + Self.spacing
         }
         x -= Self.spacing
@@ -213,12 +220,15 @@ struct CandidateLayout {
     /// 竖排：一行一个，都和最宽的一样宽，翻页箭头在右下角。
     private mutating func layOutColumn(_ page: CandidatePage, top: CGFloat) {
         let height = cellHeight
-        let widest = page.texts.enumerated().map { contentWidth(label: "\($0.offset + 1)", text: $0.element) }.max() ?? 0
+        let widest = page.texts.enumerated().map {
+            contentWidth(label: "\($0.offset + 1)", text: $0.element, comment: page.comment($0.offset))
+        }.max() ?? 0
         let width = max(widest + Self.cellPadding.width * 2, Self.arrowWidth * 2)
         var y = top
         for (i, text) in page.texts.enumerated() {
             cells.append(Cell(frame: NSRect(x: Self.inset.width, y: y, width: width, height: height),
-                              label: "\(i + 1)", text: text, showLabel: true, current: i == page.cursor, leading: true))
+                              label: "\(i + 1)", text: text, comment: page.comment(i), showLabel: true,
+                              current: i == page.cursor, leading: true))
             y += height + Self.spacing
         }
         var bottom = y - Self.spacing
@@ -240,7 +250,7 @@ struct CandidateLayout {
         var widths = [CGFloat](repeating: 0, count: columns)
         for (i, text) in page.texts.enumerated() {
             let column = i % columns
-            widths[column] = max(widths[column], contentWidth(label: "\(column + 1)", text: text))
+            widths[column] = max(widths[column], contentWidth(label: "\(column + 1)", text: text, comment: page.comment(i)))
         }
         var xs: [CGFloat] = []
         var x = Self.inset.width
@@ -254,8 +264,8 @@ struct CandidateLayout {
             let (r, column) = (i / columns, i % columns)
             let y = top + CGFloat(r) * (height + Self.spacing)
             let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
-            cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, showLabel: r == cursorRow,
-                              current: i == page.cursor))
+            cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, comment: page.comment(i),
+                              showLabel: r == cursorRow, current: i == page.cursor))
             if r == cursorRow {
                 row = NSRect(x: Self.inset.width, y: y, width: right - Self.inset.width, height: height)
             }
@@ -317,8 +327,9 @@ final class CandidateView: NSView {
                 roundedRect(cell.frame).fill()
             }
             let label: NSColor = !cell.showLabel ? .clear : cell.current ? theme.highlightText : theme.label
-            let content = layout.content(label: cell.label, text: cell.text, labelColor: label,
-                                         textColor: cell.current ? theme.highlightText : theme.text)
+            let content = layout.content(label: cell.label, text: cell.text, comment: cell.comment, labelColor: label,
+                                         textColor: cell.current ? theme.highlightText : theme.text,
+                                         commentColor: cell.current ? theme.highlightText : theme.label)
             let size = content.size()
             let x = cell.leading ? cell.frame.minX + CandidateLayout.cellPadding.width : cell.frame.midX - size.width / 2
             content.draw(at: NSPoint(x: x, y: cell.frame.midY - size.height / 2))

@@ -26,7 +26,7 @@ func selfTest() -> Bool {
     print("WowType \(appVersion)，核心接口版本 \(Engine.abiVersion)")
     print("资源目录 \(AppState.shared.resourceDir.path)")
     print("数据目录 \(AppState.shared.supportDir.path)")
-    for name in ["lexicon.tsv", "english.txt", "words.lm", "s2t.tsv"] {
+    for name in ["lexicon.tsv", "english.txt", "words.lm", "s2t.tsv", "wubi86.tsv"] {
         print("  \(name)：\(AppState.shared.resource(name) == nil ? "没有" : "有")")
     }
     let start = Date()
@@ -36,7 +36,7 @@ func selfTest() -> Bool {
     }
     print(String(format: "词库载入 %.1f 秒", Date().timeIntervalSince(start)))
     let config = AppState.shared.config
-    print("设置 \(AppState.shared.configPath)：\(config == WowtypeConfig() ? "默认" : "改过")，双拼 \(config.shuangpin ? config.shuangpinScheme : "关")")
+    print("设置 \(AppState.shared.configPath)：\(config == WowtypeConfig() ? "默认" : "改过")，输入方案 \(config.inputScheme.rawValue)\(config.shuangpin ? "（\(config.shuangpinScheme)）" : "")")
     // 下面照默认设置打一句（设置里开了双拼 nihao 就不是你好了）
     engine.apply(WowtypeConfig())
     let client = SelfTestClient()
@@ -47,7 +47,21 @@ func selfTest() -> Bool {
     let first = client.page?.texts.first ?? ""
     _ = composer.handle(.char(" "))
     print("nihao → 第一个候选「\(first)」，上屏「\(client.committed)」")
-    return client.committed == "你好"
+    guard client.committed == "你好" else { return false }
+    // 安装包里的五笔码表：wqvb 空格上屏「你好」
+    var wubi = WowtypeConfig()
+    wubi.inputScheme = .wubi86
+    for problem in engine.apply(wubi, wubi: AppState.shared.resource("wubi86.tsv")) {
+        print("FAIL \(problem)")
+    }
+    let wubiClient = SelfTestClient()
+    let wubiComposer = Composer(engine: engine, client: wubiClient)
+    wubiComposer.apply(wubi)
+    for c in "wqvb " {
+        _ = wubiComposer.handle(.char(c))
+    }
+    print("五笔 wqvb → 上屏「\(wubiClient.committed)」")
+    return wubiClient.committed == "你好"
 }
 
 /// 和 Linux 的 wowtype-config 一样：--install-lexicon wanxiang|<文件.tar.gz> 下载 / 装上万象并切过去，

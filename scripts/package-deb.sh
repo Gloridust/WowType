@@ -76,11 +76,20 @@ data_copyright() { # <数据目录>：copyright 里词库那几段
   echo " (https://zh.wikipedia.org/). Licensed under the Creative Commons"
   echo " Attribution-ShareAlike 4.0 International License:"
   echo " https://creativecommons.org/licenses/by-sa/4.0/legalcode"
+  echo
+  echo "Files: usr/share/wowtype/wubi86.tsv"
+  echo "Comment: 五笔 86 码表，转换自 Rime 五笔字型 rime-wubi（https://github.com/rime/rime-wubi），"
+  echo " 作者见 WUBI-AUTHORS，来源和钉死的提交见 WUBI-SOURCE.txt"
+  echo "License: LGPL-3.0"
+  sed 's/^$/./; s/^/ /' "$1/WUBI-LICENSE"
 }
 
 check_data() { # <数据目录>
   for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
     [[ -f "$1/$f" ]] || { echo "缺 $1/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
+  done
+  for f in wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS; do
+    [[ -f "$1/$f" ]] || { echo "缺 $1/${f}，先跑 scripts/make-wubi.sh" >&2; exit 1; }
   done
 }
 
@@ -108,14 +117,16 @@ engine)
                       while read -r f; do is_elf "$f" && echo "$f"; done)
   strip --strip-unneeded "${elfs[@]}"
 
-  # 词库：雾凇拼音（GPL-3.0）+ WowType 的词级语言模型（CC BY-SA 4.0）
-  for f in lexicon.tsv english.txt words.lm; do
+  # 词库：雾凇拼音（GPL-3.0）+ WowType 的词级语言模型（CC BY-SA 4.0）+ 五笔码表（rime-wubi，LGPL-3.0）
+  for f in lexicon.tsv english.txt words.lm wubi86.tsv; do
     install -Dm644 "$data/$f" "$stage/usr/share/wowtype/$f"
   done
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
   install -Dm644 "$data/SOURCE.txt" "$doc/DATA-SOURCE.txt"
   install -Dm644 "$data/VERSION" "$doc/DATA-VERSION"
+  install -Dm644 "$data/WUBI-SOURCE.txt" "$doc/WUBI-SOURCE.txt"
+  install -Dm644 "$data/WUBI-AUTHORS" "$doc/WUBI-AUTHORS"
   {
   cat <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -154,7 +165,7 @@ EOF
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \
     "WeChat-style pinyin input method for fcitx5" \
 "拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-自带雾凇拼音（rime-ice）词库和词级语言模型。
+自带雾凇拼音（rime-ice）词库、词级语言模型和五笔 86 码表（rime-wubi）。
 装完在 fcitx5 配置里添加「WowType」，设置在应用菜单「WowType 设置」里。"
   ;;
 
@@ -169,7 +180,8 @@ data)
   # sha256 都一样，打包脚本（如 AUR）钉住的校验和不会因为重新发版而失效。
   tar -C "$data" --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
     --owner=0 --group=0 --numeric-owner -cf - \
-    lexicon.tsv english.txt words.lm LICENSE SOURCE.txt | gzip -n >"$tarball"
+    lexicon.tsv english.txt words.lm LICENSE SOURCE.txt \
+    wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS | gzip -n >"$tarball"
   echo "$tarball"
   ;;
 
