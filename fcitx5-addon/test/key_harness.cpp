@@ -1134,9 +1134,11 @@ void runCases(Instance &instance) {
                   list->cursorIndex() == 0,
               "退格删掉插进去的 x，End 回末尾，末尾的右键不挑候选：" + preedit(ic.get()));
     }
-    const std::string second = page(ic.get()).at(1);
-    type(ic.get(), "<down><sp>");
-    check(ic->committed == second, "下键选第 2 个，空格上屏它：" + ic->committed + " / " + second);
+    {
+        const std::string want = page(ic.get()).at(1);
+        type(ic.get(), "<down><sp>");
+        check(ic->committed == want, "下键选第 2 个，空格上屏它：" + ic->committed + " / " + want);
+    }
     fresh(ic.get());
     std::filesystem::remove(configDir + "/wowtype.conf");
     addon->reloadConfig();

@@ -1631,7 +1631,7 @@ impl<'e> Session<'e> {
                 let at = self.caret();
                 if at < self.input.len() {
                     // 光标在拼音中间（#129）：删光标前一个；光标在最前面时撤销选词，没有就不动
-                    if at > self.selected_bytes() {
+                    if at > self.rest_start() {
                         let prev = self.input[..at].chars().next_back().map_or(1, char::len_utf8);
                         self.input.replace_range(at - prev..at, "");
                         self.caret = Some(at - prev);
@@ -2082,7 +2082,7 @@ impl<'e> Session<'e> {
         let n = self.candidates().len();
         let selected = self.selected_text();
         let shown = self.segmented_remaining();
-        let rest_caret = self.caret() - self.selected_bytes().min(self.input.len());
+        let rest_caret = self.caret() - self.rest_start();
         let preedit_cursor = selected.len()
             + Self::shown_caret(self.remaining(), &shown, rest_caret).unwrap_or(shown.len());
         let preedit = selected + &shown;
@@ -2175,10 +2175,14 @@ impl<'e> Session<'e> {
         self.fresh = false;
     }
 
+    /// 还没选词的那段在 input 里从哪个字节开始。
+    fn rest_start(&self) -> usize {
+        self.selected_bytes().min(self.input.len())
+    }
+
     /// 编辑区光标在 input 里的字节位置：在还没选词的那段里，没移动过时在末尾。
     fn caret(&self) -> usize {
-        let start = self.selected_bytes().min(self.input.len());
-        self.caret.map_or(self.input.len(), |at| at.clamp(start, self.input.len()))
+        self.caret.map_or(self.input.len(), |at| at.clamp(self.rest_start(), self.input.len()))
     }
 
     /// 左右键移动拼音里的光标（[`ArrowKeys::Caret`]），Home、End、Delete 也管光标；到了两头照样吃掉。
@@ -2191,7 +2195,7 @@ impl<'e> Session<'e> {
             // 「译」里拼音显示在候选框的原文框里，那里画不出光标：光标留在末尾
             return Some(true);
         }
-        let start = self.selected_bytes().min(self.input.len());
+        let start = self.rest_start();
         let at = self.caret();
         let len = self.input.len();
         let prev = self.input[..at].chars().next_back().map_or(0, char::len_utf8);
@@ -2363,7 +2367,7 @@ impl<'e> Session<'e> {
     fn segmented_remaining(&mut self) -> String {
         let shown = self.segmented_remaining_shown();
         let input = self.remaining();
-        let rest_caret = self.caret() - self.selected_bytes().min(self.input.len());
+        let rest_caret = self.caret() - self.rest_start();
         if rest_caret < input.len() && Self::shown_caret(input, &shown, rest_caret).is_none() {
             // 光标在拼音中间、显示的样子换不回光标位置（双拼显示成全拼）：显示打的键
             return input.to_owned();
