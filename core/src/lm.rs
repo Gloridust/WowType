@@ -555,14 +555,15 @@ mod mixed_lm_tests {
         // 联想按通用模型：混上领域模型以后，词频表也要配到通用模型上
         use crate::wordlm::{build, BuildConfig, Counts, WordLm};
         let counts = Counts {
-            words: ["<s>", "明天", "见"].iter().map(|w| w.to_string()).collect(),
-            unigram: vec![10, 10, 10],
-            history: vec![0, 10, 0],
+            words: ["<s>", "明天", "见", "的"].iter().map(|w| w.to_string()).collect(),
+            unigram: vec![10, 10, 10, 100_000],
+            history: vec![0, 10, 0, 0],
             bigram: vec![(1 << 32 | 2, 8)],
         };
         let general = WordLm::from_bytes(&build(&counts, BuildConfig::default()).unwrap().0).unwrap();
         let m = MixedLm::new(Arc::new(general), Arc::new(Fixed(0.0, false)), 0.4);
-        let lexicon = crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t10\njian\t见\t10\n").unwrap();
+        let lexicon =
+            crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t10\njian\t见\t10\nde\t的\t100000\n").unwrap();
         m.prepare_prediction(&lexicon);
         assert_eq!(m.top_next("明天", 3)[0].0, "见");
     }

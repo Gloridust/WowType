@@ -37,6 +37,10 @@ pub const BOS: &str = "<s>";
 /// 再高（−0.5）中低频 88.8%，但整句回落到 84.8%、简拼也降。设成 0 以前出过「分崩离兮」。
 pub const OOV_FLOOR: f64 = -1.5;
 
+/// 联想只要和上一个词真有搭配的：接在它后面比平常常见 33 倍以上（提升 ≥ 3.5）。
+/// 我们、这个、什么这种接在哪儿都常见的词，乘上词库频次以后概率不低，但联想出来没用。
+const MIN_PREDICT_LIFT: f32 = 3.5;
+
 pub struct WordLm {
     ids: HashMap<String, u32>,
     words: Vec<String>,
@@ -150,7 +154,8 @@ impl LanguageModel for WordLm {
     }
 
     /// ln P(cur | prev) = ln P(cur) + 提升：一元概率来自词库（[`LanguageModel::prepare_prediction`]），
-    /// 只按提升排的话，罕见的搭配都顶到上限（6.0）挤在最前面。没准备好时返回空。
+    /// 只按提升排的话，罕见的搭配都顶到上限（6.0）挤在最前面。只给和 prev 有搭配的词
+    /// （[`MIN_PREDICT_LIFT`]）。没准备好时返回空。
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
         let (Some(prior), Some(&p)) = (self.prior.get(), self.ids.get(prev)) else {
             return Vec::new();
@@ -159,8 +164,8 @@ impl LanguageModel for WordLm {
         let mut items: Vec<(f32, u32)> = row
             .filter_map(|i| {
                 let cur = self.curs[i];
-                let unigram = prior[cur as usize];
-                unigram.is_finite().then(|| ((unigram + self.scores[i]).min(0.0), cur))
+                let (unigram, lift) = (prior[cur as usize], self.scores[i]);
+                (unigram.is_finite() && lift >= MIN_PREDICT_LIFT).then(|| ((unigram + lift).min(0.0), cur))
             })
             .collect();
         let better = |x: &(f32, u32), y: &(f32, u32)| y.0.total_cmp(&x.0).then_with(|| x.1.cmp(&y.1));
@@ -399,14 +404,28 @@ mod tests {
             lm.score(Some("明天"), "不认识"),
             lm.score(Some("明天"), "面")
         );
+    }
+
+    #[test]
+    fn predicts_associated_followers() {
+        // 明天后面：见（真有搭配）、的（接在哪儿都常见，不给）、我们（词库里没有，不给）
+        let words: Vec<String> = ["<s>", "明天", "见", "的", "我们"].iter().map(|s| s.to_string()).collect();
+        let key = |a: u64, b: u64| a << 32 | b;
+        let counts = Counts {
+            words,
+            unigram: vec![100, 400, 100, 100_000, 100],
+            history: vec![0, 400, 0, 0, 0],
+            bigram: vec![(key(1, 2), 60), (key(1, 3), 300), (key(1, 4), 30)],
+        };
+        let lm = WordLm::from_bytes(&build(&counts, BuildConfig::default()).unwrap().0).unwrap();
         // 联想要先配上词库里的一元概率；没配之前不给
-        assert!(lm.top_next("明天", 1).is_empty());
-        let lexicon = crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t9\njian\t见\t6\nmian\t面\t50\n").unwrap();
+        assert!(lm.top_next("明天", 3).is_empty());
+        let lexicon =
+            crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t400\njian\t见\t100\nde\t的\t100000\n").unwrap();
         lm.prepare_prediction(&lexicon);
-        let next = lm.top_next("明天", 5);
-        assert_eq!(next[0].0, "见");
+        let next = lm.top_next("明天", 3);
+        assert_eq!(next.iter().map(|(w, _)| w.as_str()).collect::<Vec<_>>(), ["见"]);
         // 分数是条件概率：ln P(见 | 明天) = ln P(见) + 提升，不超过 0
         assert!(next[0].1 <= 0.0);
-        assert!(next.iter().all(|(w, _)| w != "我们"), "词库里没有的词不联想");
     }
 }
