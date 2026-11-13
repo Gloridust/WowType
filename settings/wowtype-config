@@ -94,6 +94,7 @@ DEFAULTS = {
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
     "ShiftToggle": "Both",
+    "InitialMode": "Chinese",
     "Traditional": "False",
     "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
@@ -205,11 +206,18 @@ SHIFT_TOGGLES = [
     ("不用 Shift 切换", "Off"),
 ]
 
+INITIAL_MODES = [
+    ("中文", "Chinese"),
+    ("英文", "English"),
+    ("和上次切走时一样", "Last"),
+]
+
 # 枚举项认哪些写法（区分大小写，认不出的读成默认值，和插件、macOS 一样，见 spec/config.json）
 ENUMS = {
     "CandidateLayout": ("Horizontal", "Vertical"),
     "ShuangpinScheme": tuple(value for _label, value in SHUANGPIN_SCHEMES),
     "ShiftToggle": tuple(value for _label, value in SHIFT_TOGGLES),
+    "InitialMode": tuple(value for _label, value in INITIAL_MODES),
     "PunctuationStyle": tuple(value for _label, value in PUNCT_STYLES),
     "SelectKeys": tuple(value for _label, value in SELECT_KEYS),
     "TranslateTarget": tuple(code for _label, code, _english in TRANSLATE_LANGUAGES),
@@ -3247,6 +3255,17 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.shift_names.index(current) if current in self.shift_names else 0)
         self.shift_row.connect("notify::selected", self.on_shift_toggle_changed)
         switch.add(self.shift_row)
+        self.initial_names = [name for _, name in INITIAL_MODES]
+        self.initial_row = Adw.ComboRow(
+            title="切到 WowType 时",
+            subtitle="从别的输入法切过来、开机后第一次用时；换窗口不变",
+            model=Gtk.StringList.new([label for label, _ in INITIAL_MODES]))
+        current = self.values.get("InitialMode", "Chinese")
+        self.initial_row.set_selected(
+            self.initial_names.index(current) if current in self.initial_names else 0)
+        self.initial_row.connect("notify::selected", lambda r, _p: self.set_value(
+            "InitialMode", self.initial_names[r.get_selected()]))
+        switch.add(self.initial_row)
         # fcitx5 自己也用 Shift 切输入法时提示，并能一键让给 WowType（再一键还回去）
         self.shift_free_row = Adw.SwitchRow(title="Shift 只给 WowType 用", visible=False)
         self.shift_free_info = self.add_info(self.shift_free_row, "").info_label

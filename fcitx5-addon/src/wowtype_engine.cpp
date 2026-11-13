@@ -838,6 +838,7 @@ void WowtypeEngine::applyConfig() {
         asciiMode_ = false;
         translateMode_ = false;
     }
+    initialMode_ = *config_.initialMode;
     punctStyle_ = *config_.punctStyle;
     if (const char *env = std::getenv("WOWTYPE_PUNCT_STYLE"); env && *env) {
         const std::string name = env;
@@ -1808,6 +1809,18 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     state->clear();
     clearTranslation(state);
     coreReady();
+    // 从别的输入法切回来（不是换窗口获得焦点）、启动后第一次用：按「切到 WowType 时」定中 / 英
+    // （#158：切走时是英文，切回来还是英文，打不了中文）。换窗口不动，模式照旧全局保持；
+    // 进出密码框时 fcitx5 自己换成键盘布局再换回来（CapabilityChanged），也不算用户切回来。
+    bool switchedBack = false;
+    if (event.type() == fcitx::EventType::InputContextSwitchInputMethod) {
+        const auto &switched = static_cast<fcitx::InputContextSwitchInputMethodEvent &>(event);
+        switchedBack = switched.reason() != fcitx::InputMethodSwitchedReason::CapabilityChanged;
+    }
+    if (switchedBack || !initialModeApplied_) {
+        initialModeApplied_ = true;
+        applyInitialMode(ic, state);
+    }
     // 最近用过的 emoji 在核心里（所有输入框共用），存在 ~/.local/share/wowtype/emoji-recent.txt
     wowtype_recent_emoji_path(recentEmojiPath().c_str());
     sampleClipboard(ic);
@@ -1922,6 +1935,19 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
                frame->mode == WOWTYPE_MODE_TRANSLATE, true);
     event.filterAndAccept();
     return true;
+}
+
+void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *state) {
+    if (initialMode_ == WowtypeInitialMode::Last) {
+        return;
+    }
+    // 关了 Shift 切换时不进英文：切不回中文
+    const bool english =
+        initialMode_ == WowtypeInitialMode::English && shiftToggle_ != WowtypeShiftToggle::Off;
+    if (english == asciiMode_ && !translateMode_) {
+        return;
+    }
+    switchMode(ic, state, english, false, false);
 }
 
 void WowtypeEngine::syncMode(fcitx::InputContext *ic, WowtypeState *state) {
