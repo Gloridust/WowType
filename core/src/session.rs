@@ -449,7 +449,7 @@ pub struct View {
 pub struct Config {
     /// 一页几个候选（数字按键 emoji 只在第一页里找数字字）。
     pub page_size: usize,
-    /// V 模式计算器（v 后面打算式）。双拼时用大写 V（小写 v 是声母键）。
+    /// V 模式计算器（v 后面打算式）。双拼、五笔时用大写 V（小写 v 是声母键、五笔码）。
     pub calculator: bool,
     /// 打 riqi、shijian 这类时给日期时间候选。
     pub date_time: bool,
@@ -473,7 +473,7 @@ pub struct Config {
     pub shift_tap_ms: u32,
     /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
     pub translate_mode: bool,
-    /// 只打一个 v 再按空格打开工具栏（双拼、互译时不开）。
+    /// 只打一个 v 再按空格打开工具栏（双拼、五笔、互译时不开）。
     pub toolbar: bool,
     /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
     pub clipboard_history: bool,

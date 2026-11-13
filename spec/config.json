@@ -113,7 +113,7 @@
        {"value": "Wubi86", "name": "五笔输入"}
      ],
      "platforms": ["fcitx5", "settings", "macos"],
-     "note": "输入方案：全拼、双拼、五笔 86。五笔要数据目录里有 wubi86.tsv，没有时设置里五笔灰掉，插件照全拼打并提示。name 三端都对照（fcitx5 的 EnumI18n、设置界面的 INPUT_SCHEMES、macOS 的 WowtypeConfig.inputSchemes）",
+     "note": "输入方案：全拼、双拼、五笔 86。五笔要数据目录里有 wubi86.tsv，没有时设置里五笔灰掉，插件照全拼打并提示。name 三端都对照（fcitx5 的 EnumI18n、设置界面的 INPUT_SCHEMES、macOS 的 WowtypeConfig.InputScheme.name）",
      "whenMissing": {
        "$comment": "文件里没有 InputScheme 这一行时：Shuangpin 是 True 就是 value，否则用 default。三端读文件时都照这条规矩。Shuangpin 已经不是设置项：只在这里读，三端存盘时都不写它，文件里有的那行下次存盘就没了。",
        "ifTrue": "Shuangpin",

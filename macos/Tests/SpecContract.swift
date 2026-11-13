@@ -131,9 +131,9 @@ func checkConfigContract() {
     let schemeNames = (byKey["InputScheme"]?["values"]?.array ?? []).map {
         ($0["name"]?.string ?? "", $0["value"]?.string ?? "")
     }
-    check(WowtypeConfig.inputSchemes.map { $0.0 } == schemeNames.map { $0.0 }
-          && WowtypeConfig.inputSchemes.map { $0.1.rawValue } == schemeNames.map { $0.1 },
-          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(WowtypeConfig.inputSchemes)")
+    let ourSchemes = WowtypeConfig.InputScheme.allCases.map { ($0.name, $0.rawValue) }
+    check(ourSchemes.map { $0.0 } == schemeNames.map { $0.0 } && ourSchemes.map { $0.1 } == schemeNames.map { $0.1 },
+          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(ourSchemes)")
     // whenMissing 的 ifTrue 指着的旧键（InputScheme 的 Shuangpin）已经不是设置项：从只有旧键的文件读进来，
     // 在设置窗口里改成每一个可选值（包括默认值）存盘，读回来是改的值，文件里没有旧键了
     for s in mine {

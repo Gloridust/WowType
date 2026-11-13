@@ -33,12 +33,16 @@ public struct WowtypeConfig: Equatable {
     /// 输入方案：全拼、双拼、五笔 86（见 spec/config.json 的 InputScheme）
     public enum InputScheme: String, CaseIterable {
         case quanpin = "Quanpin", shuangpin = "Shuangpin", wubi86 = "Wubi86"
-    }
 
-    /// 输入方案在设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）。
-    public static let inputSchemes: [(String, InputScheme)] = [
-        ("拼音输入", .quanpin), ("双拼输入", .shuangpin), ("五笔输入", .wubi86),
-    ]
+        /// 设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）
+        public var name: String {
+            switch self {
+            case .quanpin: return "拼音输入"
+            case .shuangpin: return "双拼输入"
+            case .wubi86: return "五笔输入"
+            }
+        }
+    }
 
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]

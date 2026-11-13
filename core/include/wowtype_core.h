@@ -422,7 +422,7 @@ typedef struct {
 typedef struct {
     uint32_t size;
     uint32_t page_size; /* 一页几个候选，0 用默认（9）；数字按键 emoji 只在第一页里找 */
-    int calculator;     /* V 模式计算器，默认 1（双拼时不开） */
+    int calculator;     /* V 模式计算器，默认 1（双拼、五笔时是大写 V） */
     int date_time;      /* 日期时间候选，默认 1 */
     int emoji_suggest;  /* 打字推荐 emoji，默认 1 */
     int horizontal;     /* 1.6 起：候选横排，默认 1；0 竖排。方向键怎么用见 WOWTYPE_ARROW_KEYS_* */
@@ -436,7 +436,7 @@ typedef struct {
     int shift_toggle;    /* 1.10 起：WOWTYPE_SHIFT_TOGGLE_*，默认两边都行 */
     uint32_t shift_tap_ms; /* 1.10 起：按住 Shift 多久以内松开算单按（毫秒），0 用默认 500 */
     int translate_mode;  /* 1.10 起：单按 Shift 的循环里有「译」（配好了翻译服务），默认 0 */
-    int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、互译时不开），默认 1 */
+    int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、五笔、互译时不开），默认 1 */
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
     int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
     int arrow_keys;      /* 1.10 起：WOWTYPE_ARROW_KEYS_*，默认 CANDIDATES */
