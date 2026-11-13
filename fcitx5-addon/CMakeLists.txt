@@ -113,8 +113,12 @@ endif()
 
 configure_file(conf/wowtype.conf.in
     "${CMAKE_CURRENT_BINARY_DIR}/wowtype.conf" @ONLY)
-# 插件清单里要求的 fcitx5 版本就是编译时用的版本：用到的接口（5.1.11 的自定义提示等）照它挑，
-# 装到更老的 fcitx5 上时 fcitx5 不加载，而不是载入时缺符号
+# 插件清单里要求的 fcitx5 版本：编译时版本的「主.次.0」（5.1.x 上编的写 5.1.0，22.04 的 5.0.14 上编的写 5.0.0）。
+# 不写编译时的完整版本：Arch、Fedora 的包对 fcitx5 不写版本，CI 用最新的 fcitx5 编，用户的 fcitx5 只要
+# 晚一个小版本没升级，fcitx5 就不加载插件、也不报错。同一个次版本里缺符号（5.1.11 的自定义提示）的风险
+# 和以前写死 5.1.0 时一样。
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" _wowtype_fcitx_minor "${Fcitx5Core_VERSION}")
+set(WOWTYPE_FCITX_CORE_DEP "${_wowtype_fcitx_minor}.0")
 configure_file(conf/wowtype-addon.conf.in
     "${CMAKE_CURRENT_BINARY_DIR}/wowtype-addon.conf" @ONLY)
 
@@ -165,13 +169,15 @@ if(WOWTYPE_BUILD_TESTS)
     unset(WOWTYPE_FCITX_GLOBALCONFIG_H CACHE)  # 换了 fcitx5 重新配置时重新找（NO_CACHE 要 CMake 3.21）
     find_file(WOWTYPE_FCITX_GLOBALCONFIG_H fcitx/globalconfig.h
         PATHS ${_wowtype_fcitx_inc} NO_DEFAULT_PATH)
+    if(NOT WOWTYPE_FCITX_GLOBALCONFIG_H)
+        # 找不到就当没有这个设置的话，5.1 上会悄悄测弱的那种，所以直接报错
+        message(FATAL_ERROR "按键测试：在 ${_wowtype_fcitx_inc} 里找不到 fcitx/globalconfig.h")
+    endif()
     set(_wowtype_password_option OFF)
-    if(WOWTYPE_FCITX_GLOBALCONFIG_H)
-        file(STRINGS "${WOWTYPE_FCITX_GLOBALCONFIG_H}" _wowtype_password_lines
-            REGEX "allowInputMethodForPassword")
-        if(_wowtype_password_lines)
-            set(_wowtype_password_option ON)
-        endif()
+    file(STRINGS "${WOWTYPE_FCITX_GLOBALCONFIG_H}" _wowtype_password_lines
+        REGEX "allowInputMethodForPassword")
+    if(_wowtype_password_lines)
+        set(_wowtype_password_option ON)
     endif()
     message(STATUS "WowType 按键测试：fcitx5 ${Fcitx5Core_VERSION}，「密码框也用输入法」设置 ${_wowtype_password_option}"
         "（globalconfig.h：${WOWTYPE_FCITX_GLOBALCONFIG_H}）")

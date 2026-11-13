@@ -509,7 +509,8 @@ jobs:
           test -f "$addon_dir/libwowtype.so"
           ldd "$addon_dir/libwowtype.so" | tee ldd.txt
           if grep -q 'not found' ldd.txt; then exit 1; fi
-          version="$(pkg-config --modversion Fcitx5Core)"
+          # 插件清单要求编译时 fcitx5 的「主.次.0」（这里是 5.0.0）
+          version="$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0"
           grep -n "core:" /usr/share/fcitx5/addon/wowtype.conf
           grep -qx "0=core:$version" /usr/share/fcitx5/addon/wowtype.conf
           test ! -e /usr/bin/wowtype-config
