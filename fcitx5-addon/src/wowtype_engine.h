@@ -56,6 +56,19 @@ struct WowtypeLayoutAnnotation {
     }
 };
 
+/// 打字途中方向键做什么（#129）。
+enum class WowtypeArrowKeys { Candidates, Caret };
+FCITX_CONFIG_ENUM_NAME(WowtypeArrowKeys, "Candidates", "Caret");
+
+struct WowtypeArrowKeysAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "都用来选词");
+        config.setValueByPath("EnumI18n/1", "左右键移动光标");
+    }
+};
+
 enum class WowtypeShuangpinScheme { Ziranma, Xiaohe, Microsoft, Sogou, ABC, Ziguang, PinyinJiajia };
 FCITX_CONFIG_ENUM_NAME(WowtypeShuangpinScheme, "Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC",
                        "Ziguang", "PinyinJiajia");
@@ -152,6 +165,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeLayout, fcitx::NoConstrain<WowtypeLayout>,
                   fcitx::DefaultMarshaller<WowtypeLayout>, WowtypeLayoutAnnotation>
         layout{this, "CandidateLayout", "候选排列", WowtypeLayout::Horizontal};
+    fcitx::Option<WowtypeArrowKeys, fcitx::NoConstrain<WowtypeArrowKeys>,
+                  fcitx::DefaultMarshaller<WowtypeArrowKeys>, WowtypeArrowKeysAnnotation>
+        arrowKeys{this, "ArrowKeys", "方向键", WowtypeArrowKeys::Candidates};
     fcitx::Option<int, fcitx::IntConstrain> pageSize{
         this, "PageSize", "每页候选个数", 9, fcitx::IntConstrain(3, 9)};
     fcitx::Option<bool> pageKeysMinus{this, "PageKeysMinusEqual", "翻页键：- =", true};
@@ -194,8 +210,6 @@ FCITX_CONFIGURATION(
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
     fcitx::Option<bool> pickChar{this, "PickChar",
                                  "以词定字：打拼音时 [ ] 上屏候选的第一个、最后一个字", true};
-    fcitx::Option<bool> arrowCaret{this, "ArrowCaret",
-                                   "方向键移动拼音里的光标（到头了再移动候选）", false};
     fcitx::Option<bool> dateTime{this, "DateTime",
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
@@ -503,6 +517,7 @@ private:
     WowtypeConfig config_;
     // 生效中的设置（配置文件 + 环境变量覆盖）
     bool horizontal_ = true;
+    WowtypeArrowKeys arrowKeys_ = WowtypeArrowKeys::Candidates;
     std::size_t pageSize_ = 9;
     bool fuzzy_ = false;
     /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
@@ -511,7 +526,6 @@ private:
     bool rareExt_ = false;
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool pickChar_ = true;
-    bool arrowCaret_ = false;
     bool dateTime_ = true;
     bool calculator_ = true;
     bool toolbar_ = true;

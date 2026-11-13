@@ -418,6 +418,18 @@ pub enum SelectKeys {
     SemicolonQuote,
 }
 
+/// 打字途中方向键做什么（#129）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ArrowKeys {
+    /// 都用来挑候选，跟着候选排列：横排左右键选词、上键上一页、下键展开面板；竖排上下键选词、左右键翻页。
+    #[default]
+    Candidates,
+    /// 上下键选词（到了一页的两头接着翻页），左右键在还没选词的拼音里移动光标：
+    /// 字母插在光标处，退格删光标前一个，Home、End、Delete 也管光标。方向键不翻页。
+    /// 「译」里拼音在原文框里，没有光标，左右键不动。
+    Caret,
+}
+
 /// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct View {
@@ -441,7 +453,7 @@ pub struct Config {
     pub date_time: bool,
     /// 打字时推荐 emoji（开心 → 😊，八 → 8️⃣）。
     pub emoji_suggest: bool,
-    /// 候选横排（左右键移光标、上下键翻页、下键展开面板）；竖排时上下移光标、左右翻页。
+    /// 候选横排；false 竖排。方向键怎么用见 [`ArrowKeys`]。
     pub horizontal: bool,
     /// 翻页键，[`page_keys`] 的位掩码（PgUp PgDn 一直能用）。
     pub page_keys: u32,
@@ -465,9 +477,8 @@ pub struct Config {
     pub clipboard_history: bool,
     /// 双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong）；中英混打时看得出打了什么（#122）。
     pub shuangpin_keys: bool,
-    /// 方向键移动拼音里的光标（#129）：字母插在光标处，退格删光标前一个；横排时光标到了两头，
-    /// 左右键才移动候选，竖排时左右键只管光标。Home、End、Delete 也管光标。
-    pub arrow_caret: bool,
+    /// 打字途中方向键做什么（#129）。
+    pub arrow_keys: ArrowKeys,
 }
 
 impl Default for Config {
@@ -489,7 +500,7 @@ impl Default for Config {
             toolbar: true,
             clipboard_history: false,
             shuangpin_keys: false,
-            arrow_caret: false,
+            arrow_keys: ArrowKeys::Candidates,
         }
     }
 }
@@ -678,6 +689,9 @@ impl<'e> Session<'e> {
 
     pub fn configure(&mut self, config: Config) {
         if self.config != config {
+            if config.arrow_keys == ArrowKeys::Candidates {
+                self.caret = None; // 方向键换回选词：拼音里的光标回到末尾
+            }
             self.config = config;
             self.fresh = false;
         }
@@ -1651,8 +1665,10 @@ impl<'e> Session<'e> {
             }
             _ => {}
         }
-        if let Some(handled) = self.caret_key(key) {
-            return Some(handled);
+        if self.config.arrow_keys == ArrowKeys::Caret {
+            if let Some(handled) = self.caret_key(sym) {
+                return Some(handled);
+            }
         }
         if self.config.calculator {
             // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）。双拼时是大写 V
@@ -1714,8 +1730,9 @@ impl<'e> Session<'e> {
             }
             return Some(true);
         }
-        // 横排时左右键移动候选、上下键翻页；竖排反过来
-        let horizontal = self.config.horizontal;
+        // 横排时左右键移动候选、上下键翻页；竖排反过来。左右键用来移拼音里的光标时（上面 caret_key
+        // 处理完了，到不了这里）和竖排一样上下键选词，下键也不展开面板
+        let horizontal = self.config.horizontal && self.config.arrow_keys == ArrowKeys::Candidates;
         let (prev_key, next_key, prev_page_key, next_page_key) = if horizontal {
             (keysym::LEFT, keysym::RIGHT, keysym::UP, keysym::DOWN)
         } else {
@@ -2164,24 +2181,24 @@ impl<'e> Session<'e> {
         self.caret.map_or(self.input.len(), |at| at.clamp(start, self.input.len()))
     }
 
-    /// 方向键移动拼音里的光标（[`Config::arrow_caret`]）。Some：处理完了；None：照常处理
-    /// （横排时光标在两头的左右键接着去移动候选）。带修饰键的不管（Shift+右键照旧移候选）。
-    fn caret_key(&mut self, key: &Key) -> Option<bool> {
-        if !self.config.arrow_caret
-            || key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
-        {
+    /// 左右键移动拼音里的光标（[`ArrowKeys::Caret`]），Home、End、Delete 也管光标；到了两头照样吃掉。
+    /// Some：处理完了；None：不是这几个键。
+    fn caret_key(&mut self, sym: u32) -> Option<bool> {
+        if !matches!(sym, keysym::LEFT | keysym::RIGHT | keysym::HOME | keysym::END | keysym::DELETE) {
             return None;
+        }
+        if self.translating() {
+            // 「译」里拼音显示在候选框的原文框里，那里画不出光标：光标留在末尾
+            return Some(true);
         }
         let start = self.selected_bytes().min(self.input.len());
         let at = self.caret();
         let len = self.input.len();
         let prev = self.input[..at].chars().next_back().map_or(0, char::len_utf8);
         let next = self.input[at..].chars().next().map_or(0, char::len_utf8);
-        match key.keysym {
+        match sym {
             keysym::LEFT if at > start => self.caret = Some(at - prev),
             keysym::RIGHT if at < len => self.caret = (at + next < len).then_some(at + next),
-            // 竖排时左右键只管光标，到头了也吃掉（上下键管候选）
-            keysym::LEFT | keysym::RIGHT if !self.config.horizontal => {}
             keysym::HOME => self.caret = Some(start),
             keysym::END => self.caret = None,
             keysym::DELETE if at < len => {
@@ -2192,7 +2209,7 @@ impl<'e> Session<'e> {
                     self.clear();
                 }
             }
-            _ => return None,
+            _ => {} // 到了两头
         }
         Some(true)
     }
