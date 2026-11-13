@@ -216,7 +216,13 @@ def run(app):
                 current = w.get_current_folder()
                 return current is not None and current.get_path() == folder
             check(pump_until(folder_ready), "文件对话框没切到目标目录")
-            w.response(Gtk.ResponseType.ACCEPT)
+            # 目录还在载入时点「保存」会被对话框吞掉（窗口还开着）：没写出文件就再点
+            for _ in range(10):
+                if not w.get_visible():
+                    break
+                w.response(Gtk.ResponseType.ACCEPT)
+                if pump_until(lambda: os.path.exists(target), 3):
+                    break
         check(pump_until(lambda: os.path.exists(target)), "导出自定义词没写出文件")
     step("导出自定义词（保存）", export_words)
     step("打开网址", lambda: win.open_url("https://example.invalid/"))
