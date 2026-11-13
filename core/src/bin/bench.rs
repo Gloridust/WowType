@@ -2,9 +2,10 @@
 //!
 //! 合成词库：cargo run --release -p wowtype-core --bin wowtype-bench
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
+//! 混上领域词级模型：... -- --lexicon lexicon.tsv --lm words.lm --domain-lm words.domain.lm
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
-//!   加 --lm words.lm 带上词级语言模型（再加 --domain-lm 文件 混上领域模型），--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
+//!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
 
 use std::sync::Arc;
 use std::time::Instant;

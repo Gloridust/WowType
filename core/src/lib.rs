@@ -2673,6 +2673,30 @@ mod tests {
     }
 
     #[test]
+    fn domain_lm_replaces_instead_of_stacking() {
+        // 领域模型：jin tian 后面接「天」比「田」常见得多
+        struct Domain;
+        impl LanguageModel for Domain {
+            fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+                if prev == Some("今天") && cur == "天" { 2.0 } else { 0.0 }
+            }
+        }
+        let mut e = engine("jin tian\t今天\t1000\ntian\t天\t1000\ntian\t田\t1000\n");
+        let scores = |e: &Engine| -> Vec<(String, f64)> {
+            e.set_context("今天");
+            e.input("tian").into_iter().map(|c| (c.text, c.score)).collect()
+        };
+        let general = scores(&e);
+        e.set_domain_lm(Some(Arc::new(Domain)));
+        let once = scores(&e);
+        assert_ne!(once, general, "混上领域模型要起作用");
+        e.set_domain_lm(Some(Arc::new(Domain)));
+        assert_eq!(scores(&e), once, "再设一次是换掉，不是再混一层");
+        e.set_domain_lm(None);
+        assert_eq!(scores(&e), general, "去掉以后回到通用模型");
+    }
+
+    #[test]
     fn context_merged_into_one_word_counts_as_common_pair() {
         let lexicon: Arc<dyn Lexicon> = Arc::new(
             MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap(),
@@ -2871,30 +2895,6 @@ mod tests {
             "要整个编码对上"
         );
         assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
-    }
-
-    #[test]
-    fn domain_lm_replaces_instead_of_stacking() {
-        // 领域模型：jin tian 后面接「天」比「田」常见得多
-        struct Domain;
-        impl LanguageModel for Domain {
-            fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
-                if prev == Some("今天") && cur == "天" { 2.0 } else { 0.0 }
-            }
-        }
-        let mut e = engine("jin tian\t今天\t1000\ntian\t天\t1000\ntian\t田\t1000\n");
-        let scores = |e: &Engine| -> Vec<(String, f64)> {
-            e.set_context("今天");
-            e.input("tian").into_iter().map(|c| (c.text, c.score)).collect()
-        };
-        let general = scores(&e);
-        e.set_domain_lm(Some(Arc::new(Domain)));
-        let once = scores(&e);
-        assert_ne!(once, general, "混上领域模型要起作用");
-        e.set_domain_lm(Some(Arc::new(Domain)));
-        assert_eq!(scores(&e), once, "再设一次是换掉，不是再混一层");
-        e.set_domain_lm(None);
-        assert_eq!(scores(&e), general, "去掉以后回到通用模型");
     }
 
     #[test]
