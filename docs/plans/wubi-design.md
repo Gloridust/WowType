@@ -14,32 +14,42 @@
 
 ## 1. 参考：主流五笔怎么做
 
-| 行为 | 微信输入法（本机 3.0.1） | 搜狗 / QQ 五笔 | 极点五笔 | Rime wubi86 | fcitx5 五笔（libime 码表） |
+搜狗 / QQ、极点两列凭使用经验，没有逐项核对出处，默认值以实际版本为准。Rime 一列来自 rime-wubi 的 `wubi86.schema.yaml`，fcitx5 一列来自 fcitx5-chinese-addons 的 `wbx.conf.in.in`。
+
+| 行为 | 微信输入法（本机 3.0.1） | 搜狗 / QQ 五笔（经验） | 极点五笔（经验） | Rime wubi86 | fcitx5 五笔（libime 码表） |
 |---|---|---|---|---|---|
 | 四码唯一自动上屏 | 开关，本机为开 | 有，默认开 | 有，默认开 | 默认不自动（`auto_select` 未开） | `AutoSelect=True` |
-| 第五码顶字 | 开关（「第五码首选词上屏」），本机为**关** | 有 | 有，默认开 | 码长不限（拼句） | `NoMatchAutoSelectLength=-1`（顶字） |
+| 第五码顶字 | 开关（「第五码首选词上屏」），本机为**关** | 有 | 有，默认开 | 码长不限（拼句） | `NoMatchAutoSelectLength=-1`（按键名理解为无匹配时顶字，未实测） |
 | 拼音混输 | 开关，本机为开 | 默认混输 | 有单独的「五笔拼音」方案 | 有单独的 `wubi_pinyin` 方案 | 有单独的 Wubi Pinyin |
-| `z` 键 | 混输时直接打拼音 | 临时拼音 | 万能键 / 临时拼音 | 拼音反查（`z` 前缀），候选带五笔码 | `PinyinKey=z` 且 `MatchingKey=z` |
+| `z` 键 | 未确认（混输开着时拼音直接打） | 临时拼音 | 万能键 / 临时拼音 | 拼音反查（`z` 前缀），候选带五笔码 | `PinyinKey=z` 且 `MatchingKey=z` |
 | 编码提示 | 开关，本机为开 | 逐码提示 | 逐码提示 | 反查时提示 | `Hint=True` |
 | 调频 | 有用户五笔词典 | 可选，默认固定 | 可选，默认固定 | 用户词典调频 | `OrderPolicy=Freq`，但码长 ≤2 不调（`NoSortInputLength=2`） |
 | 造词 | 有用户五笔词典 | 自动 + 手动造词 | 手动造词 | 按规则编码造词（`encode_commit_history`） | 用 3 次自动成词（`SaveAutoPhraseAfter=3`） |
 
-微信输入法这些都是从本机安装里只读看到的**规则**，没有取任何数据：
+微信输入法一列只记**规则**，没有取任何数据。
 
-- 「输入方案」是一个单选；五笔另有方案（86 / 98 / 新世纪）和一组配置 `WubiConfig`。
-- `WubiConfig` 的四个键：
-  - `enableComment`：五笔编码提示；
-  - `emitUniqueCandidate`：四码唯一上屏；
-  - `enablePinyin`：五笔拼音混输；
-  - `emitWhenInputNextRune`：第五码首选词上屏。
-- 本机存储里这四个依次是 开、开、开、**关**。这些值没改过的话就是默认值，未能确认。
-- 引擎有这几个组件：
+**直接看到的：**
+
+- 程序里有四个设置项文字：「五笔编码提示」「四码唯一上屏」「五笔拼音混输」「第五码首选词上屏」，还有「86五笔」。
+- 用户设置存储（`~/Library/Application Support/WeType/mmkv/`，不在安装目录里）有：
+  - 三个方案键：`InputScheme`、`ShuangpinScheme`、`WubiScheme`；
+  - 一个 `WubiConfig` JSON，四个键是 `enableComment`、`emitUniqueCandidate`、`enablePinyin`、`emitWhenInputNextRune`，本机值依次是 开、开、开、关。
+- 符号表里能看到这几个引擎组件：
   - `WubiSessionV2`：独立的五笔会话；
   - `WubiComment`：给候选加编码注释的装饰层；
   - `ReverseWubiDict`：词 → 码，用于反查和提示；
   - `UserWubiDict`：用户五笔词，和拼音的用户词典分开。
 
-**微信输入法开了混输，就关掉了第五码顶字。** 两者冲突：混输时第 5 个字母可能是拼音的一部分。WowType v1 不做混输，所以第五码顶字固定开。
+**推断的，没有直接看到：**
+
+- 输入方案是一个单选。
+- 四个 JSON 键按名字对应上面四个设置项。
+- `WubiScheme` 对应 86 / 98 / 新世纪：词典目录里有 `swbd86/98/nc.bin`，但 98、新世纪的界面文字没找到。
+- 本机值是不是出厂默认，无法确认。
+
+**混输和第五码顶字的关系**：本机恰好是混输开、顶字关，但不能据此说微信输入法把两者绑定。
+
+两者确实有歧义：混输时第 5 个字母可能是拼音的一部分，也可能是下一个字的码。WowType v1 不做混输，没有这个歧义，所以第五码顶字固定开。
 
 ## 2. 架构：在会话层做
 
@@ -47,7 +57,7 @@ PR #194 在 `Engine::try_input_at`（`core/src/lib.rs:670`）里加 `if wubi { w
 
 - **引擎只能返回候选列表，表达不了「上屏」。** 四码唯一自动上屏、第五码顶字、空码清空都是按键流程上的决定。现在这些决定都在 `Session` 里，fcitx5 和 macOS 两个外壳共用。
 - **绕开了引擎里的后处理。**
-  - 简繁转换（`apply_traditional`）在拼音路径里调，#194 的五笔候选不转繁体。
+  - 简繁转换（`apply_traditional`）在拼音路径里调，#194 的五笔候选不转繁体（读 diff 得出，没有实际跑）。
   - 候选的 `pinyin` 是空的，会话的学习（`learn` → `record_selection`）照样记进**拼音**的选词历史。
 - **会话里按原始字母触发的功能会误触发。** 比如 `v`+空格开工具栏、`v` 开头的计算器、`rq`/`sj` 日期时间。只有会话能按方案关掉它们。
 
@@ -70,10 +80,11 @@ PR #194 在 `Engine::try_input_at`（`core/src/lib.rs:670`）里加 `if wubi { w
 | 规则 | 行为 | 挂在哪 |
 |---|---|---|
 | 码长 | 五笔码最多 4 码，只认 `a`–`y` | `handle_key` 字母分支（`session.rs:762`） |
-| 四码唯一自动上屏（开关，默认开） | 打满 4 码、**精确匹配的五笔候选只有 1 个**时直接上屏。<br>emoji、日期这类附加候选和前缀联想候选不算数。 | `push_input` 之后检查 |
-| 第五码顶字（固定开） | 已有 4 码时再按字母：先上屏当前首选，这个字母开始新码。<br>码长不到 4 但这个字母接上以后没有任何候选（含前缀）时，也照此顶字。 | `handle_key` 字母分支，`push_input` 之前 |
+| 四码唯一自动上屏（开关，默认开） | 打满 4 码、**精确匹配的候选只有 1 个**时直接上屏。<br>计数包括码表词、五笔用户词和用户的自定义编码，emoji、日期这类附加候选不算。<br>自定义编码和码表撞码时就不唯一，不自动上屏，由用户选。 | `push_input` 之后检查 |
+| 第五码顶字（固定开） | **只在已有 4 码时**触发：再按字母，先上屏当前首选，再用这个字母开始新码。<br>4 码时只有精确候选，没有前缀候选。<br>码长不到 4 时字母一律接上，不顶字。接上以后没有候选就按下面的「空码」处理。 | `handle_key` 字母分支，`push_input` 之前 |
 | 空码 | 当前码没有任何候选（精确和前缀都没有）：<br>- 编辑区保留并标出空码，可以退格改；<br>- 再按字母：丢掉空码，从这个字母开始新码（不上屏字母）；<br>- 空格：清空；<br>- 回车：字母原样上屏（和拼音的回车一致）。<br>不响铃，跨平台做不好。 | `composing_key` 的 `SPACE` 分支（`session.rs:1628`）。<br>现在 `commit_current` 没候选时会把字母上屏（`session.rs:1885`），五笔下要改成清空。 |
 | 标点顶字 | 打码时按标点：先上屏首选，再上屏标点。空码时丢掉码，只上屏标点。 | 现成：`symbol_key`（`session.rs:1500`）先 `commit_current` 再出标点。空码那条跟上一行一起改。 |
+| 首选是前缀候选时 | 码不满 4、没有精确候选、只有前缀联想时，首选是联想出来的词。例如打 `wq`，首选可能是「你」（`wqiy`）。<br>空格和标点顶字都上屏光标处的这个词，和拼音的空格一样，看到的就是上屏的。<br>第五码顶字不会遇到这种情况，因为 4 码时没有前缀候选。 | `commit_current` 不用改 |
 | 数字 | 打码时按当前页选词（现成）。不打码时照常。 | 现成 |
 | 大写字母 | 打码时先顶字上屏，再原样上屏大写字母。五笔不做英文候选。 | `handle_key` 字母分支 |
 
@@ -119,7 +130,7 @@ PR #194 在 `Engine::try_input_at`（`core/src/lib.rs:670`）里加 `if wubi { w
 | 符号、标点 | 不变（`symbols`）。标点顶字见 3.1。 |
 | 以词定字 `[ ]` | 不变（`pick_char`，`session.rs:1952`），对多字候选取首字/末字；取出来的字不学。 |
 | 繁体输出 | 五笔候选同样走 `apply_traditional`（简入繁出）。#194 漏了这一步。 |
-| 自定义编码（`mail`、`wdyx`） | 照常放最前（`prepend_custom_codes`），用户定义的优先于码表。 |
+| 自定义编码（`mail`、`wdyx`） | 放最前，用户定义的优先于码表。<br>`prepend_custom_codes` 在 `try_input_at` 里（`lib.rs:676`），五笔路径不经过那里，要**显式调用**。<br>它算不算进「四码唯一」见 3.1。 |
 | 英文候选、模糊音、纠错、双拼 | 五笔下不生效，设置里也藏起来。 |
 | 语音 | 无关，不变。 |
 | 选词键 `;` `'`、翻页键 | 不变。翻页键选了 `, .` 时，打码中的 `, .` 是翻页，不是标点顶字。这和拼音一致。 |
@@ -135,7 +146,7 @@ WubiAutoCommit=True              # 四码唯一自动上屏
 WubiHint=True                    # 编码提示
 ```
 
-- 设置界面是**一个单选「输入方案」**。选了双拼才出方案下拉；选了五笔才出两个开关。微信输入法也是这样：一个输入方案单选，五笔另有自己的一组配置。
+- 设置界面是**一个单选「输入方案」**。选了双拼才出方案下拉；选了五笔才出两个开关。微信输入法的设置存储也是一个 `InputScheme` 键，五笔另有自己的一组配置；界面上是不是单选是推断。
 - 只留这两个开关的理由：
   - **四码唯一自动上屏**：习惯分两派。打词组的人会被误上屏打断，主流都给开关。默认开。
   - **编码提示**：学码期很需要，熟手嫌乱。主流都给开关。默认开。
@@ -145,7 +156,7 @@ WubiHint=True                    # 编码提示
   - 调频：v1 不做。
   - 单字优先：频次已经覆盖。
   - 五笔版本：v1 只有 86，有了 98 再出下拉。
-- v1.1 的「拼音混输」是第 3 个开关，默认关。开了以后第五码顶字自动失效，照微信输入法的做法。
+- v1.1 的「拼音混输」是第 3 个开关，默认关。开了以后第五码顶字要让位：第 5 个字母可能是拼音的一部分，两者有歧义。
 - 兼容旧配置：没有 `InputScheme` 时，`Shuangpin=True` 当作 `Shuangpin`，否则当作 `Quanpin`。
   - 写回时两个键都写，旧版本读得懂。
   - 涉及 `settings/wowtype-config`、`macos/Sources/Shared/Config.swift`、`fcitx5-addon` 的 `Shuangpin` 选项，以及 `docs/CONFIG.md`。
@@ -164,9 +175,13 @@ WubiHint=True                    # 编码提示
 
 **nice-to-have（v1.1 起）**
 - 造词：分次选出的 2–4 字词按规则编码，记进 `wubi_user.tsv`。
-- 拼音混输开关：五笔精确码在前，拼音候选在后并带五笔码；只在码 >4 或五笔无候选时让拼音排前；开了就关掉顶字。
+- 拼音混输开关：五笔精确码在前，拼音候选在后并带五笔码；只在码 >4 或五笔无候选时让拼音排前；开了就不再第五码顶字（理由见第 1 节）。
 - `z` 万能键；3–4 码重码调频（有开关）。
-- 98 版：唯一许可清楚的公开来源是 fcitx5-table-extra 的 `wubi98.txt`（GPL-3.0-or-later，README 声明数据为公有领域）。它没有频次，要用 WowType 词库的词频补，所以没在 #193 里做。
+- 98 版：候选来源是 fcitx5-table-extra 的 `wubi98.txt`，但许可说法不一：
+  - README 说代码是 GPLv3 或更高，又笼统写了一句「数据文件都已是公有领域」；
+  - metainfo 写的是 GPL-2.0+。
+
+  98 表是 2021 年以后别人提交的，那句话是否覆盖它要再确认。这个表也没有频次，要用 WowType 词库的词频补。所以没在 #193 里做。
 
 **明确不做**
 - 解微信输入法的五笔词典（`swbd*.bin`）或用其中任何数据。
@@ -183,11 +198,11 @@ WubiHint=True                    # 编码提示
 | CI data job（`.github/workflows/ci.yml:158`） | `make-data.sh` 之后加 `scripts/make-wubi.sh "" dist/data`。<br>artifact 上传的是整个 `dist/data`（:169-173），下游 job 自动拿到。 |
 | 版本号（`scripts/make-data.sh:83` `REV`） | 加了文件要把 `REV` 加 1，否则 `VERSION` 不变。<br>`nix-data-pr.sh:23-26` 看版本号相同就不更新 Nix。 |
 | deb（`scripts/package-deb.sh`） | - `check_data` 必需文件（:71）加 `wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS`<br>- 装到 `/usr/share/wowtype` 的循环（:101）加 `wubi86.tsv`<br>- doc 目录加 `WUBI-SOURCE.txt`、`WUBI-AUTHORS`（:106 附近）<br>- `data_copyright()`（:53-67）加一段 `Files: usr/share/wowtype/wubi86.tsv`、`License: LGPL-3.0`，正文缩进贴 `WUBI-LICENSE`<br>- 数据 tarball（:158-160，已按 #203 做成可复现的 tar）的清单加这几个文件<br>- #194 已经在这里加过可选的 wubi，以这次为准合并 |
-| rpm（`scripts/package-rpm.sh`） | - 检查（:21）和拷贝（:37）<br>- `%install`（:127）<br>- `LICENSE.rime-wubi` 加进 `%license`（:137、:142）<br>- COPYRIGHT（:56-64）加一段<br>- `License:`（:81）加 `AND LGPL-3.0-only` |
-| Arch（`scripts/package-arch.sh`） | - 检查（:19）、拷贝（:32）、`install`（:86）<br>- `/usr/share/licenses/wowtype/LICENSE.rime-wubi`<br>- `license=`（:48）加 `'LGPL-3.0-only'` |
+| rpm（`scripts/package-rpm.sh`） | - 检查（:21）和拷贝（:37）加 `wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS`<br>- `%install`（:127）加 `wubi86.tsv`<br>- `WUBI-LICENSE` 装成 `LICENSE.rime-wubi`，加进 `%license`（:137、:142）<br>- `WUBI-SOURCE.txt`、`WUBI-AUTHORS` 进 doc 目录<br>- COPYRIGHT（:56-64）加一段<br>- `License:`（:81）加 `AND LGPL-3.0-only` |
+| Arch（`scripts/package-arch.sh`） | - 检查（:19）、拷贝（:32）加 `wubi86.tsv` 和三个 `WUBI-*` 文件<br>- `install`（:86）加 `wubi86.tsv`<br>- `WUBI-LICENSE` 装成 `/usr/share/licenses/wowtype/LICENSE.rime-wubi`（:92 附近）<br>- `WUBI-SOURCE.txt`、`WUBI-AUTHORS` 进 doc 目录<br>- `license=`（:48）加 `'LGPL-3.0-only'` |
 | openSUSE 源码安装（`ci.yml:467`） | 显式的 `install -m644` 清单加 `wubi86.tsv` |
-| Nix（`nix/package.nix`） | - `postInstall`（:104）加 `data/wubi86.tsv`，许可证装成 `LICENSE.rime-wubi`（:108 附近）<br>- `meta.license`（:130-136）加 `lgpl3Only`<br>- tarball 内容变了，hash 会变：靠上面的 `REV` 让 `nix-data-pr.sh` 发版后自动改 `dataVersion`、URL、hash |
-| macOS（`macos/build.sh`） | - 拷贝（:69-75）加 `wubi86.tsv` 和 `WUBI-LICENSE`→`DATA-WUBI-LICENSE`、`WUBI-SOURCE.txt`→`DATA-WUBI-SOURCE.txt`<br>- **必须**同时改资源白名单正则（:78），否则构建失败<br>- `main.swift:29` 的自检清单加 `wubi86.tsv`<br>- `AppState.resource()` 通用查找，不用改 |
+| Nix（`nix/package.nix`） | - `postInstall`（:104）加 `data/wubi86.tsv`，许可证装成 `LICENSE.rime-wubi`（:108 附近），`WUBI-SOURCE.txt`、`WUBI-AUTHORS` 装进 doc 目录<br>- `meta.license`（:130-136）加 `lgpl3Only`<br>- tarball 内容变了，hash 会变：靠上面的 `REV` 让 `nix-data-pr.sh` 发版后自动改 `dataVersion`、URL、hash |
+| macOS（`macos/build.sh`） | - 拷贝（:69-75）加 `wubi86.tsv`，另外三个改名放进去：`WUBI-LICENSE`→`DATA-WUBI-LICENSE`、`WUBI-SOURCE.txt`→`DATA-WUBI-SOURCE.txt`、`WUBI-AUTHORS`→`DATA-WUBI-AUTHORS`<br>- **必须**同时把这四个名字加进资源白名单正则（:78），否则构建失败<br>- `main.swift:29` 的自检清单加 `wubi86.tsv`<br>- `AppState.resource()` 通用查找，不用改 |
 | fcitx5 插件 | `findDataFile("WOWTYPE_WUBI", "wubi86.tsv")`（`wowtype_engine.cpp:84-98`）能找到 `/usr/share/wowtype` 下的文件，CMake 不用改 |
 | `install.sh` | 数据都在各发行版的包里，不用改 |
 | 发布说明（`ci.yml:558`）、`README.md` 许可证一节 | 加一行：五笔码表来自 rime-wubi，LGPL-3.0 |
