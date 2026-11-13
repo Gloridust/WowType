@@ -17,7 +17,16 @@
 
 [![加入 Telegram 交流群](https://img.shields.io/badge/%E5%8A%A0%E5%85%A5%20Telegram%20%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+Kxk-4VkXIS9lODM1)
 
-https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
+<table>
+<tr>
+<td align="center" width="50%"><video src="https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253" controls muted width="100%"></video></td>
+<td align="center" width="50%"><video src="https://github.com/user-attachments/assets/9a6a6ea9-d3b3-4b7b-8d7b-fc5554c4a8c6" controls muted width="100%"></video></td>
+</tr>
+<tr>
+<td align="center"><sub>介绍视频</sub></td>
+<td align="center"><sub>v0.3.12：互译、语音输入、macOS 版、日期时间、候选更准……</sub></td>
+</tr>
+</table>
 
 </div>
 
@@ -396,7 +405,7 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 
 | 页面 | 能改什么 |
 |---|---|
-| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、候选字号。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「问题反馈」能[导出日志](#出问题时导出日志) |
+| 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、候选字号。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「帮助」能[导出日志](#出问题时导出日志) |
 | 输入 | 词库（默认雾凇，可下载切换到[万象](docs/CONFIG.md#可选词库万象拼音)）、拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（12 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong）、按错键自动纠正、繁体字、日期时间、计算器、v + 空格工具栏、剪贴板历史、中英文之间自动加空格、分号引号选第 2/3 个候选 |
 | 表情 | 打字时推荐 emoji、表情面板快捷键 |
 | 语音 | 下载 / 删除识别模型（有进度、能取消）；下载好模型后才能打开语音输入；语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别结果同时复制到剪贴板 |
@@ -464,7 +473,7 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 
 ### 出问题时导出日志
 
-「WowType 设置 → 常规 → 问题反馈 → 导出日志」，或者右上角菜单里的「导出日志…」，会存一个 `wowtype-log-时间.txt`，
+「WowType 设置 → 常规 → 帮助 → 导出日志」，或者右上角菜单里的「导出日志…」，会存一个 `wowtype-log-时间.txt`，
 里面有版本、系统和桌面环境、fcitx5 的输入法列表和主题、WowType 的设置、数据文件在不在、WowType 和 fcitx5 最近的日志。
 **不含你打过的字**，自定义词、自动学到的词和输入习惯只写条数；家目录写成 `~`。导出后可以先打开看一眼再发。
 

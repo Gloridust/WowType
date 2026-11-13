@@ -8,12 +8,14 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
 #include <fcitx-config/configuration.h>
 #include <fcitx-config/enum.h>
 #include <fcitx-config/option.h>
+#include <fcitx-config/rawconfig.h>
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx-utils/dbus/bus.h>
@@ -209,9 +211,10 @@ FCITX_CONFIGURATION(
     fcitx::Option<std::string> translateModel{this, "TranslateModel", "翻译用的模型", ""};
     fcitx::Option<bool> translateFormal{this, "TranslateFormal", "译文用正式语气（默认聊天口吻）",
                                         false};
-    // 本地模型（腾讯 HY-MT 1.5 1.8B）：第一次翻译时起 llama-server，闲置后停掉
+    // 本地模型（腾讯 HY-MT 1.5 1.8B）：第一次翻译时起 llama-server，闲置后停掉。
+    // 默认用本地模型；旧配置文件里没写这一项时见 loadWowtypeConfig
     fcitx::Option<bool> translateLocal{this, "TranslateLocal", "用本地模型翻译（HY-MT，离线）",
-                                       false};
+                                       true};
     fcitx::Option<std::string> translateLocalModel{
         this, "TranslateLocalModel", "本地模型文件（留空用 WowType 设置下载的）", ""};
     fcitx::Option<std::string> translateLlamaServer{
@@ -223,6 +226,67 @@ FCITX_CONFIGURATION(
     // ~/.local/share/wowtype/dicts/wanxiang/lexicon.tsv；文件不在就用默认的
     fcitx::Option<std::string> lexicon{this, "Lexicon", "词库文件（留空用自带的雾凇词库）", ""};
     fcitx::ExternalOption settings{this, "Settings", "自定义词和更多设置", "wowtype-config"};);
+
+/// 键名、默认值、范围、可选值以 spec/config.json 为准（设置契约），改这里要先改规格；
+/// fcitx5-addon/test/config_dump.cpp 把上面的导出来，scripts/test-config-contract.py 对照。
+
+/// 把 wowtype.conf 读成的 RawConfig 装进 config，文件里没写的项是默认值（和 fcitx::readAsIni 一样）。
+/// 0.3.10 及以前没有 TranslateLocal：文件里没写这一项、TranslateBaseUrl 又填了的，接着用翻译接口（False）。
+/// 这条规矩三端一样（settings/wowtype-config 的 read_config、macOS 的 WowtypeConfig.parse）。
+/// 数字项超出范围时夹到边上（三端一样，见 spec/config.json 的 readRules.outOfRange）。
+/// fcitx5 自己的 IntConstrain 是不认、回到默认值；认不出的数字（abc、空的）还是默认值。
+inline void clampWowtypeInt(fcitx::Option<int, fcitx::IntConstrain> &option, const fcitx::RawConfig &raw,
+                            int min, int max) {
+    const std::string *text = raw.valueByPath(option.path());
+    if (!text || text->empty()) {
+        return;
+    }
+    char *end = nullptr;
+    const long long n = std::strtoll(text->c_str(), &end, 10);
+    if (end == text->c_str() || *end != '\0') {
+        return;
+    }
+    if (n < min) {
+        option.setValue(min);
+    } else if (n > max) {
+        option.setValue(max);
+    }
+}
+
+/// 去掉两边的空格和 Tab（fcitx5 读文件时值前面的空格会留着：「Key=  值」读成「  值」）。
+inline std::string trimWowtypeValue(const std::string &text) {
+    const auto begin = text.find_first_not_of(" \t");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    return text.substr(begin, text.find_last_not_of(" \t") - begin + 1);
+}
+
+/// 最上面一层的设置项，键和值两边的空格去掉（三端一样：「PageSize = 5」读成 5，见 spec/config.json 的 readRules）。
+/// [分组]（[Hotkey] 等）是带子项的，不是设置项，不要。
+inline fcitx::RawConfig wowtypeTopLevel(const fcitx::RawConfig &raw) {
+    fcitx::RawConfig out;
+    for (const auto &key : raw.subItems()) {
+        auto item = raw.get(key);
+        if (!item || !item->subItems().empty()) {
+            continue;
+        }
+        out.setValueByPath(trimWowtypeValue(key), trimWowtypeValue(item->value()));
+    }
+    return out;
+}
+
+inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &file) {
+    const fcitx::RawConfig raw = wowtypeTopLevel(file);
+    config.load(raw);
+    // 范围和上面 IntConstrain 的一样；不一样时契约测试（PageSize=12 读成 9）会报错
+    clampWowtypeInt(config.pageSize, raw, 3, 9);
+    clampWowtypeInt(config.translateIdleMinutes, raw, 0, 240);
+    if (!raw.valueByPath("TranslateLocal") &&
+        (*config.translateBaseUrl).find_first_not_of(" \t\r\n") != std::string::npos) {
+        config.translateLocal.setValue(false);
+    }
+}
 
 class WowtypeEngine;
 

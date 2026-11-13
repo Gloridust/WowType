@@ -182,7 +182,9 @@ public struct Shortcut: Equatable, Sendable {
         if modifiers.contains(.control) { parts.append("Control") }
         if modifiers.contains(.option) { parts.append("Alt") }
         if modifiers.contains(.shift) { parts.append("Shift") }
-        let index = Int(keysym) - 0x20
+        // 按着 Shift 的字母写大写（和 fcitx5 一样：Control+Shift+E），两端设置里的预设才对得上
+        let shifted = modifiers.contains(.shift) && keysym >= 0x61 && keysym <= 0x7a
+        let index = Int(shifted ? keysym - 0x20 : keysym) - 0x20
         let names = Shortcut.asciiNames
         parts.append(index >= 0 && index < names.count ? names[index] : "?")
         return parts.joined(separator: "+")

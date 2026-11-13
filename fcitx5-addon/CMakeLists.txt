@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(wowtype-fcitx5 VERSION 0.3.11 LANGUAGES CXX)
+project(wowtype-fcitx5 VERSION 0.3.12 LANGUAGES CXX)
 
 # fcitx5 5.1 的头文件用到了 std::span、std::source_location
 set(CMAKE_CXX_STANDARD 20)
@@ -156,4 +156,11 @@ if(WOWTYPE_BUILD_TESTS)
     add_executable(wowtype-key-harness test/key_harness.cpp src/clipboard_copy.cpp)
     target_include_directories(wowtype-key-harness PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(wowtype-key-harness PRIVATE Fcitx5::Core Fcitx5::Utils)
+
+    # 设置契约：导出 WowtypeConfig 的键、默认值、范围、可选值，scripts/test-config-contract.py 对照 spec/config.json
+    add_executable(wowtype-config-dump test/config_dump.cpp)
+    target_include_directories(wowtype-config-dump PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../core/include")
+    target_link_libraries(wowtype-config-dump PRIVATE Fcitx5::Core Fcitx5::Config Fcitx5::Utils)
 endif()
