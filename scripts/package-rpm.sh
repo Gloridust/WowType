@@ -47,7 +47,8 @@ WowType — https://github.com/Gloridust/WowType
   MIT 或 Apache-2.0，二选一。
 
 /usr/share/wowtype/s2t.tsv：
-  由 OpenCC 的字符映射表生成（tools/opencc2tsv.py），Apache-2.0。
+  由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+  版本见文件头，Apache-2.0，https://github.com/BYVoid/OpenCC。
 
 插件里编进去的 emoji 关键词（core/src/emoji/cldr.tsv）：
   来自 Unicode CLDR 和 emoji-test.txt，Copyright 1991-2026 Unicode, Inc.，

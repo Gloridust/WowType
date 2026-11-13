@@ -115,7 +115,8 @@ Files: *
 License: MIT or Apache-2.0
 
 Files: usr/share/wowtype/s2t.tsv
-Comment: 由 OpenCC 的字符映射表生成（tools/opencc2tsv.py）
+Comment: 由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+ 版本见文件头，https://github.com/BYVoid/OpenCC
 License: Apache-2.0
 
 Files: usr/lib/*/fcitx5/libwowtype.so

@@ -3,11 +3,18 @@
 
 先输出字符映射；给了 OpenCC 的 STPhrases.txt 时，再输出词组映射，
 引擎转换时词组按最长匹配优先，「头发 -> 頭髮」「干净 -> 乾淨」这类一对多的字就能转对。
-词组只留逐字转换会转错的那些，其余的逐字映射已经够用，不必重复。
 
-OpenCC 是 Apache-2.0。STPhrases.txt 在 OpenCC 源码的 data/dictionary/ 下，
-取和 pip 装的 opencc 同一个版本，例如：
-    https://raw.githubusercontent.com/BYVoid/OpenCC/ver.1.4.1/data/dictionary/STPhrases.txt
+词组整张照收，不挑「逐字转会转错」的那些：OpenCC 自己也是拿整张词组表从左到右
+最长匹配，逐字就能转对的词组在整句里还负责挡住别的词组（「为了」挡住「为了解决」
+里的「了解 -> 瞭解」，「控制」挡住「控制面板」里的「制面 -> 製麪」）。少收一个，
+整句就可能和 OpenCC 转得不一样；整张照收，引擎的结果和 OpenCC 一致。
+
+OpenCC 是 Apache-2.0。STPhrases.txt 要和 pip 装的 opencc 是同一个版本（版本号会写进表头），
+在 OpenCC 源码的 data/dictionary/ 下，例如：
+    https://raw.githubusercontent.com/BYVoid/OpenCC/ver.1.1.9/data/dictionary/STPhrases.txt
+pip 包里转换器实际用的是 clib/share/opencc/STPhrases.ocd2（同目录 dictionary/ 下的 txt
+可能是旧的），也可以直接导出：
+    opencc_dict -i .../clib/share/opencc/STPhrases.ocd2 -o STPhrases.txt -f ocd2 -t text
 
 用法：
     python3 tools/opencc2tsv.py STPhrases.txt > core/data/s2t.tsv
@@ -18,16 +25,17 @@ import sys
 
 
 def read_phrases(path):
-    """STPhrases.txt 的左列（简体词组），去重、保持顺序。"""
+    """STPhrases.txt：简体词组 -> 文件里的第一个繁体写法，去重、保持顺序。"""
     seen = {}
     with open(path, encoding="utf-8") as f:
         for line in f:
             if line.startswith("#"):
                 continue
-            key = line.split("\t", 1)[0].strip()
-            if len(key) > 1:
-                seen.setdefault(key, None)
-    return list(seen)
+            cols = line.rstrip("\n").split("\t")
+            key = cols[0].strip()
+            if len(key) > 1 and len(cols) > 1:
+                seen.setdefault(key, cols[1].split(" ")[0])
+    return seen
 
 
 def main():
@@ -41,11 +49,12 @@ def main():
         return 1
 
     conv = opencc.OpenCC("s2t")
+    version = getattr(opencc, "__version__", "?")
     out = sys.stdout
-    out.write("# 由 tools/opencc2tsv.py 生成，数据来源 OpenCC (Apache-2.0)\n")
+    out.write(f"# 由 tools/opencc2tsv.py 生成，数据来源 OpenCC {version} (Apache-2.0)\n")
     out.write("# 简体<TAB>繁体；左边多于一个字的是词组，转换时最长匹配优先\n")
 
-    chars = {}
+    chars = 0
     ranges = [(0x4E00, 0x9FFF), (0x3400, 0x4DBF)]
     for lo, hi in ranges:
         for code in range(lo, hi + 1):
@@ -53,41 +62,22 @@ def main():
             t = conv.convert(ch)
             if t != ch and len(t) == 1:
                 out.write(f"{ch}\t{t}\n")
-                chars[ch] = t
-    print(f"生成 {len(chars)} 条字符映射", file=sys.stderr)
+                chars += 1
+    print(f"生成 {chars} 条字符映射", file=sys.stderr)
 
     if len(sys.argv) == 2:
-        want = {p: conv.convert(p) for p in read_phrases(sys.argv[1])}
-        table = {}
-        # 按引擎的最长匹配试转每个词组，转得和 OpenCC 不一样就收进表。收进来的词组
-        # 会改变别的词组的切分（断发 会吃掉「不断发展」里的「发」），所以反复做到不再变。
-        while True:
-            longest = max(map(len, table), default=0)
-            added = {p: t for p, t in want.items()
-                     if p not in table and greedy(p, chars, table, longest) != t}
-            if not added:
-                break
-            table.update(added)
-        for p in want:
-            if p in table:
-                out.write(f"{p}\t{table[p]}\n")
-        print(f"生成 {len(table)} 条词组映射", file=sys.stderr)
+        phrases = read_phrases(sys.argv[1])
+        stale = 0
+        for p, listed in phrases.items():
+            t = conv.convert(p)
+            stale += t != listed
+            out.write(f"{p}\t{t}\n")
+        print(f"生成 {len(phrases)} 条词组映射", file=sys.stderr)
+        if stale:
+            # 词组表和 pip 的 opencc 不是同一个版本：字和词会来自两个版本
+            print(f"警告：{stale} 个词组 OpenCC {version} 转出来和 {sys.argv[1]} 写的不一样，"
+                  "检查两边版本是否一致", file=sys.stderr)
     return 0
-
-
-def greedy(text, chars, phrases, longest):
-    """和 core/src/convert.rs 一样：从左到右，词组最长匹配优先，其余逐字转换。"""
-    out, i = [], 0
-    while i < len(text):
-        for n in range(min(longest, len(text) - i), 1, -1):
-            if text[i:i + n] in phrases:
-                out.append(phrases[text[i:i + n]])
-                i += n
-                break
-        else:
-            out.append(chars.get(text[i], text[i]))
-            i += 1
-    return "".join(out)
 
 
 if __name__ == "__main__":
