@@ -180,50 +180,65 @@ impl LocalServer {
                 "翻译失败：没找到 llama-server（在设置的「翻译」页点下载，或者自己装 llama.cpp）"
                     .to_string()
             })?;
-            let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
-            let child = spawn_retrying_busy(|| {
-                Command::new(&server)
-                    .arg("-m")
-                    .arg(&config.model)
-                    .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-                    // 一句话用不了多少上下文；一个并发槽，内存最省
-                    .args(["-c", "2048", "-np", "1"])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-            })
-            .map_err(|e| format!("翻译失败：启动 llama-server 失败（{e}）"))?;
-            s.running = Some(Running {
-                child,
-                port,
-                config: config.clone(),
-            });
-            s.generation += 1;
-            s.starting = true;
-            let generation = s.generation;
-            drop(s);
-            // 等模型载入：不拿着锁，免得插件线程的 poll / 配置被卡住
-            let ready = wait_healthy(port, LOAD_TIMEOUT, || {
-                let mut s = lock.lock().unwrap();
-                s.generation == generation && alive(&mut s)
-            });
-            s = lock.lock().unwrap();
-            s.starting = false;
-            cvar.notify_all();
-            if s.generation != generation {
-                return Err("翻译已取消".to_string());
-            }
-            if let Err(message) = ready {
-                stop(&mut s);
-                return Err(message);
-            }
-            if config.idle_secs > 0 {
-                spawn_watchdog(
-                    Arc::clone(&self.state),
-                    generation,
-                    Duration::from_secs(config.idle_secs),
-                );
+            // 进程一起来就退出，多半是端口被别人抢了（free_port 放掉到 llama-server 绑上之间），
+            // 换个端口马上再试；模型坏了也会这样，试 3 次就报错
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
+                let child = spawn_retrying_busy(|| {
+                    Command::new(&server)
+                        .arg("-m")
+                        .arg(&config.model)
+                        .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+                        // 一句话用不了多少上下文；一个并发槽，内存最省
+                        .args(["-c", "2048", "-np", "1"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                })
+                .map_err(|e| format!("翻译失败：启动 llama-server 失败（{e}）"))?;
+                s.running = Some(Running {
+                    child,
+                    port,
+                    config: config.clone(),
+                });
+                s.generation += 1;
+                s.starting = true;
+                let generation = s.generation;
+                drop(s);
+                // 等模型载入：不拿着锁，免得插件线程的 poll / 配置被卡住
+                let ready = wait_healthy(port, LOAD_TIMEOUT, || {
+                    let mut s = lock.lock().unwrap();
+                    s.generation == generation && alive(&mut s)
+                });
+                s = lock.lock().unwrap();
+                s.starting = false;
+                cvar.notify_all();
+                if s.generation != generation {
+                    return Err("翻译已取消".to_string());
+                }
+                match ready {
+                    Ok(()) => {
+                        if config.idle_secs > 0 {
+                            spawn_watchdog(
+                                Arc::clone(&self.state),
+                                generation,
+                                Duration::from_secs(config.idle_secs),
+                            );
+                        }
+                        break;
+                    }
+                    Err(message) => {
+                        let exited = !alive(&mut s);
+                        stop(&mut s);
+                        if exited && attempt < 3 {
+                            continue;
+                        }
+                        return Err(message);
+                    }
+                }
             }
         }
         let port = s.running.as_ref().map(|r| r.port).unwrap_or(0);
@@ -274,7 +289,7 @@ fn stop(s: &mut State) {
 
 fn free_port() -> Option<u16> {
     // 让系统挑一个；放掉以后马上给 llama-server 用。极少数情况下会被别人抢走，
-    // 那样 llama-server 起不来，wait_healthy 会报错，下一次翻译换个端口重来。
+    // 那样 llama-server 起来就退出，acquire 换个端口马上重试。
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     listener.local_addr().ok().map(|a| a.port())
 }
@@ -507,6 +522,23 @@ mod tests {
         assert_ne!(server.pid(), Some(pid), "进程没了就重起");
         server.shutdown();
         assert!(!server.is_running());
+    }
+
+    #[test]
+    fn server_that_exits_reports_after_retries() {
+        // 起来就退出（模型坏了、端口被抢）：换端口试 3 次，还不行才报错，不会卡住
+        let (dir, mut config) = setup(0);
+        let script = dir.path().join("exits");
+        std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        let started = Instant::now();
+        let err = server.acquire(&config).err().unwrap();
+        assert!(err.contains("启动后退出了"), "{err}");
+        assert!(!server.is_running());
+        assert!(started.elapsed() < Duration::from_secs(20));
     }
 
     #[test]
