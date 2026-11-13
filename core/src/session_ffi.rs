@@ -1149,6 +1149,8 @@ mod tests {
         let read = unsafe { read_sized(&config, config.size) }.to_config();
         assert!(read.toolbar);
         assert!(!read.shuangpin_keys, "size 之外的字段不该读进来");
+        // 1.10 加的五笔两个开关默认开着，五笔本身默认关
+        assert!(!read.wubi && read.wubi_auto_commit && read.wubi_hint);
     }
 
     #[test]

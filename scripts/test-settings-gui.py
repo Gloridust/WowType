@@ -131,14 +131,16 @@ def run(app):
         pump(0.4)
         check(not any(visible(win.wubi_rows + win.shuangpin_rows)), "全拼时不该出双拼、五笔的设置")
         check(win.toolbar_row.get_sensitive() and win.calc_row.get_subtitle() == "v1+2*3 → 7", "全拼时计算器、工具栏不对")
-        # 没有码表：「五笔输入」灰掉，副标题说为什么（另建一页看，看完换回来）
-        os.remove(wubi_table)
+        # 没有码表：「五笔输入」灰掉（另建一页看，看完换回来）。装了安装包时系统目录里也有码表，
+        # 所以把设置界面找码表的地方换成空的，不删文件
+        found = type(win).build_input.__globals__
+        saved = found["WUBI_CANDIDATES"]
+        found["WUBI_CANDIDATES"] = []
         try:
             win.build_input()
             check(not win.scheme_checks["Wubi86"].is_sensitive(), "没有码表时五笔该灰掉")
         finally:
-            with open(wubi_table, "w", encoding="utf-8") as f:
-                f.write("g\t一\t1\n")
+            found["WUBI_CANDIDATES"] = saved
             win.build_input()
         check(win.scheme_checks["Wubi86"].is_sensitive(), "有码表时五笔该能选")
     step("输入方案", input_scheme)
