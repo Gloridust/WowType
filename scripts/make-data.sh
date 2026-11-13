@@ -36,7 +36,11 @@ rm "$OUT/lexicon.rime.tsv"
 # 例：WOWTYPE_CORPUS=/path/tatoeba_cmn.txt WOWTYPE_CORPUS_WEIGHT=0.3 scripts/make-data.sh
 if [[ -n "${WOWTYPE_CORPUS:-}" ]]; then
   # shellcheck disable=SC2086
-  python3 tools/mine_corpus_freq.py --min-count 1 ${WOWTYPE_CORPUS} > "$OUT/corpus-freq.tsv"
+  CORPUS_T2S=()
+  if [[ "${WOWTYPE_CORPUS_T2S:-}" == "1" ]]; then
+    CORPUS_T2S=(--t2s)
+  fi
+  python3 tools/mine_corpus_freq.py --min-count 1 ${CORPUS_T2S[@]+"${CORPUS_T2S[@]}"} ${WOWTYPE_CORPUS} > "$OUT/corpus-freq.tsv"
   python3 tools/blend-freq.py "$OUT/lexicon.tsv" "$OUT/corpus-freq.tsv" "$OUT/lexicon.corpus.tsv" \
     --weight "${WOWTYPE_CORPUS_WEIGHT:-0.3}"
   mv "$OUT/lexicon.corpus.tsv" "$OUT/lexicon.tsv"

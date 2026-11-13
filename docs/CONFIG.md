@@ -274,7 +274,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 
 构建时还可以用 `WOWTYPE_CORPUS` 指定公开语料（纯文本，可多个文件），
-脚本会挖词频、按 `WOWTYPE_CORPUS_WEIGHT`（默认 0.3）融进词库；只改词频、不新增词条。
+脚本会挖词频、按 `WOWTYPE_CORPUS_WEIGHT`（默认 0.3）融进词库；语料是繁体时加 `WOWTYPE_CORPUS_T2S=1`（需要 opencc）；只改词频、不新增词条。
 语料许可证跟着语料本身，构建产物里会生成 `CORPUS-NOTICE.txt`。
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
