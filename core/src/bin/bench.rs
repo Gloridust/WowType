@@ -112,6 +112,8 @@ fn main() {
         config.prefix_candidates = 0;
     }
     let engine = Engine::new(lex, lm).with_config(config);
+    // 和 wowtype_engine_new 一样在载入时建好模糊音索引，不算进第一次按键
+    engine.prepare_fuzzy();
     if let Some(path) = &nnlm_path {
         let started = Instant::now();
         engine.load_nnlm(path).expect("载入神经语言模型");

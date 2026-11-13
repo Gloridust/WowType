@@ -5,9 +5,10 @@
 // 窗口开着时在文本编辑里改的、别的键不会被盖掉；切回窗口时文件变了就重新读。
 
 import AppKit
+import AVFoundation
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, input, emoji, translate, words
+    case general, input, emoji, voice, translate, words
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "常规"
         case .input: return "输入"
         case .emoji: return "表情"
+        case .voice: return "语音"
         case .translate: return "翻译"
         case .words: return "自定义词"
         }
@@ -27,6 +29,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .input: return "keyboard"
         case .emoji: return "face.smiling"
+        case .voice: return "mic"
         case .translate: return "character.bubble"
         case .words: return "book.closed"
         }
@@ -336,6 +339,93 @@ final class SettingsModel: ObservableObject {
     // MARK: 本地翻译模型（和 Linux 设置的「离线翻译模型」一样：缺什么下什么）
 
     /// 正在下载时的进度（nil：没在下载）
+    // MARK: 语音模型（和 Linux 设置的「语音」页一样：从腾讯的 CDN 下载官方离线语音包）
+
+    /// 下载中的进度（已下, 总共）；没在下是 nil
+    @Published private(set) var voiceProgress: (Int64, Int64)?
+    @Published private(set) var voiceError: String?
+    @Published private var voiceRevision = 0
+    private var voiceControl: DownloadControl?
+    var voiceBusy: Bool { voiceProgress != nil }
+
+    var voiceModelReady: Bool {
+        _ = voiceRevision
+        return VoiceModelInstaller.isReady(supportDir: supportDir)
+    }
+
+    /// 「语音模型」那一行的状态，和 Linux 一样
+    var voiceModelStatus: String {
+        _ = voiceRevision
+        if let (done, total) = voiceProgress {
+            return total > 0 ? "下载中 \(done * 100 / total)%" : "下载中 \(LocalModel.sizeText(done))"
+        }
+        if voiceModelReady {
+            return "已下载（\(LocalModel.sizeText(LexiconPackInstaller.folderSize(VoiceModelInstaller.folder(in: supportDir)))))"
+        }
+        if let voiceError { return "没下载好：\(voiceError)" }
+        let part = VoiceModelInstaller.pack(in: supportDir).path + ".part"
+        if FileManager.default.fileExists(atPath: part) {
+            return "下了 \(LocalModel.sizeText(LocalModelInstaller.fileSize(part))) / "
+                + "\(LocalModel.sizeText(VoiceModelInstaller.size))，可以接着下"
+        }
+        return "要下载 \(LocalModel.sizeText(VoiceModelInstaller.size))，解开后约 130 MB"
+    }
+
+    func downloadVoiceModel() {
+        guard !voiceBusy else { return }
+        let control = DownloadControl()
+        voiceControl = control
+        voiceError = nil
+        voiceProgress = (0, VoiceModelInstaller.size)
+        let supportDir = self.supportDir
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                try VoiceModelInstaller.install(supportDir: supportDir, control: control) { done, total in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.voiceControl === control else { return }
+                        self.voiceProgress = (done, total)
+                    }
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.voiceControl = nil
+                self.voiceProgress = nil
+                self.voiceRevision += 1
+                switch result {
+                case .success:
+                    self.config.voice = true
+                    self.showToast("语音模型下载好了，按住\(self.voiceKeyLabel) 说话")
+                    // 顺手问一下麦克风权限，免得第一次按语音键时才弹框（同一个程序，输入法那边也认）
+                    AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                case .failure(let error as DownloadCancelled):
+                    self.showToast(error.description)
+                case .failure(let error as PackError):
+                    self.voiceError = error.description
+                case .failure(let error):
+                    self.voiceError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func cancelVoiceDownload() {
+        voiceControl?.cancel()
+    }
+
+    func removeVoiceModel() {
+        guard !voiceBusy else { return }
+        let freed = VoiceModelInstaller.remove(supportDir: supportDir)
+        config.voice = false
+        voiceRevision += 1
+        showToast(freed > 0 ? "已删除语音模型，空出 \(LocalModel.sizeText(freed))" : "已删除")
+    }
+
+    /// 语音键在界面上的叫法
+    var voiceKeyLabel: String {
+        VoiceKey.presets.first { $0.name == config.voiceKey }?.label ?? config.voiceKey
+    }
+
     @Published private(set) var localProgress: LocalModelInstaller.Progress?
     /// 上次没下完的原因，再点下载时清掉
     @Published private(set) var localError: String?

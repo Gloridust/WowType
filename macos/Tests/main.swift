@@ -264,11 +264,12 @@ do {
 
 do {
     let (c, client) = fresh()
-    // 数字交给了应用，光标前是数字：后面的符号原样（20:22、3,000）
+    // 数字交给了应用，光标前是数字：后面的符号也交给应用原样上屏（20:22、3,000）
     client.committed = "20"
-    _ = c.handle(.char(":"))
-    client.committed += "22"
-    _ = c.handle(.char(","))
+    check(!c.handle(.char(":")), "数字后的冒号交给应用", client.committed)
+    client.committed += ":22"
+    check(!c.handle(.char(",")), "数字后的逗号交给应用", client.committed)
+    client.committed += ","
     check(client.committed == "20:22,", "数字后的符号不换成中文标点", client.committed)
     type(c, "nihao")
     _ = c.handle(.char(":"))
@@ -356,7 +357,8 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     _ = c.handle(.char(","))
-    check(commits == ["你好", "，"], "上屏回调", "\(commits)")
+    // 只上屏标点不算学到了词，不回调（外壳按回调攒次数存学习数据）
+    check(commits == ["你好"], "上屏回调", "\(commits)")
 }
 
 do {
@@ -555,7 +557,10 @@ withConfig({ $0.pickChar = false }) { c, client in
 }
 
 withConfig({ $0.halfwidthPunct = true }) { c, client in
-    _ = c.handle(.char(","))
+    // 半角：没在打字时标点交给应用（应用原样上屏）；打字途中先上屏候选再上屏半角标点
+    if !c.handle(.char(",")) {
+        client.committed += ","
+    }
     type(c, "nihao")
     _ = c.handle(.char("."))
     check(client.committed == ",你好.", "半角标点", client.committed)
@@ -619,7 +624,7 @@ do {
     }
     check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
           "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
-    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+    check(d.value(forKey: "CheckUpdate") == nil, "不认识的键没有写法")
 
     // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
     var all = WowtypeConfig()
@@ -636,6 +641,7 @@ do {
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
     all.translateModel = "qwen 2.5"
@@ -752,7 +758,7 @@ do {
 
     for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
                           ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
-                          ("hua r", "hua r"), ("zhongguo", "zhong guo")] {
+                          ("hua r", "hua r"), ("zhongguo", "zhong guo"), ("Biáng biáng miàn", "biang biang mian")] {
         check(CustomWords.normalizePinyin(input) == want, "拼音整理 \(input)", CustomWords.normalizePinyin(input) ?? "nil")
     }
     check(CustomWords.normalizePinyin("mail") == nil && CustomWords.normalizeCode("mail") == "mail"
@@ -766,6 +772,7 @@ do {
     }
     check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
     check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你你好") == "ni ni hao" && guess("好好") == "hao hao", "叠字逐字猜", guess("你你好") ?? "nil")
     check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
     if !ownLexicon, let f = fopen(lexicon, "rb") {
         var bytes: [UInt8] = []
@@ -862,7 +869,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("2"))
     check(c.openPanel == .phrases, "2 进常用语")
-    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在菜单「编辑自定义词」里添加",
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在设置的「自定义词」里添加",
           "没有自定义词时只有提示", client.page?.aux ?? "nil")
     _ = c.handle(.key(Keysym.backspace))
     check(c.openPanel == .menu, "退格返回菜单")
@@ -956,7 +963,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("1"))
     check(!sampled && client.page?.texts.isEmpty == true
-              && client.page?.aux == "剪贴板：没打开，在设置（wowtype.conf）里写 ClipboardHistory=True",
+              && client.page?.aux == "剪贴板：没打开，在设置里打开「记录剪贴板历史」",
           "剪贴板历史默认关：不取、不列", client.page?.aux ?? "nil")
     _ = c.handle(.char(" "))
     check(c.openPanel == nil && client.committed.isEmpty, "空列表按空格关上")
@@ -1095,7 +1102,6 @@ withConfig({ $0.horizontal = false }) { c, client in
 /// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
 final class FakeTranslator: TranslationBackend {
     var isReady = true
-    weak var owner: AnyObject?
     var started: [String] = []
     var cancels = 0
     var snapshot = TranslateSnapshot(phase: .idle)
@@ -1307,7 +1313,7 @@ do {
     let cancels = r.t.cancels
     check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
           && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
-    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+    check(r.t.cancels == cancels + 1, "Esc 取消请求")
 
     type(r.c, "nihao")
     _ = r.c.handle(.char(" "))
@@ -1417,7 +1423,8 @@ do {
     _ = r.c.handle(.char(" "))
     r.tick(0.6)
     other.cancel()
-    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+    // 每个会话只取消自己发的请求（会话记着发过没有）
+    check(r.t.cancels == 0, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
 }
 
 /// 文件的权限位。
@@ -1685,6 +1692,25 @@ do {
     check(LocalModel.safeLinkTarget("libllama.0.9.0.dylib"), "链接指向同目录的文件")
     check(!LocalModel.safeLinkTarget("../evil.dylib") && !LocalModel.safeLinkTarget("/usr/lib/libz.dylib")
           && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
+}
+
+// MARK: 语音键
+
+do {
+    let d = WowtypeConfig()
+    check(d.voice && d.voiceKey == "Alt_R" && !d.voiceCopy, "语音默认开、右 Option、不复制")
+    let option = VoiceKey(name: "Alt_R")
+    check(option?.keyCode == 0x3D && option?.isModifier == true, "Alt_R 是右 Option")
+    // 右 Option 按着时 modifierFlags 带 NX_DEVICERALTKEYMASK（0x40），左 Option 是 0x20
+    check(option?.isDown(rawFlags: 0x80000 | 0x40) == true && option?.isDown(rawFlags: 0x80000 | 0x20) == false,
+          "分得清左右 Option")
+    check(VoiceKey(name: "F8")?.keyCode == 0x64 && VoiceKey(name: "F8")?.isModifier == false, "F8 不是修饰键")
+    check(VoiceKey(name: "Menu") == nil && VoiceKey(name: "") == nil && VoiceKey(name: "none") == nil,
+          "Mac 上没有的键、留空：不用语音键")
+    let c = WowtypeConfig.parse("Voice=False\nVoiceKey=F9\nVoiceCopy=True")
+    check(!c.voice && c.voiceKey == "F9" && c.voiceCopy, "读语音设置")
+    check(voiceWave([]) == "▁▁▁▁▁▁" && voiceWave([100, 0]) == "▁▁▁▁█▁"
+          && voiceWave([0, 10, 20, 30, 40, 50, 60]).count == 6, "音量画成 6 个竖条（和 Linux 一样）")
 }
 
 // MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）
