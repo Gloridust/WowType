@@ -46,6 +46,12 @@ public final class Engine {
         Int(wowtype_engine_load_english(handle, path))
     }
 
+    /// 混上领域词级模型（用户自己训的 words.domain.lm），nil 去掉；再调一次是换掉上一个。
+    @discardableResult
+    public func setDomainLM(_ path: String?) -> Bool {
+        wowtype_engine_set_domain_lm(handle, path) == 0
+    }
+
     @discardableResult
     public func loadUserDict(_ path: String) -> Int {
         Int(wowtype_engine_load_user_dict(handle, path))
@@ -497,7 +503,6 @@ public final class Composer {
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
         config.prediction = settings.prediction ? 1 : 0
-        let wasPredicting = isPredicting
         config.punct_style = settings.halfwidthPunct ? 1 : 0
         config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
         switch settings.shiftToggle {
@@ -510,6 +515,7 @@ public final class Composer {
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
+        let wasPredicting = isPredicting
         wowtype_session_configure(session, &config)
         if isComposing || wasPredicting {
             refresh() // 改了设置会话收起联想：候选框跟着收

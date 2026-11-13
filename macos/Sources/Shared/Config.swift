@@ -77,6 +77,10 @@ public struct WowtypeConfig: Equatable {
     public var fuzzyIan = true
     public var fuzzyUan = true
     public var fuzzyUn = false
+    public var fuzzyAnAi = false
+    public var fuzzyHuangWang = false
+    public var fuzzyUnIong = false
+    public var fuzzyEngOng = false
     public var typoCorrection = true
     public var rareExtChars = false
     public var shuangpin = false
@@ -141,6 +145,7 @@ public struct WowtypeConfig: Equatable {
         let groups: [(Bool, UInt32)] = [
             (fuzzyZh, 1), (fuzzyCh, 2), (fuzzySh, 4), (fuzzyNL, 8), (fuzzyFH, 16), (fuzzyRL, 32),
             (fuzzyAn, 64), (fuzzyEn, 128), (fuzzyIn, 256), (fuzzyIan, 512), (fuzzyUan, 1024), (fuzzyUn, 2048),
+            (fuzzyAnAi, 4096), (fuzzyHuangWang, 8192), (fuzzyUnIong, 16384), (fuzzyEngOng, 32768),
         ]
         return groups.reduce(0) { $0 | ($1.0 ? $1.1 : 0) }
     }
@@ -226,6 +231,7 @@ public struct WowtypeConfig: Equatable {
         "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar", "Prediction",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
+        "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong", "FuzzyEngOng",
         "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys", "ShiftToggle",
         "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
@@ -242,7 +248,9 @@ public struct WowtypeConfig: Equatable {
         "Fuzzy": \.fuzzy, "FuzzyZh": \.fuzzyZh, "FuzzyCh": \.fuzzyCh, "FuzzySh": \.fuzzySh,
         "FuzzyNL": \.fuzzyNL, "FuzzyFH": \.fuzzyFH, "FuzzyRL": \.fuzzyRL, "FuzzyAn": \.fuzzyAn,
         "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
-        "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
+        "FuzzyUn": \.fuzzyUn, "FuzzyAnAi": \.fuzzyAnAi, "FuzzyHuangWang": \.fuzzyHuangWang,
+        "FuzzyUnIong": \.fuzzyUnIong, "FuzzyEngOng": \.fuzzyEngOng,
+        "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
         "Shuangpin": \.shuangpin, "ShuangpinShowKeys": \.shuangpinShowKeys,
         "Traditional": \.traditional, "PickChar": \.pickChar, "Prediction": \.prediction,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
@@ -457,6 +465,10 @@ public struct WowtypeConfig: Equatable {
         FuzzyIan=\(b(d.fuzzyIan))
         FuzzyUan=\(b(d.fuzzyUan))
         FuzzyUn=\(b(d.fuzzyUn))
+        FuzzyAnAi=\(b(d.fuzzyAnAi))
+        FuzzyHuangWang=\(b(d.fuzzyHuangWang))
+        FuzzyUnIong=\(b(d.fuzzyUnIong))
+        FuzzyEngOng=\(b(d.fuzzyEngOng))
         # 按错键自动纠正
         TypoCorrection=\(b(d.typoCorrection))
         # 候选末尾也列出扩展 B 区以后的生僻字（常见字体显示不了，默认关）

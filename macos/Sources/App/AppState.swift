@@ -216,6 +216,15 @@ final class AppState {
         if let english = resource("english.txt") {
             engine.loadEnglish(english)
         }
+        // 用户自己训的领域词级模型（可选），和 words.lm 混着用
+        let domain = supportDir.appendingPathComponent("words.domain.lm").path
+        if FileManager.default.fileExists(atPath: domain) {
+            if engine.setDomainLM(domain) {
+                NSLog("WowType: 载入领域词级模型 %@", domain)
+            } else {
+                NSLog("WowType: 领域词级模型载入失败 %@", domain)
+            }
+        }
         engine.loadUserDict(userDictPath)
         engine.loadHistory(historyPath)
         return engine
