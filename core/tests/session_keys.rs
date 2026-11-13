@@ -1961,3 +1961,231 @@ fn emoji_panel_search_and_pick() {
     session.key(&shift(keysym::SHIFT_L, false, 1000));
     assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
 }
+
+/// 停顿够了、请求发出去，翻译器译完了 text。
+fn translated(session: &mut Session, t: &FakeTranslator, text: &str) {
+    session.tick(100_000);
+    t.set(wowtype_core::translate::JobState::Done, text);
+}
+
+/// 单按一下 Shift（按下、松开，间隔 50 毫秒）。
+fn tap(session: &mut Session, time_ms: u64) -> Frame {
+    session.key(&shift(keysym::SHIFT_L, false, time_ms));
+    session.key(&shift(keysym::SHIFT_L, true, time_ms + 50))
+}
+
+/// 开着「双击 Shift 单次互译」、配好了翻译器的会话。
+fn one_shot(t: &'static FakeTranslator) -> Session<'static> {
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, translate_one_shot: true, ..Config::default() });
+    session
+}
+
+#[test]
+fn one_shot_shift_cycle_skips_translate() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = one_shot(t);
+    let modes: Vec<Mode> = (1..=3).map(|i| tap(&mut session, 1000 * i).mode).collect();
+    assert_eq!(modes, [Mode::English, Mode::Chinese, Mode::English], "单按只在中英之间切");
+}
+
+#[test]
+fn double_tap_enters_translate_once_and_returns() {
+    use wowtype_core::session::Mode;
+    for start in [Mode::Chinese, Mode::English] {
+        let t: &'static FakeTranslator = Box::leak(Box::default());
+        let mut session = one_shot(t);
+        session.set_mode(start);
+        tap(&mut session, 1000);
+        let frame = tap(&mut session, 1200);
+        assert!(frame.handled && frame.mode_changed);
+        assert_eq!(frame.mode, Mode::Translate, "从{start:?}双击进「译」");
+        type_keys(&mut session, "nihao<sp>");
+        translated(&mut session, t, "Hello");
+        let frame = session.key(&Key::press(keysym::RETURN));
+        assert_eq!(frame.commit.as_deref(), Some("Hello"));
+        assert!(frame.mode_changed);
+        assert_eq!(frame.mode, start, "译文上屏后回到原来的模式");
+    }
+}
+
+#[test]
+fn double_tap_returns_after_pending_translation_commits() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = one_shot(t);
+    tap(&mut session, 1000);
+    tap(&mut session, 1200);
+    type_keys(&mut session, "nihao<sp>");
+    assert_eq!(session.key(&Key::press(keysym::RETURN)).mode, Mode::Translate, "还没译好，先等着");
+    translated(&mut session, t, "Hello");
+    let frame = session.tick(5000);
+    assert_eq!(frame.commit.as_deref(), Some("Hello"));
+    assert!(frame.mode_changed);
+    assert_eq!(frame.mode, Mode::Chinese);
+}
+
+#[test]
+fn one_shot_translate_cancel_returns() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    // Esc 清空原文：回原模式
+    let mut session = one_shot(t);
+    session.set_mode(Mode::English);
+    tap(&mut session, 1000);
+    tap(&mut session, 1200);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = session.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(session.translate_source(), "");
+    // Shift+回车上屏原文：回原模式
+    let mut session = one_shot(t);
+    tap(&mut session, 1000);
+    tap(&mut session, 1200);
+    type_keys(&mut session, "nihao<sp>");
+    let shift_enter = Key { modifiers: modifier::SHIFT, ..Key::press(keysym::RETURN) };
+    let frame = session.key(&shift_enter);
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert_eq!(frame.mode, Mode::Chinese);
+    // 单按 Shift：放弃，回原模式（英文），原文原样上屏
+    let mut session = one_shot(t);
+    session.set_mode(Mode::English);
+    tap(&mut session, 1000);
+    tap(&mut session, 1200);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = tap(&mut session, 3000);
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    // 「译」里双击：第一下就退出了，第二下不再进
+    let mut session = one_shot(t);
+    tap(&mut session, 1000);
+    tap(&mut session, 1200);
+    tap(&mut session, 3000);
+    assert_eq!(tap(&mut session, 3200).mode, Mode::English, "退出后第二下照常单按");
+}
+
+#[test]
+fn slow_taps_are_two_toggles() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = one_shot(t);
+    tap(&mut session, 1000);
+    assert_eq!(tap(&mut session, 1400).mode, Mode::Chinese, "超过 300 毫秒不算双击");
+    // 中间按了别的键也不算
+    let mut session = one_shot(t);
+    tap(&mut session, 1000);
+    session.key(&Key::char('a'));
+    assert_eq!(tap(&mut session, 1200).mode, Mode::Chinese);
+}
+
+#[test]
+fn double_tap_without_one_shot_is_the_old_cycle() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, ..Config::default() });
+    tap(&mut session, 1000);
+    assert_eq!(tap(&mut session, 1200).mode, Mode::Translate, "中 → 英 → 译");
+    type_keys(&mut session, "nihao<sp>");
+    translated(&mut session, t, "Hello");
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit.as_deref(), Some("Hello"));
+    assert!(!frame.mode_changed, "常驻「译」，上屏后不回去");
+    // 没配翻译器（translate_mode 关）时开关不起作用：照常中英切换
+    let mut session = with(engine());
+    session.configure(Config { translate_one_shot: true, ..Config::default() });
+    tap(&mut session, 1000);
+    assert_eq!(tap(&mut session, 1200).mode, Mode::Chinese);
+}
+
+#[test]
+fn double_tap_while_composing_keeps_pinyin() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = one_shot(t);
+    type_keys(&mut session, "nihao");
+    let frame = tap(&mut session, 1000);
+    assert_eq!(frame.mode, Mode::English);
+    assert_eq!(frame.commit, None, "第一下先不上屏");
+    assert_eq!(frame.preedit, "nihao", "编辑区留着打的字母");
+    assert_eq!(frame.cand_count, 0, "英文里不出候选");
+    let frame = tap(&mut session, 1200);
+    assert_eq!(frame.mode, Mode::Translate);
+    assert_eq!(frame.commit, None);
+    assert!(session.composing(), "拼音带进「译」");
+    assert!(frame.cand_count > 0, "接着出候选");
+    type_keys(&mut session, "<sp>");
+    assert_eq!(session.translate_source(), "你好");
+}
+
+#[test]
+fn single_tap_while_composing_commits_on_next_key() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    // 接着打字母：字母先原样上屏，新字母交给应用（和以前一样，只是晚一个键）
+    let mut session = one_shot(t);
+    type_keys(&mut session, "nihao");
+    tap(&mut session, 1000);
+    let frame = session.key(&Key::char('a'));
+    assert_eq!(frame.commit.as_deref(), Some("nihao"));
+    assert!(!frame.handled, "a 交给应用");
+    assert!(!session.composing());
+    assert_eq!(session.mode(), Mode::English);
+    // 回车：一样先上屏再交给应用
+    let mut session = one_shot(t);
+    type_keys(&mut session, "nihao");
+    tap(&mut session, 1000);
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit.as_deref(), Some("nihao"));
+    assert!(!frame.handled);
+    // 换输入框（reset 上屏）：原样上屏
+    let mut session = one_shot(t);
+    type_keys(&mut session, "nihao");
+    tap(&mut session, 1000);
+    assert_eq!(session.reset(true).commit.as_deref(), Some("nihao"));
+    // 慢慢再按一下 Shift 回中文：字母没上屏过，拼音接着打
+    let mut session = one_shot(t);
+    type_keys(&mut session, "nihao");
+    tap(&mut session, 1000);
+    let frame = tap(&mut session, 2000);
+    assert_eq!(frame.mode, Mode::Chinese);
+    assert_eq!(frame.commit, None);
+    assert!(frame.cand_count > 0);
+}
+
+#[test]
+fn toggle_translate_key() {
+    use wowtype_core::session::Mode;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    // 开关开：进「译」只翻一句
+    let mut session = one_shot(t);
+    session.set_mode(Mode::English);
+    let frame = session.toggle_translate();
+    assert!(frame.handled && frame.mode_changed);
+    assert_eq!(frame.mode, Mode::Translate);
+    type_keys(&mut session, "nihao<sp>");
+    translated(&mut session, t, "Hello");
+    assert_eq!(session.key(&Key::press(keysym::RETURN)).mode, Mode::English);
+    // 开关开：在「译」里再按回原模式
+    let mut session = one_shot(t);
+    session.set_mode(Mode::English);
+    session.toggle_translate();
+    assert_eq!(session.toggle_translate().mode, Mode::English);
+    // 开关关：常驻「译」，再按回中文（和以前一样）
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, ..Config::default() });
+    session.set_mode(Mode::English);
+    assert_eq!(session.toggle_translate().mode, Mode::Translate);
+    type_keys(&mut session, "nihao<sp>");
+    translated(&mut session, t, "Hello");
+    assert_eq!(session.key(&Key::press(keysym::RETURN)).mode, Mode::Translate);
+    assert_eq!(session.toggle_translate().mode, Mode::Chinese);
+    // 没配好互译：不接
+    let mut session = with(engine());
+    assert!(!session.toggle_translate().handled);
+    assert_eq!(session.mode(), Mode::Chinese);
+}

@@ -222,7 +222,14 @@ pub enum ShiftToggle {
 struct ShiftTap {
     /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
     down: Option<(u32, u32, u64)>,
+    /// 上一次单按的时刻和单按之前的模式（双击 Shift 单次互译用）；中间按了别的键就清掉。
+    last: Option<(u64, Mode)>,
+    /// 单按切到英文时打到一半的字母先留在编辑区（双击时带进「译」），按下一个键时再原样上屏。
+    held: bool,
 }
+
+/// 两次单按 Shift 隔多久以内算双击（毫秒）。
+pub const DOUBLE_TAP_MS: u64 = 300;
 
 impl Key {
     /// 按下一个键，不带修饰键。
@@ -459,6 +466,9 @@ pub struct Config {
     pub shift_tap_ms: u32,
     /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
     pub translate_mode: bool,
+    /// 双击 Shift 单次互译（有「译」时才起作用）：单按只在中 ↔ 英之间切，双击 Shift
+    /// （或 [`Session::toggle_translate`]）进「译」只翻一句，上屏后回到原来的模式。
+    pub translate_one_shot: bool,
     /// 只打一个 v 再按空格打开工具栏（双拼、互译时不开）。
     pub toolbar: bool,
     /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
@@ -483,6 +493,7 @@ impl Default for Config {
             shift_toggle: ShiftToggle::Both,
             shift_tap_ms: 500,
             translate_mode: false,
+            translate_one_shot: false,
             toolbar: true,
             clipboard_history: false,
             shuangpin_keys: false,
@@ -586,6 +597,8 @@ pub struct Session<'e> {
     shift: ShiftTap,
     translator: Option<&'e dyn TranslateBackend>,
     translation: Translation,
+    /// 单次「译」：翻完一句（或放弃）回到这个模式；None 是常驻「译」或者不在「译」里。
+    translate_return: Option<Mode>,
     /// 开着的工具栏 / 表情面板；None 是没开。
     tool: Option<ToolState>,
     /// 最近一次按键或 tick 的时刻（毫秒）。
@@ -621,6 +634,7 @@ impl Default for Session<'_> {
             shift: ShiftTap::default(),
             translator: None,
             translation: Translation::default(),
+            translate_return: None,
             tool: None,
             now_ms: 0,
         }
@@ -701,6 +715,12 @@ impl<'e> Session<'e> {
         }
         if key.action == KeyAction::Observe {
             return self.frame(false);
+        }
+        if self.shift.held && !key.release && !is_modifier_keysym(key.keysym) {
+            // 单按 Shift 切到英文时留着的字母：先原样上屏，这个键再照英文处理
+            // （没处理的键 frame 里也带着上屏的字，外壳先上屏再交给应用）
+            self.shift.held = false;
+            self.commit_input_now();
         }
         if !key.release {
             self.prev_char = key.prev_char;
@@ -882,6 +902,7 @@ impl<'e> Session<'e> {
             self.translation.requested = None;
             self.clear_translation();
             self.push_commit(&snap.text);
+            self.finish_one_shot();
             return;
         }
         self.translation.pending = true;
@@ -910,6 +931,7 @@ impl<'e> Session<'e> {
             keysym::RETURN | keysym::KP_ENTER => {
                 if key.modifiers & modifier::SHIFT != 0 {
                     self.commit_source();
+                    self.finish_one_shot();
                 } else {
                     self.commit_translation();
                 }
@@ -921,6 +943,7 @@ impl<'e> Session<'e> {
             }
             keysym::ESCAPE => {
                 self.clear_translation();
+                self.finish_one_shot();
                 Some(true)
             }
             keysym::BACKSPACE => {
@@ -1389,15 +1412,60 @@ impl<'e> Session<'e> {
         self.frame(true)
     }
 
+    /// 进出「译」的快捷键（外壳认出设置里的 TranslateModeKey 后调）：在「译」里回到进来前的模式
+    /// （常驻「译」时回中文）；不在就进「译」（[`Config::translate_one_shot`] 时只翻一句）。
+    /// 没有「译」（[`Config::translate_mode`] 关）时不接，frame.handled 为假，键交给应用。
+    pub fn toggle_translate(&mut self) -> Frame {
+        self.last_choice = None;
+        if self.mode == Mode::Translate {
+            let back = self.translate_return.unwrap_or(Mode::Chinese);
+            self.switch_mode(back);
+        } else if self.config.translate_mode {
+            self.switch_mode(Mode::Translate);
+        } else {
+            return self.frame(false);
+        }
+        self.frame(true)
+    }
+
+    /// 双击 Shift 单次互译开着（而且有「译」）。
+    fn one_shot(&self) -> bool {
+        self.config.translate_one_shot && self.config.translate_mode
+    }
+
+    /// 单次「译」翻完一句或放弃了：回到进来前的模式。
+    fn finish_one_shot(&mut self) {
+        if self.mode == Mode::Translate {
+            if let Some(back) = self.translate_return {
+                self.switch_mode(back);
+            }
+        }
+    }
+
     fn switch_mode(&mut self, mode: Mode) {
+        self.switch_mode_holding(mode, false);
+    }
+
+    /// hold：切英文时打到一半的字母先留在编辑区（单按 Shift、开着单次互译时），下一个键再上屏。
+    fn switch_mode_holding(&mut self, mode: Mode, hold: bool) {
         if mode == self.mode {
             return;
         }
+        if mode == Mode::Translate {
+            self.translate_return = self.one_shot().then_some(self.mode);
+        } else {
+            self.translate_return = None;
+        }
+        // 留着的字母没上屏过：回中文、进「译」时接着打
+        self.shift.held = false;
+        self.fresh = false;
         if self.mode == Mode::Translate {
             // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
             self.commit_source();
         }
-        if mode == Mode::English && self.composing() {
+        if mode == Mode::English && self.composing() && hold {
+            self.shift.held = true;
+        } else if mode == Mode::English && self.composing() {
             // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
             self.commit_input_now();
         }
@@ -1407,12 +1475,34 @@ impl<'e> Session<'e> {
 
     /// 单按 Shift 循环切换：中 → 英 →（有「译」时）译 → 中。
     fn toggle_mode(&mut self) {
+        let one_shot = self.one_shot();
         let next = match self.mode {
             Mode::Chinese => Mode::English,
-            Mode::English if self.config.translate_mode => Mode::Translate,
-            Mode::English | Mode::Translate => Mode::Chinese,
+            Mode::English if self.config.translate_mode && !one_shot => Mode::Translate,
+            Mode::English => Mode::Chinese,
+            // 单次「译」里单按：放弃，回到进来前的模式
+            Mode::Translate => self.translate_return.unwrap_or(Mode::Chinese),
         };
-        self.switch_mode(next);
+        self.switch_mode_holding(next, one_shot);
+    }
+
+    /// 单按了一下 Shift：开着单次互译时，离上一次单按不到 DOUBLE_TAP_MS 算双击，
+    /// 撤销上一下、进「译」只翻一句；否则照常循环切换。
+    fn shift_tapped(&mut self, time_ms: u64) {
+        let last = self.shift.last.take();
+        if self.one_shot() {
+            if let Some((at, before)) = last {
+                let quick = time_ms != 0 && at != 0 && time_ms.saturating_sub(at) <= DOUBLE_TAP_MS;
+                // 上一下是从「译」里退出来的：这一下照常单按，不再进去
+                if quick && before != Mode::Translate && self.mode != Mode::Translate {
+                    self.switch_mode(Mode::Translate);
+                    self.translate_return = Some(before);
+                    return;
+                }
+            }
+            self.shift.last = Some((time_ms, self.mode));
+        }
+        self.toggle_mode();
     }
 
     /// Shift 的按下、松开，以及打断单按的别的键。Some：处理完了（handled 是里面的值，
@@ -1427,6 +1517,7 @@ impl<'e> Session<'e> {
         if !key.release {
             if !is_shift {
                 self.shift.down = None;
+                self.shift.last = None;
                 return None;
             }
             let wanted = match self.config.shift_toggle {
@@ -1465,9 +1556,10 @@ impl<'e> Session<'e> {
         self.shift.down = None;
         let held_ms = key.time_ms.saturating_sub(down_at);
         if key.time_ms != 0 && down_at != 0 && held_ms > u64::from(self.config.shift_tap_ms) {
+            self.shift.last = None;
             return Some(false);
         }
-        self.toggle_mode();
+        self.shift_tapped(key.time_ms);
         Some(true)
     }
 
@@ -2121,6 +2213,7 @@ impl<'e> Session<'e> {
     fn clear(&mut self) {
         self.input.clear();
         self.selections.clear();
+        self.shift.held = false;
         self.fresh = false;
     }
 
@@ -2146,6 +2239,10 @@ impl<'e> Session<'e> {
 
     fn compute_candidates(&self) -> Vec<Candidate> {
         let input = self.remaining();
+        if self.shift.held {
+            // 单按 Shift 切到英文时留着的字母：英文里不出候选
+            return Vec::new();
+        }
         let Some(engine) = self.engine else {
             return Vec::new();
         };

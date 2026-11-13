@@ -216,6 +216,8 @@ pub struct WowtypeSessionConfig {
     pub clipboard_history: c_int,
     /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
     pub shuangpin_keys: c_int,
+    /// 1.10 起：双击 Shift 单次互译（有「译」时才起作用），默认 0。
+    pub translate_one_shot: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -248,6 +250,7 @@ impl Default for WowtypeSessionConfig {
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
             shuangpin_keys: c_int::from(config.shuangpin_keys),
+            translate_one_shot: c_int::from(config.translate_one_shot),
         }
     }
 }
@@ -293,6 +296,7 @@ impl WowtypeSessionConfig {
             toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
+            translate_one_shot: self.translate_one_shot != 0,
         }
     }
 }
@@ -763,6 +767,18 @@ pub unsafe extern "C" fn wowtype_session_set_mode(
         return ptr::null();
     };
     handle.run("set_mode", |session| session.set_mode(mode_from_c(mode)))
+}
+
+/// 进出「译」的快捷键（设置里的 TranslateModeKey）：在「译」里回到进来前的模式，不在就进「译」
+/// （translate_one_shot 时只翻一句）。没有「译」时不接，frame->handled 为 0。（1.10 起）
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_toggle_translate(
+    session: *mut WowtypeSession,
+) -> *const WowtypeFrame {
+    let Some(handle) = (unsafe { session.as_mut() }) else {
+        return ptr::null();
+    };
+    handle.run("toggle_translate", |session| session.toggle_translate())
 }
 
 /// 现在的输入模式，`WOWTYPE_MODE_*`；session 为 NULL 时是中文。（1.10 起）

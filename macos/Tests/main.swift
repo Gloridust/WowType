@@ -1288,6 +1288,58 @@ do {
     check(same.c.handle(.char(" ", [.control])) && same.c.mode == .translate, "同一个键：再按进「译」")
 }
 
+do {
+    // 双击 Shift 单次互译（#191），和 Linux 一样：判定和翻完回去都在会话里
+    check(!WowtypeConfig().translateOneShot, "默认不开单次互译")
+    check(WowtypeConfig.parse("TranslateOneShot=True").translateOneShot, "读出单次互译")
+    let r = translateRig {
+        $0.translateOneShot = true
+        $0.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    }
+    r.c.switchMode(to: .chinese)
+    // Shift 的时刻用假时钟（发请求的 0.5 秒也按它算）
+    func tap(_ rig: TranslateRig, after seconds: Double) -> Bool {
+        rig.clock.now += seconds
+        _ = rig.c.shiftChanged(down: true, otherModifiers: false, now: rig.clock.now)
+        rig.clock.now += 0.05
+        return rig.c.shiftChanged(down: false, otherModifiers: false, now: rig.clock.now)
+    }
+    func translateOnce(_ rig: TranslateRig, _ text: String) {
+        type(rig.c, "nihao")
+        _ = rig.c.handle(.char(" "))
+        _ = rig.tick(0.6)
+        rig.t.finish(text)
+        _ = rig.c.handle(.key(Keysym.returnKey))
+    }
+    check(tap(r, after: 1) && r.c.mode == .english, "单按：中 → 英")
+    check(tap(r, after: 1) && r.c.mode == .chinese, "再单按：英 → 中，不经过「译」")
+    _ = tap(r, after: 1)
+    check(tap(r, after: 0.1) && r.c.mode == .translate, "双击进「译」")
+    translateOnce(r, "Hello")
+    check(r.client.committed == "Hello" && r.c.mode == .chinese, "上屏译文后回到中文",
+          "\(r.client.committed) \(r.c.mode)")
+    r.c.switchMode(to: .english)
+    check(r.c.handle(.char("Y", [.control, .shift])) && r.c.mode == .translate, "互译键进「译」")
+    translateOnce(r, "Hi")
+    check(r.client.committed == "HelloHi" && r.c.mode == .english, "互译键也只翻一句，回到英文",
+          "\(r.client.committed) \(r.c.mode)")
+
+    // 打到一半单按：字母先留着，下一个键时原样上屏、这个键交给应用；双击就带进「译」
+    let held = translateRig { $0.translateOneShot = true }
+    held.c.switchMode(to: .chinese)
+    type(held.c, "nihao")
+    check(tap(held, after: 1) && held.c.mode == .english && held.client.committed.isEmpty && held.c.isComposing,
+          "打到一半单按：字母先留着", held.client.committed)
+    check(!held.c.handle(.char("a")) && held.client.committed == "nihao" && !held.c.isComposing,
+          "下一个键：字母原样上屏，这个键交给应用", held.client.committed)
+    _ = tap(held, after: 1)
+    type(held.c, "nihao")
+    _ = tap(held, after: 1)
+    check(tap(held, after: 0.1) && held.c.mode == .translate && held.c.isComposing, "打到一半双击：拼音带进「译」")
+    _ = held.c.handle(.char(" "))
+    check(held.c.translateSource == "你好", "接着选词进原文", held.c.translateSource)
+}
+
 withConfig({ $0.toggleKey = Shortcut(name: "Control+space") }) { c, client in
     type(c, "nihao")
     check(c.handle(.char(" ", [.control])) && c.mode == .english && client.committed == "nihao",

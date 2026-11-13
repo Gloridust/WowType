@@ -119,6 +119,7 @@ DEFAULTS = {
     "TranslateBaseUrl": "",
     "TranslateModel": "",
     "TranslateFormal": "False",
+    "TranslateOneShot": "False",
     "TranslateLocal": "True",
     "TranslateLocalModel": "",
     "TranslateLlamaServer": "",
@@ -4173,6 +4174,14 @@ class SettingsWindow(Adw.ApplicationWindow):
                       "按它直接进「译」，在「译」里再按回到中文，不用单按 Shift 一路切过去。"
                       "互译没打开、翻译没配好时这个键交给应用。")
         intro.add(self.translate_mode_key_row)
+        self.one_shot_row = self.make_switch(
+            "TranslateOneShot", "双击 Shift 单次互译", "单按 Shift 只切中英，翻完一句自动回来")
+        self.add_info(self.one_shot_row,
+                      "打开后单按 Shift 只在中、英之间切；0.3 秒内连按两下 Shift（或按上面的快捷键）进「译」，"
+                      "只翻这一句：译文上屏、Esc 或单按 Shift 放弃后，回到原来的中文或英文。"
+                      "关着时和以前一样，单按 Shift 在 中 → 英 → 译 之间切。")
+        self.one_shot_row.connect("notify::active", lambda *_a: self.refresh_translate_status())
+        intro.add(self.one_shot_row)
         self.target_codes = [code for _, code, _ in TRANSLATE_LANGUAGES]
         self.target_row = Adw.ComboRow(
             title="翻译成", model=Gtk.StringList.new([label for label, _, _ in TRANSLATE_LANGUAGES]))
@@ -4580,7 +4589,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         elif key and not fcitx_hotkey_taking(key):
             self.translate_row.set_subtitle(
                 f"按 {key_label(key)} 进出「译」" + ("" if toggle == "Off" or conflicts
-                                                    else "；单按 Shift：中 → 英 → 译 → 中"))
+                                                    else "；" + self.shift_cycle_text()))
         elif toggle == "Off":
             self.translate_row.set_subtitle("「输入」页关掉了 Shift 切换，切不到「译」；可以设一个进出互译的快捷键")
         elif conflicts:
@@ -4589,7 +4598,13 @@ class SettingsWindow(Adw.ApplicationWindow):
                 f"{taken} 被 fcitx5 占着；" + (f"用{'、'.join(usable)}，" if usable else "")
                 + "或到「输入」页让给 WowType")
         else:
-            self.translate_row.set_subtitle("单按 Shift：中 → 英 → 译 → 中")
+            self.translate_row.set_subtitle(self.shift_cycle_text())
+
+    def shift_cycle_text(self):
+        """「互译」那一行说 Shift 怎么切到「译」（看双击 Shift 单次互译开没开）。"""
+        if self.values.get("TranslateOneShot") == "True":
+            return "单按 Shift 切中英，双击 Shift 翻一句"
+        return "单按 Shift：中 → 英 → 译 → 中"
 
     def on_test_translate(self, _button):
         base = self.url_row.get_text().strip()

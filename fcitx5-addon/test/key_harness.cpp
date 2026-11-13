@@ -1900,6 +1900,91 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      type(ic, "nihao<sp>");
                  },
                  [handledFlag](HarnessInputContext *ic) { return !*handledFlag && ic->committed == "你好"; }});
+    // 双击 Shift 单次互译（#191）：判定在会话里，这里看插件跟着会话的模式走
+    auto slowTap = [](HarnessInputContext *ic) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(400)); // 超过双击的 300 毫秒
+        tapKey(ic, FcitxKey_Shift_R);
+    };
+    s.push_back({"单次互译开着：单按两下只在中英之间切",
+                 [c, addon, reset, url, slowTap](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nTranslateOneShot=True\n"
+                            "TranslateModeKey=Control+Shift+Y\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     slowTap(ic);
+                     slowTap(ic);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"双击 Shift 进「译」",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic) == "你好" &&
+                            aux(ic).find("中→英") != std::string::npos;
+                 }});
+    s.push_back({"回车上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
+                 expectCommit("EN:你好")});
+    s.push_back({"翻完一句自动回到中文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"打到一半双击：拼音带进「译」",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao");
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic) == "你好" &&
+                            aux(ic).find("中→英") != std::string::npos;
+                 }});
+    s.push_back({"Esc 清空原文也回到中文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic); // reset 按的就是 Esc
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"打到一半单按：字母先留着，下一个键时原样上屏、这个键交给应用",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao");
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "a");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed == "nihao" && ic->passed == "a" && preedit(ic).empty();
+                 }});
+    s.push_back({"再单按回中文",
+                 [reset, slowTap](HarnessInputContext *ic) {
+                     reset(ic);
+                     slowTap(ic);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"单次互译开着时互译键也只翻一句",
+                 [reset, press, translateKey](HarnessInputContext *ic) {
+                     reset(ic);
+                     check(press(ic, translateKey), "互译键被接住");
+                     type(ic, "nihao<sp><cr>");
+                 },
+                 expectCommit("EN:你好")});
+    s.push_back({"互译键翻完一句也回到中文",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
     s.push_back({"关掉互译后 Shift 只在中英之间切",
                  [c, addon, reset](HarnessInputContext *ic) {
                      std::filesystem::remove(c->configFile);

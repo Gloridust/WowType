@@ -854,6 +854,7 @@ void WowtypeEngine::applyConfig() {
     emojiKey_ = *config_.emojiKey;
     toggleKey_ = *config_.toggleKey;
     translateModeKey_ = *config_.translateModeKey;
+    translateOneShot_ = *config_.translateOneShot;
 
     // 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8）优先，none 关掉
     fcitx::Key key = *config_.voice ? *config_.voiceKey : fcitx::Key();
@@ -922,7 +923,7 @@ void WowtypeEngine::applyConfig() {
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
-             << " 中英键=" << toggleKey_.toString() << " 互译键=" << translateModeKey_.toString()
+             << " 中英键=" << toggleKey_.toString() << " 互译键=" << translateModeKey_.toString() << " 单次互译=" << translateOneShot_
              << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
              << " 计算器=" << calculator_ << " 工具栏=" << toolbar_
              << " 剪贴板历史=" << clipboardHistory_ << " 互译=" << translateEnabled_ << "("
@@ -1008,19 +1009,21 @@ bool WowtypeEngine::handleModeKey(fcitx::InputContext *ic, WowtypeState *state,
     coreReady();
     syncSession(state);
     syncMode(ic, state);
-    bool ascii = false;
-    bool translate = false;
     if (translateKey) {
-        // 在「译」里按：回中文；不在：进「译」（没开互译、没配好就不接）
+        // 在「译」里按：回到进来前的模式（常驻「译」时回中文）；不在：进「译」（双击 Shift 单次互译
+        // 开着时只翻一句）。没开互译、没配好就不接。会话做，外壳跟着会话的模式走
         if (!translateMode_ && !translateAvailable()) {
             return false;
         }
-        translate = !translateMode_;
-    } else {
-        // 中 ↔ 英；在「译」里按回中文
-        ascii = !asciiMode_ && !translateMode_;
+        const WowtypeFrame *frame = wowtype_session_toggle_translate(state->session_);
+        if (!frame || !frame->handled) {
+            return false;
+        }
+        applySessionFrame(ic, state, frame);
+        return true;
     }
-    switchMode(ic, state, ascii, translate, true);
+    // 中 ↔ 英；在「译」里按回中文
+    switchMode(ic, state, !asciiMode_ && !translateMode_, false, true);
     return true;
 }
 
@@ -1181,6 +1184,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.toolbar = toolbar_ ? 1 : 0;
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
     config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
+    config.translate_one_shot = translateOneShot_ ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
@@ -1204,6 +1208,19 @@ const WowtypeFrame *WowtypeEngine::sessionKey(fcitx::InputContext *ic, WowtypeSt
                           action, prevChar(ic), hints, nowMs());
     if (frame && frame->wake_after_ms > 0) {
         scheduleTick(ic, frame->wake_after_ms);
+    }
+    if (frame && !frame->handled && frame->commit) {
+        // 单按 Shift 切英文时留着的字母（双击 Shift 单次互译开着时）：按下一个键时会话把它放进 frame，
+        // 这个键本身交给应用。先上屏，再让调用的地方照「没处理」往下走
+        const std::string text = frame->commit;
+        if (ic) {
+            ic->commitString(text);
+        }
+        rememberContext(text);
+        state->clear();
+        updateInputPanel(ic, state);
+        static const WowtypeFrame passThrough{};
+        return &passThrough;
     }
     return frame;
 }
@@ -1251,6 +1268,10 @@ uint32_t WowtypeEngine::keyAction(const fcitx::Key &key) const {
 
 void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *state,
                                       const WowtypeFrame *frame) {
+    // 单次「译」翻完一句（回车）或放弃（Esc、Shift+回车）时会话回到了原来的模式：外壳跟上
+    if (frame && frame->mode_changed) {
+        followMode(ic, frame->mode);
+    }
     if (frame && frame->size >= offsetof(WowtypeFrame, forgot) + sizeof(frame->forgot) &&
         frame->forgot) {
         // Ctrl+Delete 忘掉了学错的词：马上存，免得 fcitx5 退出前没存上、重启又回来
@@ -1812,6 +1833,10 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             event.filterAndAccept();
             return;
         }
+        if (!state->composing()) {
+            // 单按 Shift 切英文时留着的字母：会话已经上屏（见 sessionKey），这个键交给应用
+            return;
+        }
         if (wasExpanded) {
             // 展开面板里按了会话不管的键（标点、Home……）：面板已经收起，重画再照常处理
             syncView(state);
@@ -1967,13 +1992,14 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
         }
         return false;
     }
+    const int mode = frame->mode;
     if (frame->commit) {
         // 打到一半切英文：已选的词 + 打的字母原样上屏（会话已经放进 frame）
         finishCommit(ic, state, frame);
-        updateInputPanel(ic, state);
     }
-    switchMode(ic, state, frame->mode == WOWTYPE_MODE_ENGLISH,
-               frame->mode == WOWTYPE_MODE_TRANSLATE, true);
+    // 双击 Shift 单次互译开着时，打到一半切英文的字母先留在编辑区（会话做），这里只跟上模式、重画
+    followMode(ic, mode);
+    updateInputPanel(ic, state);
     event.filterAndAccept();
     return true;
 }
@@ -2021,6 +2047,18 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
     if (state) {
         syncMode(ic, state);
     }
+    announceMode(ic, notify);
+}
+
+void WowtypeEngine::followMode(fcitx::InputContext *ic, int mode) {
+    // 会话自己切了模式（单按 Shift、双击进单次「译」、翻完一句回去）：外壳的全局模式跟上，
+    // 会话已经上屏过要上屏的，这里不再动编辑区
+    asciiMode_ = mode == WOWTYPE_MODE_ENGLISH;
+    translateMode_ = mode == WOWTYPE_MODE_TRANSLATE;
+    announceMode(ic, true);
+}
+
+void WowtypeEngine::announceMode(fcitx::InputContext *ic, bool notify) {
     const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
     WLOG_I() << "WowType: 切到" << name;
     if (!ic) {
@@ -2395,11 +2433,19 @@ uint32_t WowtypeEngine::tickTranslate() {
     }
     if (frame->commit) {
         // 按过回车，译好了：上屏译文（正在打的拼音留着，不清编辑区）
-        ic->commitString(frame->commit);
-        rememberContext(frame->commit);
+        const std::string text = frame->commit;
+        const bool modeChanged = frame->mode_changed;
+        const int mode = frame->mode;
+        const uint32_t wake = frame->wake_after_ms;
+        ic->commitString(text);
+        rememberContext(text);
+        if (modeChanged) {
+            // 单次「译」：翻完这一句回到原来的模式
+            followMode(ic, mode);
+        }
         translateDrawn_.clear();
         updateInputPanel(ic, state);
-        return frame->wake_after_ms;
+        return wake;
     }
     // 结果变了才重画；只换编辑区和提示行：正在打拼音时候选列表（和翻到的页、光标）不动
     if (translating(ic) && translateSignature(frame) != translateDrawn_) {
