@@ -192,9 +192,16 @@ private struct GeneralPage: View {
             PickerRow(title: "排列方向", selection: $model.config.horizontal,
                       options: [("横排", true), ("竖排", false)])
             RowDivider()
+            PickerRow(title: "方向键", subtitle: arrowKeysSubtitle,
+                      info: "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
+                          + "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
+                          + "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。",
+                      selection: $model.config.arrowKeys,
+                      options: [("都用来选词", .candidates), ("左右键移动光标", .caret)])
+            RowDivider()
             StepperRow(title: "每页个数", value: $model.config.pageSize, range: 3...9)
             RowDivider()
-            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down 和方向键") {
+            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down") {
                 SwitchRow(title: "- 和 =", isOn: $model.config.pageKeysMinus)
                 RowDivider()
                 SwitchRow(title: "[ 和 ]", subtitle: "打字途中不再出【】", isOn: $model.config.pageKeysBracket)
@@ -227,6 +234,15 @@ private struct GeneralPage: View {
             ActionRow(title: "提交问题", action: { NSWorkspace.shared.open(issuesURL) }) {
                 Image(systemName: "arrow.up.right.square").foregroundColor(.secondary)
             }
+        }
+    }
+
+    /// 方向键那一行的副标题：这种用法和候选排列下各个方向键做什么（和 Linux 设置一样）
+    private var arrowKeysSubtitle: String {
+        switch (model.config.arrowKeys, model.config.horizontal) {
+        case (.caret, _): return "↑ ↓ 选词，← → 在拼音里移动光标"
+        case (.candidates, true): return "← → 选词，↑ 上一页，↓ 展开更多候选"
+        case (.candidates, false): return "↑ ↓ 选词，← → 翻页"
         }
     }
 }
@@ -307,6 +323,12 @@ private struct InputPage: View {
                   + "打到一半切英文，已经打的字母原样上屏。") {
             PickerRow(title: "切换键", selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
+            RowDivider()
+            PickerRow(title: "另设一个切换键",
+                      info: "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
+                          + "Control+空格是 macOS 切换输入法的快捷键，系统先拿走，WowType 收不到："
+                          + "要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里把它关掉。",
+                      selection: toggleKey, options: toggleKeyOptions)
         }
 
         PrefGroup("拼音") {
@@ -359,6 +381,19 @@ private struct InputPage: View {
                 SwitchRow(title: "汉字和数字之间", isOn: $model.config.autoSpaceDigits)
             }
         }
+    }
+
+    /// 键名同 wowtype.conf 的 ToggleKey；空串是不用
+    private var toggleKey: Binding<String> {
+        Binding(get: { model.config.toggleKey?.name ?? "" },
+                set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) })
+    }
+
+    private var toggleKeyOptions: [(String, String)] {
+        let options = [("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
+                       ("Control + Shift + 空格", "Control+Shift+space")]
+        let current = toggleKey.wrappedValue
+        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
     }
 
     private var schemeOptions: [(String, String)] {
