@@ -243,7 +243,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 改完下一次按键时生效，不用重启；换了 `Lexicon` 会在后台重新载入词库，载完之前照旧用原来的。
 
 现在认的项：`CandidateLayout`、`ArrowKeys`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
-`InputScheme`、`Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
+`InputScheme`、`ShuangpinScheme`、`ShuangpinShowKeys`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
 `AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`ToggleKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
 检查更新 macOS 还没做，对应的项写了也不起作用。
 
