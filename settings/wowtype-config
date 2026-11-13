@@ -112,6 +112,7 @@ DEFAULTS = {
     "VoiceKey": "Alt_R",
     "EmojiSuggest": "True",
     "EmojiKey": "Super+period",
+    "ToggleKey": "",
     "Translate": "False",
     "TranslateTarget": "en",
     "TranslateBaseUrl": "",
@@ -281,6 +282,12 @@ EMOJI_KEYS = [
     ("Ctrl + ;", "Control+semicolon"),
     ("Ctrl + Shift + E", "Control+Shift+E"),
     ("不用快捷键", ""),
+]
+# 另设的切换中 / 英文快捷键（#143）。Ctrl+空格默认是 fcitx5 切换输入法的键，要先让出来
+TOGGLE_KEYS = [
+    ("不用（单按 Shift 照常）", ""),
+    ("Ctrl + 空格", "Control+space"),
+    ("Ctrl + Shift + 空格", "Control+Shift+space"),
 ]
 
 # 合法拼音音节（和 core/src/syllable.rs 的 SYLLABLES 一致，核心的测试会比对；macOS 设置直接用核心的）
@@ -832,6 +839,26 @@ def key_label(key):
     """fcitx5 的按键名 → 给人看的（Control+space → Ctrl+空格）。"""
     names = {"Control": "Ctrl", "space": "空格", "Super": "Super", "Alt": "Alt"}
     return "+".join(names.get(part, part) for part in key.split("+"))
+
+
+def same_key(a, b):
+    """两个 fcitx5 键名是不是同一个键（修饰键顺序、大小写不算；Ctrl 和 Control 一样）。"""
+    def norm(key):
+        parts = [p.strip().lower() for p in key.split("+")]
+        mods = {"ctrl": "control"}
+        return frozenset(mods.get(p, p) for p in parts[:-1]), parts[-1]
+    return bool(a and b) and norm(a) == norm(b)
+
+
+def fcitx_hotkey_taking(key, hotkey=None):
+    """fcitx5 哪个全局快捷键也是这个键（fcitx5 先处理，WowType 收不到）；没有返回 None。"""
+    if not key:
+        return None
+    hotkey = saved_fcitx_hotkey()[0] if hotkey is None else hotkey
+    for option in FCITX_SHIFT_OPTIONS:
+        if any(same_key(key, k) for k in key_list(hotkey.get(option))):
+            return option
+    return None
 
 
 
@@ -3540,6 +3567,20 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.shift_names.index(current) if current in self.shift_names else 0)
         self.shift_row.connect("notify::selected", self.on_shift_toggle_changed)
         switch.add(self.shift_row)
+        current = self.values.get("ToggleKey", DEFAULTS["ToggleKey"])
+        labels = [label for label, _ in TOGGLE_KEYS]
+        self.toggle_keys = [name for _, name in TOGGLE_KEYS]
+        if current not in self.toggle_keys:
+            labels.append(f"其他（{current}）")
+            self.toggle_keys.append(current)
+        self.toggle_key_row = Adw.ComboRow(title="另设一个切换键", model=Gtk.StringList.new(labels))
+        self.add_info(self.toggle_key_row,
+                      "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
+                      "Ctrl+空格默认是 fcitx5 切换输入法的键，fcitx5 先拿走，WowType 收不到："
+                      "要先在「Fcitx 5 配置 → 全局选项 → 快捷键」里把它从「切换启用/禁用输入法」删掉。")
+        self.toggle_key_row.set_selected(self.toggle_keys.index(current))
+        self.toggle_key_row.connect("notify::selected", self.on_toggle_key_changed)
+        switch.add(self.toggle_key_row)
         self.initial_names = [name for _, name in INITIAL_MODES]
         self.initial_row = Adw.ComboRow(
             title="切到 WowType 时",
@@ -3758,6 +3799,23 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.set_value("ShiftToggle", self.shift_names[row.get_selected()])
         self.refresh_shift_conflict()
 
+    def on_toggle_key_changed(self, row, _param):
+        self.set_value("ToggleKey", self.toggle_keys[row.get_selected()])
+        self.refresh_toggle_key_hint()
+
+    def refresh_toggle_key_hint(self):
+        """另设的切换键也是 fcitx5 的全局快捷键时（Ctrl+空格默认就是）说一声：fcitx5 先拿走，WowType 收不到。"""
+        key = self.values.get("ToggleKey", "")
+        taken = fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None))
+        row = self.toggle_key_row
+        if taken:
+            row.set_subtitle(f"fcitx5 也用 {key_label(key)} {FCITX_OPTION_NAMES[taken]}，"
+                             "WowType 收不到，先在 Fcitx 5 配置里删掉它（见 ⓘ）")
+            row.add_css_class("wt-warning")
+        else:
+            row.set_subtitle("")
+            row.remove_css_class("wt-warning")
+
     def refresh_shift_conflict(self):
         """看 fcitx5 有没有用 WowType 要的 Shift 切输入法，更新「输入」「翻译」两页的提示。"""
         toggle = self.values.get("ShiftToggle", "Both")
@@ -3796,6 +3854,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                 row.set_subtitle(f"已让出；{switch_hint}")
                 self.shift_free_info.set_text("fcitx5 不再用 Shift 切输入法。关掉这个开关就还给 fcitx5。")
                 row.remove_css_class("wt-warning")
+            self.refresh_toggle_key_hint()
             self.refresh_translate_status()
         self.fcitx.get_config(GLOBAL_URI, done)
 
@@ -4968,6 +5027,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
             self.refresh_voice_model()
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
+            self.toggle_key_row.set_selected(self.toggle_keys.index(DEFAULTS["ToggleKey"]))
             self.target_row.set_selected(0)
             self.toast("已恢复默认设置")
         dialog.connect("response", answered)

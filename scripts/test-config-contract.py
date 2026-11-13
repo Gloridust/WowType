@@ -237,6 +237,8 @@ def check_settings(spec, wc, home):
          "设置界面：EMOJI_KEYS")
     same([value for _label, value in wc.VOICE_KEYS], by_key["VoiceKey"]["presets"]["settings"],
          "设置界面：VOICE_KEYS")
+    same([value for _label, value in wc.TOGGLE_KEYS], by_key["ToggleKey"]["presets"]["settings"],
+         "设置界面：TOGGLE_KEYS")
     same_set([key for key, _label in wc.FUZZY_GROUPS], [s["key"] for s in mine if s.get("group") == "fuzzy"],
              "设置界面：FUZZY_GROUPS 的键")
 

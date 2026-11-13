@@ -872,7 +872,8 @@ void WowtypeEngine::applyConfig() {
                        : name == "off" || name == "0" ? WowtypeShiftToggle::Off
                                                       : WowtypeShiftToggle::Both;
     }
-    if (shiftToggle_ == WowtypeShiftToggle::Off) {
+    toggleKey_ = *config_.toggleKey;
+    if (!canToggleMode()) { // 切不回中文了，回到中文
         asciiMode_ = false;
         translateMode_ = false;
     }
@@ -954,6 +955,7 @@ void WowtypeEngine::applyConfig() {
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
+             << " 中英键=" << toggleKey_.toString()
              << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
              << " 计算器=" << calculator_ << " 工具栏=" << toolbar_
              << " 剪贴板历史=" << clipboardHistory_ << " 互译=" << translateEnabled_ << "("
@@ -1024,6 +1026,14 @@ bool WowtypeEngine::isVoiceKey(const fcitx::Key &key) const {
 
 bool WowtypeEngine::isEmojiKey(const fcitx::Key &key) const {
     return emojiKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{emojiKey_});
+}
+
+bool WowtypeEngine::isToggleKey(const fcitx::Key &key) const {
+    return toggleKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{toggleKey_});
+}
+
+bool WowtypeEngine::canToggleMode() const {
+    return shiftToggle_ != WowtypeShiftToggle::Off || toggleKey_.sym() != FcitxKey_None;
 }
 
 WowtypeEngine::~WowtypeEngine() {
@@ -1669,6 +1679,15 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         event.filterAndAccept();
         return;
     }
+    if (state->panel() == WOWTYPE_TOOL_NONE && isToggleKey(key)) {
+        // 另设的切换键：中 ↔ 英；在「译」里按回中文
+        coreReady();
+        syncSession(state);
+        syncMode(ic, state);
+        switchMode(ic, state, !asciiMode_ && !translateMode_, false, true);
+        event.filterAndAccept();
+        return;
+    }
     if (state->panel() != WOWTYPE_TOOL_NONE) {
         // 工具栏 / 表情面板开着：按键都归它（会话管）；带 Ctrl / Alt / Super 的收起面板、交给应用
         if (state->panel() == WOWTYPE_TOOL_MENU) {
@@ -1909,9 +1928,8 @@ void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *stat
     if (initialMode_ == WowtypeInitialMode::Last) {
         return;
     }
-    // 关了 Shift 切换时不进英文：切不回中文
-    const bool english =
-        initialMode_ == WowtypeInitialMode::English && shiftToggle_ != WowtypeShiftToggle::Off;
+    // 切不回中文时不进英文
+    const bool english = initialMode_ == WowtypeInitialMode::English && canToggleMode();
     if (english == asciiMode_ && !translateMode_) {
         return;
     }

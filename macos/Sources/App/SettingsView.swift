@@ -307,6 +307,12 @@ private struct InputPage: View {
                   + "打到一半切英文，已经打的字母原样上屏。") {
             PickerRow(title: "切换键", selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
+            RowDivider()
+            PickerRow(title: "另设一个切换键",
+                      info: "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
+                          + "Control+空格是 macOS 切换输入法的快捷键，系统先拿走，WowType 收不到："
+                          + "要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里把它关掉。",
+                      selection: toggleKey, options: toggleKeyOptions)
         }
 
         PrefGroup("拼音") {
@@ -359,6 +365,19 @@ private struct InputPage: View {
                 SwitchRow(title: "汉字和数字之间", isOn: $model.config.autoSpaceDigits)
             }
         }
+    }
+
+    /// 键名同 wowtype.conf 的 ToggleKey；空串是不用
+    private var toggleKey: Binding<String> {
+        Binding(get: { model.config.toggleKey?.name ?? "" },
+                set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) })
+    }
+
+    private var toggleKeyOptions: [(String, String)] {
+        let options = [("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
+                       ("Control + Shift + 空格", "Control+Shift+space")]
+        let current = toggleKey.wrappedValue
+        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
     }
 
     private var schemeOptions: [(String, String)] {
