@@ -1189,7 +1189,7 @@ void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text
 }
 
 void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
-                                 const WowtypeFrame *frame, bool keepPreedit) {
+                                 const WowtypeFrame *frame) {
     // 会话已经清空编辑区、记过选词、补好了空格；这里上屏、记上文、攒着存用户词库
     const std::string text = frame && frame->commit ? frame->commit : "";
     const bool learned = frame && frame->learned;
@@ -1200,12 +1200,11 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
     }
-    if (keepPreedit) {
-        // 按键上屏以后还在打字（五笔顶字：首选上屏，新打的字母开始下一个码）：编辑区留着，抄新的候选
-        state->forgetCandidates();
+    // 会话上屏时已经清好了它上屏的那部分，这里从不 reset 会话（reset 会把还在打的丢掉）：只丢掉抄的候选，
+    // 会话还在打字就重新抄（五笔顶字：首选上屏，新打的字母开始下一个码；离开「译」：拼音留着接着打）
+    state->forgetCandidates();
+    if (state->composing()) {
         syncView(state);
-    } else {
-        state->clear();
     }
     if (learned || !text.empty()) {
         rememberContext(text);
@@ -1335,7 +1334,7 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
     }
     if (frame && frame->commit) {
         // 学没学到词看 frame->learned；选了 emoji 由会话记进最近用过
-        finishCommit(ic, state, frame, true);
+        finishCommit(ic, state, frame);
         updateInputPanel(ic, state);
         return;
     }
@@ -1994,13 +1993,17 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
         }
         return false;
     }
-    if (frame->commit) {
-        // 打到一半切英文：已选的词 + 打的字母原样上屏（会话已经放进 frame）
+    // 打到一半切英文：已选的词 + 打的字母原样上屏；离开「译」：原文原样上屏、拼音留着（会话已经放进 frame）
+    const int mode = frame->mode;
+    const bool committed = frame->commit != nullptr;
+    if (committed) {
         finishCommit(ic, state, frame);
+    }
+    switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
+    if (committed) {
+        // 换好模式再画：离开「译」以后留着的拼音照普通的编辑区画，不再画成互译的原文框
         updateInputPanel(ic, state);
     }
-    switchMode(ic, state, frame->mode == WOWTYPE_MODE_ENGLISH,
-               frame->mode == WOWTYPE_MODE_TRANSLATE, true);
     event.filterAndAccept();
     return true;
 }
