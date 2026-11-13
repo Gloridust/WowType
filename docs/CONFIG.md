@@ -274,7 +274,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 
-词库（`lexicon.tsv`）由 `scripts/make-data.sh` 从雾凇拼音生成；设 `WOWTYPE_CEDICT=1` 时再用 CC-CEDICT
+词库（`lexicon.tsv`）由 `scripts/make-data.sh` 从雾凇拼音生成；默认再用 CC-CEDICT
 补一批人名、地名、专业词（CC BY-SA 4.0，见 `CEDICT-NOTICE.txt`）。
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
