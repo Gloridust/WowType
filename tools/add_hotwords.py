@@ -74,6 +74,10 @@ def main():
             if pinyin not in seen.get(word, ()):
                 out.write(f"{pinyin}\t{word}\t{freq}\n")
                 added += 1
+                if word in seen:
+                    # 词库里有这个词、没有这个读音：打出来，换词库时好查有没有加进错读音
+                    print(f"热词：给 {word} 加读音 {pinyin}（词库里是 {'、'.join(sorted(seen[word]))}）",
+                          file=sys.stderr)
     print(f"热词：提高词频 {raised} 条，新增 {added} 个；去掉 {removed} 条", file=sys.stderr)
 
 

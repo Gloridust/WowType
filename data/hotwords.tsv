@@ -1,8 +1,9 @@
 # WowType 热词表：近几年 AI、工作、生活、网络上常用、但雾凇词库里词频偏低或没有的词。
 # 格式：拼音（空格分隔）<TAB>词[<TAB>词频]，没写词频的按 30000。scripts/make-data.sh 用
-# tools/add_hotwords.py 合进 lexicon.tsv：词库里已有的词沿用词库的读音、把词频提到不低于这里的词频
-# （只提不降）；没有的按这里的拼音加进去。只对雾凇词库的词频修正在 data/rime-ice-freq.tsv。
-# 这份表是 WowType 自己整理的（MIT），加词时注意多音字的读音。
+# tools/add_hotwords.py 合进 lexicon.tsv（万象词库也合）：词库里已有的读音把词频提到不低于这里的词频
+# （只提不降）；这里写了、词库里没有的读音（包括新词）按这里的拼音加进去。同一个词有几种读法就写几行。
+# 只对雾凇词库的词频修正在 data/rime-ice-freq.tsv。
+# 这份表是 WowType 自己整理的（MIT）。这里的读音会直接加进词库，写错了就多一个错读音：加词时注意多音字。
 da mo xing	大模型
 da yu yan mo xing	大语言模型
 zhi neng ti	智能体
