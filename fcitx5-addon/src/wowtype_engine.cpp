@@ -1241,12 +1241,15 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         updateInputPanel(ic, state);
         return;
     }
-    // 编辑区里的光标动了（方向键移进拼音，#129）：重画编辑区
-    const fcitx::Text &shown =
-        inlinePreedit(ic) ? ic->inputPanel().clientPreedit() : ic->inputPanel().preedit();
-    if (frame && frame->preedit && shown.cursor() != frame->preedit_cursor) {
-        updateInputPanel(ic, state);
-        return;
+    // 编辑区里的光标动了（方向键移进拼音，#129）：重画编辑区。只在打开了这个设置时看
+    //（互译时画的是原文框和译文，光标本来就和会话的编辑区对不上）
+    if (arrowCaret_ && !translating(ic) && frame && frame->preedit) {
+        const fcitx::Text &shown =
+            inlinePreedit(ic) ? ic->inputPanel().clientPreedit() : ic->inputPanel().preedit();
+        if (shown.cursor() != frame->preedit_cursor) {
+            updateInputPanel(ic, state);
+            return;
+        }
     }
     // 只是翻页、挪候选光标：原地摆好候选框
     if (auto *list = dynamic_cast<WowtypeSessionList *>(ic->inputPanel().candidateList().get())) {
