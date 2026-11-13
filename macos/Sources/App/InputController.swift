@@ -59,11 +59,13 @@ final class WowTypeInputController: IMKInputController {
         if configGeneration != state.configGeneration {
             configGeneration = state.configGeneration
             composer.apply(state.config)
+            VoiceInput.shared.configure(state.config, modelDir: state.voiceModelDir)
         }
     }
 
     override func recognizedEvents(_ sender: Any!) -> Int {
-        Int(NSEvent.EventTypeMask([.keyDown, .flagsChanged]).rawValue)
+        // keyUp 只给语音键用（F8 这类按住说话的键）
+        Int(NSEvent.EventTypeMask([.keyDown, .keyUp, .flagsChanged]).rawValue)
     }
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
@@ -71,10 +73,19 @@ final class WowTypeInputController: IMKInputController {
         syncComposer()
         switch event.type {
         case .flagsChanged:
+            VoiceInput.shared.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
+                                           composing: composer.isComposing, host: self)
             handleFlags(event)
             // 修饰键永远交给应用
             return false
+        case .keyUp:
+            return VoiceInput.shared.keyEvent(keyCode: event.keyCode, up: true, composing: composer.isComposing,
+                                              host: self)
         case .keyDown:
+            if VoiceInput.shared.keyEvent(keyCode: event.keyCode, up: false, composing: composer.isComposing,
+                                          host: self) {
+                return true
+            }
             guard let key = translateKeyDown(keyCode: event.keyCode, characters: event.characters,
                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                                              cocoaFlags: event.modifierFlags.rawValue)
@@ -123,6 +134,7 @@ final class WowTypeInputController: IMKInputController {
     }
 
     override func deactivateServer(_ sender: Any!) {
+        VoiceInput.shared.cancel(for: self)
         composer.commitComposition()
         stopTranslatePolling()
         AppState.shared.candidatePanel.hide()
@@ -247,3 +259,25 @@ extension WowTypeInputController: TextClient {
 }
 
 let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "dev"
+
+// MARK: 语音输入
+
+extension WowTypeInputController: VoiceHost {
+    func voiceShow(status: String?, partial: String) {
+        setMarkedText(partial, cursor: partial.utf16.count)
+        guard let status else {
+            showCandidates(nil)
+            return
+        }
+        showCandidates(CandidatePage(texts: [], cursor: -1, hasPrev: false, hasNext: false, expanded: false,
+                                     aux: status))
+    }
+
+    func voiceCommit(_ text: String) {
+        setMarkedText("", cursor: 0)
+        showCandidates(nil)
+        guard !text.isEmpty else { return }
+        // 和打字上屏一样走 Composer：自动加空格、记上下文；互译时进原文
+        composer.insert(text)
+    }
+}

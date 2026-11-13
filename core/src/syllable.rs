@@ -629,6 +629,26 @@ pub fn parse(input: &str) -> Result<ParsedInput, ParseError> {
 mod tests {
     use super::*;
 
+    /// Linux 设置界面（Python，不链接核心）自己抄了一份音节表，改了这里要跟着改。
+    #[test]
+    fn settings_syllable_table_matches() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../settings/wowtype-config");
+        let Ok(script) = std::fs::read_to_string(path) else {
+            return; // 单独发的核心源码包里没有设置界面
+        };
+        let start = script
+            .find("SYLLABLES = frozenset(\"\"\"")
+            .expect("找不到 SYLLABLES");
+        let body = &script[start..];
+        let body = &body[body.find('\n').unwrap()..body.find("\"\"\".split()").unwrap()];
+        let mut theirs: Vec<&str> = body.split_whitespace().collect();
+        theirs.sort_unstable();
+        assert_eq!(
+            theirs, SYLLABLES,
+            "settings/wowtype-config 的 SYLLABLES 和核心的不一样"
+        );
+    }
+
     #[test]
     fn syllable_table_is_sorted_and_unique() {
         for pair in SYLLABLES.windows(2) {

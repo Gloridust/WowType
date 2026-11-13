@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Gloridust/WowType/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloridust/WowType/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Gloridust/WowType?include_prereleases&label=release)](https://github.com/Gloridust/WowType/releases)
-![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
+![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.0-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
 [安装](#安装) · [使用](#使用) · [设置](#设置) · [更多文档](#更多文档) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
@@ -44,7 +44,7 @@
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **Emoji**：打「开心」「点赞」「生日快乐」时，第三个候选就是对应的 emoji；按 `Super` + `.` 打开表情面板，打拼音或英文搜 emoji 和符号（`xiao` → 😂、`pizza` → 🍕、`youjiantou` → →）。
 - **互译**：单按 `Shift` 切到「译」，照常打中文，停一下就翻成英文（或日、韩、法等 13 种语言），回车上屏；打外文就翻成中文。翻译服务用你自己填的 OpenAI 格式接口（DeepSeek、通义千问、Ollama……），也可以下载腾讯混元的 HY-MT 翻译模型离线翻。
-- **日期时间、计算器**：打 `riqi`（`rq`）、`shijian`（`sj`）、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`；只打一个数（`v12345.67`）出大写金额「壹万贰仟叁佰肆拾伍元陆角柒分」和「一万二千三百四十五点六七」。
+- **日期时间、计算器**：打 `riqi`（`rq`）、`shijian`（`sj`）、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`；只打一个数（`v12345.67`）出大写金额「壹万贰仟叁佰肆拾伍元陆角柒分」和「一万二千三百四十五点六七」。双拼时 `v` 是声母键，计算器用大写 `V`（`V1+2*3`）。
 - **v + 空格工具栏**：只打一个 `v` 再按空格，选剪贴板历史（默认关，最近 20 条，只在内存里）、常用语（自定义词）、符号、表情。
 - **中英文之间自动加空格**（默认关）：`你好Linux` → `你好 Linux`、`第5章` → `第 5 章`，字母和数字分别开关。
 - **繁体、模糊音、双拼**：可切繁体输出；模糊音分 12 组单独开（z=zh、n=l、f=h、r=l、an=ang、un=ong……）；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
@@ -94,14 +94,15 @@
 
 ### 系统要求
 
-- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.1 或更新**。Arch 的安装包只有 x86_64
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
-- Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
+- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.0 或更新**。Arch 的安装包只有 x86_64
+- 有现成安装包的发行版：**Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- Ubuntu 22.04 的 GNOME 是 42：绿色候选框主题和语音浮条（GNOME 扩展，要 GNOME 45+）用不了，见[安装说明](docs/INSTALL.md#ubuntu-2204fcitx5-50)
+- deepin 的安装包只有 x86_64
 - **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
+Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
@@ -111,7 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
 2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
-3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
+3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去（deepin 默认就是 fcitx5，不动）
 4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
 装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
@@ -174,7 +175,7 @@ im-config -n fcitx5
 ##### 方式一：安装包
 
 到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
-`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu24.04`、`ubuntu26.04`、`debian13`，架构是 `amd64` 或 `arm64`），词库已经包含在里面。
+`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu22.04`、`ubuntu24.04`、`ubuntu26.04`、`debian13`、`deepin23`、`deepin25`，架构是 `amd64` 或 `arm64`，deepin 只有 `amd64`），词库已经包含在里面。
 不知道自己是哪个发行版、哪种架构：
 
 ```bash
@@ -354,6 +355,10 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 （也接受已经下载好的语音包路径），`wowtype-config --remove-voice-model` 删掉并关闭。
 
 换语音键（右 Ctrl、菜单键、F8–F10）或者关掉语音，在 [WowType 设置](#设置)的「语音」页里改。
+
+**macOS** 上一样用，语音键是右 `Option`（也能换成右 Control、F8–F10）：在设置窗口的「语音」页下载模型
+（和 Linux 同一个包，存在 `~/Library/Application Support/WowType/wtlocal/`），第一次说话时允许 WowType 使用麦克风。
+提示显示在候选框里（🎙 和字符画的波形）。
 
 <img src="docs/images/voice.png" width="560" alt="按住右 Alt 说话：光标变成声波，下面是正在听、离线和实时波形">
 
