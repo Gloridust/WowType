@@ -588,8 +588,6 @@ pub struct Session<'e> {
     clock: Clock,
     /// 候选缓存：输入、已选词、引擎、上文、设置变了就作废，用的时候再算。
     candidates: Vec<Candidate>,
-    /// 五笔：候选最前面有几个是码正好对上的（自定义编码、码表词），四码唯一自动上屏看它。随候选重算。
-    exact: usize,
     fresh: bool,
     /// 每重算一次候选加一（C 接口按它判断要不要重建字符串）。
     generation: u64,
@@ -638,7 +636,6 @@ impl Default for Session<'_> {
             context: String::new(),
             clock: system_time,
             candidates: Vec::new(),
-            exact: 0,
             fresh: false,
             generation: 0,
             page: 0,
@@ -2099,7 +2096,7 @@ impl<'e> Session<'e> {
     /// 五笔下的字母（临时拼音以外）：
     /// - 已经打了四码、空码、按了 z 或大写字母、在算算式：先顶字（光标处的候选上屏，空码丢掉）；
     /// - 大写字母原样上屏（V 开头是计算器）；别的字母开始新码，z 开始临时拼音；
-    /// - 打满四码、只有一个码正好对上的候选时直接上屏（设置里能关）。
+    /// - 打满四码、只有一个候选时直接上屏（设置里能关）。四码没有更长的码，emoji 推荐不算。
     fn wubi_letter(&mut self, c: char) {
         if self.composing()
             && (c == 'z'
@@ -2115,11 +2112,12 @@ impl<'e> Session<'e> {
             return;
         }
         self.push_input(c);
-        if self.config.wubi_auto_commit && self.wubi_code() && self.input.len() == crate::wubi::MAX_CODE {
-            self.candidates();
-            if self.exact == 1 {
-                self.choose_now(0);
-            }
+        if self.config.wubi_auto_commit
+            && self.wubi_code()
+            && self.input.len() == crate::wubi::MAX_CODE
+            && self.candidates().iter().filter(|c| c.kind != CandidateKind::Emoji).count() == 1
+        {
+            self.choose_now(0);
         }
     }
 
@@ -2371,9 +2369,8 @@ impl<'e> Session<'e> {
         self.generation
     }
 
-    fn compute_candidates(&mut self) -> Vec<Candidate> {
-        self.exact = 0;
-        let input = self.remaining().to_owned();
+    fn compute_candidates(&self) -> Vec<Candidate> {
+        let input = self.remaining();
         let Some(engine) = self.engine else {
             return Vec::new();
         };
@@ -2392,7 +2389,7 @@ impl<'e> Session<'e> {
             return if self.calc_active() {
                 Vec::new()
             } else {
-                self.wubi_candidates(engine, &input)
+                self.wubi_candidates(engine, input)
             };
         }
 
@@ -2444,7 +2441,7 @@ impl<'e> Session<'e> {
             add_keycap(&mut all, input.len(), self.config.page_size);
         }
         if self.config.date_time && self.selections.is_empty() {
-            self.add_date_time(&mut all, &input, skip, engine.config().shuangpin);
+            self.add_date_time(&mut all, input, skip, engine.config().shuangpin);
         }
         all
     }
@@ -2453,7 +2450,7 @@ impl<'e> Session<'e> {
     /// 再是 emoji 推荐（不占重码的码位），最后是逐码提示（以这个码开头的更长的码的词，后面带还要打的码）。
     /// 日期时间不在这里出：rq、sj 都是五笔码，日期、时间、星期的码又是四码唯一、一打就上屏了；
     /// 要日期时间打 z 临时拼音（zriqi）。
-    fn wubi_candidates(&mut self, engine: &Engine, code: &str) -> Vec<Candidate> {
+    fn wubi_candidates(&self, engine: &Engine, code: &str) -> Vec<Candidate> {
         let len = code.len();
         let candidate = |text: String, comment: String| Candidate {
             // 自定义词里带换行的原样上屏（和拼音一样）
@@ -2478,22 +2475,19 @@ impl<'e> Session<'e> {
             .map(|(_, word)| candidate(crate::unescape_custom(&word), String::new()))
             .collect();
         let mut longer = Vec::new();
-        for hit in engine.wubi_lookup(code, WUBI_MORE) {
-            if all.iter().chain(&longer).any(|c: &Candidate| c.text == hit.text) {
+        for hit in engine.wubi().iter().flat_map(|table| table.lookup(code, WUBI_MORE)) {
+            // 繁体输出时转完可能重复，自定义词也可能和码表的一样：只留前面那个，码位不动
+            let text = engine.shown_text(hit.word);
+            if all.iter().chain(&longer).any(|c: &Candidate| c.text == text) {
                 continue;
             }
             if hit.code.len() == len {
-                all.push(candidate(hit.text, String::new()));
+                all.push(candidate(text, String::new()));
             } else {
-                let rest = if self.config.wubi_hint {
-                    hit.code[len..].to_owned()
-                } else {
-                    String::new()
-                };
-                longer.push(candidate(hit.text, rest));
+                let rest = if self.config.wubi_hint { &hit.code[len..] } else { "" };
+                longer.push(candidate(text, rest.to_owned()));
             }
         }
-        self.exact = all.len();
         if self.config.emoji_suggest {
             let mut emoji = all
                 .first()

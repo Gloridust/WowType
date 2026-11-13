@@ -587,8 +587,6 @@ private:
     bool shuangpin_ = false;
     /// 五笔（设置里选了五笔；码表在 applyCoreSettings 里载入，没载入时会话照全拼打并提示）。
     bool wubi_ = false;
-    bool wubiAutoCommit_ = true;
-    bool wubiHint_ = true;
     /// 现在的引擎载入了五笔码表。
     bool wubiLoaded_ = false;
     /// 配置文件里的双拼方案名（传给核心）。

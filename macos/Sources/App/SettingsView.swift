@@ -326,7 +326,7 @@ private struct InputPage: View {
                      selected: model.config.wubi) {
                 model.config.inputScheme = .wubi86
             }
-            .disabled(!model.wubiTableAvailable && !model.config.wubi)
+            .disabled(!model.wubiTableAvailable)
             if model.config.wubi {
                 RowDivider()
                 SwitchRow(title: "四码唯一自动上屏", subtitle: "打满四码、只有一个字词时直接上屏",
@@ -369,9 +369,7 @@ private struct InputPage: View {
         }
 
         PrefGroup("快捷输入") {
-            SwitchRow(title: "日期和时间",
-                      subtitle: model.config.wubi ? "五笔时打 z 加拼音：zriqi、zshijian、zxingqi" : "打 riqi、shijian、xingqi",
-                      isOn: $model.config.dateTime)
+            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi（五笔前面加 z）", isOn: $model.config.dateTime)
             RowDivider()
             SwitchRow(title: "计算器", subtitle: schemeName.map { "\($0)时打大写 V：V1+2*3 → 7" } ?? "v1+2*3 → 7",
                       isOn: $model.config.calculator)
@@ -417,11 +415,7 @@ private struct InputPage: View {
 
     /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
     private var schemeName: String? {
-        switch model.config.inputScheme {
-        case .quanpin: return nil
-        case .shuangpin: return "双拼"
-        case .wubi86: return "五笔"
-        }
+        model.config.inputScheme == .quanpin ? nil : model.config.shuangpin ? "双拼" : "五笔"
     }
 
     private var schemeOptions: [(String, String)] {

@@ -3590,30 +3590,36 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(self.build_lexicon())
 
         mode = Adw.PreferencesGroup(title="输入方案")
-        wubi_table = find_wubi_table()
+        has_wubi = find_wubi_table() is not None
         subtitles = {"Quanpin": "全拼，也能只打声母", "Shuangpin": "每个字打两个键",
-                     "Wubi86": "86 版，z 键临时打拼音" if wubi_table
+                     "Wubi86": "86 版，z 键临时打拼音" if has_wubi
                      else "没有找到五笔码表 wubi86.tsv，重新安装 WowType 可以修好"}
+        self.scheme_names = [name for _, name in SHUANGPIN_SCHEMES]
+        self.scheme_row = Adw.ComboRow(
+            title="双拼方案", model=Gtk.StringList.new([label for label, _ in SHUANGPIN_SCHEMES]))
+        current = self.values.get("ShuangpinScheme", "Ziranma")
+        self.scheme_row.set_selected(
+            self.scheme_names.index(current) if current in self.scheme_names else 0)
+        self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "ShuangpinScheme", self.scheme_names[row.get_selected()]))
+        # 选了这个方案才出的设置
+        self.scheme_rows = {
+            "Shuangpin": [self.scheme_row, self.make_switch(
+                "ShuangpinShowKeys", "编辑区显示打的键", "不翻成全拼，中英混打时看得出打了什么")],
+            "Wubi86": [self.make_switch("WubiAutoCommit", "四码唯一自动上屏", "打满四码、只有一个字词时直接上屏"),
+                       self.make_switch("WubiHint", "编码提示", "候选后面显示还要打的码")],
+        }
         self.scheme_checks = {}
-        group = None
         for label, scheme in INPUT_SCHEMES:
-            check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=group)
-            group = group or check
+            check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.scheme_checks.get("Quanpin"))
             row = Adw.ActionRow(title=label, subtitle=subtitles[scheme])
             row.add_prefix(check)
             row.set_activatable_widget(check)
+            row.set_sensitive(has_wubi or scheme != "Wubi86")
             mode.add(row)
+            for extra in self.scheme_rows.get(scheme, []):
+                mode.add(extra)
             self.scheme_checks[scheme] = check
-            if scheme == "Shuangpin":
-                self.shuangpin_rows = self.build_shuangpin_rows(mode)
-            elif scheme == "Wubi86":
-                row.set_sensitive(bool(wubi_table) or self.values["InputScheme"] == "Wubi86")
-                self.wubi_rows = [
-                    self.make_switch("WubiAutoCommit", "四码唯一自动上屏", "打满四码、只有一个字词时直接上屏"),
-                    self.make_switch("WubiHint", "编码提示", "候选后面显示还要打的码"),
-                ]
-                for wubi_row in self.wubi_rows:
-                    mode.add(wubi_row)
         self.scheme_checks[self.values["InputScheme"]].set_active(True)
         for scheme, check in self.scheme_checks.items():
             check.connect("toggled", self.on_scheme_toggled, scheme)
@@ -3691,8 +3697,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(pinyin)
 
         extras = Adw.PreferencesGroup(title="快捷输入")
-        self.date_row = self.make_switch("DateTime", "日期和时间", None)
-        extras.add(self.date_row)
+        extras.add(self.make_switch("DateTime", "日期和时间", "打 riqi、shijian、xingqi（五笔前面加 z）"))
         self.calc_row = self.make_switch("Calculator", "计算器", None)
         extras.add(self.calc_row)
         self.toolbar_row = self.make_switch("Toolbar", "工具栏", None)
@@ -3726,34 +3731,16 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.show_scheme(self.values["InputScheme"])
         return page
 
-    def build_shuangpin_rows(self, mode):
-        self.scheme_names = [name for _, name in SHUANGPIN_SCHEMES]
-        self.scheme_row = Adw.ComboRow(
-            title="双拼方案", model=Gtk.StringList.new([label for label, _ in SHUANGPIN_SCHEMES]))
-        current = self.values.get("ShuangpinScheme", "Ziranma")
-        self.scheme_row.set_selected(
-            self.scheme_names.index(current) if current in self.scheme_names else 0)
-        self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
-            "ShuangpinScheme", self.scheme_names[row.get_selected()]))
-        mode.add(self.scheme_row)
-        show_keys_row = self.make_switch(
-            "ShuangpinShowKeys", "编辑区显示打的键", "不翻成全拼，中英混打时看得出打了什么")
-        mode.add(show_keys_row)
-        return [self.scheme_row, show_keys_row]
-
     def show_scheme(self, scheme):
         """双拼、五笔各自的设置只在选了它时显示；双拼、五笔时 v 是字母键：计算器换成大写 V，
-        工具栏灰掉；五笔的日期时间要打 z 加拼音。副标题说为什么。"""
-        for row in self.shuangpin_rows:
-            row.set_visible(scheme == "Shuangpin")
-        for row in self.wubi_rows:
-            row.set_visible(scheme == "Wubi86")
+        工具栏灰掉，副标题说为什么。"""
+        for owner, rows in self.scheme_rows.items():
+            for row in rows:
+                row.set_visible(owner == scheme)
         name = {"Shuangpin": "双拼", "Wubi86": "五笔"}.get(scheme)
         self.calc_row.set_subtitle(f"{name}时打大写 V：V1+2*3 → 7" if name else "v1+2*3 → 7")
         self.toolbar_row.set_sensitive(not name)
         self.toolbar_row.set_subtitle(f"{name}时不可用" if name else "打 v 再按空格：剪贴板、常用语、符号、表情")
-        self.date_row.set_subtitle("五笔时打 z 加拼音：zriqi、zshijian、zxingqi" if scheme == "Wubi86"
-                                   else "打 riqi、shijian、xingqi")
 
     def on_scheme_toggled(self, check, scheme):
         if check.get_active():

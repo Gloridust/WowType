@@ -904,8 +904,6 @@ void WowtypeEngine::applyConfig() {
     }
     // 双拼和五笔只能选一个（环境变量打开了双拼时就不是五笔）
     wubi_ = !shuangpin_ && *config_.inputScheme == WowtypeInputScheme::Wubi86;
-    wubiAutoCommit_ = *config_.wubiAutoCommit;
-    wubiHint_ = *config_.wubiHint;
     shiftToggle_ = *config_.shiftToggle;
     if (const char *env = std::getenv("WOWTYPE_SHIFT_TOGGLE"); env && *env) {
         const std::string name = env;
@@ -1256,8 +1254,8 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
     config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
     config.wubi = wubi_ ? 1 : 0;
-    config.wubi_auto_commit = wubiAutoCommit_ ? 1 : 0;
-    config.wubi_hint = wubiHint_ ? 1 : 0;
+    config.wubi_auto_commit = *config_.wubiAutoCommit ? 1 : 0;
+    config.wubi_hint = *config_.wubiHint ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 

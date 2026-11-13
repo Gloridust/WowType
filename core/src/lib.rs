@@ -202,14 +202,6 @@ pub struct Engine {
     wubi: RwLock<Option<Arc<wubi::WubiTable>>>,
 }
 
-/// 五笔的一个候选（[`Engine::wubi_lookup`]）。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct WubiCandidate {
-    /// 上屏的字（繁体输出时已经转好）。
-    pub text: String,
-    /// 码表里的码：等于打的码是精确候选，更长的是逐码提示（后面几码是还要打的）。
-    pub code: String,
-}
 
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
@@ -412,7 +404,7 @@ impl Engine {
     }
 
     /// 词库里的写法在候选里显示成什么：开着繁体就转一次。
-    fn shown_text(&self, text: &str) -> String {
+    pub(crate) fn shown_text(&self, text: &str) -> String {
         match self.converter.read() {
             Ok(conv) if self.config.traditional && !conv.is_empty() => conv.convert(text),
             _ => text.to_string(),
@@ -648,25 +640,6 @@ impl Engine {
     /// 载入了的五笔码表。
     pub fn wubi(&self) -> Option<Arc<wubi::WubiTable>> {
         self.wubi.read().ok().and_then(|t| t.clone())
-    }
-
-    /// 五笔：打了 code 时的候选（见 [`wubi::WubiTable::lookup`]）。繁体输出时转成繁体，
-    /// 转完重复的只留前面那个，顺序不动（码位是固定的，不按分数重排）。没有码表时为空。
-    pub fn wubi_lookup(&self, code: &str, more: usize) -> Vec<WubiCandidate> {
-        let Some(table) = self.wubi() else {
-            return Vec::new();
-        };
-        let mut out: Vec<WubiCandidate> = Vec::new();
-        for hit in table.lookup(code, more) {
-            let text = self.shown_text(hit.word);
-            if !out.iter().any(|c| c.text == text) {
-                out.push(WubiCandidate {
-                    text,
-                    code: hit.code.to_owned(),
-                });
-            }
-        }
-        out
     }
 
     pub fn set_max_candidates(&mut self, max_candidates: usize) {

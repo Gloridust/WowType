@@ -119,25 +119,24 @@ def run(app):
         win.scheme_checks["Wubi86"].set_active(True)
         pump(0.4)
         check(win.values["InputScheme"] == "Wubi86", "没存成五笔")
-        check(visible(win.wubi_rows) == [True, True] and visible(win.shuangpin_rows) == [False, False],
+        check(visible(win.scheme_rows["Wubi86"]) == [True, True] and visible(win.scheme_rows["Shuangpin"]) == [False, False],
               "五笔时该只出五笔的两个开关")
         check(win.calc_row.get_subtitle().startswith("五笔时打大写 V") and not win.toolbar_row.get_sensitive(),
               "五笔时计算器、工具栏的说明不对")
-        check("zriqi" in win.date_row.get_subtitle(), "五笔时日期时间该说打 z 加拼音")
         text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
         check("InputScheme=Wubi86" in text and "Shuangpin=False" in text, "五笔写进文件不对")
-        win.wubi_rows[0].set_active(False)
+        win.scheme_rows["Wubi86"][0].set_active(False)
         check(win.values["WubiAutoCommit"] == "False", "四码唯一自动上屏没存上")
-        win.wubi_rows[0].set_active(True)
+        win.scheme_rows["Wubi86"][0].set_active(True)
         win.scheme_checks["Shuangpin"].set_active(True)
         pump(0.4)
-        check(visible(win.wubi_rows) == [False, False] and visible(win.shuangpin_rows) == [True, True],
+        check(visible(win.scheme_rows["Wubi86"]) == [False, False] and visible(win.scheme_rows["Shuangpin"]) == [True, True],
               "双拼时该只出双拼的两项")
         text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
         check("InputScheme=Shuangpin" in text and "Shuangpin=True" in text, "双拼写进文件不对（旧版要读 Shuangpin）")
         win.scheme_checks["Quanpin"].set_active(True)
         pump(0.4)
-        check(not any(visible(win.wubi_rows + win.shuangpin_rows)), "全拼时不该出双拼、五笔的设置")
+        check(not any(visible(win.scheme_rows["Wubi86"] + win.scheme_rows["Shuangpin"])), "全拼时不该出双拼、五笔的设置")
         check(win.toolbar_row.get_sensitive() and win.calc_row.get_subtitle() == "v1+2*3 → 7", "全拼时计算器、工具栏不对")
         # 没有码表：「五笔输入」灰掉（另建一页看，看完换回来）。装了安装包时系统目录里也有码表，
         # 所以把设置界面找码表的地方换成空的，不删文件
