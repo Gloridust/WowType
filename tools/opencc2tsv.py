@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """用 OpenCC 生成简繁映射表（TSV：简体<TAB>繁体）。
 
-先输出字符映射；给了 OpenCC 的 STPhrases.txt 时，再输出词组映射，
+先输出字符映射；给了 OpenCC 的词组表时，再输出词组映射，
 引擎转换时词组按最长匹配优先，「头发 -> 頭髮」「干净 -> 乾淨」这类一对多的字就能转对。
 
 词组整张照收，不挑「逐字转会转错」的那些：OpenCC 自己也是拿整张词组表从左到右
@@ -9,37 +9,40 @@
 里的「了解 -> 瞭解」，「控制」挡住「控制面板」里的「制面 -> 製麪」）。少收一个，
 整句就可能和 OpenCC 转得不一样；整张照收，引擎的结果和 OpenCC 一致。
 
-OpenCC 是 Apache-2.0。STPhrases.txt 要和 pip 装的 opencc 是同一个版本（版本号会写进表头），
-在 OpenCC 源码的 data/dictionary/ 下，例如：
-    https://raw.githubusercontent.com/BYVoid/OpenCC/ver.1.1.9/data/dictionary/STPhrases.txt
-pip 包里转换器实际用的是 clib/share/opencc/STPhrases.ocd2（同目录 dictionary/ 下的 txt
-可能是旧的），也可以直接导出：
-    opencc_dict -i .../clib/share/opencc/STPhrases.ocd2 -o STPhrases.txt -f ocd2 -t text
+OpenCC 是 Apache-2.0。词组表要和 pip 装的 opencc 是同一个版本（版本号会写进表头）。
+1.4.1 的 s2t 用两张词组表的并集：源码里的 STPhrases.txt，和构建时生成、只有 ocd2 的
+STPhrases_GeneratedFromRegionalPhrases（从 pip 包里导出）。现在仓库里的表这样生成：
 
-用法：
-    python3 tools/opencc2tsv.py STPhrases.txt > core/data/s2t.tsv
-    python3 tools/opencc2tsv.py > core/data/s2t.tsv      # 只要字符映射
+    python3 -m venv /tmp/occ && /tmp/occ/bin/pip install opencc==1.4.1
+    curl -LO https://raw.githubusercontent.com/BYVoid/OpenCC/ver.1.4.1/data/dictionary/STPhrases.txt
+    C=$(echo /tmp/occ/lib/python3*/site-packages/opencc/clib)
+    $C/bin/opencc_dict -i $C/share/opencc/STPhrases_GeneratedFromRegionalPhrases.ocd2 \\
+        -o Regional.txt -f ocd2 -t text
+    /tmp/occ/bin/python tools/opencc2tsv.py STPhrases.txt Regional.txt > core/data/s2t.tsv
+
+只要字符映射时不给参数。
 """
 
 import sys
 
 
-def read_phrases(path):
-    """STPhrases.txt：简体词组 -> 文件里的第一个繁体写法，去重、保持顺序。"""
+def read_phrases(paths):
+    """词组表：简体词组 -> 文件里的第一个繁体写法，去重、保持顺序。"""
     seen = {}
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("#"):
-                continue
-            cols = line.rstrip("\n").split("\t")
-            key = cols[0].strip()
-            if len(key) > 1 and len(cols) > 1:
-                seen.setdefault(key, cols[1].split(" ")[0])
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("#"):
+                    continue
+                cols = line.rstrip("\n").split("\t")
+                key = cols[0].strip()
+                if len(key) > 1 and len(cols) > 1:
+                    seen.setdefault(key, cols[1].split(" ")[0])
     return seen
 
 
 def main():
-    if len(sys.argv) > 2 or sys.argv[1:2] in (["-h"], ["--help"]):
+    if sys.argv[1:2] in (["-h"], ["--help"]):
         print(__doc__, file=sys.stderr)
         return 2
     try:
@@ -65,8 +68,8 @@ def main():
                 chars += 1
     print(f"生成 {chars} 条字符映射", file=sys.stderr)
 
-    if len(sys.argv) == 2:
-        phrases = read_phrases(sys.argv[1])
+    if len(sys.argv) > 1:
+        phrases = read_phrases(sys.argv[1:])
         stale = 0
         for p, listed in phrases.items():
             t = conv.convert(p)
@@ -75,7 +78,7 @@ def main():
         print(f"生成 {len(phrases)} 条词组映射", file=sys.stderr)
         if stale:
             # 词组表和 pip 的 opencc 不是同一个版本：字和词会来自两个版本
-            print(f"警告：{stale} 个词组 OpenCC {version} 转出来和 {sys.argv[1]} 写的不一样，"
+            print(f"警告：{stale} 个词组 OpenCC {version} 转出来和词组表写的不一样，"
                   "检查两边版本是否一致", file=sys.stderr)
     return 0
 
