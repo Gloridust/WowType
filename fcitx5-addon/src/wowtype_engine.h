@@ -445,8 +445,6 @@ private:
     void refreshCandidates(WowtypeState *state);
     /// 会话的候选重算过才重新抄；返回 true 表示重抄了。页码、光标每次都抄。
     bool syncView(WowtypeState *state);
-    /// 表情面板（和普通候选的展开面板一个样子）：处理了这个键返回 true。
-    bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
     /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
