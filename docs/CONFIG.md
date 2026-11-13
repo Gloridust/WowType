@@ -122,7 +122,9 @@ TypoCorrection=True
 RareExtChars=False
 Shuangpin=False
 ShuangpinScheme=Ziranma
+ShuangpinShowKeys=False
 ShiftToggle=Both
+InitialMode=Chinese
 Traditional=False
 SelectKeys=Off
 PickChar=True
@@ -162,7 +164,9 @@ Lexicon=
 | `RareExtChars` | 也出 CJK 扩展 B 区及以后的单字（比如 `hou` 的 𠯜），默认关：常见中文字体（Noto CJK、思源、苹方）都没有这些字，列出来是方块。打开前先装能显示它们的字体，比如 Ubuntu / Debian 的 `fonts-hanazono`。通用规范汉字表里的扩展区字（𬭩、𫚔，约 200 个，常见字体都有）和含这些字的词（𩽾𩾌）不受这个开关影响 |
 | `PickChar` | 以词定字：打拼音时 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字，默认开；翻页键设成 `[ ]` 时让给翻页 |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
+| `ShuangpinShowKeys` | 双拼时编辑区显示打的键（`uivs`），不翻成全拼（`shi'zhong`），中英混打时看得出打了什么。默认 `False` |
 | `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off`。fcitx5 自己的全局快捷键（「临时切换输入法」「切换输入法」「向前切换输入法」等任何一项）里用了同一个 Shift 时，fcitx5 先处理，WowType 收不到；设置界面「输入」页会提示，并能一键把 Shift 从 fcitx5 那边去掉（改的是 `~/.config/fcitx5/config`，关掉开关就还原；这个文件写不了时提示「只在这次有效」，NixOS 见[安装说明](INSTALL.md#单按-shift-在-nixos-上)） |
+| `InitialMode` | 从别的输入法切到 WowType、开机后第一次用时的模式：`Chinese`（默认）、`English`、`Last`（和上次切走时一样）。换窗口不算，中英文照旧全局保持；关了 Shift 切换（`ShiftToggle=Off`）时总是中文。只在 Linux（macOS 每个应用一份模式，还没有这一项） |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键。macOS 上默认 `Control+period`，`Super` 当 `Control`（见 [macOS](#macos)） |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
@@ -218,16 +222,16 @@ Lexicon=
 ### macOS
 
 macOS 上的设置在 `~/Library/Application Support/WowType/wowtype.conf`，**键名、取值、默认值和上面一样**（只有 `EmojiKey` 的默认值不同，见下），Linux 上的文件拷过去就能用。
-点菜单栏里的 WowType 图标 →「WowType 设置…」打开设置窗口（页面和 Linux 的设置界面一样：常规、输入、表情、自定义词，
-macOS 还没有的功能不列）。窗口只改它认识的键，文件里的注释、不认识的键（语音这些）、`[分组]` 原样留着，
+点菜单栏里的 WowType 图标 →「WowType 设置…」打开设置窗口（页面和 Linux 的设置界面一样：常规、输入、表情、语音、翻译、自定义词，
+macOS 还没有的功能不列）。窗口只改它认识的键，文件里的注释、不认识的键（检查更新这些）、`[分组]` 原样留着，
 改过的文件拿回 Linux 照样能用。也可以直接改文件：设置窗口的「文件」菜单 →「用文本编辑打开设置文件」，
 还没有文件时会写出一份全是默认值、带说明的。窗口开着时在别处改了文件，切回窗口会重新读，不会被窗口里的旧值盖掉。
 改完下一次按键时生效，不用重启；换了 `Lexicon` 会在后台重新载入词库，载完之前照旧用原来的。
 
 现在认的项：`CandidateLayout`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
-`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
-`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
-语音、检查更新这些 macOS 还没做，对应的项写了也不起作用。
+`Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
+`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
+检查更新 macOS 还没做，对应的项写了也不起作用。
 
 [工具栏](#v--空格工具栏)和表情面板和 Linux 上一样用，不同的是：
 
@@ -243,7 +247,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
   （加词时自动填拼音，能删、导入、导出），保存后下一次按键时生效。
 - `AutoSpace` 只在应用告诉输入法光标前是什么字时才加（很多应用不告诉，这时不猜）。
 - [互译](#互译)用法和 Linux 一样（单按 Shift 中 → 英 → 译 → 中，原文在候选框顶上，译文写在输入框里）。在 `wowtype.conf` 里写
-  `Translate=True` 和 `TranslateBaseUrl`、`TranslateModel`；API Key 用菜单里的「设置互译 API Key…」填，
+  `Translate=True` 和 `TranslateBaseUrl`、`TranslateModel`（设置窗口的「文件」菜单能用文本编辑打开它）；API Key 用菜单里的「设置互译 API Key…」填，
   存在同一个目录的 `translate.key`（0600，只有自己能读），不写进 `wowtype.conf`。系统开着安全输入（密码框）时照常打中文，不翻译。
 - 本地模型（`TranslateLocal=True`）：和 Linux 一样一键下载。设置窗口「翻译」页选「本地模型（离线）」，点「下载」，
   确认许可后模型（1.13 GB）下到数据目录的 `models/`（`TranslateLocalModel` 写了位置就下到那里），下完校验 SHA256，断了再点会接着下；好了那一行写「已就绪」。
@@ -254,6 +258,17 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
   模型文件的位置（`TranslateLocalModel`）、llama-server 的位置、闲置几分钟释放、删除模型都在「更多选项」里。
   `TranslateLlamaServer` 留空时依次找数据目录的 `llama/llama-server`、`/opt/homebrew/bin`、`/usr/local/bin`、`/opt/local/bin`（输入法是系统启动的，
   `PATH` 里没有 Homebrew）。模型的许可和上面[本地模型](#本地模型离线)说的一样：不是开源协议，**不适用于欧盟、英国和韩国**。
+- [语音输入](../README.md#语音输入)用法和 Linux 一样：按住语音键说话，松开就上屏；点一下语音键开始说，停顿一会儿自动上屏；Esc 取消。
+  - 语音键默认右 Option（`VoiceKey=Alt_R`，键名和 Linux 一样，一份配置两边通用），还能选右 Control、F8–F10。
+    Mac 键盘没有菜单键，Linux 上的 `VoiceKey=Menu` 拷过来不起作用，设置里会标出来。
+    右 Option 按下就开始听，Option+方向键这类组合会让麦克风亮一下就停；F8–F10 在笔记本上默认是媒体键，
+    要在「系统设置 → 键盘」里打开「将 F1、F2 等键用作标准功能键」。
+  - 模型和 Linux 是同一个：设置窗口「语音」页点「下载」，从腾讯的服务器下载微信输入法的离线语音包（约 103 MB），
+    校验后解到数据目录的 `wtlocal/`（约 130 MB），断了再点会接着下。和这台电脑装没装微信输入法无关，WowType 不分发它。
+    命令行：`WowType --install-voice-model`（也接受下载好的 `.apk`）、`--remove-voice-model`。
+  - 还没下载模型时按语音键只提示去设置里下载，不碰麦克风。第一次说话时系统会问要不要允许 WowType 使用麦克风
+    （下载完模型时设置窗口会先问一次）；WowType 更新后系统可能会再问一次。在本机识别，录音不上传。
+  - `VoiceCopy=True` 时说的话上屏后也复制到剪贴板（密码框里不复制）。
 - 上面的环境变量 macOS 不认（输入法是系统启动的，拿不到你设的环境变量）。
 
 ## 数据文件

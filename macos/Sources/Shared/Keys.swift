@@ -140,31 +140,6 @@ public func translateKeyDown(keyCode: UInt16, characters: String?, charactersIgn
     return KeyInput(keysym: scalar.value, modifiers: modifiers)
 }
 
-/// 单按 Shift 切中英文：按下 Shift 到松开之间没有按别的键，并且不超过 0.5 秒。
-/// macOS 上 Shift 只有 flagsChanged 事件，没有 keyDown / keyUp。
-public struct ShiftTap {
-    private var downAt: Double?
-    public var limit: Double = 0.5
-
-    public init() {}
-
-    /// Shift 的 flagsChanged：down 是按下（flags 里有 shift）。返回 true 表示这一次是单按。
-    public mutating func shift(down: Bool, otherModifiers: Bool, now: Double) -> Bool {
-        if down {
-            downAt = otherModifiers ? nil : now
-            return false
-        }
-        defer { downAt = nil }
-        guard let at = downAt else { return false }
-        return now - at <= limit
-    }
-
-    /// 别的键按下、别的修饰键变化：这一次就不算单按了。
-    public mutating func interrupt() {
-        downAt = nil
-    }
-}
-
 /// 快捷键（设置里的 EmojiKey）。键名和 fcitx5 一样：修饰键 + 键，用 + 连起来，比如 Control+period、
 /// Control+Shift+E、Alt+semicolon。键只能是可见的 ASCII 字符（X keysym 名字，或者字符本身）。
 ///

@@ -1,13 +1,14 @@
 name: CI
 
-# PR 和推送到 main：验证安装器、更新器及各发行版构建，安装包保存在 Artifacts。
+# PR 和推送到 main、pre-release：验证安装器、更新器及各发行版构建，安装包保存在 Artifacts。
+# pre-release 是下一版的集成分支：功能 PR 先合进这里，攒够了再整体合进 main 发版。
 # 只改了文档（*.md、docs/、截图）的提交不跑。
 # 推送 v* 标签（git tag v0.1.0 && git push origin v0.1.0）：总是跑，并把这些包发到 GitHub Release。
 # 其他分支想跑一次：Actions 页手动运行（workflow_dispatch）。
 
 on:
   push:
-    branches: [main]
+    branches: [main, pre-release]
     tags: ["v*"]
     paths-ignore:
       - "**.md"
@@ -94,7 +95,7 @@ jobs:
           WOWTYPE_EXPECT_FULL_CHARS=1 macos/test.sh dist/data/lexicon.tsv dist/data/english.txt
       - name: 核心静态库要链接的系统库（对照 build.sh 的链接参数）
         run: |
-          cargo rustc --release -q -p wowtype-core --no-default-features --lib --crate-type staticlib \
+          cargo rustc --release -q -p wowtype-core --lib --crate-type staticlib \
             --target-dir target/macos-libs -- --print native-static-libs 2>&1 | grep native-static-libs || true
       - name: 打包
         # 发版时版本号跟 tag 走（和 Linux 的包一样），一键安装脚本按 tag 找 WowType-<版本>-macos.pkg
@@ -157,12 +158,12 @@ jobs:
       - run: scripts/make-data.sh "" dist/data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
-        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会开 issue 写好要改的内容。
+        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会自动开 PR 改好（.github/scripts/nix-data-pr.sh）。
         run: |
           built=$(<dist/data/VERSION)
           pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
           if [ "$built" != "$pinned" ]; then
-            echo "::warning title=Nix 词库版本落后::这次构建的词库是 $built，nix/package.nix 还固定在 $pinned。发版后按自动开的 issue 更新。"
+            echo "::warning title=Nix 词库版本落后::这次构建的词库是 $built，nix/package.nix 还固定在 $pinned。发版时会自动开 PR 更新。"
           fi
       - run: scripts/package-deb.sh data dist/data dist/pkg
       - uses: actions/upload-artifact@v4
@@ -201,11 +202,18 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-        distro: [ubuntu24.04, ubuntu26.04, debian13]
+        distro: [ubuntu22.04, ubuntu24.04, ubuntu26.04, debian13, deepin23, deepin25]
         include:
+          - { distro: ubuntu22.04, image: "ubuntu:22.04" }
           - { distro: ubuntu24.04, image: "ubuntu:24.04" }
           - { distro: ubuntu26.04, image: "ubuntu:26.04" }
           - { distro: debian13, image: "debian:trixie" }
+          - { distro: deepin23, image: "linuxdeepin/deepin:23" }
+          - { distro: deepin25, image: "linuxdeepin/deepin:25" }
+        exclude:
+          # deepin 的容器镜像只有 amd64
+          - { distro: deepin23, arch: arm64 }
+          - { distro: deepin25, arch: arm64 }
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -217,7 +225,7 @@ jobs:
             libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
             fcitx5 fcitx5-modules \
             ca-certificates curl git dpkg-dev file python3 \
-            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11
       - uses: actions/checkout@v4
       - name: Rust
         run: |
@@ -250,7 +258,7 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: 打包
-        run: scripts/package-deb.sh engine "$VERSION" dist/pkg
+        run: WOWTYPE_DISTRO=${{ matrix.distro }} scripts/package-deb.sh engine "$VERSION" dist/pkg
       - name: 用一键安装脚本装上试一下
         run: |
           mkdir -p /tmp/inst && cp dist/pkg/wowtype_*.deb /tmp/inst/
@@ -271,6 +279,10 @@ jobs:
           test -f /usr/share/icons/hicolor/scalable/apps/wowtype.svg
           test -f /usr/share/icons/hicolor/22x22/apps/wowtype.png
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
+          # 插件清单要求编译时 fcitx5 的「主.次.0」（22.04 是 5.0.0），fcitx5 小版本落后一点的系统也能加载
+          grep -qx "0=core:$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0" /usr/share/fcitx5/addon/wowtype.conf
+      - name: 设置界面：每页、每个对话框点一遍（无头；22.04 的老 libadwaita 用替身控件）
+        run: timeout 300 dbus-run-session -- xvfb-run -a python3 scripts/test-settings-gui.py /usr/bin/wowtype-config
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}-${{ matrix.arch }}
@@ -502,6 +514,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -516,7 +529,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## 安装（Ubuntu / Debian、Arch Linux、Fedora、NixOS）
+          ## 安装（Ubuntu / Debian、deepin、Arch Linux、Fedora、NixOS）
 
           一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：
 
@@ -525,9 +538,9 @@ jobs:
           \`\`\`
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_<架构>.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*.deb\`。
-          deb 和 Fedora RPM 有 x86_64（amd64）和 arm64（aarch64）两种，一键脚本按本机架构选；Arch 包只有 x86_64。
+          Ubuntu / Debian 的 deb 和 Fedora RPM 有 x86_64（amd64）和 arm64（aarch64）两种，一键脚本按本机架构选；Arch 包和 deepin 包只有 x86_64。
           Arch Linux / EndeavourOS / Garuda / CachyOS：一键脚本用 pacman 安装对应包，不替你整机升级；依赖装不上时按提示先运行 \`sudo pacman -Syu\`。
-          Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 24.04 / 26.04 及明确声明兼容基线的衍生版使用对应 deb。
+          Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 22.04 / 24.04 / 26.04 及明确声明兼容基线的衍生版、deepin 23 / 25 使用对应 deb。
           Manjaro：按安装说明在本机用 makepkg 打包；openSUSE Tumbleweed：按安装说明从源码构建。
           NixOS（x86_64、aarch64）：flake 输入写 \`github:${GITHUB_REPOSITORY}/release\`（跟正式版）或 \`github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`（锁这一版），把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md#nixos--nix)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。
@@ -589,33 +602,8 @@ jobs:
           fi
           echo "release 分支 → $GITHUB_REF_NAME（$sha）"
       - name: Nix 词库跟上这一版
-        # nix/package.nix 固定用某次发布页上的词库包；这一版换了词库，就开 issue 写好要改的三行
+        # 这一版换了词库，就把 nix/package.nix 改好开 PR 到 main（开不了 PR 时退回开 issue），见脚本开头
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          tarball=$(cd dist && ls wowtype-data-rime-ice-*.tar.gz)
-          built=${tarball#wowtype-data-rime-ice-}
-          built=${built%.tar.gz}
-          pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
-          if [ "$built" = "$pinned" ]; then
-            echo "Nix 包的词库已经是 $built"
-            exit 0
-          fi
-          hex=$(sha256sum "dist/$tarball" | cut -d' ' -f1)
-          sri=$(python3 -c 'import base64, sys; print("sha256-" + base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' "$hex")
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$tarball"
-          cat > issue.md <<EOF
-          $GITHUB_REF_NAME 的词库是 \`$built\`，nix/package.nix 还固定在 \`$pinned\`，NixOS 用户拿到的是旧词库。
-
-          把 nix/package.nix 里这三处改成：
-
-          \`\`\`nix
-          dataVersion = "$built";
-          url = "$url";
-          hash = "$sri";
-          \`\`\`
-
-          合进 main 后，跟 release 分支的 NixOS 用户在下一次发版时拿到新词库。
-          EOF
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "Nix 包的词库更新到 $built" --body-file issue.md
+        run: .github/scripts/nix-data-pr.sh dist/wowtype-data-rime-ice-*.tar.gz

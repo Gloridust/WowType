@@ -12,6 +12,7 @@ pub mod convert;
 pub mod datetime;
 pub mod emoji;
 pub mod ffi;
+pub mod fsutil;
 pub mod graph;
 pub mod learn;
 pub mod lexicon;
@@ -20,6 +21,7 @@ pub mod lm;
 pub mod nnlm;
 pub mod preedit;
 pub mod rank;
+pub mod recent_emoji;
 pub mod session;
 pub mod session_ffi;
 pub mod shuangpin;
@@ -93,6 +95,9 @@ pub struct EngineConfig {
     pub fuzzy_groups: u32,
     /// 每用一处模糊音（一个声母或韵母）多出的代价（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
+    /// 模糊音关着时的兜底：精确读音只能凑出硬拼的结果（yingai -> 因该），而按模糊音
+    /// 是个常用词（应该）时，把这个词也给出来。见 [`Engine::fuzzy_fallback`]。
+    pub fuzzy_fallback: bool,
     /// 是否使用双拼。
     pub shuangpin: bool,
     /// 双拼方案（自然码、小鹤……）。
@@ -116,6 +121,10 @@ pub struct EngineConfig {
     pub nnlm_rerank: usize,
 }
 
+/// 上文末尾和候选连起来本身是一个词（我 + 要 = 我要）时，上文排序特征至少给这么多
+/// （自然对数，和语言模型的分数同一个尺度）。见 [`Engine::word_lm_context_score`]。
+pub const MERGED_PAIR_SCORE: f64 = 1.5;
+
 /// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
 pub const COMPOSED_WORD_MAX_CHARS: usize = 4;
 
@@ -128,6 +137,7 @@ impl Default for EngineConfig {
             fuzzy: false,
             fuzzy_groups: crate::syllable::fuzzy::DEFAULT,
             fuzzy_penalty: 2.5,
+            fuzzy_fallback: true,
             shuangpin: false,
             shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
             english_candidate: true,
@@ -420,6 +430,17 @@ impl Engine {
     /// 开关模糊音。
     pub fn set_fuzzy(&mut self, on: bool) {
         self.config.fuzzy = on;
+    }
+
+    /// 把模糊音索引先建好。模糊音打开或者兜底（默认开）都要用；不先建的话，第一次碰到
+    /// 要查模糊音的输入时现建，会卡一下（55 万条约 0.2 秒）。载入词库的后台线程里调。
+    pub fn prepare_fuzzy(&self) {
+        self.base_lexicon.prepare_fuzzy();
+    }
+
+    /// 模糊音关着时的兜底（见 [`EngineConfig::fuzzy_fallback`]），默认开。
+    pub fn set_fuzzy_fallback(&mut self, on: bool) {
+        self.config.fuzzy_fallback = on;
     }
 
     /// 设置打开的模糊音分组（`syllable::fuzzy::*` 位掩码）。不用重建索引。
@@ -775,13 +796,19 @@ impl Engine {
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
+        pin_single_initial(&normalized, &mut result);
         self.promote_custom(&mut result);
         self.append_raw_candidate(raw_display.unwrap_or(display), &mut result);
+        let english_only = drop_forced_chinese(&mut result);
         if self.config.traditional {
             self.apply_traditional(&mut result);
         }
         for candidate in &mut result {
             candidate.consumed = raw.len();
+        }
+        if english_only {
+            // 打的是英文词（iphone、hello）：硬解出来的中文都去掉了，也不补句首词
+            return Ok(result);
         }
         if self.config.prefix_candidates > 0 {
             let leading = raw.len() - raw.trim_start().len();
@@ -1093,11 +1120,13 @@ impl Engine {
             .first()
             .map(|c| c.words.iter().any(|w| w.known))
             .unwrap_or(false);
+        // 第一名是几个词凑的整句（ok -> 哦 | 可）：不是「一个词还没打完」
+        let top_sentence = candidates.first().is_some_and(is_sentence);
         let position = if english.is_some() {
             if exact {
                 // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
                 Some(5)
-            } else if top_typos == 0.0 && has_known_word && !inner_abbrev {
+            } else if top_typos == 0.0 && has_known_word && !inner_abbrev && !top_sentence {
                 // 中文只是最后一个音节没打完（bug -> 不过、diy -> 第一），
                 // 用户多半还在打拼音，英文排第二
                 Some(1)
@@ -1184,7 +1213,10 @@ impl Engine {
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
-            let found = self.query_once(&full, at_ms, fuzzy)?;
+            let mut found = self.query_once(&full, at_ms, fuzzy)?;
+            if !fuzzy && self.config.fuzzy_fallback && !self.config.shuangpin {
+                self.fuzzy_fallback(&full, &mut found);
+            }
             let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
             if !self.config.jianpin_fallback || any_known {
                 return Ok(found);
@@ -1215,6 +1247,85 @@ impl Engine {
         Ok(result)
     }
 
+    /// 模糊音关着时的兜底：精确读音的第一名偏弱（几个词硬凑的、纠错或补全出来的），
+    /// 而输入按模糊音读是个常用词（yingai -> 应该、shengme -> 什么、zidao -> 知道、
+    /// penyou -> 朋友）时，把这个词（最多两个）加进候选，比第一名高出
+    /// [`FUZZY_FALLBACK_LEAD`] 才加。
+    ///
+    /// 只查 2–4 个音节的精确切分，每种切分一次模糊查表，不再跑一遍束搜索。
+    fn fuzzy_fallback(&self, graph: &SyllableGraph, found: &mut Vec<Candidate>) {
+        let weak = found.first().is_none_or(|c| {
+            c.words.len() >= 2
+                || c.features.typo_count > 0.0
+                || c.features.prefix_completion > 0.0
+                || c.words.iter().any(|w| !w.known)
+        });
+        let syllables = found
+            .first()
+            .map_or(0, |c| c.pinyin.split_whitespace().count());
+        if !weak || !(2..=4).contains(&syllables) {
+            return;
+        }
+        let top = found.first().map_or(f64::NEG_INFINITY, |c| c.score);
+        let view = FuzzyLexicon::new(
+            self.lexicon.as_ref(),
+            self.config.fuzzy_groups,
+            self.config.fuzzy_penalty,
+        );
+        // 接着前文打时第一个词不在句首，和精确候选一样不加句首分
+        let mid_sentence = !self.context().trim().is_empty();
+        let mut segmentations = Vec::new();
+        exact_segmentations(graph, 0, 4, &mut Vec::new(), &mut segmentations);
+        let mut extra: Vec<Candidate> = Vec::new();
+        for segmentation in segmentations.iter().filter(|s| (2..=4).contains(&s.len())) {
+            let query: Vec<SyllableQuery> = segmentation.iter().map(|e| e.query()).collect();
+            let exact = self.lexicon.lookup_common(&query);
+            let pinyin = query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ");
+            for entry in view.lookup_common(&query) {
+                // 精确读音也有这个词、而且更常用：不是靠模糊音才有的
+                if exact.iter().any(|e| e.word == entry.word && e.freq >= entry.freq) {
+                    continue;
+                }
+                if found.iter().chain(&extra).any(|c| c.text == entry.word) {
+                    continue;
+                }
+                let lm = if mid_sentence { 0.0 } else { self.lm.score(None, &entry.word) };
+                let feature = Feature {
+                    coverage_score: 1.0,
+                    lm_score_with_previous_txt: lm as f32,
+                    ..Feature::default()
+                };
+                let score = -view.cost(&entry)
+                    + self.config.beam.lm_weight * lm
+                    + self.ranker.score(&feature) as f64;
+                if score < top + FUZZY_FALLBACK_LEAD {
+                    continue;
+                }
+                extra.push(Candidate {
+                    text: entry.word.clone(),
+                    pinyin: pinyin.clone(),
+                    score,
+                    features: feature,
+                    words: vec![CandidateWord {
+                        text: entry.word.clone(),
+                        pinyin: pinyin.clone(),
+                        freq: entry.freq,
+                        known: true,
+                    }],
+                    consumed: 0,
+                });
+            }
+        }
+        if extra.is_empty() {
+            return;
+        }
+        extra.sort_by(|a, b| b.score.total_cmp(&a.score));
+        extra.truncate(2);
+        found.extend(extra);
+        found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+        found.truncate(self.config.max_candidates.max(1));
+    }
+
     fn query_once(&self, graph: &SyllableGraph, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
         // fuzzy 时用包装视图：精确读音之外再加上模糊音读音的词。
         let fuzzy_view;
@@ -1233,11 +1344,14 @@ impl Engine {
             .pairs
             .read()
             .map_err(|_| anyhow::anyhow!("pairs lock poisoned"))?;
+        // 接着前文打：第一个词不在句首，不加句首分（上文搭配由排序特征 context_bigram_score 管）
+        let mid_sentence = !self.context().trim().is_empty();
         let lm = LearnedLm {
             base: self.lm.as_ref(),
             pairs: &pairs,
             start: start.as_deref(),
             at_ms,
+            mid_sentence,
         };
         let mut paths = beam_search(graph, lexicon, &lm, &self.config.beam);
         drop(pairs);
@@ -1271,6 +1385,7 @@ impl Engine {
                 .total_cmp(&a.score)
                 .then_with(|| a.text.cmp(&b.text))
         });
+        let mut deduped = exact_syllable_first(deduped);
         deduped.truncate(self.config.max_candidates.max(1));
         Ok(deduped)
     }
@@ -1308,11 +1423,47 @@ impl Engine {
         out
     }
 
+    /// 词级语言模型下，光标前的文字接这个词的分数（上文排序特征）。
+    ///
+    /// 上文末尾 1–4 个字里，模型认识的每个后缀都当一次前一个词，取最高分。以前只试「整段上文」
+    /// 和「最后一个字」：整段上文模型不认识时得 0，反倒把负分抹平了（「今天我」碰巧正常、「我」不正常）。
+    ///
+    /// 「后缀 + 这个词」本身是模型里的一个词时（我 + 要 = 我要、不 + 知道 = 不知道），
+    /// 语料分词时它们被并成了一个词，这个搭配从没被计过数，模型给的是「没见过」的负分，
+    /// 还不如偶然见过几次的「我腰」「我悔」。这时按见过的常用搭配算，至少给 [`MERGED_PAIR_SCORE`]。
+    fn word_lm_context_score(&self, context: &str, word: &str) -> f32 {
+        let chars: Vec<char> = context.chars().collect();
+        let merged_floor = MERGED_PAIR_SCORE;
+        let mut best: Option<f64> = None;
+        for n in 1..=chars.len().min(4) {
+            let prev: String = chars[chars.len() - n..].iter().collect();
+            if self.lm.knows_word(&prev) == Some(true) {
+                let s = self.lm.score(Some(&prev), word);
+                best = Some(best.map_or(s, |b| b.max(s)));
+            }
+            if self.lm.knows_word(&format!("{prev}{word}")) == Some(true) {
+                best = Some(best.map_or(merged_floor, |b| b.max(merged_floor)));
+            }
+        }
+        best.unwrap_or(0.0) as f32
+    }
+
     fn make_candidate(&self, path: BeamPath, best_score: f64, at_ms: u64, nnlm: f32) -> Candidate {
         let mut feature = self.make_feature(&path, best_score, at_ms);
         feature.head_word_nnlm = nnlm;
         let rank_score = self.ranker.score(&feature) as f64;
-        let score = path.score + rank_score;
+        // 单个音节打全时只有一个字：句首 LM 分反映的是语料里谁常出现在句首，
+        // 没有上下文时不该压过字频（否则 he 会先出「何」）。
+        // 只减基础模型的句首分：path.lm_score 里还有用户学过的搭配加成，学过的字要照样靠前。
+        let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
+        // 接着前文打时句首分本来就没加（见 run_query 的 mid_sentence），不用再减
+        let mid_sentence = !self.context().trim().is_empty();
+        let score = if single_word && !mid_sentence {
+            let start = self.lm.score(None, &path.words[0].text);
+            path.score - self.config.beam.lm_weight * start + rank_score
+        } else {
+            path.score + rank_score
+        };
         Candidate {
             text: path.text,
             pinyin: path.pinyin,
@@ -1403,6 +1554,9 @@ impl Engine {
                 if context.is_empty() {
                     return (0.0, 0.0);
                 }
+                if self.lm.knows_word(&candidate.text).is_some() {
+                    return (1.0, self.word_lm_context_score(context, &candidate.text));
+                }
                 let mut best: Option<f32> = None;
                 let mut consider = |prev: &str| {
                     if prev.is_empty() {
@@ -1444,6 +1598,60 @@ impl Engine {
         }
     }
 }
+
+/// 输入正好是一个完整音节（xian、ji、zhe）时：本音节的字排在补全出来的字（想、就、真）前面，
+/// 纠错出来的（gei → 被、飞；si → 是，漏按 h）再往后。
+///
+/// 补全每个字母只罚 1.4 左右，高频字补全以后常常比本音节的字分还高；已经打全的音节，
+/// 用户要的是这个音节的字。多音节输入、没打全的音节不动。
+fn exact_syllable_first(candidates: Vec<Candidate>) -> Vec<Candidate> {
+    let exact = |c: &Candidate| c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0;
+    let one_syllable = candidates
+        .iter()
+        .any(|c| exact(c) && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' '));
+    if !one_syllable {
+        return candidates;
+    }
+    let (mut out, rest): (Vec<Candidate>, Vec<Candidate>) = candidates.into_iter().partition(exact);
+    lift_split_word(&mut out);
+    // 补全的在前、纠错的在后，各自按分数
+    let (completions, typos): (Vec<Candidate>, Vec<Candidate>) =
+        rest.into_iter().partition(|c| c.features.typo_count == 0.0);
+    // 分数也压到前面的下面，后面按分数合并、排序的地方不会再把它们换上来
+    for c in completions.into_iter().chain(typos) {
+        let floor = out.last().map_or(0.0, |last| last.score);
+        out.push(Candidate {
+            score: c.score.min(floor - 1e-3),
+            ..c
+        });
+    }
+    out
+}
+
+/// 一个音节也能切成两个音节的整词（xian → 西安）：分数和第一名差得不多时，至少排到第 [`SPLIT_WORD_SLOT`] 位。
+/// 单字太多，按分数它常常排在十几位以后，第一页看不到。
+fn lift_split_word(exact: &mut Vec<Candidate>) {
+    let Some(top) = exact.first().map(|c| c.score) else {
+        return;
+    };
+    let found = exact.iter().position(|c| {
+        c.words.len() == 1 && c.pinyin.contains(' ') && top - c.score <= SPLIT_WORD_MARGIN
+    });
+    let Some(at) = found.filter(|&at| at > SPLIT_WORD_SLOT) else {
+        return;
+    };
+    let mut word = exact.remove(at);
+    // 分数夹在前后两个之间，后面再按分数排也不会变
+    let (above, below) = (exact[SPLIT_WORD_SLOT - 1].score, exact[SPLIT_WORD_SLOT].score);
+    word.score = (above + below) / 2.0;
+    exact.insert(SPLIT_WORD_SLOT, word);
+}
+
+/// [`lift_split_word`]：最多和第一名差多少（自然对数）。实测 xian 的「西安」差 3.0，
+/// 别的音节能切出来的整词（提案、彼岸、立案、堤岸）差 4 以上，不抬。
+const SPLIT_WORD_MARGIN: f64 = 3.5;
+/// [`lift_split_word`]：抬到第几位（从 0 数，4 是第五个）。
+const SPLIT_WORD_SLOT: usize = 4;
 
 /// 第 k 个字母之后在原始串里的字节位置（跳过紧随其后的隔音符）。
 fn letters_to_bytes(raw: &str, letters: usize) -> usize {
@@ -1588,6 +1796,43 @@ pub fn unescape_custom(text: &str) -> String {
         }
     }
     out
+}
+
+/// 只打一个声母（l、b、zh）时固定排第一的字：词库按读音分的词频把它们排得太后
+/// （了 le 348 万，来 1484 万；不 299 万，把 380 万），而且第一个候选不该随上文、选过的字变来变去
+/// （#156）。没列的声母照词频排。
+const SINGLE_INITIAL_TOP: &[(&str, &str)] = &[
+    ("b", "不"),
+    ("d", "的"),
+    ("g", "个"),
+    ("h", "和"),
+    ("j", "就"),
+    ("l", "了"),
+    ("n", "你"),
+    ("q", "去"),
+    ("r", "人"),
+    ("s", "是"),
+    ("sh", "是"),
+    ("t", "他"),
+    ("w", "我"),
+    ("y", "一"),
+    ("z", "在"),
+    ("zh", "这"),
+];
+
+/// 输入只是一个声母时，把 [`SINGLE_INITIAL_TOP`] 里的字挪到第一个（在选过最多的字前面；
+/// 自定义词、自定义编码之后还会排到它前面）。候选里没有这个字就不动。
+fn pin_single_initial(input: &str, candidates: &mut Vec<Candidate>) {
+    let Some(&(_, top)) = SINGLE_INITIAL_TOP.iter().find(|(key, _)| *key == input) else {
+        return;
+    };
+    if let Some(i) = candidates
+        .iter()
+        .position(|c| c.text == top && c.words.len() == 1)
+    {
+        let pinned = candidates.remove(i);
+        candidates.insert(0, pinned);
+    }
 }
 
 fn promote_picked(candidates: &mut Vec<Candidate>) {
@@ -1883,8 +2128,20 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
 
     let mut kept: Vec<Candidate> = Vec::new();
     let mut sentences = 0usize;
+    // 第一名是打全了的、词库里的整词（你好；纠错出来的也算：zhognguo -> 中国）时，比它差
+    // JUNK_SENTENCE_MARGIN 以上的整句（泥 | 好、点 | 脑、钟 | 国）是硬凑的，不占位置；用户选过的照留
+    let top_word = whole
+        .first()
+        .filter(|c| {
+            c.words.len() == 1 && c.words[0].known && c.features.prefix_completion == 0.0
+        })
+        .map(|c| c.score);
     for c in whole {
         if is_sentence(&c) {
+            let junk = top_word.is_some_and(|top| top - c.score > JUNK_SENTENCE_MARGIN);
+            if junk && c.features.history_use_count == 0.0 {
+                continue;
+            }
             let first = kept.is_empty();
             if !first
                 && (sentences >= cap || kept.iter().any(|k| differs_only_at_tail(&k.text, &c.text)))
@@ -1906,11 +2163,28 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
     // 排第一的没纠错时，纠错出来的整句/整词放到句首词后面：`bujianyi` 打的就是
     // 不建议，「古剑一」（b 当 g）不该排在「不见」前面
     let exact_first = kept.first().is_some_and(|c| c.features.typo <= 0.0);
-    let (kept, corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
+    let (mut kept, mut corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
         kept.into_iter().partition(|c| c.features.typo <= 0.0)
     } else {
         (kept, Vec::new())
     };
+    // 但第一名只是几个单字硬凑的整句（tianqu -> 天 | 去），而纠一处错就是个词（天气）时，
+    // 这个词放第二位：打的多半是这个词，只是按错了一个键
+    let weak_top = kept.first().is_some_and(|c| {
+        is_sentence(c)
+            && c.features.history_use_count == 0.0
+            && c.words.iter().all(|w| w.pinyin.split_whitespace().count() == 1)
+    });
+    if weak_top {
+        let top = kept[0].score;
+        let found = corrected.iter().position(|c| {
+            c.words.len() == 1 && c.features.typo_count == 1.0 && top - c.score <= TYPO_WORD_GAP
+        });
+        if let Some(i) = found {
+            let word = corrected.remove(i);
+            kept.insert(1, word);
+        }
+    }
     let long_sentence = syllables >= 4 && kept.first().map(is_sentence).unwrap_or(false);
     let mut merged: Vec<Candidate> =
         Vec::with_capacity(kept.len() + prefix.len() + corrected.len());
@@ -1935,6 +2209,60 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
         }
     }
     *result = merged;
+}
+
+/// [`compose_candidates`]：整句比排第一的整词差多少（自然对数）就算硬凑的。
+/// 实测 你好 −6.6 vs 泥 | 好 −15.5，电脑 −7.6 vs 点 | 脑 −14.8；整句评测不受影响。
+const JUNK_SENTENCE_MARGIN: f64 = 3.0;
+
+/// [`compose_candidates`]：纠一处错得到的词最多比单字硬凑的第一名差多少，还能排第二。
+/// 实测 tianqu：天 | 去 −11.1，天气（纠一处）−15.9，差 4.8。
+const TYPO_WORD_GAP: f64 = 6.5;
+
+/// 第一个候选是英文词表里的词（iPhone、hello）时，去掉硬解出来的中文：两处纠错的（屁 | 好呢）、
+/// 中间夹着只打了声母的音节的（合理[he l] | 了哦）。返回是不是只剩英文了。
+fn drop_forced_chinese(result: &mut Vec<Candidate>) -> bool {
+    let english_first = result.len() > 1
+        && result
+            .first()
+            .is_some_and(|c| is_raw_candidate(c) && c.words[0].known);
+    if !english_first {
+        return false;
+    }
+    result.retain(|c| {
+        is_raw_candidate(c)
+            || !(c.features.typo_count >= 2.0 || (is_mixed_jianpin(c) && abbrev_before_last(c)))
+    });
+    result.len() == 1
+}
+
+/// [`Engine::fuzzy_fallback`]：模糊音读出的词要比精确读音的第一名高出多少（自然对数）才给出来。
+const FUZZY_FALLBACK_LEAD: f64 = 2.0;
+
+/// 只走精确全拼边（不纠错、不补全、不带儿化）、最多 depth 个音节的切法，最多 8 种。
+fn exact_segmentations(
+    graph: &SyllableGraph,
+    pos: usize,
+    depth: usize,
+    path: &mut Vec<crate::graph::Edge>,
+    out: &mut Vec<Vec<crate::graph::Edge>>,
+) {
+    if pos == graph.len() {
+        out.push(path.clone());
+        return;
+    }
+    if depth == 0 || out.len() >= 8 {
+        return;
+    }
+    for edge in graph.edges_from(pos) {
+        let plain = matches!(edge.kind, crate::graph::EdgeKind::Full { erhua: false, .. });
+        if edge.typo || edge.completion > 0 || !plain {
+            continue;
+        }
+        path.push(*edge);
+        exact_segmentations(graph, edge.end, depth - 1, path, out);
+        path.pop();
+    }
 }
 
 fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
@@ -2266,6 +2594,114 @@ mod tests {
         assert_eq!(head.consumed, "wojintianwanshangyao".len());
     }
 
+    /// 模拟词级 LM 的句首（`<s>`）分：只给「何」一个很大的提升。
+    struct SentenceStartBoost;
+
+    impl LanguageModel for SentenceStartBoost {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            if prev.is_none() && cur == "何" {
+                5.0
+            } else {
+                0.0
+            }
+        }
+    }
+
+    #[test]
+    fn single_syllable_candidates_follow_word_frequency() {
+        // 打 he 时「和」比「何」常用，句首 LM 分不该把「何」抬上来。
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("he\t和\t100000\nhe\t何\t10000\nhe\t合\t1000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(SentenceStartBoost));
+        let texts: Vec<String> = e.input("he").into_iter().map(|c| c.text).collect();
+        let at = |word: &str| texts.iter().position(|t| t == word);
+        assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
+        assert!(at("何") < at("合"), "{texts:?}");
+    }
+
+    #[test]
+    fn single_syllable_keeps_learned_pair_bonus() {
+        // 去掉的只是基础模型的句首分：用户在「快」后面选过「乐」，这个搭配加成要留着。
+        // 两个引擎都选过一次「乐」（热度一样），只有 a 是在「快」后面选的。
+        let make = || {
+            let lexicon: Arc<dyn Lexicon> = Arc::new(
+                MemoryLexicon::from_tsv_str("le\t了\t100000\nle\t乐\t10000\n").unwrap(),
+            );
+            Engine::new(lexicon, Arc::new(SentenceStartBoost))
+        };
+        // 搭配只认「上一次选的词，且光标前正好以它结尾」，所以先选前一个字
+        let pick = |e: &Engine, prev: &str, word: &str| {
+            e.set_context("");
+            e.record_selection(prev);
+            e.set_context(prev);
+            e.record_selection(word);
+        };
+        let (a, b) = (make(), make());
+        pick(&a, "快", "乐");
+        pick(&b, "慢", "乐");
+        let score = |e: &Engine| {
+            e.set_context("");
+            e.record_selection("快");
+            e.set_context("快");
+            e.input("le").into_iter().find(|c| c.text == "乐").map(|c| c.score)
+        };
+        let (sa, sb) = (score(&a).unwrap(), score(&b).unwrap());
+        assert!(sa > sb, "学过的搭配没起作用：{sa} vs {sb}");
+    }
+
+    /// 模拟词级 LM 的分词缺口：「我要」是一个词，(我, 要) 从没计过数（回退分 −2.5），
+    /// 偶然见过几次的 (我, 腰) 反而有 +1.5。
+    struct MergedPairLm;
+
+    impl LanguageModel for MergedPairLm {
+        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+            match (prev, cur) {
+                (Some("我"), "腰") => 1.5,
+                (Some("我"), _) => -2.5,
+                _ => 0.0,
+            }
+        }
+
+        fn knows_word(&self, word: &str) -> Option<bool> {
+            Some(matches!(word, "我" | "要" | "腰" | "我要" | "今天"))
+        }
+    }
+
+    #[test]
+    fn context_merged_into_one_word_counts_as_common_pair() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str("yao\t要\t1000000\nyao\t腰\t30000\n").unwrap(),
+        );
+        let e = Engine::new(lexicon, Arc::new(MergedPairLm));
+        // 上文只有「我」和「今天我」（整段不是模型里的词）都要一样：取末尾模型认识的后缀
+        for context in ["我", "今天我"] {
+            e.set_context(context);
+            let texts: Vec<String> = e.input("yao").into_iter().map(|c| c.text).collect();
+            assert_eq!(texts.first().map(String::as_str), Some("要"), "{context}: {texts:?}");
+        }
+    }
+
+    #[test]
+    fn complete_syllable_keeps_its_own_characters_first() {
+        // 「想」字频高得多，但 xian 已经打全了：本音节的字都排在补全出来的「想」前面；
+        // 切成 xi'an 的整词「西安」分数差得不多，抬到第五个
+        let mut tsv = String::from("xiang\t想\t50000000\nxi an\t西安\t400000\nxiao\t笑\t100\n");
+        for (i, c) in "先现显线险仙咸鲜".chars().enumerate() {
+            tsv.push_str(&format!("xian\t{c}\t{}\n", 1_000_000 - i * 100_000));
+        }
+        let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(&tsv).unwrap());
+        let e = Engine::new(lexicon, Arc::new(BigramLm::default()));
+        let texts: Vec<String> = e.input("xian").into_iter().map(|c| c.text).collect();
+        let at = |w: &str| texts.iter().position(|t| t == w);
+        assert_eq!(texts.first().map(String::as_str), Some("先"), "{texts:?}");
+        assert!(at("鲜") < at("想"), "补全的字排到了本音节的字前面：{texts:?}");
+        assert_eq!(at("西安"), Some(4), "{texts:?}");
+        // 没打全时照样出补全
+        let texts: Vec<String> = e.input("xia").into_iter().map(|c| c.text).collect();
+        assert!(texts.iter().any(|t| t == "想"), "{texts:?}");
+    }
+
     #[test]
     fn context_bigram_boosts_first_word() {
         let mut lm = BigramLm::new().with_backoff(0.001);
@@ -2384,8 +2820,9 @@ mod tests {
             Arc::new(MemoryLexicon::from_tsv_str("zhi dao\t知道\t5000\n").unwrap());
         let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
         let mut e = Engine::new(lexicon, lm);
-        // 纠错会把 zidao 当成漏按 h，这里只测模糊音开关
+        // 纠错会把 zidao 当成漏按 h，这里只测模糊音开关；关着时的兜底另测
         e.set_typo_correction(false);
+        e.set_fuzzy_fallback(false);
         assert!(
             !e.input("zidao").iter().any(|c| c.text == "知道"),
             "默认关闭模糊音时不应命中"
@@ -2522,10 +2959,35 @@ mod tests {
     }
 
     #[test]
+    fn fuzzy_off_still_offers_common_word_when_exact_reading_is_junk() {
+        // 模糊音关着：yingai 精确读音只能凑出「因 | 该」，按模糊音是「应该」，给出来排第一；
+        // 精确读音本身有词时（dansi -> 单丝）不兜底
+        let mut e = Engine::new(
+            Arc::new(
+                MemoryLexicon::from_tsv_str(concat!(
+                    "yin\t因\t50000\n",
+                    "gai\t该\t50000\n",
+                    "ying gai\t应该\t5000000\n",
+                    "dan si\t单丝\t5\n",
+                    "dan shi\t但是\t3000000\n",
+                ))
+                .unwrap(),
+            ),
+            Arc::new(BigramLm::default()),
+        );
+        e.set_typo_correction(false);
+        assert_eq!(position(&e, "yingai", "应该"), Some(0));
+        assert_eq!(position(&e, "dansi", "但是"), None);
+        e.set_fuzzy_fallback(false);
+        assert_eq!(position(&e, "yingai", "应该"), None);
+    }
+
+    #[test]
     fn fuzzy_competes_with_exact_reading() {
         let mut e = fuzzy_rank_engine();
         e.set_typo_correction(false);
-        // 关掉模糊音时照旧只有精确读音
+        e.set_fuzzy_fallback(false);
+        // 关掉模糊音（也不兜底）时照旧只有精确读音
         assert_eq!(position(&e, "zong", "中"), None);
         assert_eq!(position(&e, "si", "是"), None);
         assert_eq!(position(&e, "dansi", "但是"), None);
@@ -2714,6 +3176,46 @@ mod tests {
         assert!(pos == 5 || (pos >= 1 && pos == she.len() - 1), "{she:?}");
         // 缩写编码（Jan -> January）不当作英文词
         assert!(!texts("jan").iter().any(|t| t == "January"));
+    }
+
+    #[test]
+    fn english_word_beats_chinese_sentence_made_of_abbreviations() {
+        // ok -> 哦 | 可（o + k）是两个词硬凑的；bug -> 不过（bu + g）是一个词还没打完
+        let e = engine("o\t哦\t900000\nke\t可\t900000\nbu guo\t不过\t500000\nbu\t不\t1000000\n");
+        e.load_english_str("ok\nbug\n");
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        assert_eq!(texts("ok").first().map(String::as_str), Some("ok"), "{:?}", texts("ok"));
+        let bug = texts("bug");
+        assert_eq!(bug.first().map(String::as_str), Some("不过"), "{bug:?}");
+        assert_eq!(bug.get(1).map(String::as_str), Some("bug"), "{bug:?}");
+    }
+
+    #[test]
+    fn junk_sentence_does_not_follow_a_clear_word() {
+        // 你好比「泥 | 好」高得多：硬凑的整句不占第二位；英文词后面不出两处纠错硬解的中文
+        let e = engine("ni hao\t你好\t1000000\nni\t泥\t10000\nhao\t好\t100000\n");
+        let texts: Vec<String> = e.input("nihao").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("你好"), "{texts:?}");
+        assert!(!texts.iter().any(|t| t == "泥好"), "{texts:?}");
+    }
+
+    #[test]
+    fn swapped_keys_beat_a_wrong_key() {
+        // meiyuo：两键按反是「没有」，按错一个键（y 当 g）是「美国」；美国词频高一些，
+        // 但打反比按错常见，没有排第一
+        let e = engine("mei you\t没有\t500000\nmei guo\t美国\t900000\n");
+        let texts: Vec<String> = e.input("meiyuo").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("没有"), "{texts:?}");
+    }
+
+    #[test]
+    fn one_typo_word_follows_a_sentence_of_single_characters() {
+        // tianqu：第一名「天 | 去」是两个单字硬凑的，纠一处错（u 当 i）就是「天气」，排第二
+        let e = engine("tian\t天\t100000\nqu\t去\t100000\ntian qi\t天气\t1000000\n");
+        let texts: Vec<String> = e.input("tianqu").into_iter().map(|c| c.text).collect();
+        assert_eq!(texts.first().map(String::as_str), Some("天去"), "{texts:?}");
+        assert_eq!(texts.get(1).map(String::as_str), Some("天气"), "{texts:?}");
     }
 
     #[test]
@@ -3035,6 +3537,33 @@ mod tests {
         let e = default_engine();
         let cands = e.input("zg");
         assert!(cands.iter().any(|c| c.text == "中国"), "{:?}", cands);
+    }
+
+    #[test]
+    fn single_initial_pins_the_common_char_first() {
+        // #156：只打 l，词频更高的「来」「里」不能排在「了」前面；选过别的字也不换掉第一个
+        let e = engine(concat!(
+            "lai\t来\t14837007\n",
+            "li\t里\t7329328\n",
+            "le\t了\t3481243\n",
+            "liao\t了\t999\n",
+            "ba\t把\t3798288\n",
+            "bu\t不\t2985809\n",
+            "fa\t发\t3000000\n",
+            "fang\t放\t4000000\n",
+        ));
+        let texts = |raw: &str| e.input(raw).into_iter().map(|c| c.text).collect::<Vec<_>>();
+        assert_eq!(texts("l")[0], "了", "{:?}", texts("l"));
+        assert_eq!(texts("b")[0], "不", "{:?}", texts("b"));
+        // 没列的声母照词频
+        assert_eq!(texts("f")[0], "放", "{:?}", texts("f"));
+        // 打全的拼音不受影响
+        assert_eq!(texts("lai")[0], "来");
+        for _ in 0..5 {
+            e.record_selection("来");
+        }
+        let l = texts("l");
+        assert_eq!(&l[..2], ["了", "来"], "选过的字排第二，第一个不变：{l:?}");
     }
 
     #[test]

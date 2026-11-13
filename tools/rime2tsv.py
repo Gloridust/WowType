@@ -211,7 +211,8 @@ def convert(path, min_weight, out, use_imports=True, skip=(), scale_total=0.0, e
     ]
     items.sort(key=lambda kv: (-kv[1], kv[0][0], kv[0][1]))
 
-    out.write("# 由 tools/rime2tsv.py 生成，来源：%s\n" % path)
+    # 只写文件名：完整路径常是 mktemp 的临时目录，会让每次生成的文件都不一样
+    out.write("# 由 tools/rime2tsv.py 生成，来源：%s\n" % os.path.basename(path))
     out.write("# 拼音<TAB>词<TAB>频次\n")
     for (code, text), weight in items:
         if weight < 1:

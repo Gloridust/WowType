@@ -54,7 +54,7 @@ pub struct WowtypeCandidates {
 
 impl WowtypeCandidates {
     /// 只有文本和分数的结果（预测、符号）。
-    fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
+    pub(crate) fn plain(texts: Vec<CString>, scores: Vec<f64>) -> Self {
         let n = texts.len();
         Self {
             texts,
@@ -90,7 +90,10 @@ pub unsafe extern "C" fn wowtype_engine_new(
             Some(path) if !path.is_empty() => crate::lm::load_lm(path)?,
             _ => Arc::new(BigramLm::default()),
         };
-        Ok(Engine::new(lexicon, lm))
+        let engine = Engine::new(lexicon, lm);
+        // 外壳都在后台线程里载入引擎：模糊音索引（兜底默认开）也在这时建好，不留到第一次按键
+        engine.prepare_fuzzy();
+        Ok(engine)
     })();
 
     match result {
@@ -919,53 +922,8 @@ pub unsafe extern "C" fn wowtype_engine_emoji_search(
         set_last_error("query is null or not utf8");
         return ptr::null_mut();
     };
-    let query = query.trim();
-    let results: Vec<String> = if query.is_empty() {
-        crate::emoji::all()
-            .into_iter()
-            .map(str::to_string)
-            .collect()
-    } else {
-        let mut words: Vec<String> = Vec::new();
-        if let Some(handle) = unsafe { engine.as_ref() } {
-            if query.bytes().all(|b| b.is_ascii_alphabetic() || b == b'\'') {
-                let outcome =
-                    panic::catch_unwind(panic::AssertUnwindSafe(|| handle.engine.try_input(query)));
-                if let Ok(Ok(candidates)) = outcome {
-                    words = candidates
-                        .into_iter()
-                        .filter(|c| c.consumed >= query.len() && !c.text.is_ascii())
-                        .map(|c| c.text)
-                        .take(8)
-                        .collect();
-                }
-            } else if !query.is_ascii() {
-                words.push(query.to_string());
-            }
-        }
-        let refs: Vec<&str> = words.iter().map(String::as_str).collect();
-        let mut out: Vec<String> = Vec::new();
-        let add = |items: Vec<&str>, out: &mut Vec<String>| {
-            for item in items {
-                if !out.iter().any(|x| x == item) {
-                    out.push(item.to_string());
-                }
-            }
-        };
-        let symbols = crate::symbols::search(query, limit);
-        let (named, prefixed): (Vec<_>, Vec<_>) =
-            symbols.into_iter().partition(|s| s.names.contains(&query));
-        // 符号名完全对上的、关键词完全对上的 emoji、以名字开头的符号、英文、关键词里包含这个词的
-        add(named.into_iter().map(|s| s.text).collect(), &mut out);
-        add(crate::emoji::search_words_exact(&refs, limit), &mut out);
-        add(prefixed.into_iter().map(|s| s.text).collect(), &mut out);
-        add(crate::emoji::search_english(query, limit), &mut out);
-        add(
-            crate::emoji::search_words_containing(&refs, limit),
-            &mut out,
-        );
-        out
-    };
+    let engine = unsafe { engine.as_ref() }.map(|handle| &handle.engine);
+    let results = crate::emoji::panel_search(engine, query, limit);
     let texts: Vec<CString> = results
         .into_iter()
         .take(limit.max(1))
@@ -1097,6 +1055,59 @@ pub unsafe extern "C" fn wowtype_segment_input(
     }
 }
 
+thread_local! {
+    static CUSTOM_CODE: RefCell<CString> = RefCell::new(CString::default());
+}
+
+/// 自定义词的编码整理（设置界面加词、导入用）。pinyin_only 非 0 时只认拼音（Ni Hǎo、nihao、
+/// ni3hao3 -> ni hao），否则不是拼音但全是字母的（mail）也行（小写）。不合法返回 NULL；
+/// 返回的串在同一线程下一次调用本函数或 wowtype_guess_pinyin 前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_custom_code(
+    text: *const c_char,
+    pinyin_only: c_int,
+) -> *const c_char {
+    let Some(text) = (unsafe { cstr_to_str(text) }) else {
+        return ptr::null();
+    };
+    let code = if pinyin_only != 0 {
+        crate::lexicon::normalize_pinyin(text)
+    } else {
+        crate::lexicon::normalize_code(text)
+    };
+    match code.and_then(|s| CString::new(s).ok()) {
+        Some(code) => CUSTOM_CODE.with(|slot| {
+            *slot.borrow_mut() = code;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
+}
+
+/// 在词库原文（拼音<TAB>词<TAB>频次）里猜词的拼音，整理成空格分开的音节；猜不出返回 NULL。
+/// 返回的串在同一线程下一次调用本函数或 wowtype_custom_code 前有效。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_guess_pinyin(
+    lexicon: *const c_char,
+    len: usize,
+    word: *const c_char,
+) -> *const c_char {
+    let Some(word) = (unsafe { cstr_to_str(word) }) else {
+        return ptr::null();
+    };
+    if lexicon.is_null() || len == 0 {
+        return ptr::null();
+    }
+    let lexicon = unsafe { std::slice::from_raw_parts(lexicon.cast::<u8>(), len) };
+    match crate::lexicon::guess_pinyin(lexicon, word).and_then(|s| CString::new(s).ok()) {
+        Some(code) => CUSTOM_CODE.with(|slot| {
+            *slot.borrow_mut() = code;
+            slot.borrow().as_ptr()
+        }),
+        None => ptr::null(),
+    }
+}
+
 /// 最近一次错误。返回的指针在下一次调用本 API 前有效。
 #[no_mangle]
 pub extern "C" fn wowtype_last_error() -> *const c_char {
@@ -1111,7 +1122,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 9;
+pub const ABI_VERSION_MINOR: c_int = 10;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1168,7 +1179,7 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1009);
+        assert_eq!(wowtype_abi_version(), 1010);
     }
 }
 

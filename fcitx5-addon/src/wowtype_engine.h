@@ -19,6 +19,7 @@
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/matchrule.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
@@ -41,7 +42,6 @@ class KeyEvent;
 class WowtypeState;
 
 /// v + 空格打开的工具栏里现在是哪一页（符号、表情直接用表情面板）。
-enum class WowtypeTool { None, Menu, Clipboard, Phrases };
 
 enum class WowtypeLayout { Horizontal, Vertical };
 FCITX_CONFIG_ENUM_NAME(WowtypeLayout, "Horizontal", "Vertical");
@@ -114,6 +114,20 @@ struct WowtypeShiftAnnotation {
     }
 };
 
+/// 切到 WowType 时用中文还是英文（#158、#121）。
+enum class WowtypeInitialMode { Chinese, English, Last };
+FCITX_CONFIG_ENUM_NAME(WowtypeInitialMode, "Chinese", "English", "Last");
+
+struct WowtypeInitialModeAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "中文");
+        config.setValueByPath("EnumI18n/1", "英文");
+        config.setValueByPath("EnumI18n/2", "和上次切走时一样");
+    }
+};
+
 /// 互译语言（代码和核心的 translate::LANGUAGES 一致）。
 enum class WowtypeTranslateTarget { en, ja, ko, fr, de, es, ru, pt, it, vi, th, id, ar };
 FCITX_CONFIG_ENUM_NAME(WowtypeTranslateTarget, "en", "ja", "ko", "fr", "de", "es", "ru", "pt",
@@ -163,9 +177,14 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
         shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
+    fcitx::Option<bool> shuangpinShowKeys{this, "ShuangpinShowKeys",
+                                          "双拼时编辑区显示打的键（不翻成全拼）", false};
     fcitx::Option<WowtypeShiftToggle, fcitx::NoConstrain<WowtypeShiftToggle>,
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
+    fcitx::Option<WowtypeInitialMode, fcitx::NoConstrain<WowtypeInitialMode>,
+                  fcitx::DefaultMarshaller<WowtypeInitialMode>, WowtypeInitialModeAnnotation>
+        initialMode{this, "InitialMode", "切到 WowType 时", WowtypeInitialMode::Chinese};
     fcitx::Option<bool> traditional{this, "Traditional", "输出繁体字", false};
     fcitx::Option<WowtypePunctStyle, fcitx::NoConstrain<WowtypePunctStyle>,
                   fcitx::DefaultMarshaller<WowtypePunctStyle>, WowtypePunctStyleAnnotation>
@@ -340,10 +359,11 @@ public:
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
                          std::size_t index);
+    /// 点了工具栏 / 表情面板的第 index 项（会话做：菜单进下一层，别的上屏）。
+    void choosePanelItem(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
     /// 展开的候选面板里点了第 row 行：光标在这行就选光标处的词，否则选这行第一个。
     void selectGridRow(fcitx::InputContext *ic, WowtypeState *state, std::size_t row);
     /// 互译：上屏译文；还没译好就记下来，好了再上屏。
-    void commitTranslation(fcitx::InputContext *ic, WowtypeState *state);
 
 private:
     /// 词库在后台线程载入；载入好之前 core_ 为空，按键照常进编辑区。
@@ -359,12 +379,13 @@ private:
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
-    /// 按标点样式和光标前一个字符取标点；返回空串表示原样上屏 ASCII。
-    std::string punctFor(fcitx::InputContext *ic, WowtypeState *state, unsigned sym) const;
-    bool handleShiftToggle(fcitx::InputContext *ic, WowtypeState *state,
-                           fcitx::KeyEvent &event);
-    /// Shift 循环切换：中 → 英 → 译（配置了翻译服务才有）→ 中。
-    void toggleAsciiMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// Shift 键交给会话判断单按（别的键只报一下，打断单按）。返回 true：这个键处理完了
+    /// （Shift 键都是；单按切换了模式时吃掉，否则交给应用）。
+    bool handleShiftKey(fcitx::InputContext *ic, WowtypeState *state, fcitx::KeyEvent &event);
+    /// 把全局的中 / 英 / 译对齐到这个输入框的会话（切英文时会话上屏打到一半的）。
+    void syncMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// 按「切到 WowType 时」（InitialMode）定中 / 英：从别的输入法切回来、启动后第一次用时调。
+    void applyInitialMode(fcitx::InputContext *ic, WowtypeState *state);
     /// 切到指定模式。离开「译」上屏攒着的原文，切到英文上屏打到一半的；
     /// notify：弹出「中 / 英 / 译」提示（外部命令切的不弹，免得 vim 每按一次 Esc 闪一下）。
     void switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii, bool translate,
@@ -376,57 +397,46 @@ private:
     bool translateAvailable() const;
     std::string translateKeyFile() const;
     /// 上屏一段文字：互译模式下攒进原文，否则直接交给应用。所有上屏都走这里。
-    void emit(fcitx::InputContext *ic, const std::string &text);
+    /// autoSpace：要不要按光标前的字补空格（会话上屏的已经补过了，传 false）。
+    void emit(fcitx::InputContext *ic, const std::string &text, bool autoSpace = true);
     /// 上屏 next 之前要不要先补一个空格（光标前是汉字、next 是字母数字，或反过来）。
     bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
     /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
     bool autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key);
-    /// 原文变了：过一会儿（句末标点立刻）发请求。
-    void translateSourceChanged(fcitx::InputContext *ic, WowtypeState *state, bool now);
-    /// 互译模式下、没有正在打的拼音时的按键，处理了返回 true。
-    bool handleTranslateKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     /// 原文原样上屏（Shift+回车、离开互译模式）。
-    void commitTranslateSource(fcitx::InputContext *ic, WowtypeState *state);
     void clearTranslation(WowtypeState *state);
-    void ensureTranslateTimer();
-    /// 定时调用：到点发请求、取流式结果、刷新面板。还要继续就返回 true。
-    bool pollTranslate();
-    /// 面板上翻译部分的内容摘要：变了才重画
-    std::string translateSignature(WowtypeState *state, int phase, bool fresh) const;
+    /// 单调时钟的毫秒数（会话的 time_ms、tick 用）。
+    static uint64_t nowMs();
+    /// 过 ms 毫秒叫一次会话的 tick（会话的 frame->wake_after_ms：等发请求、等译文）。
+    void scheduleTick(fcitx::InputContext *ic, uint32_t ms);
+    /// 定时器到了：tick 会话，按过回车且译好了的上屏，结果变了重画。返回多久以后再叫（0 不用）。
+    uint32_t tickTranslate();
+    /// 现在画的互译内容（变了才重画）。
+    std::string translateSignature(const WowtypeFrame *frame) const;
     /// 照微信输入法：译文直接写在应用的输入框里（编辑区），候选框当原文框
     /// （顶上是方向，下面是原文和正在打的拼音，拼音候选照常列在下面）。
     /// 只设编辑区和提示行，不动候选列表。
     void fillTranslateView(fcitx::InputContext *ic, WowtypeState *state, fcitx::InputPanel &panel);
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
-    void openEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
-    /// 打开表情面板，但空搜索词时列全部符号（工具栏的「符号」）。
-    void openSymbolPanel(fcitx::InputContext *ic, WowtypeState *state);
-    void openTool(fcitx::InputContext *ic, WowtypeState *state, WowtypeTool tool);
-    bool handleToolKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
     /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
     void sampleClipboard(fcitx::InputContext *ic);
 
 public:
-    void selectTool(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
 
 private:
-    void closeEmojiPanel(fcitx::InputContext *ic, WowtypeState *state);
-    void refreshEmojiPanel(WowtypeState *state);
-    /// 面板开着时的按键，处理了返回 true。
-    bool handleEmojiPanelKey(fcitx::InputContext *ic, WowtypeState *state,
-                             const fcitx::Key &key);
-    /// 上屏选中的 emoji 候选（打字推荐的或面板里的）。
-    void commitEmoji(fcitx::InputContext *ic, WowtypeState *state, std::size_t index);
-    void rememberEmoji(const std::string &emoji);
     std::string recentEmojiPath() const;
     /// 把引擎、上文、设置同步给会话（引擎是后台载入的，设置可能刚改过）。
     void syncSession(WowtypeState *state);
     /// 同步后交给会话处理一个按下的键；action 是 WOWTYPE_KEY_ACTION_*（fcitx5 全局的翻页、
     /// 移动候选热键）。返回会话的 frame（会话没建好时为 NULL）。
-    const WowtypeFrame *sessionKey(WowtypeState *state, const fcitx::Key &key,
+    /// 带上应用里光标前的字（prevChar）和输入框情况（密码框、互译时不自动补空格）。
+    const WowtypeFrame *sessionKey(fcitx::InputContext *ic, WowtypeState *state,
+                                   const fcitx::Key &key,
                                    uint32_t action = WOWTYPE_KEY_ACTION_NONE);
+    /// 应用里光标前一个字（Unicode 码位）；应用不报告周围文字时 0。
+    uint32_t prevChar(fcitx::InputContext *ic) const;
     /// 这个键对应的 fcitx5 全局翻页、移动候选热键（方向键不算，照横排竖排的规则走）。
     uint32_t keyAction(const fcitx::Key &key) const;
     /// 会话处理了一个键以后：上屏、记 emoji、照会话的候选框重画（或只挪页码和光标）。
@@ -436,13 +446,10 @@ private:
     void refreshCandidates(WowtypeState *state);
     /// 会话的候选重算过才重新抄；返回 true 表示重抄了。页码、光标每次都抄。
     bool syncView(WowtypeState *state);
-    /// 表情面板（和普通候选的展开面板一个样子）：处理了这个键返回 true。
-    bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
-    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；learned 时攒着存用户词库。
-    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
-                      bool learned);
+    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
+    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame);
     /// 上屏已选的词 + 还没选的原始输入（切输入法、打到一半切英文），原始输入也记一次选词。
     void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
@@ -468,9 +475,12 @@ private:
     void setupVoiceOverlay();
     /// 在会话总线上登记 org.wowtype.Input（外部命令切模式）。
     void setupControl();
-    bool voiceOverlay() const { return !overlayOwner_.empty(); }
+    /// 扩展在跑、而且没被认定画不出来（#170）：语音提示交给浮条。
+    bool voiceOverlay() const { return !overlayOwner_.empty() && !overlayBroken_; }
     void sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state, const std::string &label,
                           int level);
+    /// 发了状态一直等不到扩展的回执：认定浮条画不出来，这次和以后都在候选框里提示。
+    void checkOverlayAck(fcitx::InputContext *ic);
     void maybeCheckUpdate();
     bool voiceActive() const { return voiceShowing_; }
 
@@ -503,12 +513,17 @@ private:
     bool calculator_ = true;
     bool toolbar_ = true;
     bool clipboardHistory_ = false;
+    /// 双拼时编辑区显示打的键（#122）
+    bool shuangpinShowKeys_ = false;
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
+    WowtypeInitialMode initialMode_ = WowtypeInitialMode::Chinese;
+    /// 启动后还没切到过 WowType：第一次切过来（包括 WowType 是默认输入法时第一次获得焦点）按 InitialMode 定模式
+    bool initialModeApplied_ = false;
     WowtypePunctStyle punctStyle_ = WowtypePunctStyle::Fullwidth;
     /// 打开的翻页键组（Page Up/Down、方向键、fcitx 全局翻页键一直可用）
     bool pageMinus_ = true;
@@ -519,10 +534,6 @@ private:
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。
     bool translateMode_ = false;
-    /// 按下还没松开的 Shift（单按才切换，中间按了别的键就作废）、它的键码和按下的时刻。
-    fcitx::KeySym shiftDown_ = FcitxKey_None;
-    int shiftDownCode_ = 0;
-    uint64_t shiftDownAt_ = 0;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
     bool lm2Loaded_ = false;
@@ -530,8 +541,6 @@ private:
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
-    std::vector<std::string> recentEmoji_;
-    bool recentEmojiLoaded_ = false;
 
     WowtypeVoice *voice_ = nullptr;
     /// 语音结果同时复制到剪贴板（默认关）。
@@ -563,7 +572,6 @@ private:
     fcitx::TrackableObjectReference<fcitx::InputContext> translateIc_;
     std::unique_ptr<fcitx::EventSourceTime> translateTimer_;
     /// 到这个时刻（单调时钟，微秒）发请求；0 表示不用发。
-    uint64_t translateAt_ = 0;
     /// 上次画面板时的结果，没变就不重画。
     std::string translateDrawn_;
 
@@ -573,6 +581,12 @@ private:
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> overlayWatch_;
     /// 扩展在总线上的唯一名；空表示扩展没在跑，用候选框里的文字提示。
     std::string overlayOwner_;
+    /// 扩展画好一次状态回一个 Ack。这次说话发出第一个状态的时间、收到回执没有；
+    /// 等不到就把 overlayBroken_ 置上，直到扩展换了人（重新登录、扩展重载）。
+    std::unique_ptr<fcitx::dbus::Slot> overlayAckSlot_;
+    uint64_t overlaySentAt_ = 0;
+    bool overlayAcked_ = false;
+    bool overlayBroken_ = false;
 
     // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
     std::unique_ptr<fcitx::dbus::Bus> controlBus_;
