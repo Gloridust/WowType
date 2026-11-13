@@ -1789,6 +1789,7 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                  }});
     s.push_back({"上面那种情况回车也上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
                  expectCommit("EN:你好")});
+#ifdef WOWTYPE_HAVE_PASSWORD_IM_OPTION
     s.push_back({"密码框里照常打中文，不翻译",
                  [reset, &instance](HarnessInputContext *ic) {
                      reset(ic);
@@ -1800,6 +1801,18 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      type(ic, "nihao<sp>");
                  },
                  expectCommit("你好")});
+#else
+    // fcitx5 5.0 没有「密码框也用输入法」：密码框里换成键盘布局，WowType 收不到按键，更不会翻译
+    s.push_back({"密码框里不用输入法（fcitx5 没有「密码框也用输入法」）：按键原样交给应用",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::Password, CapabilityFlag::Preedit});
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && ic->passed == "nihao " && preedit(ic).empty();
+                 }});
+#endif
     s.push_back({"有原文时 Shift 切回中文：原文原样上屏",
                  [reset, &instance](HarnessInputContext *ic) {
                      reset(ic);

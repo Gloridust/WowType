@@ -1581,7 +1581,7 @@ bool WowtypeEngine::handleGridKey(fcitx::InputContext *ic, WowtypeState *state,
         return true;
     default:
         if (key.isDigit()) {
-            const int digit = key.digit();
+            const int digit = static_cast<int>(key.sym() - FcitxKey_0); // Key::digit() 5.1 才有
             const std::size_t index = cursor / kGridCols * kGridCols + digit - 1;
             if (digit >= 1 && digit <= static_cast<int>(kGridCols) && index < n) {
                 commitCandidate(ic, state, index);
