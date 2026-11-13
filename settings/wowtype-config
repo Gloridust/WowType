@@ -4,7 +4,7 @@
 改的是 fcitx5 读的同一个配置文件（~/.config/fcitx5/conf/wowtype.conf）和自定义词文件
 （~/.local/share/wowtype/custom.tsv），改完经 D-Bus 让 fcitx5 重新读，立刻生效。
 
-用系统的 python3（要 PyGObject、GTK 4、libadwaita 1.5+）：
+用系统的 python3（要 PyGObject、GTK 4.6+、libadwaita 1.1+；老版本上缺的控件用替身，见「旧版 GTK / libadwaita」）：
   Debian/Ubuntu: sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
 """
 
@@ -886,6 +886,7 @@ THEME_LIGHT = "wowtype"
 THEME_DARK = "wowtype-dark"
 GNOME_THEME_EXT = "wowtype-theme@gloridust.github.io"
 KIMPANEL_EXT = "kimpanel@kde.org"
+GNOME_EXT_OUT_OF_DATE = 4  # GNOME Shell 的 ExtensionState.OUT_OF_DATE：扩展不支持这个 GNOME 版本
 
 
 KIMPANEL_SCHEMA = "org.gnome.shell.extensions.kimpanel"
@@ -1196,6 +1197,9 @@ def apply_gnome_theme(on):
     shell = gnome_shell_settings()
     if shell is None:
         return None
+    # GNOME 44 及以前（比如 Ubuntu 22.04 的 GNOME 42）扫到这个扩展也只标「版本不符」，不加载
+    if on and int(gnome_extension_info(GNOME_THEME_EXT).get("state", 0)) == GNOME_EXT_OUT_OF_DATE:
+        return "这个 GNOME 太旧，候选框换不了色（WowType 主题扩展要 GNOME 45 以上）"
     set_gnome_extension(shell, GNOME_THEME_EXT, on)
     if not on:
         return "已换回默认配色"
@@ -1479,6 +1483,16 @@ def update_platform(info=None, machine=None, immutable=None):
     guide = f"安装说明：{INSTALL_GUIDE}"
     if "nixos" in family:
         return "", "", "", "NixOS 请更新 flake 输入后运行 nixos-rebuild switch；" + guide
+    # deepin 25 的磐石系统基于 OSTree，但 apt-get install 照常能用，要在「不可变系统」之前认出来
+    if distro == "deepin":
+        codename = info.get("VERSION_CODENAME", "").lower()
+        base = ("deepin25" if codename == "crimson" or re.fullmatch(r"25(\.\d+)*", version) else
+                "deepin23" if codename == "beige" or re.fullmatch(r"23(\.\d+)*", version) else "")
+        if not base:
+            return "", "", "", f"deepin {version or codename} 没有发布包（有 deepin 23 和 25 的）；{guide}"
+        if machine not in ("x86_64", "amd64"):
+            return "", "", "", f"deepin 的发布包只有 x86_64，{machine} 请从源码构建；{guide}"
+        return "apt-get", base, "amd64", ""
     if immutable or "atomic" in variant or variant in {
             "silverblue", "kinoite", "sericea", "onyx", "coreos"}:
         return "", "", "", "不可变系统请使用系统的分层或声明式配置更新（Fedora Atomic 用 rpm-ostree）；" + guide
@@ -1490,7 +1504,7 @@ def update_platform(info=None, machine=None, immutable=None):
                           "arm64": ("arm64", "aarch64")}.get(machine, ("", ""))
     if not deb_arch:
         return "", "", "", f"发布包只有 x86_64 和 arm64，{machine} 请从源码构建；{guide}"
-    if distro == "ubuntu" and version in ("24.04", "26.04"):
+    if distro == "ubuntu" and version in ("22.04", "24.04", "26.04"):
         return "apt-get", "ubuntu" + version, deb_arch, ""
     if distro == "debian" and (version == "13" or version.startswith("13.")):
         return "apt-get", "debian13", deb_arch, ""
@@ -1499,7 +1513,7 @@ def update_platform(info=None, machine=None, immutable=None):
         codename = info.get("UBUNTU_CODENAME", "")
         if not codename and "ubuntu" in family:
             codename = info.get("VERSION_CODENAME", "")
-        ubuntu = {"noble": "24.04", "resolute": "26.04"}.get(codename)
+        ubuntu = {"jammy": "22.04", "noble": "24.04", "resolute": "26.04"}.get(codename)
         if ubuntu:
             return "apt-get", "ubuntu" + ubuntu, deb_arch, ""
         codename = info.get("DEBIAN_CODENAME", "")
@@ -2866,6 +2880,270 @@ def dir_size(path):
     return total
 
 
+# ---------------- 旧版 GTK / libadwaita
+# Ubuntu 22.04 是 GTK 4.6、libadwaita 1.1，下面这些控件还没有。新系统一律用原生控件；
+# 缺的才换成最小的替身，只实现设置界面用到的那几个方法和信号。
+
+def css_load(provider, text):
+    if hasattr(provider, "load_from_string"):  # GTK 4.12
+        provider.load_from_string(text)
+    else:
+        provider.load_from_data(text.encode())
+
+
+def add_suffix(row, widget):
+    """ExpanderRow.add_suffix 是 libadwaita 1.4 才有的，之前叫 add_action。"""
+    if hasattr(row, "add_suffix"):
+        row.add_suffix(widget)
+    else:
+        row.add_action(widget)
+
+
+def launch_uri(window, uri):
+    if hasattr(Gtk, "UriLauncher"):  # GTK 4.10
+        Gtk.UriLauncher.new(uri).launch(window, None, None)
+    else:
+        Gtk.show_uri(window, uri, Gdk.CURRENT_TIME)
+
+
+def launch_file(window, path):
+    if hasattr(Gtk, "FileLauncher"):  # GTK 4.10
+        Gtk.FileLauncher.new(Gio.File.new_for_path(path)).launch(window, None, None)
+    else:
+        Gtk.show_uri(window, Gio.File.new_for_path(path).get_uri(), Gdk.CURRENT_TIME)
+
+
+class _ToolbarView(Gtk.Box):
+    """Adw.ToolbarView（1.4）：上面一排栏，下面内容。"""
+    __gtype_name__ = "WowTypeToolbarView"
+
+    def __init__(self, **kwargs):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, **kwargs)
+        self._bars = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.append(self._bars)
+        self._content = None
+
+    def add_top_bar(self, bar):
+        self._bars.append(bar)
+
+    def set_content(self, content):
+        if self._content is not None:
+            self.remove(self._content)
+        content.set_vexpand(True)
+        self.append(content)
+        self._content = content
+
+
+class _SwitchRow(Adw.ActionRow):
+    """Adw.SwitchRow（1.4）：后缀一个开关，active 属性跟着它。"""
+    __gtype_name__ = "WowTypeSwitchRow"
+    active = GObject.Property(type=bool, default=False)
+
+    def __init__(self, active=False, **kwargs):
+        super().__init__(**kwargs)
+        self.switch = Gtk.Switch(valign=Gtk.Align.CENTER)
+        self.add_suffix(self.switch)
+        self.set_activatable_widget(self.switch)
+        self.switch.bind_property("active", self, "active",
+                                  GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
+        self.props.active = active
+
+    def get_active(self):
+        return self.props.active
+
+    def set_active(self, active):
+        self.props.active = active
+
+
+class _SpinRow(Adw.ActionRow):
+    """Adw.SpinRow（1.4）：后缀一个数字框，value 属性跟着它。"""
+    __gtype_name__ = "WowTypeSpinRow"
+    value = GObject.Property(type=float, default=0)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.spin = Gtk.SpinButton(valign=Gtk.Align.CENTER, numeric=True)
+        self.add_suffix(self.spin)
+        self.spin.bind_property("value", self, "value",
+                                GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE)
+
+    @classmethod
+    def new_with_range(cls, low, high, step):
+        row = cls()
+        row.spin.set_range(low, high)
+        row.spin.set_increments(step, step * 10)
+        return row
+
+    def get_value(self):
+        return self.props.value
+
+    def set_value(self, value):
+        self.props.value = value
+
+
+class _EntryRow(Adw.ActionRow):
+    """Adw.EntryRow（1.2）：标题在左，输入框在右。changed、entry-activated 跟原生的一样从这一行发出。"""
+    __gtype_name__ = "WowTypeEntryRow"
+    __gsignals__ = {"changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
+                    "entry-activated": (GObject.SignalFlags.RUN_FIRST, None, ())}
+
+    def __init__(self, show_apply_button=False, **kwargs):
+        super().__init__(**kwargs)
+        self.entry = self.make_entry()
+        self.entry.set_valign(Gtk.Align.CENTER)
+        self.entry.set_hexpand(True)
+        self.entry.connect("changed", lambda _e: self.emit("changed"))
+        self.entry.connect("activate", lambda _e: self.emit("entry-activated"))
+        self.add_suffix(self.entry)
+
+    def make_entry(self):
+        return Gtk.Entry(width_chars=24)
+
+    def get_text(self):
+        return self.entry.get_text()
+
+    def set_text(self, text):
+        self.entry.set_text(text)
+
+    def set_input_purpose(self, purpose):
+        self.entry.set_input_purpose(purpose)
+
+    def grab_focus(self):
+        return self.entry.grab_focus()
+
+    def add_css_class(self, name):
+        Adw.ActionRow.add_css_class(self, name)
+        self.entry.add_css_class(name)
+
+    def remove_css_class(self, name):
+        Adw.ActionRow.remove_css_class(self, name)
+        self.entry.remove_css_class(name)
+
+
+class _PasswordEntryRow(_EntryRow):
+    __gtype_name__ = "WowTypePasswordEntryRow"
+
+    def make_entry(self):
+        return Gtk.PasswordEntry(show_peek_icon=True, width_chars=24)
+
+
+class _ResponseAppearance:
+    SUGGESTED = "suggested-action"
+    DESTRUCTIVE = "destructive-action"
+
+
+class _AlertDialog:
+    """Adw.AlertDialog（1.5）换成 Gtk.MessageDialog；response 信号给回答的 id，关掉窗口算取消。"""
+
+    def __init__(self, heading="", body=""):
+        self.heading, self.body = heading, body
+        self.responses, self.styles, self.handlers = [], {}, []
+
+    def add_response(self, response_id, label):
+        self.responses.append((response_id, label))
+
+    def set_response_appearance(self, response_id, appearance):
+        self.styles[response_id] = appearance
+
+    def connect(self, signal, handler):
+        assert signal == "response", signal
+        self.handlers.append(handler)
+
+    def present(self, parent):
+        dialog = Gtk.MessageDialog(transient_for=parent, modal=True, text=self.heading,
+                                   secondary_text=self.body)
+        for index, (response_id, label) in enumerate(self.responses):
+            button = dialog.add_button(label, index)
+            if response_id in self.styles:
+                button.add_css_class(self.styles[response_id])
+
+        def answered(dialog, index):
+            dialog.destroy()
+            ok = 0 <= index < len(self.responses)
+            answer = self.responses[index][0] if ok else "cancel"
+            for handler in self.handlers:
+                handler(self, answer)
+        dialog.connect("response", answered)
+        dialog.present()
+
+
+class _AboutDialog:
+    """Adw.AboutDialog（1.5）换成 Gtk.AboutDialog。"""
+
+    def __init__(self, application_name="", application_icon="", developer_name="", version="",
+                 website="", issue_url="", license_type=Gtk.License.UNKNOWN, license="", comments=""):
+        self.props = dict(program_name=application_name, logo_icon_name=application_icon,
+                          authors=[developer_name], version=version, website=website,
+                          license_type=license_type, license=license, comments=comments)
+
+    def present(self, parent):
+        Gtk.AboutDialog(transient_for=parent, modal=True, **self.props).present()
+
+
+_open_choosers = set()  # 原生文件对话框没人引用会被回收，开着的时候留在这里
+
+
+class _FileDialog:
+    """Gtk.FileDialog（4.10）换成 Gtk.FileChooserNative；取消时 *_finish 抛 GLib.Error，跟原生一样。"""
+
+    def __init__(self, title="", initial_name=None):
+        self.title, self.initial_name = title, initial_name
+        self.filters, self.folder, self.file = [], None, None
+
+    def set_filters(self, filters):
+        self.filters = [filters.get_item(i) for i in range(filters.get_n_items())]
+
+    def set_initial_folder(self, folder):
+        self.folder = folder
+
+    def _run(self, parent, action, callback):
+        chooser = Gtk.FileChooserNative(title=self.title, transient_for=parent, modal=True,
+                                        action=action)
+        for item in self.filters:
+            chooser.add_filter(item)
+        if self.initial_name:
+            chooser.set_current_name(self.initial_name)
+        if self.folder is not None:
+            try:
+                chooser.set_current_folder(self.folder)
+            except GLib.Error:
+                pass
+
+        def done(chooser, response):
+            _open_choosers.discard(chooser)
+            self.file = chooser.get_file() if response == Gtk.ResponseType.ACCEPT else None
+            chooser.destroy()
+            callback(self, None)
+        chooser.connect("response", done)
+        _open_choosers.add(chooser)
+        chooser.show()
+
+    def open(self, parent, _cancellable, callback):
+        self._run(parent, Gtk.FileChooserAction.OPEN, callback)
+
+    def save(self, parent, _cancellable, callback):
+        self._run(parent, Gtk.FileChooserAction.SAVE, callback)
+
+    def open_finish(self, _result):
+        if self.file is None:
+            raise GLib.Error("没选文件")
+        return self.file
+
+    save_finish = open_finish
+
+
+ToolbarView = getattr(Adw, "ToolbarView", _ToolbarView)
+SwitchRow = getattr(Adw, "SwitchRow", _SwitchRow)
+SpinRow = getattr(Adw, "SpinRow", _SpinRow)
+EntryRow = getattr(Adw, "EntryRow", _EntryRow)
+PasswordEntryRow = getattr(Adw, "PasswordEntryRow", _PasswordEntryRow)
+# libadwaita 1.2–1.4 有 ResponseAppearance 但没有 AlertDialog：两个要配套
+AlertDialog, ResponseAppearance = ((Adw.AlertDialog, Adw.ResponseAppearance) if hasattr(Adw, "AlertDialog")
+                                   else (_AlertDialog, _ResponseAppearance))
+AboutDialog = getattr(Adw, "AboutDialog", _AboutDialog)
+FileDialog = getattr(Gtk, "FileDialog", _FileDialog)
+
+
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app, page=None):
         super().__init__(application=app, title="WowType 设置")
@@ -2929,7 +3207,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         side_box.append(self.nav)
         side_header = Adw.HeaderBar(show_end_title_buttons=False)
         side_header.set_title_widget(Gtk.Box())
-        sidebar = Adw.ToolbarView()
+        sidebar = ToolbarView()
         sidebar.add_css_class("wt-sidebar")
         sidebar.add_top_bar(side_header)
         sidebar.set_content(side_box)
@@ -2951,7 +3229,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             action.connect("activate", handler)
             self.add_action(action)
 
-        content = Adw.ToolbarView()
+        content = ToolbarView()
         content.add_css_class("wt-content")
         content.add_top_bar(header)
         self.toasts.set_child(self.stack)
@@ -3030,7 +3308,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             "CandidateLayout", "Vertical" if row.get_selected() == 1 else "Horizontal"))
         cands.add(self.layout_row)
 
-        self.page_row = Adw.SpinRow.new_with_range(*RANGES["PageSize"], 1)
+        self.page_row = SpinRow.new_with_range(*RANGES["PageSize"], 1)
         self.page_row.set_title("每页个数")
         try:
             self.page_row.set_value(int(self.values["PageSize"]))
@@ -3051,12 +3329,12 @@ class SettingsWindow(Adw.ApplicationWindow):
         page.add(cands)
 
         look = Adw.PreferencesGroup(title="外观")
-        self.theme_row = Adw.SwitchRow(
+        self.theme_row = SwitchRow(
             title="WowType 绿色主题", subtitle="圆角候选框，深色模式自动换深色版")
         self.theme_row.set_sensitive(False)  # 读到 fcitx5 的当前主题再打开
         self.theme_handler = self.theme_row.connect("notify::active", self.on_theme_toggled)
         look.add(self.theme_row)
-        self.font_row = Adw.SpinRow.new_with_range(*FONT_SIZE_RANGE, 1)
+        self.font_row = SpinRow.new_with_range(*FONT_SIZE_RANGE, 1)
         self.font_row.set_title("候选字号")
         self.font_row.set_sensitive(False)  # 读到现在的字号再打开
         self.font_handler = self.font_row.connect("notify::value", self.on_font_size_changed)
@@ -3082,7 +3360,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         export_row.set_activatable_widget(export_button)
         help_group.add(export_row)
         issue_row = Adw.ActionRow(title="提交问题")
-        issue_row.add_suffix(Gtk.Image(icon_name="adw-external-link-symbolic"))
+        # adw-external-link-symbolic 是 libadwaita 自带的图标，1.1 还没有
+        link_icon = ("adw-external-link-symbolic" if Adw.get_minor_version() >= 2
+                     else "go-next-symbolic")
+        issue_row.add_suffix(Gtk.Image(icon_name=link_icon))
         issue_row.set_activatable(True)
         issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
         help_group.add(issue_row)
@@ -3234,7 +3515,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         return GLib.SOURCE_REMOVE
 
     def on_lexicon_from_file(self, _button):
-        dialog = Gtk.FileDialog(title="安装万象词库包")
+        dialog = FileDialog(title="安装万象词库包")
         patterns = Gtk.FileFilter(name="WowType 词库包（*.tar.gz）")
         patterns.add_pattern("*.tar.gz")
         filters = Gio.ListStore.new(Gtk.FileFilter)
@@ -3321,7 +3602,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             "InitialMode", self.initial_names[r.get_selected()]))
         switch.add(self.initial_row)
         # fcitx5 自己也用 Shift 切输入法时提示，并能一键让给 WowType（再一键还回去）
-        self.shift_free_row = Adw.SwitchRow(title="Shift 只给 WowType 用", visible=False)
+        self.shift_free_row = SwitchRow(title="Shift 只给 WowType 用", visible=False)
         self.shift_free_info = self.add_info(self.shift_free_row, "").info_label
         self.shift_free_handler = self.shift_free_row.connect(
             "notify::active", self.on_shift_free_toggled)
@@ -3390,11 +3671,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         return page
 
     def show_shuangpin(self, on):
-        """双拼方案只在双拼时显示；计算器、工具栏双拼时灰掉，副标题说为什么。"""
+        """双拼方案只在双拼时显示；双拼时计算器换成大写 V，工具栏灰掉，副标题说为什么。"""
         self.scheme_row.set_visible(on)
         self.show_keys_row.set_visible(on)
-        self.calc_row.set_sensitive(not on)
-        self.calc_row.set_subtitle("双拼时不可用" if on else "v1+2*3 → 7")
+        self.calc_row.set_subtitle("双拼时打大写 V：V1+2*3 → 7" if on else "v1+2*3 → 7")
         self.toolbar_row.set_sensitive(not on)
         self.toolbar_row.set_subtitle("双拼时不可用" if on else "打 v 再按空格：剪贴板、常用语、符号、表情")
 
@@ -3429,10 +3709,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         return page
 
     def open_url(self, url):
-        Gtk.UriLauncher.new(url).launch(self, None, None, None)
+        launch_uri(self, url)
 
     def on_export_log(self, *_args):
-        dialog = Gtk.FileDialog(title="导出日志", initial_name=default_log_name())
+        dialog = FileDialog(title="导出日志", initial_name=default_log_name())
         downloads = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
         if downloads and os.path.isdir(downloads):
             dialog.set_initial_folder(Gio.File.new_for_path(downloads))
@@ -3612,7 +3892,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.fcitx.set_hotkeys(lists, done)
 
     def make_switch(self, key, title, subtitle):
-        row = Adw.SwitchRow(title=title)
+        row = SwitchRow(title=title)
         if subtitle:
             row.set_subtitle(subtitle)
         row.set_active(self.values[key] == "True")
@@ -3683,7 +3963,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def add_info(self, row, text, links=()):
         """给一行加 ⓘ，放在这一行自己的开关、下拉框前面。返回按钮。"""
         button = self.info_button(text, links)
-        row.add_suffix(button)
+        add_suffix(row, button)
         # SwitchRow 的开关、ComboRow 的下拉也在后缀那一排里，新加的排在最后：挪到最前面
         suffixes = button.get_parent()
         if hasattr(suffixes, "reorder_child_after"):
@@ -3857,12 +4137,12 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def on_voice_delete(self, _button):
         size = dir_size(VOICE_MODEL_DIR)
-        dialog = Adw.AlertDialog(
+        dialog = AlertDialog(
             heading="删掉语音模型？",
             body=f"空出 {human_size(size)}，语音输入会关掉。以后想用再到这里下载。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("delete", "删除")
-        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_response_appearance("delete", ResponseAppearance.DESTRUCTIVE)
 
         def answered(_dialog, response):
             if response != "delete":
@@ -3920,18 +4200,18 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.provider_row.connect("notify::selected", self.on_provider_selected)
         service.add(self.provider_row)
 
-        self.url_row = Adw.EntryRow(title="接口地址", show_apply_button=False)
+        self.url_row = EntryRow(title="接口地址", show_apply_button=False)
         self.url_row.set_input_purpose(Gtk.InputPurpose.URL)
         self.url_row.set_text(self.values["TranslateBaseUrl"])
         self.url_row.connect("changed", self.on_url_changed)
         service.add(self.url_row)
 
-        self.key_entry = Adw.PasswordEntryRow(title="API Key（本机服务可以不填）")
+        self.key_entry = PasswordEntryRow(title="API Key（本机服务可以不填）")
         self.key_entry.set_text(read_translate_key())
         self.key_entry.connect("changed", self.on_key_changed)
         service.add(self.key_entry)
 
-        self.tmodel_row = Adw.EntryRow(title="模型")
+        self.tmodel_row = EntryRow(title="模型")
         self.tmodel_row.set_text(self.values["TranslateModel"])
         self.tmodel_row.connect("changed", lambda row: (
             self.set_value("TranslateModel", row.get_text().strip()), self.refresh_translate_status()))
@@ -3990,7 +4270,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         # 一般用不着的放进折叠项
         more = Adw.ExpanderRow(title="更多选项")
-        idle = Adw.SpinRow.new_with_range(*RANGES["TranslateIdleMinutes"], 1)
+        idle = SpinRow.new_with_range(*RANGES["TranslateIdleMinutes"], 1)
         idle.set_title("不用几分钟后释放内存")
         idle.set_subtitle("0 表示一直留着")
         try:
@@ -4002,7 +4282,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         more.add_row(idle)
         self.llama_status = Adw.ActionRow(title="运行模型的程序（llama-server）")
         more.add_row(self.llama_status)
-        self.llama_row = Adw.EntryRow(title="llama-server 的位置（一般不用填）",
+        self.llama_row = EntryRow(title="llama-server 的位置（一般不用填）",
                                       show_apply_button=False)
         self.llama_row.set_text(self.values["TranslateLlamaServer"])
         self.llama_row.connect("changed", lambda row: (
@@ -4078,13 +4358,13 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         extra = ("同时下载运行模型的程序 llama-server（llama.cpp 官方发布，MIT 许可）。"
                  if want_llama else "")
-        dialog = Adw.AlertDialog(
+        dialog = AlertDialog(
             heading="下载离线翻译模型？",
             body=f"一共 {human_size(size)}，下载完会校验文件。{extra}\n\n"
                  f"{LOCAL_MODEL_TERMS}\n\n点「同意并下载」表示你接受这份许可。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("accept", "同意并下载")
-        dialog.set_response_appearance("accept", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_appearance("accept", ResponseAppearance.SUGGESTED)
 
         def answered(_dialog, response):
             if response == "accept":
@@ -4352,10 +4632,10 @@ class SettingsWindow(Adw.ApplicationWindow):
             "人名、公司名、常用的长句、邮箱地址都可以加。加进来的词总排在候选第一个，简拼也能打出来。\n\n"
             "编码按词自动填好拼音，多音字请检查；也可以是 mail、addr 这类字母，正好打这几个字母时出现。\n\n"
             "词里写 \\n 表示换行，比如「四川省\\n宜宾市」。"))
-        self.word_entry = Adw.EntryRow(title="词")
+        self.word_entry = EntryRow(title="词")
         self.word_entry.connect("changed", self.on_word_changed)
         self.word_entry.connect("entry-activated", self.on_add_word)
-        self.pinyin_entry = Adw.EntryRow(title="编码：拼音或字母")
+        self.pinyin_entry = EntryRow(title="编码：拼音或字母")
         self.pinyin_entry.connect("changed", self.on_pinyin_changed)
         self.pinyin_entry.connect("entry-activated", self.on_add_word)
         self.add_button = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="添加",
@@ -4486,7 +4766,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.word_box.append(row)
 
     def on_import_words(self, *_args):
-        dialog = Gtk.FileDialog(title="导入自定义词")
+        dialog = FileDialog(title="导入自定义词")
 
         def chosen(dialog, result):
             try:
@@ -4507,7 +4787,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         dialog.open(self, None, chosen)
 
     def on_export_words(self, *_args):
-        dialog = Gtk.FileDialog(title="导出自定义词", initial_name="wowtype-custom-words.tsv")
+        dialog = FileDialog(title="导出自定义词", initial_name="wowtype-custom-words.tsv")
 
         def chosen(dialog, result):
             try:
@@ -4546,9 +4826,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.install_button.add_css_class("suggested-action")
         self.install_button.connect("clicked", self.on_install_update)
         self.page_button = Gtk.Button(label="打开下载页", valign=Gtk.Align.CENTER)
-        self.page_button.connect("clicked", lambda _b: Gtk.UriLauncher.new(
-            self.release["url"] if self.release and self.update_files
-            else INSTALL_GUIDE).launch(self, None, None))
+        self.page_button.connect("clicked", lambda _b: launch_uri(
+            self, self.release["url"] if self.release and self.update_files else INSTALL_GUIDE))
         self.install_row.add_suffix(self.page_button)
         self.install_row.add_suffix(self.install_button)
         group.add(self.install_row)
@@ -4755,15 +5034,15 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_open_custom(self, *_args):
         if not os.path.exists(CUSTOM_FILE):
             write_custom_words(self.words)
-        Gtk.FileLauncher.new(Gio.File.new_for_path(CUSTOM_FILE)).launch(self, None, None)
+        launch_file(self, CUSTOM_FILE)
 
     def on_reset(self, *_args):
-        dialog = Adw.AlertDialog(heading="恢复默认设置？",
+        dialog = AlertDialog(heading="恢复默认设置？",
                                  body="排列方向、模糊音、语音键等回到默认值。自定义词和翻译服务"
                                       "（地址、模型、Key）不受影响。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("reset", "恢复默认")
-        dialog.set_response_appearance("reset", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_response_appearance("reset", ResponseAppearance.DESTRUCTIVE)
 
         def answered(_dialog, response):
             if response != "reset":
@@ -4793,7 +5072,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         dialog.present(self)
 
     def on_about(self, *_args):
-        about = Adw.AboutDialog(
+        about = AboutDialog(
             application_name="WowType",
             application_icon="wowtype",
             developer_name="Gloridust",
@@ -4806,6 +5085,33 @@ class SettingsWindow(Adw.ApplicationWindow):
                     "语音模型属于腾讯微信输入法，在设置的「语音」页从腾讯服务器下载，不随 WowType 分发。",
             comments="好用的拼音输入法：整句、简拼、按错键纠正、语音输入。")
         about.present(self)
+
+
+def gui_supported():
+    """设置窗口要 libadwaita 1.1、GTK 4.6 以上（Ubuntu 22.04 正好是这两个；缺的控件用上面的替身）。"""
+    return (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 6) and Adw.get_minor_version() >= 1
+
+
+class OldSystemApp(Adw.Application):
+    """系统的 libadwaita / GTK 太旧时，打开设置只说明一下，不让它报错退出。"""
+
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        # 插件会带 --page 打开设置；这里不认的话 GApplication 会报「未知选项」
+        self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING, "", "")
+
+    def do_activate(self):
+        window = Adw.ApplicationWindow(application=self, title="WowType 设置",
+                                       default_width=520, default_height=380)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(Adw.HeaderBar())
+        box.append(Adw.StatusPage(
+            icon_name="wowtype", vexpand=True, title="这个系统上打不开设置界面",
+            description=(f"WowType 设置要 GTK 4.6、libadwaita 1.1 以上，这台电脑是 GTK "
+                         f"4.{Gtk.get_minor_version()}、libadwaita 1.{Adw.get_minor_version()}。\n"
+                         "打字不受影响。设置可以在「Fcitx 5 配置」里改（输入法列表里选 WowType）。")))
+        window.set_content(box)
+        window.present()
 
 
 class SettingsApp(Adw.Application):
@@ -4839,7 +5145,7 @@ class SettingsApp(Adw.Application):
         family = Pango.FontDescription.from_string(name).get_family() or "Sans"
         families = [family] + [f for f in CJK_SC_FONTS if f != family]
         quoted = ", ".join('"' + f.replace('"', "") + '"' for f in families)
-        self.font_css.load_from_string(f"window {{ font-family: {quoted}; }}")
+        css_load(self.font_css, f"window {{ font-family: {quoted}; }}")
 
     def update_style_css(self):
         dark = Adw.StyleManager.get_default().get_dark()
@@ -4847,7 +5153,7 @@ class SettingsApp(Adw.Application):
         css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT % accent_text
         if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):
             css += STYLE_ACCENT_VARS % accent_text
-        self.style_css.load_from_string(css)
+        css_load(self.style_css, css)
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict().end().unpack()
@@ -5039,4 +5345,4 @@ if __name__ == "__main__":
             assert "连不上" in str(e) or "超时" in str(e), e
         print("self-test ok")
         sys.exit(0)
-    sys.exit(SettingsApp().run(sys.argv))
+    sys.exit((SettingsApp() if gui_supported() else OldSystemApp()).run(sys.argv))

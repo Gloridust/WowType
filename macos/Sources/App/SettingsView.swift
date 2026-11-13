@@ -349,9 +349,8 @@ private struct InputPage: View {
         PrefGroup("快捷输入") {
             SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi", isOn: $model.config.dateTime)
             RowDivider()
-            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时不可用" : "v1+2*3 → 7",
+            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时打大写 V：V1+2*3 → 7" : "v1+2*3 → 7",
                       isOn: $model.config.calculator)
-                .disabled(model.config.shuangpin)
             RowDivider()
             SwitchRow(title: "工具栏",
                       subtitle: model.config.shuangpin ? "双拼时不可用" : "打 v 再按空格：剪贴板、常用语、符号、表情",

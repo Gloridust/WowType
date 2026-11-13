@@ -435,7 +435,7 @@ pub struct View {
 pub struct Config {
     /// 一页几个候选（数字按键 emoji 只在第一页里找数字字）。
     pub page_size: usize,
-    /// V 模式计算器（v 后面打算式）。双拼时不开（v 是韵母键）。
+    /// V 模式计算器（v 后面打算式）。双拼时用大写 V（小写 v 是声母键）。
     pub calculator: bool,
     /// 打 riqi、shijian 这类时给日期时间候选。
     pub date_time: bool,
@@ -1633,8 +1633,8 @@ impl<'e> Session<'e> {
             }
             _ => {}
         }
-        if self.config.calculator && !self.shuangpin() {
-            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
+        if self.config.calculator {
+            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）。双拼时是大写 V
             if sym == keysym::EQUAL && self.calc_active() && self.input.len() > 1 {
                 // = 上屏计算结果（第一个候选）
                 return Some(self.commit_current());
@@ -2235,13 +2235,14 @@ impl<'e> Session<'e> {
         all.splice(1..1, extra);
     }
 
-    /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。双拼时 v 是韵母键，不开。
+    /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。
+    /// 双拼时 v 是声母键（v1 是「选第一个候选」），改用大写 V（#160）。
     fn calc_active(&self) -> bool {
-        let shuangpin = self.engine.is_some_and(|e| e.config().shuangpin);
-        if !self.config.calculator || shuangpin || !self.selections.is_empty() {
+        if !self.config.calculator || !self.selections.is_empty() {
             return false;
         }
-        let Some(rest) = self.input.strip_prefix('v') else {
+        let prefix = if self.shuangpin() { 'V' } else { 'v' };
+        let Some(rest) = self.input.strip_prefix(prefix) else {
             return false;
         };
         rest.bytes()
@@ -2253,6 +2254,10 @@ impl<'e> Session<'e> {
     /// 分不出来就原样。
     fn segmented_remaining(&mut self) -> String {
         let input = self.remaining().to_owned();
+        if self.calc_active() {
+            // 算式原样显示（双拼时不能当成按键换成全拼）
+            return input;
+        }
         if let Some(engine) = self.engine {
             if engine.config().shuangpin {
                 if self.config.shuangpin_keys {
