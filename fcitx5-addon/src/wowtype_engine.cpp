@@ -790,6 +790,7 @@ void WowtypeEngine::maybeSwitchLexicon() {
     if (core_) {
         wowtype_engine_free(core_);
         core_ = nullptr;
+        lm2Loaded_ = false;
     }
     if (lexicon_ == wantedLexicon_) {
         WLOG_I() << "WowType: 词库文件换了，重新载入 " << lexicon_;
@@ -973,6 +974,21 @@ void WowtypeEngine::applyCoreSettings() {
     }
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
     wowtype_engine_set_rare_ext_chars(core_, rareExt_ ? 1 : 0);
+    if (!lm2Loaded_) {
+        const std::string lm2 = findDataFile("WOWTYPE_LM2", "words.extra.lm");
+        if (!lm2.empty()) {
+            double weight = 0.4;
+            if (const char *env = std::getenv("WOWTYPE_LM2_WEIGHT"); env && *env) {
+                weight = std::strtod(env, nullptr);
+            }
+            if (wowtype_engine_load_lm2(core_, lm2.c_str(), static_cast<float>(weight)) == 0) {
+                lm2Loaded_ = true;
+                WLOG_I() << "WowType: 载入领域词级模型 " << lm2 << "（权重 " << weight << "）";
+            } else {
+                WLOG_W() << "WowType: 领域词级模型载入失败 " << lm2;
+            }
+        }
+    }
     if (traditional_ && !conversionLoaded_) {
         const std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
         const int loaded =

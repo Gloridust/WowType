@@ -525,6 +525,7 @@ private:
     uint64_t shiftDownAt_ = 0;
     bool traditional_ = false;
     bool conversionLoaded_ = false;
+    bool lm2Loaded_ = false;
     bool emojiSuggest_ = true;
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;

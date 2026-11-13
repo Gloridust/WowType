@@ -206,6 +206,8 @@ Lexicon=
 | `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
 | `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal`（插件和设置界面都认） |
 | `WOWTYPE_NNLM` | 神经语言模型路径，默认 `~/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin` |
+| `WOWTYPE_LM2` | 领域词级模型路径，默认数据目录下的 `words.extra.lm`；没有就不混 |
+| `WOWTYPE_LM2_WEIGHT` | 领域模型权重，0–1，默认 0.4 |
 | `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新，也不自动打开默认主题 |
 | `WOWTYPE_LOG` | 日志文件路径，默认 `~/.local/state/wowtype/wowtype.log`；`0` 不写 |
 | `WOWTYPE_TRANSLATE=1`、`WOWTYPE_TRANSLATE_URL`、`WOWTYPE_TRANSLATE_MODEL`、`WOWTYPE_TRANSLATE_TARGET` | 互译开关、服务地址、模型、语言 |
@@ -272,6 +274,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `wtlocal/` | 语音模型（约 130MB），在设置的「语音」页下载或删除；没有它语音输入打不开，按语音键只提示去下载 |
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
+| `words.extra.lm` | 可选：领域词级模型，和 `words.lm` 按权重混合，见下 |
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
@@ -291,6 +294,15 @@ cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
 WowType 能读它来给整句候选重排（日常整句的首选命中率从约 75% 提到约 84%，每次按键多 2ms 左右）。
 模型是腾讯的，WowType 不分发；手上有微信输入法 macOS 版（3.0.0）的安装包或程序时，运行
 `python3 tools/install_wetype_nnlm.py <WeType 的 .zip 或 .app>` 取出来，重启 fcitx5 生效。
+
+**领域词级模型（可选）**：如果手上有一批领域语料（客服、聊天、某专业），可以训一个小词级模型和默认的 `words.lm` 混合，让这个领域的用词排在前面。实测对话语料训的 0.5MB 小模型，1000 句留出 top1 从 60.3% 提到 64.1%。
+
+```bash
+cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
+    --lexicon lexicon.tsv --out words.extra.lm corpus.txt
+```
+
+把 `words.extra.lm` 放进数据目录（或 `WOWTYPE_LM2` 指过去），重启 fcitx5；权重用 `WOWTYPE_LM2_WEIGHT` 调（默认 0.4，0.3–0.5 比较稳）。
 
 想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动（自定义词不受影响）。
 

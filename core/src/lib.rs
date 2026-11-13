@@ -219,6 +219,19 @@ impl Engine {
             *slot = model;
         }
     }
+    /// 再加载一个领域词级模型，和当前的按 `weight`（第二路的权重）混合。
+    ///
+    /// 只调用一次；重复调用会在上一次的混合结果上再混一层。
+    pub fn load_lm2<P: AsRef<std::path::Path>>(&mut self, path: P, weight: f64) -> Result<()> {
+        let second = crate::lm::load_lm(path.as_ref())?;
+        let first = self.lm.clone();
+        self.lm = Arc::new(crate::lm::MixedLm::new(
+            first,
+            second,
+            1.0 - weight.clamp(0.0, 1.0),
+        ));
+        Ok(())
+    }
 
     pub fn has_nnlm(&self) -> bool {
         self.nnlm.read().map(|m| m.is_some()).unwrap_or(false)
