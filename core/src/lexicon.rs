@@ -668,62 +668,22 @@ impl Lexicon for MemoryLexicon {
                 SyllableQuery::Jianpin { .. } => return Vec::new(),
             }
         }
-        // 成对归并的音节（huang/wang、jun/jiong…）要拿对方的归并键再查一次，
-        // 所以这里按音节展开成若干条键，最多 16 种组合。
-        let mut options: Vec<Vec<u32>> = Vec::with_capacity(ids.len());
-        for &id in &ids {
-            let mut opts = vec![key[options.len()]];
-            if let Some(syllable) = crate::syllable::Syllable::from_id(id) {
-                for (partner, _) in crate::syllable::fuzzy_partners(syllable.text) {
-                    if let Some(partner_key) = crate::syllable::fuzzy_key_of_text(partner) {
-                        if !opts.contains(&partner_key) {
-                            opts.push(partner_key);
-                        }
-                    }
-                }
-            }
-            options.push(opts);
-        }
-        let mut keys: Vec<Vec<u32>> = vec![Vec::new()];
-        for opts in &options {
-            let mut next: Vec<Vec<u32>> = Vec::new();
-            for prefix in &keys {
-                for &opt in opts {
-                    if next.len() >= 16 {
-                        break;
-                    }
-                    let mut combined = prefix.clone();
-                    combined.push(opt);
-                    next.push(combined);
-                }
-            }
-            keys = next;
-        }
-
         let index = self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
+        let Some(idxs) = index.get(&key) else {
+            return Vec::new();
+        };
         // 索引按全部分组归并，这里只留下「用到的分组都打开了」的词
-        let mut seen = std::collections::HashSet::new();
-        let mut out = Vec::new();
-        for key in &keys {
-            let Some(idxs) = index.get(key) else {
-                continue;
-            };
-            for &i in idxs {
-                if !seen.insert(i) {
-                    continue;
-                }
-                let entry = &self.entries[i];
-                if entry.keys.len() == ids.len()
+        idxs.iter()
+            .map(|&i| &self.entries[i])
+            .filter(|entry| {
+                entry.keys.len() == ids.len()
                     && entry.keys.iter().zip(&ids).all(|(k, &q)| {
                         crate::syllable::fuzzy_groups_between(q, k.id)
                             .is_some_and(|need| need & !groups == 0)
                     })
-                {
-                    out.push(entry.clone());
-                }
-            }
-        }
-        out
+            })
+            .cloned()
+            .collect()
     }
 
     fn total_freq(&self) -> f64 {

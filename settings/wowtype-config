@@ -186,15 +186,15 @@ FUZZY_GROUPS = [
     ("FuzzyFH", "f = h"),
     ("FuzzyRL", "r = l"),
     ("FuzzyAn", "an = ang"),
+    ("FuzzyAnAi", "an = ai"),
     ("FuzzyIan", "ian = iang"),
     ("FuzzyUan", "uan = uang"),
+    ("FuzzyHuangWang", "huang = wang"),
     ("FuzzyEn", "en = eng"),
+    ("FuzzyEngOng", "eng = ong"),
     ("FuzzyIn", "in = ing"),
     ("FuzzyUn", "un = ong"),
-    ("FuzzyAnAi", "an = ai"),
-    ("FuzzyHuangWang", "huang = wang"),
     ("FuzzyUnIong", "un = iong"),
-    ("FuzzyEngOng", "eng = ong"),
 ]
 
 SELECT_KEYS = [
