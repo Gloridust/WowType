@@ -331,7 +331,9 @@ fcitx5 其他全局快捷键（`EnumerateForwardKeys` 等）里也不要放单�
   `git push --force origin v<版本>^{commit}:refs/heads/release`。
   想全自动，在仓库 Secrets 里加 `RELEASE_BRANCH_TOKEN`：细粒度 PAT，只给本仓库，权限 Contents 和 Workflows 读写。
 - 词库换了版本（rime-ice 更新，或 `scripts/make-data.sh` 的 REV 加一）时，新词库包要等发版后才有下载地址，
-  发布 job 会自动开一个 issue，写好 `nix/package.nix` 里 `dataVersion`、`url`、`hash` 要改成什么。
+  发布 job 会自动改好 `nix/package.nix` 里的 `dataVersion`、`url`、`hash`，推到 `bot/nix-data-<词库版本>` 分支并开 PR 到 main，
+  合并就行。这要在仓库设置 Actions → General 里勾上「Allow GitHub Actions to create and approve pull requests」；
+  没勾时退回开 issue，issue 里有开 PR 的链接。Actions 开的 PR 不会自动跑 CI，要跑就关掉再重新打开。
 
 ## Fedora Atomic
 
