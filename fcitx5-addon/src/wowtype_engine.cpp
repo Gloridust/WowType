@@ -1161,8 +1161,11 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
     }
-    // 会话已经清好了编辑区；不能 reset，选词上屏以后会话可能接着在联想
+    // 不能 reset 会话：选词上屏以后可能接着在联想，离开「译」时正在打的拼音也留着接着打
     state->clearCopies();
+    if (state->composing()) {
+        syncView(state);
+    }
     if (learned || !text.empty()) {
         rememberContext(text);
     }
@@ -1982,17 +1985,19 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
         }
         return false;
     }
+    const int mode = frame->mode;
+    // 打到一半切英文：已选的词 + 打的字母原样上屏；离开「译」：原文原样上屏、拼音留着（会话已经放进 frame）
+    const bool redraw = frame->commit || wasPredicting;
     if (frame->commit) {
-        // 打到一半切英文：已选的词 + 打的字母原样上屏（会话已经放进 frame）
         finishCommit(ic, state, frame);
-        updateInputPanel(ic, state);
     } else if (wasPredicting) {
-        // 单按 Shift 切模式收起了联想
-        state->clearCopies();
+        state->clearCopies(); // 切模式收起了联想
+    }
+    switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
+    if (redraw) {
+        // 换好模式再画：离开「译」以后留着的拼音照普通的编辑区画
         updateInputPanel(ic, state);
     }
-    switchMode(ic, state, frame->mode == WOWTYPE_MODE_ENGLISH,
-               frame->mode == WOWTYPE_MODE_TRANSLATE, true);
     event.filterAndAccept();
     return true;
 }

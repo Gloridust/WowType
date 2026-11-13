@@ -31,8 +31,8 @@ impl Engine {
         if limit == 0 || !context.chars().next_back().is_some_and(is_han) {
             return Vec::new();
         }
-        // 平常载入词库时已经准备好了（只做一次）
-        self.prepare_prediction();
+        // 第一次联想时配好语言模型要的词频（约 0.04 秒，只做一次；不开联想的不用花这个时间）
+        self.lm.prepare_prediction(&*self.base_lexicon);
         let Some(prev) = self.prediction_prev(context) else {
             return Vec::new();
         };
@@ -68,6 +68,12 @@ impl Engine {
             // 繁体转换后重了的不给
             if out.iter().any(|(w, _)| *w == shown) {
                 continue;
+            }
+            if self.config.traditional {
+                // 和 input() 一样记下繁体对应的词库写法：选了以后学的、接着联想看的都是词库里的写法
+                if let Ok(mut last) = self.last_words.write() {
+                    last.insert(shown.clone(), vec![word]);
+                }
             }
             out.push((shown, score));
         }

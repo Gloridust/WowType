@@ -46,7 +46,7 @@ pub trait LanguageModel: Send + Sync {
     }
 
     /// 联想要用的准备：按词库里每个词的频次配好词本身有多常用（只做一次，以后再调什么都不做）。
-    /// 载入词库的后台线程里调。默认什么都不做。
+    /// 默认什么都不做。
     fn prepare_prediction(&self, _lexicon: &dyn crate::lexicon::Lexicon) {}
 }
 

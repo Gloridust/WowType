@@ -497,6 +497,7 @@ public final class Composer {
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
         config.prediction = settings.prediction ? 1 : 0
+        let wasPredicting = isPredicting
         config.punct_style = settings.halfwidthPunct ? 1 : 0
         config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
         switch settings.shiftToggle {
@@ -510,8 +511,8 @@ public final class Composer {
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
         wowtype_session_configure(session, &config)
-        if isComposing {
-            refresh()
+        if isComposing || wasPredicting {
+            refresh() // 改了设置会话收起联想：候选框跟着收
         }
     }
 

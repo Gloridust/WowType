@@ -2174,6 +2174,10 @@ fn caret_shuangpin_shows_keys() {
 /// 今天后面多半是天气、晚上（了太少，单字不给）；谢谢后面是大家、你（单字，但很有把握）；
 /// 天气后面是不错（接着联想）；冷门后面接什么都不常见（没把握，不给）。
 fn prediction_engine() -> &'static Engine {
+    Box::leak(Box::new(new_prediction_engine()))
+}
+
+fn new_prediction_engine() -> Engine {
     use wowtype_core::wordlm::{build, BuildConfig, Counts, WordLm};
     let words = [
         "<s>", "今天", "天气", "晚上", "不错", "谢谢", "大家", "你", "了", "冷门", "我们", "的",
@@ -2213,9 +2217,7 @@ fn prediction_engine() -> &'static Engine {
         )
         .unwrap(),
     );
-    let engine = Engine::new(lexicon, Arc::new(lm));
-    engine.prepare_prediction();
-    Box::leak(Box::new(engine))
+    Engine::new(lexicon, Arc::new(lm))
 }
 
 fn predicting() -> Session<'static> {
@@ -2325,14 +2327,6 @@ fn prediction_other_keys_behave_as_without_panel() {
     type_keys(&mut session, "jintian<sp>");
     let frame = type_keys(&mut session, "7");
     assert!(!frame.handled, "只有两个联想，7 是数字");
-    assert_eq!(frame.cand_count, 0);
-
-    // 小键盘打的是数字
-    let mut session = predicting();
-    type_keys(&mut session, "jintian<sp>");
-    let frame = session.key(&Key::press(keysym::KP_0 + 1));
-    assert!(!frame.handled);
-    assert_eq!(frame.commit, None);
     assert_eq!(frame.cand_count, 0);
 
     // 分号选词也不选联想：分号照常是标点
@@ -2480,4 +2474,21 @@ fn prediction_learns_user_pairs() {
     type_keys(&mut session, "lengmen<sp>women<sp><cr>");
     type_keys(&mut session, "lengmen<sp>");
     assert_eq!(shown(&mut session), ["我们"]);
+}
+
+#[test]
+fn prediction_traditional_chains() {
+    // 开着繁体：联想给繁体，选了以后学的、接着联想看的是词库写法（天气 → 不错）
+    let mut engine = new_prediction_engine();
+    engine.install_converter(Converter::from_tsv_str("气\t氣\n错\t錯\n").unwrap());
+    engine.set_traditional(true);
+    let mut session = with(Box::leak(Box::new(engine)));
+    session.configure(Config {
+        prediction: true,
+        ..Config::default()
+    });
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(shown(&mut session), ["天氣", "晚上"]);
+    assert_eq!(type_keys(&mut session, "1").commit.as_deref(), Some("天氣"));
+    assert_eq!(shown(&mut session), ["不錯"], "选了繁体的词接着联想");
 }

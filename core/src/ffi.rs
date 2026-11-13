@@ -93,7 +93,6 @@ pub unsafe extern "C" fn wowtype_engine_new(
         let engine = Engine::new(lexicon, lm);
         // 外壳都在后台线程里载入引擎：模糊音索引（兜底默认开）也在这时建好，不留到第一次按键
         engine.prepare_fuzzy();
-        engine.prepare_prediction();
         Ok(engine)
     })();
 

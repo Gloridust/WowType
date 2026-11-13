@@ -1154,6 +1154,13 @@ void runCases(Instance &instance) {
             std::ofstream(configDir + "/wowtype.conf") << "Prediction=True\n";
         }
         addon->reloadConfig();
+        // 先用两次「今天中午」「今天生日」：用过的搭配一定联想得出来，换了词库（万象）也一样
+        for (const char *seed : {"jintian<sp>zhongwu<sp>", "jintian<sp>shengri<sp>"}) {
+            for (int i = 0; i < 2; ++i) {
+                fresh(ic.get());
+                type(ic.get(), seed);
+            }
+        }
         fresh(ic.get());
         type(ic.get(), "jintian<sp>");
         const auto predicted = page(ic.get());
@@ -1195,12 +1202,14 @@ void runCases(Instance &instance) {
         // 点联想的词（鼠标）
         fresh(ic.get());
         type(ic.get(), "jintian<sp>");
-        if (auto *shown = common(); shown && shown->size() > 1) {
-            const std::string second = page(ic.get())[1];
-            shown->candidate(1).select(ic.get());
-            check(ic->committed == "今天" + second, "联想：点第二个联想的词：" + ic->committed);
-        } else {
-            check(false, "联想：jintian 后面有两个以上联想的词：" + join(page(ic.get())));
+        {
+            auto *shown = common();
+            const auto words = page(ic.get());
+            if (shown && words.size() > 1) {
+                shown->candidate(1).select(ic.get());
+            }
+            check(words.size() > 1 && ic->committed == "今天" + words[1],
+                  "联想：点第二个联想的词：" + ic->committed + "（联想 " + join(words) + "）");
         }
 
         // 单按右 Shift 切英文、失去焦点：收起，数字不会选到看不见的词
@@ -1971,6 +1980,19 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                  [](HarnessInputContext *ic) {
                      return ic->committed.rfind("你好", 0) == 0 && ic->committed.size() > std::string("你好").size() &&
                             ic->committed.find("EN:") == std::string::npos;
+                 }});
+    s.push_back({"打着拼音 Shift 切回中文：原文原样上屏，拼音留着接着打",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                     tapKey(ic, FcitxKey_Shift_R); // 中 → 英 → 译
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>shi");
+                     tapKey(ic, FcitxKey_Shift_R);
+                 },
+                 [](HarnessInputContext *ic) {
+                     // 编辑区画在输入框里还是候选框里看 fcitx5 的设置，两处都算
+                     return ic->committed == "你好" && (inlineText(ic) + preedit(ic)) == "shi" && !page(ic).empty();
                  }});
     // 另设的切换键（#143）
     auto press = [](HarnessInputContext *ic, Key key) {

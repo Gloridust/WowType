@@ -149,6 +149,7 @@ final class WowTypeInputController: IMKInputController {
     }
 
     override func hidePalettes() {
+        composer.dismissPrediction() // 候选框收起了：联想也收起，免得数字键选到看不见的词
         AppState.shared.candidatePanel.hide()
         super.hidePalettes()
     }

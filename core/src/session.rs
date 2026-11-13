@@ -1417,12 +1417,7 @@ impl<'e> Session<'e> {
         let Some(engine) = self.engine else {
             return;
         };
-        if !self.config.prediction
-            || self.mode != Mode::Chinese
-            || self.hints & key_hints::SENSITIVE != 0
-            || self.composing()
-            || self.tool.is_some()
-        {
+        if !self.config.prediction || self.mode != Mode::Chinese || self.hints & key_hints::SENSITIVE != 0 {
             return;
         }
         self.predictions = engine
@@ -1447,7 +1442,7 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 联想开着时的键。只有主键盘上的数字（1 到联想的个数）选词、Esc 收起；别的键都收起联想以后
+    /// 联想开着时的键。只有数字（1 到联想的个数）选词、Esc 收起；别的键都收起联想以后
     /// 照常处理（返回 None），和没开着一样：空格、回车照常交给应用（空格不会选中联想的词），
     /// 退格照常删应用里的字，字母开始打字，标点照常上屏。
     /// 单按的修饰键不动它（Shift 可能是要打大写、符号）；分号、引号选词也不选联想（它们多半是要打标点）。
@@ -1455,11 +1450,7 @@ impl<'e> Session<'e> {
         if is_modifier_keysym(key.keysym) {
             return None;
         }
-        let digit = (keysym::DIGIT_0..=keysym::DIGIT_9)
-            .contains(&key.keysym)
-            .then(|| key.digit())
-            .flatten();
-        if let Some(d) = digit.filter(|&d| (1..=self.predictions.len()).contains(&d)) {
+        if let Some(d) = key.digit().filter(|&d| (1..=self.predictions.len()).contains(&d)) {
             return Some(self.choose_prediction(d - 1));
         }
         self.dismiss_prediction();

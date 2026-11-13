@@ -454,12 +454,6 @@ impl Engine {
         self.base_lexicon.prepare_fuzzy();
     }
 
-    /// 联想（[`Engine::predict`]）要的词频表先配好（语言模型的词表 × 词库频次，约 0.1 秒），
-    /// 不留到第一次上屏。载入词库的后台线程里调；只做一次。
-    pub fn prepare_prediction(&self) {
-        self.lm.prepare_prediction(&*self.base_lexicon);
-    }
-
     /// 模糊音关着时的兜底（见 [`EngineConfig::fuzzy_fallback`]），默认开。
     pub fn set_fuzzy_fallback(&mut self, on: bool) {
         self.config.fuzzy_fallback = on;
