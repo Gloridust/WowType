@@ -305,11 +305,11 @@ private struct InputPage: View {
         .onAppear { model.checkRelease() }
 
         PrefGroup("输入方案") {
-            RadioRow(title: "拼音输入", subtitle: "全拼，也能只打声母", selected: model.config.inputScheme == .quanpin) {
+            RadioRow(title: WowtypeConfig.InputScheme.quanpin.name, subtitle: "全拼，也能只打声母", selected: model.config.inputScheme == .quanpin) {
                 model.config.inputScheme = .quanpin
             }
             RowDivider()
-            RadioRow(title: "双拼输入", subtitle: "每个字打两个键", selected: model.config.shuangpin) {
+            RadioRow(title: WowtypeConfig.InputScheme.shuangpin.name, subtitle: "每个字打两个键", selected: model.config.shuangpin) {
                 model.config.inputScheme = .shuangpin
             }
             if model.config.shuangpin {
@@ -320,7 +320,7 @@ private struct InputPage: View {
                           isOn: $model.config.shuangpinShowKeys)
             }
             RowDivider()
-            RadioRow(title: "五笔输入",
+            RadioRow(title: WowtypeConfig.InputScheme.wubi86.name,
                      subtitle: model.wubiTableAvailable ? "86 版，z 键临时打拼音"
                          : "没有找到五笔码表 wubi86.tsv，重新安装 WowType 可以修好",
                      selected: model.config.wubi) {

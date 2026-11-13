@@ -781,7 +781,6 @@ void WowtypeEngine::checkOverlayAck(fcitx::InputContext *ic) {
 
 void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
     config_.load(config, true);
-    syncWowtypeLegacy(config_);
     fcitx::safeSaveAsIni(config_, kConfigFile);
     applyConfig();
 }

@@ -159,7 +159,7 @@ WubiHint=True                    # 编码提示
   - 五笔版本：v1 只有 86，有了 98 再出下拉。
 - v1.1 的「拼音混输」是第 3 个开关，默认关。开了以后第五码顶字要让位：第 5 个字母可能是拼音的一部分，两者有歧义。
 - 兼容旧配置：没有 `InputScheme` 时，`Shuangpin=True` 当作 `Shuangpin`，否则当作 `Quanpin`。
-  - 写回时两个键都写，旧版本读得懂。
+  - 写回时两个键都写，旧版本读得懂。（最后没留：三端存盘只写 `InputScheme`，旧的 `Shuangpin` 只读不写，见 `docs/CONFIG.md`。）
   - 涉及 `settings/wowtype-config`、`macos/Sources/Shared/Config.swift`、`fcitx5-addon` 的 `Shuangpin` 选项，以及 `docs/CONFIG.md`。
   - #194 加的 `Wubi` 开关改成 `InputScheme=Wubi86`。
 

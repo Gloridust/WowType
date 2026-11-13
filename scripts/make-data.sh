@@ -46,7 +46,7 @@ print(h.hexdigest())' "$1"
 }
 
 # fetch_pinned <名字> <URL> <sha256> <输出文件> [本机文件]：下载（或复制本机文件）并核对 sha256。
-# WOWTYPE_DATA_CACHE=<目录> 时下载过的文件按 sha256 存在那里，下次直接用（CI 用它少连 archive.org）。
+# WOWTYPE_DATA_CACHE=<目录> 时下载过的文件按 sha256 存在那里，下次直接用。
 fetch_pinned() {
   local name=$1 url=$2 want=$3 out=$4 local_file=${5:-} got cache=${WOWTYPE_DATA_CACHE:-}
   if [[ -n "$local_file" ]]; then
@@ -82,8 +82,6 @@ EXTRAS=" $(printf '%s' "${WOWTYPE_DATA_EXTRAS:-}" | tr ',' ' ') "
 for x in $EXTRAS; do
   case $x in
     jieba|cedict) ;;
-    corpus) echo "corpus 不用再写进 WOWTYPE_DATA_EXTRAS：默认就融 data/tatoeba-freq.tsv，换本机语料用 WOWTYPE_CORPUS" >&2
-            exit 1 ;;
     *) echo "WOWTYPE_DATA_EXTRAS 里的「${x}」不认识，可选：jieba cedict" >&2; exit 1 ;;
   esac
 done

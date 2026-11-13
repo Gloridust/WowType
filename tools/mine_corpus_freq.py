@@ -35,7 +35,6 @@ def main():
     ap.add_argument("corpus", nargs="+")
     ap.add_argument("--column", type=int, default=0,
                     help="句子在 TAB 分隔的第几列（从 1 数）；0 表示整行")
-    ap.add_argument("--min-count", type=int, default=1)
     ap.add_argument("--min-chars", type=int, default=1,
                     help="只数至少这么多字的词（2 = 不数单字：单字的频次决定 d/l/b 这类简拼的首页）")
     ap.add_argument("--t2s", action="store_true", help="繁转简（需要 opencc）")
@@ -68,11 +67,10 @@ def main():
                     if len(word) >= args.min_chars and CJK.match(word):
                         counts[word] += 1
 
-    kept = sorted(((w, c) for w, c in counts.items() if c >= args.min_count),
-                  key=lambda kv: (-kv[1], kv[0]))
+    kept = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     for word, count in kept:
         print(f"{word}\t{count}")
-    print(f"语料：{sentences} 句，{len(kept)} 个词（去重前 {len(counts)}）", file=sys.stderr)
+    print(f"语料：{sentences} 句，{len(kept)} 个词", file=sys.stderr)
 
 
 if __name__ == "__main__":

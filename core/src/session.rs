@@ -449,7 +449,7 @@ pub struct View {
 pub struct Config {
     /// 一页几个候选（数字按键 emoji 只在第一页里找数字字）。
     pub page_size: usize,
-    /// V 模式计算器（v 后面打算式）。双拼时用大写 V（小写 v 是声母键）。
+    /// V 模式计算器（v 后面打算式）。双拼、五笔时用大写 V（小写 v 是声母键、五笔码）。
     pub calculator: bool,
     /// 打 riqi、shijian 这类时给日期时间候选。
     pub date_time: bool,
@@ -473,7 +473,7 @@ pub struct Config {
     pub shift_tap_ms: u32,
     /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
     pub translate_mode: bool,
-    /// 只打一个 v 再按空格打开工具栏（双拼、互译时不开）。
+    /// 只打一个 v 再按空格打开工具栏（双拼、五笔、互译时不开）。
     pub toolbar: bool,
     /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
     pub clipboard_history: bool,
@@ -2169,10 +2169,8 @@ impl<'e> Session<'e> {
     pub fn frame(&mut self, handled: bool) -> Frame {
         let n = self.candidates().len();
         let selected = self.selected_text();
-        let shown = self.segmented_remaining();
-        let rest_caret = self.caret() - self.rest_start();
-        let preedit_cursor = selected.len()
-            + Self::shown_caret(self.remaining(), &shown, rest_caret).unwrap_or(shown.len());
+        let (shown, shown_caret) = self.segmented_remaining();
+        let preedit_cursor = selected.len() + shown_caret;
         let preedit = selected + &shown;
         let mut frame = Frame {
             handled,
@@ -2553,15 +2551,16 @@ impl<'e> Session<'e> {
     /// 还没选词那部分输入的显示：全拼分音节（nihao → ni hao），双拼显示成全拼
     /// （vsgo → zhong'guo），和微信输入法一样；设置了 `shuangpin_keys` 时双拼显示打的键。
     /// 五笔码原样，临时拼音是 z + 分好音节的拼音。分不出来就原样。
-    fn segmented_remaining(&mut self) -> String {
+    /// 连同光标在显示里的字节位置一起给。
+    fn segmented_remaining(&mut self) -> (String, usize) {
         let shown = self.segmented_remaining_shown();
         let input = self.remaining();
         let rest_caret = self.caret() - self.rest_start();
-        if rest_caret < input.len() && Self::shown_caret(input, &shown, rest_caret).is_none() {
+        match Self::shown_caret(input, &shown, rest_caret) {
+            Some(at) => (shown, at),
             // 光标在拼音中间、显示的样子换不回光标位置（双拼显示成全拼）：显示打的键
-            return input.to_owned();
+            None => (input.to_owned(), rest_caret),
         }
-        shown
     }
 
     fn segmented_remaining_shown(&mut self) -> String {
