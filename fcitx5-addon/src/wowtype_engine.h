@@ -19,6 +19,7 @@
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/matchrule.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
@@ -486,9 +487,12 @@ private:
     void setupVoiceOverlay();
     /// 在会话总线上登记 org.wowtype.Input（外部命令切模式）。
     void setupControl();
-    bool voiceOverlay() const { return !overlayOwner_.empty(); }
+    /// 扩展在跑、而且没被认定画不出来（#170）：语音提示交给浮条。
+    bool voiceOverlay() const { return !overlayOwner_.empty() && !overlayBroken_; }
     void sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state, const std::string &label,
                           int level);
+    /// 发了状态一直等不到扩展的回执：认定浮条画不出来，这次和以后都在候选框里提示。
+    void checkOverlayAck(fcitx::InputContext *ic);
     void maybeCheckUpdate();
     bool voiceActive() const { return voiceShowing_; }
 
@@ -590,6 +594,12 @@ private:
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> overlayWatch_;
     /// 扩展在总线上的唯一名；空表示扩展没在跑，用候选框里的文字提示。
     std::string overlayOwner_;
+    /// 扩展画好一次状态回一个 Ack。这次说话发出第一个状态的时间、收到回执没有；
+    /// 等不到就把 overlayBroken_ 置上，直到扩展换了人（重新登录、扩展重载）。
+    std::unique_ptr<fcitx::dbus::Slot> overlayAckSlot_;
+    uint64_t overlaySentAt_ = 0;
+    bool overlayAcked_ = false;
+    bool overlayBroken_ = false;
 
     // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
     std::unique_ptr<fcitx::dbus::Bus> controlBus_;
