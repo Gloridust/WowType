@@ -121,9 +121,16 @@ def check_spec(spec, pack):
             check(default_for(s, end) in presets, f"规格：{key} 在 {end} 的默认值不在 presets 里", presets)
         missing = s.get("whenMissing")
         if missing:
-            check(missing["ifNonEmpty"] in by_key, f"规格：{key} 的 whenMissing 用了没有的键 {missing['ifNonEmpty']}")
+            other = missing.get("ifNonEmpty") or missing.get("ifTrue")
+            check(other in by_key, f"规格：{key} 的 whenMissing 用了没有的键 {other}")
             for case in missing["cases"]:
                 check(set(case["file"]) <= set(by_key), f"规格：{key} 的例子用了没有的键", case["file"])
+        mirrors = s.get("mirrors")
+        if mirrors:
+            target = by_key.get(mirrors["key"])
+            check(kind == "bool" and target is not None and mirrors["value"] in enum_values(target)
+                  and target["platforms"] == s["platforms"] and target.get("whenMissing"),
+                  f"规格：{key} 的 mirrors 不对（要是开关，跟着三端都有、带 whenMissing 的枚举）", mirrors)
     for case in spec["readRules"]["cases"]["items"]:
         for key in case["expect"]:
             check(key in by_key and set(by_key[key]["platforms"]) == set(ENDS),
@@ -207,6 +214,23 @@ def read_settings_text(wc, home, text):
         wc.CONFIG_FILE = saved
 
 
+def mirror_cases(spec, end):
+    """跟着别的项写的旧开关（mirrors）：[(开关的键, 跟着的键, 值, 文件)]，文件取跟着的那项 whenMissing 的例子。"""
+    by_key = {s["key"]: s for s in spec["settings"]}
+    out = []
+    for s in settings_for(spec, end):
+        mirrors = s.get("mirrors")
+        if mirrors:
+            for case in by_key[mirrors["key"]]["whenMissing"]["cases"]:
+                out.append((s["key"], mirrors["key"], mirrors["value"], case["file"]))
+    return out
+
+
+def check_mirror(values, key, target, value, file, end):
+    same(values.get(key), file_text(values.get(target) == value),
+         f"{end}：文件是 {file} 时 {key} 要跟着 {target}（读回来的 {target} 是 {values.get(target)}）")
+
+
 def check_settings(spec, wc, home):
     mine = settings_for(spec, "settings")
     same_set(wc.DEFAULTS, [s["key"] for s in mine], "设置界面：DEFAULTS 的键")
@@ -220,13 +244,16 @@ def check_settings(spec, wc, home):
          {s["key"]: enum_values(s) for s in mine if s["type"] == "enum"}, "设置界面：ENUMS（读文件时认的枚举值）")
 
     # 选项列表：(界面上的名字, 存盘名)
-    lists = {"ShuangpinScheme": wc.SHUANGPIN_SCHEMES, "ShiftToggle": wc.SHIFT_TOGGLES,
+    lists = {"InputScheme": wc.INPUT_SCHEMES, "ShuangpinScheme": wc.SHUANGPIN_SCHEMES,
+             "ShiftToggle": wc.SHIFT_TOGGLES,
              "InitialMode": wc.INITIAL_MODES, "ArrowKeys": wc.ARROW_KEYS,
              "SelectKeys": wc.SELECT_KEYS, "PunctuationStyle": wc.PUNCT_STYLES}
     for key, items in lists.items():
         same([value for _label, value in items], enum_values(by_key[key]), f"设置界面：{key} 的选项")
     same([(label, value) for label, value in wc.SHUANGPIN_SCHEMES],
          [(v["name"], v["value"]) for v in by_key["ShuangpinScheme"]["values"]], "设置界面：双拼方案的名字")
+    same([(label, value) for label, value in wc.INPUT_SCHEMES],
+         [(v["name"], v["value"]) for v in by_key["InputScheme"]["values"]], "设置界面：输入方案的名字")
     same([tuple(item) for item in wc.TRANSLATE_LANGUAGES],
          [(v["name"], v["value"], v["english"]) for v in by_key["TranslateTarget"]["values"]],
          "设置界面：TRANSLATE_LANGUAGES")
@@ -248,6 +275,18 @@ def check_settings(spec, wc, home):
         for case in missing["cases"] if missing else ():
             same(read_settings_config(wc, home, case["file"])[s["key"]], file_text(case["expect"]),
                  f"设置界面：文件是 {case['file']} 时 {s['key']}")
+    for key, target, value, file in mirror_cases(spec, "settings"):
+        values = read_settings_config(wc, home, file)
+        check_mirror(values, key, target, value, file, "设置界面")
+        # 写回去（界面上只改了跟着的那项，开关还是旧的）也跟着
+        stale = {**values, key: file_text(values[target] != value)}
+        saved, wc.CONFIG_FILE = wc.CONFIG_FILE, os.path.join(home, "wowtype.conf")
+        try:
+            wc.write_config(stale, [])
+            written = wc.read_config()[0]
+        finally:
+            wc.CONFIG_FILE = saved
+        check_mirror(written, key, target, value, f"{file}（写回去再读）", "设置界面")
     policy = spec["readRules"]["outOfRange"]["settings"]
     for s in mine:
         if s["type"] == "int":
@@ -377,7 +416,10 @@ def check_fcitx5(spec, exe):
     same(external, spec["fcitx5External"]["keys"], "fcitx5：ExternalOption")
     options = {o["key"]: o for o in options if o["type"] != "External"}
     mine = settings_for(spec, "fcitx5")
-    same_set(options, [s["key"] for s in mine], "fcitx5：WowtypeConfig 的键")
+    # 跟着别的项写的旧开关（mirrors）存盘，但不在 fcitx5 配置工具里列出来
+    same_set(options, [s["key"] for s in mine if not s.get("mirrors")], "fcitx5：配置工具里列出的键")
+    saved = run_dump(exe, "--load")["values"]
+    same_set(saved, [s["key"] for s in mine], "fcitx5：WowtypeConfig 存盘的键")
     for s in mine:
         key = s["key"]
         option = options.get(key)
@@ -398,6 +440,9 @@ def check_fcitx5(spec, exe):
         for case in missing["cases"] if missing else ():
             values = run_dump(exe, "--load", *(f"{k}={v}" for k, v in case["file"].items()))["values"]
             same(values.get(s["key"]), file_text(case["expect"]), f"fcitx5：文件是 {case['file']} 时 {s['key']}")
+    for key, target, value, file in mirror_cases(spec, "fcitx5"):
+        values = run_dump(exe, "--load", *(f"{k}={v}" for k, v in file.items()))["values"]
+        check_mirror(values, key, target, value, file, "fcitx5")
     policy = spec["readRules"]["outOfRange"]["fcitx5"]
     for s in mine:
         if s["type"] == "int":
