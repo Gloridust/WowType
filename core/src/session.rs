@@ -126,6 +126,8 @@ pub mod key_hints {
     pub const PANEL_OPEN: u32 = 1 << 1;
     /// 不能翻译的输入框（密码框）：「译」里也照常上屏，不攒原文、不往外发。
     pub const NO_TRANSLATE: u32 = 1 << 2;
+    /// 密码框这类敏感的输入框：不联想。
+    pub const SENSITIVE: u32 = 1 << 3;
 }
 
 /// 互译用的翻译器（[`crate::translate::Translator`]，或外壳自己的实现）。都不阻塞。
@@ -362,6 +364,9 @@ pub enum Panel {
     Emoji,
     /// v + 空格的工具栏（菜单、剪贴板、常用语）：竖排一列，一页 [`TOOL_PAGE`] 个。
     Tool,
+    /// 联想（[`Config::prediction`]）：上屏以后接着给的词，编辑区是空的，没有光标（空格不选它），
+    /// 数字键选。别的键收起联想、照常处理（会话不管的照常交给应用）。
+    Prediction,
 }
 
 /// 工具栏一页几个。
@@ -481,6 +486,8 @@ pub struct Config {
     pub shuangpin_keys: bool,
     /// 打字途中方向键做什么（#129）。
     pub arrow_keys: ArrowKeys,
+    /// 联想（#89）：选词上屏以后接着给出可能的下一个词，数字键选，选了接着联想。
+    pub prediction: bool,
 }
 
 impl Default for Config {
@@ -503,6 +510,7 @@ impl Default for Config {
             clipboard_history: false,
             shuangpin_keys: false,
             arrow_keys: ArrowKeys::Candidates,
+            prediction: false,
         }
     }
 }
@@ -608,6 +616,11 @@ pub struct Session<'e> {
     translation: Translation,
     /// 开着的工具栏 / 表情面板；None 是没开。
     tool: Option<ToolState>,
+    /// 联想给出的词（[`Panel::Prediction`]）；空的是没在联想。和候选框显示的一一对应：
+    /// 收起候选框的地方都要清掉，不然数字键会选到看不见的词。
+    predictions: Vec<Candidate>,
+    /// 这次调用选词上屏了，frame 里接着联想（之后又上屏了标点之类的就不联想了）。
+    predict_due: bool,
     /// 最近一次按键或 tick 的时刻（毫秒）。
     now_ms: u64,
 }
@@ -643,6 +656,8 @@ impl Default for Session<'_> {
             translator: None,
             translation: Translation::default(),
             tool: None,
+            predictions: Vec::new(),
+            predict_due: false,
             now_ms: 0,
         }
     }
@@ -682,6 +697,7 @@ impl<'e> Session<'e> {
         if !same {
             self.engine = engine;
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
@@ -696,6 +712,7 @@ impl<'e> Session<'e> {
             }
             self.config = config;
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
@@ -727,6 +744,10 @@ impl<'e> Session<'e> {
             return self.frame(false);
         }
         if !key.release {
+            if key.prev_char.is_some() && key.prev_char != self.last_char {
+                // 光标前已经不是刚上屏的字了（鼠标点到了别处）：联想作废
+                self.dismiss_prediction();
+            }
             self.prev_char = key.prev_char;
             self.hints = key.hints;
             if key.prev_char.is_some() {
@@ -753,6 +774,11 @@ impl<'e> Session<'e> {
         }
         if self.tool.is_some() {
             return self.tool_key(key);
+        }
+        if !self.predictions.is_empty() {
+            if let Some(handled) = self.prediction_key(key) {
+                return handled;
+            }
         }
         if self.mode == Mode::English && !self.composing() {
             return self.english_key(key);
@@ -1066,6 +1092,7 @@ impl<'e> Session<'e> {
         if self.composing() {
             self.clear();
         }
+        self.dismiss_prediction();
         let mut state = ToolState {
             tool,
             items: Vec::new(),
@@ -1384,10 +1411,79 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，否则是候选（C 接口读这个）。
+    /// 选词上屏以后接着联想（[`Config::prediction`]）：只在中文模式、光标前是汉字时；
+    /// 互译、密码框不联想。没把握时什么都不给（候选框照常收起）。
+    fn predict(&mut self) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        if !self.config.prediction
+            || self.mode != Mode::Chinese
+            || self.hints & key_hints::SENSITIVE != 0
+            || self.composing()
+            || self.tool.is_some()
+        {
+            return;
+        }
+        self.predictions = engine
+            .predict(&self.context, self.page_size())
+            .into_iter()
+            .map(|(text, _)| Candidate {
+                commit: text.clone(),
+                text,
+                ..Candidate::default()
+            })
+            .collect();
+        if !self.predictions.is_empty() {
+            self.generation += 1;
+        }
+    }
+
+    /// 收起联想。
+    fn dismiss_prediction(&mut self) {
+        if !self.predictions.is_empty() {
+            self.predictions.clear();
+            self.generation += 1;
+        }
+    }
+
+    /// 联想开着时的键。只有主键盘上的数字（1 到联想的个数）选词、Esc 收起；别的键都收起联想以后
+    /// 照常处理（返回 None），和没开着一样：空格、回车照常交给应用（空格不会选中联想的词），
+    /// 退格照常删应用里的字，字母开始打字，标点照常上屏。
+    /// 单按的修饰键不动它（Shift 可能是要打大写、符号）；分号、引号选词也不选联想（它们多半是要打标点）。
+    fn prediction_key(&mut self, key: &Key) -> Option<bool> {
+        if is_modifier_keysym(key.keysym) {
+            return None;
+        }
+        let digit = (keysym::DIGIT_0..=keysym::DIGIT_9)
+            .contains(&key.keysym)
+            .then(|| key.digit())
+            .flatten();
+        if let Some(d) = digit.filter(|&d| (1..=self.predictions.len()).contains(&d)) {
+            return Some(self.choose_prediction(d - 1));
+        }
+        self.dismiss_prediction();
+        (key.keysym == keysym::ESCAPE).then_some(true)
+    }
+
+    /// 选第 index 个联想的词：上屏，学这个搭配（上一个词 → 它），接着联想。
+    fn choose_prediction(&mut self, index: usize) -> bool {
+        let Some(chosen) = self.predictions.get(index).cloned() else {
+            return false;
+        };
+        self.commit_with(&chosen.text, "");
+        self.predict_due = true;
+        self.last_choice = Some(chosen);
+        true
+    }
+
+    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，联想时是联想的词，否则是候选（C 接口读这个）。
     pub fn display_candidates(&mut self) -> &[Candidate] {
         if self.tool.is_some() {
             return self.tool.as_ref().map_or(&[], |t| t.items.as_slice());
+        }
+        if !self.predictions.is_empty() {
+            return &self.predictions;
         }
         self.candidates()
     }
@@ -1417,6 +1513,7 @@ impl<'e> Session<'e> {
         if mode == self.mode {
             return;
         }
+        self.dismiss_prediction();
         if self.mode == Mode::Translate {
             // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
             self.commit_source();
@@ -1579,6 +1676,9 @@ impl<'e> Session<'e> {
         let Some(first) = text.chars().next() else {
             return;
         };
+        // 上屏了别的（标点、表情、语音……）：联想作废，这次也不再联想
+        self.dismiss_prediction();
+        self.predict_due = false;
         if self.translating() {
             // 互译：上屏的字攒成原文，过一会儿（句末标点立刻）发请求
             self.translation.source.push_str(text);
@@ -2076,6 +2176,7 @@ impl<'e> Session<'e> {
     /// 不上屏时互译攒着的原文不动（外壳上屏以后清编辑区也调这个），要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
+        self.dismiss_prediction();
         if commit_pending && self.composing() {
             self.commit_input_now();
         } else {
@@ -2089,6 +2190,9 @@ impl<'e> Session<'e> {
 
     /// 现在的编辑区和候选框（不处理按键）。这次调用要上屏的字也在里面。
     pub fn frame(&mut self, handled: bool) -> Frame {
+        if std::mem::take(&mut self.predict_due) {
+            self.predict();
+        }
         let n = self.candidates().len();
         let selected = self.selected_text();
         let shown = self.segmented_remaining();
@@ -2112,6 +2216,11 @@ impl<'e> Session<'e> {
         };
         if self.tool.is_some() {
             self.tool_frame(&mut frame);
+            return frame;
+        }
+        if !self.predictions.is_empty() {
+            frame.panel = Panel::Prediction;
+            frame.cand_count = self.predictions.len();
             return frame;
         }
         if let Some((view, wake)) = self.translate_view() {
@@ -2457,6 +2566,10 @@ impl<'e> Session<'e> {
             }
             return self.frame(ok);
         }
+        if !self.predictions.is_empty() {
+            let handled = self.choose_prediction(index);
+            return self.frame(handled);
+        }
         let handled = self.choose_now(index);
         self.frame(handled)
     }
@@ -2473,7 +2586,12 @@ impl<'e> Session<'e> {
         self.forgot = shown.forgot;
         self.learned = shown.learned;
         self.mode_changed = shown.mode_changed;
-        let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
+        let handled = index < shown.cand_count
+            && if self.predictions.is_empty() {
+                self.choose_now(shown.cand_start + index)
+            } else {
+                self.choose_prediction(index)
+            };
         self.frame(handled)
     }
 
@@ -2507,6 +2625,7 @@ impl<'e> Session<'e> {
             }
             _ => {
                 self.commit_with(&chosen.text, &chosen.pinyin);
+                self.predict_due = chosen.kind == CandidateKind::Word;
                 self.last_choice = Some(chosen);
             }
         }

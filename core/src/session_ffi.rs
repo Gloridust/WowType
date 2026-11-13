@@ -43,6 +43,7 @@ pub struct WowtypeKey {
 pub const WOWTYPE_KEY_HINT_NO_AUTO_SPACE: u32 = crate::session::key_hints::NO_AUTO_SPACE;
 pub const WOWTYPE_KEY_HINT_PANEL_OPEN: u32 = crate::session::key_hints::PANEL_OPEN;
 pub const WOWTYPE_KEY_HINT_NO_TRANSLATE: u32 = crate::session::key_hints::NO_TRANSLATE;
+pub const WOWTYPE_KEY_HINT_SENSITIVE: u32 = crate::session::key_hints::SENSITIVE;
 
 /// 外壳自己的翻译器（C 布局，1.10 起）：macOS 用它把自己的翻译器（测试里是假的）交给会话。
 /// 函数都不阻塞。poll 把这次的原文、译文、出错原因写进三个出参（在下一次 poll 前有效），
@@ -127,6 +128,7 @@ pub const WOWTYPE_PANEL_NORMAL: c_int = 0;
 pub const WOWTYPE_PANEL_EXPANDED: c_int = 1;
 pub const WOWTYPE_PANEL_EMOJI: c_int = 2;
 pub const WOWTYPE_PANEL_TOOL: c_int = 3;
+pub const WOWTYPE_PANEL_PREDICTION: c_int = 4;
 
 pub const WOWTYPE_TOOL_NONE: c_int = 0;
 pub const WOWTYPE_TOOL_MENU: c_int = 1;
@@ -221,6 +223,8 @@ pub struct WowtypeSessionConfig {
     pub shuangpin_keys: c_int,
     /// 1.10 起：打字途中方向键做什么，`WOWTYPE_ARROW_KEYS_*`（#129），默认挑候选。
     pub arrow_keys: c_int,
+    /// 1.10 起：联想（#89），默认 0。
+    pub prediction: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -257,6 +261,7 @@ impl Default for WowtypeSessionConfig {
                 ArrowKeys::Candidates => WOWTYPE_ARROW_KEYS_CANDIDATES,
                 ArrowKeys::Caret => WOWTYPE_ARROW_KEYS_CARET,
             },
+            prediction: c_int::from(config.prediction),
         }
     }
 }
@@ -306,6 +311,7 @@ impl WowtypeSessionConfig {
                 WOWTYPE_ARROW_KEYS_CARET => ArrowKeys::Caret,
                 _ => ArrowKeys::Candidates,
             },
+            prediction: self.prediction != 0,
         }
     }
 }
@@ -515,6 +521,7 @@ impl WowtypeSession {
                 Panel::Expanded => WOWTYPE_PANEL_EXPANDED,
                 Panel::Emoji => WOWTYPE_PANEL_EMOJI,
                 Panel::Tool => WOWTYPE_PANEL_TOOL,
+                Panel::Prediction => WOWTYPE_PANEL_PREDICTION,
             },
             cand_count: frame.cand_count,
             cand_cursor: frame

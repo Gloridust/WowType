@@ -36,13 +36,18 @@ pub trait LanguageModel: Send + Sync {
         total
     }
 
-    /// 给定上一个词，返回最可能的后续词（按概率降序，最多 limit 个）。
+    /// 给定上一个词，返回最可能的后续词和 ln P(cur | prev)，按概率降序，最多 limit 个。
     ///
-    /// 这是「预测词库」的接口：默认实现不提供预测，接入了 bigram/神经网络
-    /// 的模型自行覆写。
+    /// 联想（[`crate::Engine::predict`]）用它。默认不提供；分数是相对一元的提升、自己不知道
+    /// 一元概率的模型（[`crate::wordlm::WordLm`]）要先 [`LanguageModel::prepare_prediction`]，
+    /// 没准备好时返回空。
     fn top_next(&self, _prev: &str, _limit: usize) -> Vec<(String, f64)> {
         Vec::new()
     }
+
+    /// 联想要用的准备：按词库里每个词的频次配好词本身有多常用（只做一次，以后再调什么都不做）。
+    /// 载入词库的后台线程里调。默认什么都不做。
+    fn prepare_prediction(&self, _lexicon: &dyn crate::lexicon::Lexicon) {}
 }
 
 /// 内存二元语言模型。

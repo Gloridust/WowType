@@ -21,9 +21,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 
+use crate::lexicon::Lexicon;
 use crate::lm::LanguageModel;
 
 pub const MAGIC: &[u8; 4] = b"WTLM";
@@ -42,6 +44,9 @@ pub struct WordLm {
     starts: Vec<u32>,
     curs: Vec<u32>,
     scores: Vec<f32>,
+    /// 每个词的 ln P(词)，从词库频次来（模型只存搭配的提升，联想要乘回一元概率）。
+    /// 词库里没有的词是负无穷，不拿来联想。[`LanguageModel::prepare_prediction`] 时才算。
+    prior: OnceLock<Vec<f32>>,
 }
 
 impl WordLm {
@@ -89,6 +94,7 @@ impl WordLm {
             starts,
             curs,
             scores,
+            prior: OnceLock::new(),
         })
     }
 
@@ -143,25 +149,47 @@ impl LanguageModel for WordLm {
         }
     }
 
+    /// ln P(cur | prev) = ln P(cur) + 提升：一元概率来自词库（[`LanguageModel::prepare_prediction`]），
+    /// 只按提升排的话，罕见的搭配都顶到上限（6.0）挤在最前面。没准备好时返回空。
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
-        let Some(&p) = self.ids.get(prev) else {
+        let (Some(prior), Some(&p)) = (self.prior.get(), self.ids.get(prev)) else {
             return Vec::new();
         };
-        let (a, b) = (
-            self.starts[p as usize] as usize,
-            self.starts[p as usize + 1] as usize,
-        );
-        let mut items: Vec<(String, f64)> = (a..b)
-            .map(|i| {
-                (
-                    self.words[self.curs[i] as usize].clone(),
-                    self.scores[i] as f64,
-                )
+        let row = self.starts[p as usize] as usize..self.starts[p as usize + 1] as usize;
+        let mut items: Vec<(f32, u32)> = row
+            .filter_map(|i| {
+                let cur = self.curs[i];
+                let unigram = prior[cur as usize];
+                unigram.is_finite().then(|| ((unigram + self.scores[i]).min(0.0), cur))
             })
             .collect();
-        items.sort_by(|x, y| y.1.total_cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
-        items.truncate(limit);
+        let better = |x: &(f32, u32), y: &(f32, u32)| y.0.total_cmp(&x.0).then_with(|| x.1.cmp(&y.1));
+        if limit < items.len() {
+            items.select_nth_unstable_by(limit, better);
+            items.truncate(limit);
+        }
+        items.sort_by(better);
         items
+            .into_iter()
+            .map(|(score, cur)| (self.words[cur as usize].clone(), f64::from(score)))
+            .collect()
+    }
+
+    fn prepare_prediction(&self, lexicon: &dyn Lexicon) {
+        self.prior.get_or_init(|| {
+            // 同一个词有几个读音时取最常用的那个读音的频次；频次不到 1 的是大字表补的生僻字
+            let mut freq = vec![0.0f64; self.words.len()];
+            lexicon.for_each_word(&mut |word, f| {
+                if let Some(&id) = self.ids.get(word) {
+                    let slot = &mut freq[id as usize];
+                    *slot = slot.max(f);
+                }
+            });
+            let total = lexicon.total_freq().max(1.0);
+            freq.into_iter()
+                .map(|f| if f >= 1.0 { (f / total).ln() as f32 } else { f32::NEG_INFINITY })
+                .collect()
+        });
     }
 }
 
@@ -371,6 +399,14 @@ mod tests {
             lm.score(Some("明天"), "不认识"),
             lm.score(Some("明天"), "面")
         );
-        assert_eq!(lm.top_next("明天", 1)[0].0, "见");
+        // 联想要先配上词库里的一元概率；没配之前不给
+        assert!(lm.top_next("明天", 1).is_empty());
+        let lexicon = crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t9\njian\t见\t6\nmian\t面\t50\n").unwrap();
+        lm.prepare_prediction(&lexicon);
+        let next = lm.top_next("明天", 5);
+        assert_eq!(next[0].0, "见");
+        // 分数是条件概率：ln P(见 | 明天) = ln P(见) + 提升，不超过 0
+        assert!(next[0].1 <= 0.0);
+        assert!(next.iter().all(|(w, _)| w != "我们"), "词库里没有的词不联想");
     }
 }

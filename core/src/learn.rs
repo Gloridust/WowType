@@ -64,6 +64,14 @@ impl UserPairs {
         self.map.get(prev).and_then(|next| next.get(cur)).copied()
     }
 
+    /// 学过的、接在 prev 后面的词（联想用）。
+    pub fn followers<'a>(&'a self, prev: &str) -> impl Iterator<Item = (&'a str, HistoryEntry)> + 'a {
+        self.map
+            .get(prev)
+            .into_iter()
+            .flat_map(|next| next.iter().map(|(cur, entry)| (cur.as_str(), *entry)))
+    }
+
     /// 这个搭配的加分（没学过是 0）。
     pub fn bonus(&self, prev: &str, cur: &str, at_ms: u64) -> f64 {
         match self.get(prev, cur) {

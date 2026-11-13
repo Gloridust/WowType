@@ -2167,3 +2167,317 @@ fn caret_shuangpin_shows_keys() {
     assert_eq!(frame.preedit_cursor, 3);
     assert_eq!(texts(&mut session)[0], "中国", "候选照旧按整个输入算");
 }
+
+// ---------------- 联想（#89）
+
+/// 联想用的小引擎：词级语言模型（和发版的 words.lm 同一种）+ 词频照着语料的小词库。
+/// 今天后面多半是天气、晚上（了太少，单字不给）；谢谢后面是大家、你（单字，但很有把握）；
+/// 天气后面是不错（接着联想）；冷门后面接什么都不常见（没把握，不给）。
+fn prediction_engine() -> &'static Engine {
+    use wowtype_core::wordlm::{build, BuildConfig, Counts, WordLm};
+    let words = [
+        "<s>", "今天", "天气", "晚上", "不错", "谢谢", "大家", "你", "了", "冷门", "我们", "的",
+    ];
+    let id = |w: &str| words.iter().position(|x| *x == w).unwrap() as u64;
+    let pair = |a: &str, b: &str, n: u32| (id(a) << 32 | id(b), n);
+    let mut unigram = vec![100u64; words.len()];
+    unigram[0] = 1000;
+    unigram[id("的") as usize] = 100_000;
+    let mut history = vec![0u64; words.len()];
+    history[id("今天") as usize] = 100;
+    history[id("谢谢") as usize] = 100;
+    history[id("天气") as usize] = 100;
+    history[id("冷门") as usize] = 10_000;
+    let counts = Counts {
+        words: words.iter().map(|w| w.to_string()).collect(),
+        unigram,
+        history,
+        bigram: vec![
+            pair("今天", "天气", 60),
+            pair("今天", "晚上", 30),
+            pair("今天", "了", 4),
+            pair("谢谢", "大家", 40),
+            pair("谢谢", "你", 20),
+            pair("天气", "不错", 80),
+            pair("冷门", "我们", 4),
+            pair("冷门", "大家", 4),
+        ],
+    };
+    let (bytes, _, _) = build(&counts, BuildConfig::default()).unwrap();
+    let lm = WordLm::from_bytes(&bytes).unwrap();
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str(
+            "jin tian\t今天\t100\ntian qi\t天气\t100\nwan shang\t晚上\t100\nbu cuo\t不错\t100\n\
+             xie xie\t谢谢\t100\nda jia\t大家\t100\nni\t你\t100\nle\t了\t100\n\
+             leng men\t冷门\t100\nwo men\t我们\t100\nde\t的\t100000\n",
+        )
+        .unwrap(),
+    );
+    let engine = Engine::new(lexicon, Arc::new(lm));
+    engine.prepare_prediction();
+    Box::leak(Box::new(engine))
+}
+
+fn predicting() -> Session<'static> {
+    let mut session = with(prediction_engine());
+    session.configure(Config {
+        prediction: true,
+        ..Config::default()
+    });
+    session
+}
+
+/// 候选框里显示的词（联想时是联想的词）。
+fn shown(session: &mut Session) -> Vec<String> {
+    session.shown().iter().map(|c| c.text.clone()).collect()
+}
+
+#[test]
+fn prediction_shown_after_commit() {
+    let mut session = predicting();
+    let frame = type_keys(&mut session, "jintian<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.panel, Panel::Prediction);
+    assert_eq!(frame.preedit, "", "联想时编辑区是空的");
+    assert_eq!(frame.cand_cursor, None, "联想不画光标：空格不选它");
+    assert!(!session.composing());
+    assert_eq!(shown(&mut session), ["天气", "晚上"], "单字「了」不够有把握，不给");
+    // 点候选上屏也联想
+    let mut session = predicting();
+    type_keys(&mut session, "xiexie");
+    let frame = choose_text(&mut session, "谢谢");
+    assert_eq!(frame.panel, Panel::Prediction);
+    assert_eq!(shown(&mut session), ["大家", "你"], "很有把握的单字照给");
+}
+
+#[test]
+fn prediction_digit_picks_and_chains() {
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = type_keys(&mut session, "1");
+    assert!(frame.handled);
+    assert_eq!(frame.commit.as_deref(), Some("天气"));
+    assert!(frame.learned, "选了联想的词要学（今天 → 天气）");
+    assert_eq!(frame.panel, Panel::Prediction, "选了接着联想");
+    assert_eq!(shown(&mut session), ["不错"]);
+    let frame = type_keys(&mut session, "1");
+    assert_eq!(frame.commit.as_deref(), Some("不错"));
+    assert_eq!(frame.panel, Panel::Normal, "不错后面没把握：收起");
+    assert_eq!(frame.cand_count, 0);
+    // 鼠标点联想的词（外壳调 select / choose）和数字键一样
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(session.select(1).commit.as_deref(), Some("晚上"));
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(session.choose(0).commit.as_deref(), Some("天气"));
+}
+
+#[test]
+fn prediction_space_enter_backspace_pass_through() {
+    // 空格、回车、退格、方向键：收起联想，照常交给应用（空格不会选中联想的词，退格照常删字）
+    for key in ["<sp>", "<cr>", "<bs>", "<left>", "<down>", "<tab>"] {
+        let mut session = predicting();
+        type_keys(&mut session, "jintian<sp>");
+        let frame = type_keys(&mut session, key);
+        assert!(!frame.handled, "{key} 交给应用");
+        assert_eq!(frame.commit, None, "{key} 不上屏联想的词");
+        assert_eq!(frame.panel, Panel::Normal, "{key} 收起联想");
+        assert_eq!(frame.cand_count, 0);
+    }
+}
+
+#[test]
+fn prediction_esc_dismisses() {
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = type_keys(&mut session, "<esc>");
+    assert!(frame.handled, "Esc 收起联想，不交给应用");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.cand_count, 0);
+    // 收起以后数字照常交给应用
+    assert!(!type_keys(&mut session, "1").handled);
+}
+
+#[test]
+fn prediction_letter_starts_composing() {
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = type_keys(&mut session, "x");
+    assert!(frame.handled);
+    assert_eq!(frame.preedit, "x", "字母换成打字");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert!(session.composing());
+    assert_eq!(frame.commit, None);
+}
+
+#[test]
+fn prediction_other_keys_behave_as_without_panel() {
+    // 标点照常上屏
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = type_keys(&mut session, ",");
+    assert_eq!(frame.commit.as_deref(), Some("，"));
+    assert_eq!(frame.cand_count, 0);
+
+    // 联想个数以外的数字照常是数字
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = type_keys(&mut session, "7");
+    assert!(!frame.handled, "只有两个联想，7 是数字");
+    assert_eq!(frame.cand_count, 0);
+
+    // 小键盘打的是数字
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = session.key(&Key::press(keysym::KP_0 + 1));
+    assert!(!frame.handled);
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.cand_count, 0);
+
+    // 分号选词也不选联想：分号照常是标点
+    let mut session = predicting();
+    session.configure(Config {
+        prediction: true,
+        select_keys: wowtype_core::session::SelectKeys::Semicolon,
+        ..Config::default()
+    });
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(type_keys(&mut session, ";").commit.as_deref(), Some("；"));
+
+    // 带 Ctrl 的快捷键：收起，交给应用
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = session.key(&Key {
+        modifiers: modifier::CTRL,
+        ..Key::char('1')
+    });
+    assert!(!frame.handled);
+    assert_eq!(frame.cand_count, 0);
+}
+
+#[test]
+fn prediction_survives_observe_and_modifiers() {
+    use wowtype_core::session::KeyAction;
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    // 外壳每个键先报一下（OBSERVE）、单按 Shift 的按下：都不收起（松开在 type_keys 里每个键都有）
+    session.key(&Key {
+        action: KeyAction::Observe,
+        ..Key::char('1')
+    });
+    session.key(&Key::press(keysym::SHIFT_L));
+    assert_eq!(session.frame(false).panel, Panel::Prediction);
+    assert_eq!(type_keys(&mut session, "2").commit.as_deref(), Some("晚上"));
+}
+
+#[test]
+fn prediction_dismissed_by_focus_mode_panel_and_caret() {
+    use wowtype_core::session::{Mode, Tool};
+    // 失去焦点（reset）
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(session.reset(false).cand_count, 0);
+    assert!(!type_keys(&mut session, "1").handled);
+
+    // 切模式
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(session.set_mode(Mode::English).cand_count, 0);
+
+    // 打开表情面板，关上以后也不回来
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    assert_eq!(session.open_tool(Tool::Emoji { symbols: false }).panel, Panel::Emoji);
+    session.close_panel();
+    assert_eq!(session.frame(false).cand_count, 0);
+
+    // 外壳上屏别的字（语音）
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = session.commit_text("语音", None);
+    assert_eq!(frame.commit.as_deref(), Some("语音"));
+    assert_eq!(frame.cand_count, 0);
+
+    // 光标前已经不是刚上屏的字（鼠标点到了别处）：数字照常是数字
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = session.key(&Key {
+        prev_char: Some('x'),
+        ..Key::char('1')
+    });
+    assert!(!frame.handled);
+    assert_eq!(frame.commit, None);
+    // 光标前还是「天」：照常选
+    let mut session = predicting();
+    type_keys(&mut session, "jintian<sp>");
+    let frame = session.key(&Key {
+        prev_char: Some('天'),
+        ..Key::char('1')
+    });
+    assert_eq!(frame.commit.as_deref(), Some("天气"));
+}
+
+#[test]
+fn prediction_off_english_translate_sensitive() {
+    use wowtype_core::session::{key_hints, Mode};
+    // 设置里关着（默认）
+    let mut session = with(prediction_engine());
+    let frame = type_keys(&mut session, "jintian<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.cand_count, 0);
+    assert!(!type_keys(&mut session, "1").handled);
+
+    // 「译」里（这里没配翻译器，照常上屏）不联想
+    let mut session = predicting();
+    session.set_mode(Mode::Translate);
+    let frame = type_keys(&mut session, "jintian<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.cand_count, 0);
+
+    // 英文模式：打到一半切英文原样上屏，不联想
+    let mut session = predicting();
+    type_keys(&mut session, "jintian");
+    let frame = session.set_mode(Mode::English);
+    assert_eq!(frame.commit.as_deref(), Some("jintian"));
+    assert_eq!(frame.cand_count, 0);
+
+    // 密码框这类敏感的输入框
+    let mut session = predicting();
+    type_keys(&mut session, "jintian");
+    let frame = session.key(&Key {
+        hints: key_hints::SENSITIVE,
+        ..Key::press(keysym::SPACE)
+    });
+    assert_eq!(frame.commit.as_deref(), Some("今天"));
+    assert_eq!(frame.cand_count, 0);
+
+    // 回车原样上屏字母：不联想
+    let mut session = predicting();
+    let frame = type_keys(&mut session, "jintian<cr>");
+    assert_eq!(frame.commit.as_deref(), Some("jintian"));
+    assert_eq!(frame.cand_count, 0);
+}
+
+#[test]
+fn prediction_low_confidence_shows_nothing() {
+    // 冷门后面接什么都不常见：宁可不给
+    let mut session = predicting();
+    let frame = type_keys(&mut session, "lengmen<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("冷门"));
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(frame.cand_count, 0);
+    // 单字「的」后面太杂，也不联想
+    let frame = type_keys(&mut session, "de<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("的"));
+    assert_eq!(frame.cand_count, 0);
+}
+
+#[test]
+fn prediction_learns_user_pairs() {
+    // 用户自己用过的搭配：冷门 → 我们 用过以后，冷门后面给出「我们」
+    let mut session = predicting();
+    type_keys(&mut session, "lengmen<sp>women<sp><cr>");
+    type_keys(&mut session, "lengmen<sp>");
+    assert_eq!(shown(&mut session), ["我们"]);
+}

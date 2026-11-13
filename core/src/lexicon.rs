@@ -188,6 +188,10 @@ pub trait Lexicon: Send + Sync {
 
     fn total_freq(&self) -> f64;
 
+    /// 挨个看每个词条的词和频次（同一个词有几个读音就看到几次）。默认什么都不给。
+    /// 联想用它给语言模型的词表配上词本身有多常用，见 [`crate::lm::LanguageModel::prepare_prediction`]。
+    fn for_each_word(&self, _visit: &mut dyn FnMut(&str, f64)) {}
+
     fn len(&self) -> usize;
 
     fn is_empty(&self) -> bool {
@@ -688,6 +692,12 @@ impl Lexicon for MemoryLexicon {
 
     fn total_freq(&self) -> f64 {
         self.total_freq
+    }
+
+    fn for_each_word(&self, visit: &mut dyn FnMut(&str, f64)) {
+        for entry in &self.entries {
+            visit(&entry.word, entry.freq);
+        }
     }
 
     fn len(&self) -> usize {
