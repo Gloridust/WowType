@@ -18,6 +18,9 @@ python3 tools/wetype-assets/scan.py "/Library/Input Methods/WeType.app/Contents/
 # 解析 XLLM 容器（大模型）：配置、分词器、张量蓝图
 python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
 
+# 顺带把词表写成 id<TAB>token
+python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin --tokens /tmp/decgnr_vocab.tsv
+
 # 分析五笔词典：头部 + UTF-16 词条扫描
 python3 tools/wetype-assets/wubi.py path/to/swbd86.bin
 ```
@@ -68,6 +71,9 @@ python3 tools/wetype-assets/wubi.py path/to/swbd86.bin
 3. 张量蓝图表（17 条，protobuf 风格：`0a` 名字、`12` 形状、`1a` 附加、`20` dtype）
 4. 权重区（74MB 文件里占大头，逐张量的偏移还没解出来）
 
+
+分词器是 **WordPiece**（vocab 10463，无 merges）：5,938 个单字中文、1,496 个 `##` 子词、105 个特殊 token；
+`--tokens` 可以把词表导成 `id<TAB>token`，后续跑 E2E 前向时用来做编码/解码。
 `decgnr.bin` 的蓝图合计 23.6M 参数，但配置是 12 层——说明蓝图表是**单层模板**，
 权重区里按层重复存储（或者部分权重共享），这是下一步要确认的。
 

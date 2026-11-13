@@ -116,6 +116,7 @@ def main():
     ap = argparse.ArgumentParser(description="解析 XLLM 模型容器")
     ap.add_argument("path")
     ap.add_argument("--json", action="store_true", help="输出 JSON")
+    ap.add_argument("--tokens", metavar="PATH", help="把词表写成 id<TAB>token 的文本")
     args = ap.parse_args()
 
     data = open(args.path, "rb").read()
@@ -155,6 +156,13 @@ def main():
         "tensor_table_end": table_end,
         "blueprint_params": params,
     }
+    if args.tokens and tokenizer:
+        vocab = tokenizer.get("model", {}).get("vocab", {})
+        with open(args.tokens, "w", encoding="utf-8") as out:
+            for token, index in sorted(vocab.items(), key=lambda kv: kv[1]):
+                out.write(f"{index}\t{token}\n")
+        print(f"词表已写出：{args.tokens}（{len(vocab)} 个 token）", file=sys.stderr)
+
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return
