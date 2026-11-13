@@ -66,6 +66,17 @@ final class AppState {
     var customWordsPath: String { supportDir.appendingPathComponent("custom.tsv").path }
     /// 互译的 API Key（一行，0600），同 Linux 的 ~/.config/wowtype/translate.key；不写进 wowtype.conf
     var translateKeyPath: String { supportDir.appendingPathComponent("translate.key").path }
+    /// 改 wowtype.conf 的 Lexicon，只动这一项（命令行 --install-lexicon / --use-lexicon 用）。
+    /// 输入法按键时看到文件变了就换词库；万象包更新了、路径没变时，词库文件的大小、时间变了也会重载。
+    func setLexicon(_ path: String) throws {
+        let text = readText(configPath)
+        let base = WowtypeConfig.parse(text ?? "")
+        var wanted = base
+        wanted.lexicon = path
+        try FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
+        try writeText(wanted.merged(changesFrom: base, into: text), to: configPath)
+    }
+
     /// 本地翻译模型，设置里 TranslateLocalModel 留空时用（同 Linux 的 ~/.local/share/wowtype/models/）
     var localModelPath: String {
         supportDir.appendingPathComponent("models/HY-MT1.5-1.8B-Q4_K_M.gguf").path

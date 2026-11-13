@@ -43,6 +43,8 @@ jobs:
       - run: bash scripts/test-install.sh
       - run: python3 scripts/test-update.py
       - run: python3 scripts/test-shift-config.py
+      # 设置契约：spec/ 自检 + 设置界面对照（fcitx5 插件在「插件」任务的 addon-test.sh 里对照，macOS 在 macos/test.sh 里）
+      - run: python3 scripts/test-config-contract.py
 
   core:
     name: Rust 核心测试
@@ -87,7 +89,7 @@ jobs:
         with:
           name: data
           path: dist/data
-      - name: 按键测试（小词库 + 真实词库）
+      - name: 按键测试和设置契约（小词库 + 真实词库）
         run: |
           macos/test.sh
           WOWTYPE_EXPECT_FULL_CHARS=1 macos/test.sh dist/data/lexicon.tsv dist/data/english.txt
@@ -96,7 +98,10 @@ jobs:
           cargo rustc --release -q -p wowtype-core --no-default-features --lib --crate-type staticlib \
             --target-dir target/macos-libs -- --print native-static-libs 2>&1 | grep native-static-libs || true
       - name: 打包
-        run: macos/build.sh dist/data dist/macos
+        # 发版时版本号跟 tag 走（和 Linux 的包一样），一键安装脚本按 tag 找 WowType-<版本>-macos.pkg
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then export WOWTYPE_VERSION=${GITHUB_REF_NAME#v}; fi
+          macos/build.sh dist/data dist/macos
       - name: 检查安装包
         run: |
           app=dist/macos/WowType.app

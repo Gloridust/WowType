@@ -18,6 +18,9 @@ cargo build --release -p wowtype-core
 cmake -S fcitx5-addon -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DWOWTYPE_BUILD_TESTS=ON >/dev/null
 cmake --build "$BUILD" -j
 
+# 设置契约：插件的键名、默认值、范围、可选值和 spec/config.json 对得上（顺带对照设置界面）
+python3 scripts/test-config-contract.py --fcitx5 "$BUILD/wowtype-config-dump"
+
 ROOT=$(mktemp -d)
 MOCK_PID=
 DBUS_PID=

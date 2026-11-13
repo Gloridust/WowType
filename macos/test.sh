@@ -3,8 +3,9 @@
 #
 #   macos/test.sh [lexicon.tsv] [english.txt]
 #
-# 先编核心的静态库（不带语音，和 macOS 安装包一样），再用 swiftc 把 Sources/Shared 和 Tests/harness.swift
+# 先编核心的静态库（不带语音，和 macOS 安装包一样），再用 swiftc 把 Sources/Shared 和 Tests/*.swift
 # 编成一个可执行文件跑一遍。没给词库时测试自己写一份小词库。
+# 测试也拿 spec/ 里的设置契约对照（WOWTYPE_SPEC_DIR，默认仓库的 spec/）。
 # 本机没有 swiftc 但有 docker 时：WOWTYPE_SWIFT_DOCKER=swift:6.1-noble macos/test.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -27,13 +28,14 @@ if [[ -n "${WOWTYPE_SWIFT_DOCKER:-}" ]]; then
 fi
 
 "${SWIFTC[@]}" -O -I macos/CWowtype \
-  macos/Sources/Shared/*.swift macos/Tests/main.swift \
+  macos/Sources/Shared/*.swift macos/Tests/*.swift \
   "${LINK[@]}" -o "$OUT/wowtype-macos-harness"
 
+export WOWTYPE_SPEC_DIR=${WOWTYPE_SPEC_DIR:-$PWD/spec}
 RUN=("$OUT/wowtype-macos-harness")
 if [[ -n "${WOWTYPE_SWIFT_DOCKER:-}" ]]; then
   # 容器里编的可执行文件要容器里的 Swift 运行库
-  RUN=(docker run --rm -u "$(id -u):$(id -g)" -e WOWTYPE_EXPECT_FULL_CHARS -v "$PWD:$PWD" -w "$PWD" "$WOWTYPE_SWIFT_DOCKER" "${RUN[@]}")
+  RUN=(docker run --rm -u "$(id -u):$(id -g)" -e WOWTYPE_EXPECT_FULL_CHARS -e WOWTYPE_SPEC_DIR -v "$PWD:$PWD" -w "$PWD" "$WOWTYPE_SWIFT_DOCKER" "${RUN[@]}")
   # 词库路径要在挂进去的目录里
 fi
 "${RUN[@]}" "$@"
