@@ -258,7 +258,7 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: 打包
-        run: scripts/package-deb.sh engine "$VERSION" dist/pkg
+        run: WOWTYPE_DISTRO=${{ matrix.distro }} scripts/package-deb.sh engine "$VERSION" dist/pkg
       - name: 用一键安装脚本装上试一下
         run: |
           mkdir -p /tmp/inst && cp dist/pkg/wowtype_*.deb /tmp/inst/
@@ -282,7 +282,7 @@ jobs:
           # 插件清单要求编译时 fcitx5 的「主.次.0」（22.04 是 5.0.0），fcitx5 小版本落后一点的系统也能加载
           grep -qx "0=core:$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0" /usr/share/fcitx5/addon/wowtype.conf
       - name: 设置界面：每页、每个对话框点一遍（无头；22.04 的老 libadwaita 用替身控件）
-        run: dbus-run-session -- xvfb-run -a python3 scripts/test-settings-gui.py /usr/bin/wowtype-config
+        run: timeout 300 dbus-run-session -- xvfb-run -a python3 scripts/test-settings-gui.py /usr/bin/wowtype-config
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}-${{ matrix.arch }}

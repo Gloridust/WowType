@@ -842,6 +842,7 @@ THEME_LIGHT = "wowtype"
 THEME_DARK = "wowtype-dark"
 GNOME_THEME_EXT = "wowtype-theme@gloridust.github.io"
 KIMPANEL_EXT = "kimpanel@kde.org"
+GNOME_EXT_OUT_OF_DATE = 4  # GNOME Shell 的 ExtensionState.OUT_OF_DATE：扩展不支持这个 GNOME 版本
 
 
 KIMPANEL_SCHEMA = "org.gnome.shell.extensions.kimpanel"
@@ -1152,6 +1153,9 @@ def apply_gnome_theme(on):
     shell = gnome_shell_settings()
     if shell is None:
         return None
+    # GNOME 44 及以前（比如 Ubuntu 22.04 的 GNOME 42）扫到这个扩展也只标「版本不符」，不加载
+    if on and int(gnome_extension_info(GNOME_THEME_EXT).get("state", 0)) == GNOME_EXT_OUT_OF_DATE:
+        return "这个 GNOME 太旧，候选框换不了色（WowType 主题扩展要 GNOME 45 以上）"
     set_gnome_extension(shell, GNOME_THEME_EXT, on)
     if not on:
         return "已换回默认配色"

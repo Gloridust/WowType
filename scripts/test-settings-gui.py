@@ -15,6 +15,7 @@ import tempfile
 import time
 import traceback
 
+sys.stdout.reconfigure(line_buffering=True)
 errors = []
 sys.excepthook = lambda t, v, tb: errors.append("".join(traceback.format_exception(t, v, tb)))
 
@@ -66,8 +67,16 @@ def check(condition, message):
         raise AssertionError(message)
 
 
+ran = []
+
+
 def run(app):
+    ran.append(True)
     win = app.props.active_window
+    if win is None:
+        errors.append("设置窗口没打开")
+        app.quit()
+        return GLib.SOURCE_REMOVE
     for page in ("general", "input", "emoji", "voice", "translate", "words", "update"):
         step(f"打开「{page}」页", lambda p=page: win.show_page(p))
 
@@ -139,7 +148,11 @@ def run(app):
 app = ns["SettingsApp"]()
 app.connect("activate", lambda a: GLib.timeout_add(800, run, a))
 app.run(["wowtype-config"])
+if not ran:
+    errors.append("设置窗口没打开就退出了")
 print(f"\n{len(errors)} 个报错")
 for error in errors:
     print(error)
-sys.exit(1 if errors else 0)
+sys.stdout.flush()
+# 窗口没建好时退出过程中 GTK 可能崩，结果已经打出来了，直接退
+os._exit(1 if errors else 0)
