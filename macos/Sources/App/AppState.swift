@@ -146,9 +146,9 @@ final class AppState {
             config = loaded
             configGeneration += 1
             applyTranslateSettings()
-            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 工具栏=%d 剪贴板历史=%d 表情键=%@ 互译=%@",
+            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) 五笔=%d Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 工具栏=%d 剪贴板历史=%d 表情键=%@ 互译=%@",
                   config.horizontal ? "横排" : "竖排", config.pageSize, config.fuzzy ? 1 : 0, config.fuzzyGroups,
-                  config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme,
+                  config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme, config.wubi ? 1 : 0,
                   config.shiftToggle.rawValue, config.traditional ? 1 : 0, config.halfwidthPunct ? 1 : 0,
                   config.candidateFontSize, config.lexicon.isEmpty ? "自带" : config.lexicon,
                   config.toolbar ? 1 : 0, config.clipboardHistory ? 1 : 0, config.emojiKey?.name ?? "不用",
@@ -192,7 +192,7 @@ final class AppState {
 
     /// 设置里管引擎的部分 + 自定义词。
     private func applyEngineSettings(_ engine: Engine) {
-        for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+        for problem in engine.apply(config, conversion: resource("s2t.tsv"), wubi: resource("wubi86.tsv")) {
             NSLog("WowType: %@", problem)
         }
         customStamp = FileStamp(customWordsPath)
@@ -297,7 +297,7 @@ final class AppState {
             let generation = configGeneration
             loadConfig()
             if configGeneration != generation, let engine {
-                for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+                for problem in engine.apply(config, conversion: resource("s2t.tsv"), wubi: resource("wubi86.tsv")) {
                     NSLog("WowType: %@", problem)
                 }
             }

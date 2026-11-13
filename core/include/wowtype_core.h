@@ -553,6 +553,9 @@ const WowtypeFrame *wowtype_session_select(WowtypeSession *session, size_t index
 /* 显示的第 index 个候选的字（1.6 起），index < cand_count，不然返回 NULL。
  * 在同一会话下一次调用前有效。 */
 const char *wowtype_session_candidate(WowtypeSession *session, size_t index);
+/* 显示的第 index 个候选后面的小字（1.10 起：五笔还要打的码、z 临时拼音反查的五笔码），没有为空串；
+ * 越界返回 NULL。和 WowtypeCandidateInfo.comment 一样，画在字后面、不上屏。 */
+const char *wowtype_session_candidate_comment(WowtypeSession *session, size_t index);
 
 /* 读会话的状态（外壳判断在不在打字、拼编辑区用）。返回的字符串在同一会话下一次调用前有效。 */
 const char *wowtype_session_input(WowtypeSession *session);         /* 全部原始输入 */

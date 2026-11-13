@@ -472,7 +472,7 @@ do {
           "Windows 换行（\\r\\n）")
 }
 
-withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client in
+withConfig({ $0.inputScheme = .shuangpin; $0.shuangpinScheme = "Xiaohe" }) { c, client in
     // 小鹤双拼：ni = ni，hao = hc
     type(c, "nihc")
     check(client.page?.texts.first == "你好", "小鹤双拼 nihc 出你好", "\(client.page?.texts ?? [])")
@@ -480,7 +480,7 @@ withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client i
     check(client.committed == "你好", "双拼空格上屏", client.committed)
 }
 
-withConfig({ $0.shuangpin = true }) { c, client in
+withConfig({ $0.inputScheme = .shuangpin }) { c, client in
     // 默认方案自然码：hao = hk
     type(c, "nihk")
     check(client.page?.texts.first == "你好", "自然码 nihk 出你好", "\(client.page?.texts ?? [])")
@@ -488,7 +488,7 @@ withConfig({ $0.shuangpin = true }) { c, client in
 
 do {
     var config = WowtypeConfig()
-    config.shuangpin = true
+    config.inputScheme = .shuangpin
     config.shuangpinScheme = "Dvorak"
     check(!engine.apply(config).isEmpty, "不认识的双拼方案报出来（改用自然码）")
     engine.apply(WowtypeConfig())
@@ -497,6 +497,88 @@ do {
 withConfig({ _ in }) { c, client in
     type(c, "nihk")
     check(client.page?.texts.first != "你好", "关掉双拼后 nihk 不是你好", "\(client.page?.texts ?? [])")
+}
+
+// 五笔：码表用 rime-wubi 的原样几行
+do {
+    check(WowtypeConfig.parse("Shuangpin=True\n").inputScheme == .shuangpin, "旧设置 Shuangpin=True 读成双拼")
+    check(WowtypeConfig.parse("InputScheme=Wubi86\nShuangpin=True\n").inputScheme == .wubi86, "有 InputScheme 时不看 Shuangpin")
+    var wubi = WowtypeConfig()
+    wubi.inputScheme = .wubi86
+    let written = wubi.serialized(into: "Shuangpin=True\n")
+    check(written.contains("Shuangpin=False") && written.contains("InputScheme=Wubi86"), "写回去 Shuangpin 跟着方案", written)
+
+    var noTable = WowtypeConfig()
+    noTable.inputScheme = .wubi86
+    check(engine.apply(noTable, wubi: nil).contains { $0.contains("五笔码表") }, "没有码表时报出来")
+    let (c, client) = fresh()
+    c.apply(noTable)
+    type(c, "nihao")
+    check(client.page?.aux?.contains("没有五笔码表") == true && client.page?.texts.first == "你好",
+          "没有码表时照全拼打，候选框上方说为什么", "\(client.page?.aux ?? "nil") \(client.page?.texts ?? [])")
+    engine.apply(WowtypeConfig())
+
+    let table = "/tmp/wowtype-macos-harness-\(getpid()).wubi86.tsv"
+    writeFile(table, "g\t一\t2015124793\nggl\t一\t2830000000\nggll\t一\t2830000000\nv\t发\t395047607\n"
+              + "w\t人\t1002212710\nwq\t你\t597727619\nwqin\t您\t3090000000\nwqvb\t你好\t70500000\n"
+              + "wqvb\t您好\t34700000\n")
+    defer { unlink(table) }
+    func withWubi(_ change: (inout WowtypeConfig) -> Void = { _ in }, _ body: (Composer, FakeClient) -> Void) {
+        var config = WowtypeConfig()
+        config.inputScheme = .wubi86
+        change(&config)
+        check(engine.apply(config, wubi: table).isEmpty, "五笔码表载入")
+        let (c, client) = fresh()
+        c.apply(config)
+        body(c, client)
+        engine.apply(WowtypeConfig())
+    }
+    withWubi { c, client in
+        type(c, "ggll")
+        check(client.committed == "一" && client.marked.isEmpty, "五笔四码唯一自动上屏", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wqvb")
+        check(client.committed.isEmpty && Array(client.page?.texts.prefix(2) ?? []) == ["你好", "您好"], "五笔重码按码表顺序",
+              "\(client.page?.texts ?? [])")
+        type(c, "g")
+        check(client.committed == "你好" && client.marked == "g", "五笔第五码顶字，新码留在编辑区",
+              "\(client.committed) / \(client.marked)")
+    }
+    withWubi { c, client in
+        type(c, "wq")
+        let page = client.page
+        let hinted = page.map { p in p.texts.indices.contains { p.texts[$0] == "您" && p.comment($0) == "in" } } ?? false
+        check(hinted && page?.comment(0) == "", "五笔逐码提示：候选后面是还要打的码", "\(page?.texts ?? []) \(page?.comments ?? [])")
+        type(c, ",")
+        check(client.committed == "你，", "五笔标点顶字", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wx")
+        check(client.page?.aux == "空码" && client.page?.texts.isEmpty == true && client.marked == "wx", "五笔空码只有提示",
+              "\(client.page?.aux ?? "nil")")
+        _ = c.handle(.char(" "))
+        check(client.committed.isEmpty && client.marked.isEmpty, "五笔空码空格清空", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "znihao")
+        check(client.marked == "zni'hao" && client.page?.texts.first == "你好" && client.page?.comment(0) == "wqvb",
+              "五笔 z 临时拼音带反查的五笔码", "\(client.marked) \(client.page?.texts ?? []) \(client.page?.comments ?? [])")
+        _ = c.handle(.char(" "))
+        check(client.committed == "你好", "临时拼音上屏", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "v ")
+        check(client.committed == "发" && c.openPanel == nil, "五笔 v + 空格上屏「发」，不开工具栏", client.committed)
+    }
+    withWubi({ $0.wubiAutoCommit = false; $0.wubiHint = false }) { c, client in
+        type(c, "ggll")
+        check(client.committed.isEmpty && client.marked == "ggll", "关掉四码唯一自动上屏", client.committed)
+        _ = c.handle(.key(Keysym.escape))
+        type(c, "wq")
+        check(client.page?.comments.allSatisfy(\.isEmpty) == true && client.page?.texts.contains("您") == true,
+              "关掉编码提示：候选不带码", "\(client.page?.comments ?? [])")
+    }
 }
 
 // 纠错也会把 si 纠成 shi，测模糊音时关掉
@@ -898,7 +980,7 @@ withConfig({ $0.toolbar = false }) { c, _ in
     check(c.openPanel == nil, "关掉工具栏：v + 空格不打开")
 }
 
-withConfig({ $0.shuangpin = true }) { c, _ in
+withConfig({ $0.inputScheme = .shuangpin }) { c, _ in
     type(c, "v")
     _ = c.handle(.char(" "))
     check(c.openPanel == nil, "双拼时不开工具栏")

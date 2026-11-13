@@ -302,13 +302,13 @@ private struct InputPage: View {
         }
         .onAppear { model.checkRelease() }
 
-        PrefGroup("输入方式") {
-            RadioRow(title: "拼音输入", subtitle: "全拼，也能只打声母", selected: !model.config.shuangpin) {
-                model.config.shuangpin = false
+        PrefGroup("输入方案") {
+            RadioRow(title: "拼音输入", subtitle: "全拼，也能只打声母", selected: model.config.inputScheme == .quanpin) {
+                model.config.inputScheme = .quanpin
             }
             RowDivider()
             RadioRow(title: "双拼输入", subtitle: "每个字打两个键", selected: model.config.shuangpin) {
-                model.config.shuangpin = true
+                model.config.inputScheme = .shuangpin
             }
             if model.config.shuangpin {
                 RowDivider()
@@ -316,6 +316,21 @@ private struct InputPage: View {
                 RowDivider()
                 SwitchRow(title: "编辑区显示打的键", subtitle: "不翻成全拼，中英混打时看得出打了什么",
                           isOn: $model.config.shuangpinShowKeys)
+            }
+            RowDivider()
+            RadioRow(title: "五笔输入",
+                     subtitle: model.wubiTableAvailable ? "86 版，z 键临时打拼音"
+                         : "没有找到五笔码表 wubi86.tsv，重新安装 WowType 可以修好",
+                     selected: model.config.wubi) {
+                model.config.inputScheme = .wubi86
+            }
+            .disabled(!model.wubiTableAvailable && !model.config.wubi)
+            if model.config.wubi {
+                RowDivider()
+                SwitchRow(title: "四码唯一自动上屏", subtitle: "打满四码、只有一个字词时直接上屏",
+                          isOn: $model.config.wubiAutoCommit)
+                RowDivider()
+                SwitchRow(title: "编码提示", subtitle: "候选后面显示还要打的码", isOn: $model.config.wubiHint)
             }
         }
 
@@ -352,15 +367,17 @@ private struct InputPage: View {
         }
 
         PrefGroup("快捷输入") {
-            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi", isOn: $model.config.dateTime)
+            SwitchRow(title: "日期和时间",
+                      subtitle: model.config.wubi ? "五笔时打 z 加拼音：zriqi、zshijian、zxingqi" : "打 riqi、shijian、xingqi",
+                      isOn: $model.config.dateTime)
             RowDivider()
-            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时打大写 V：V1+2*3 → 7" : "v1+2*3 → 7",
+            SwitchRow(title: "计算器", subtitle: schemeName.map { "\($0)时打大写 V：V1+2*3 → 7" } ?? "v1+2*3 → 7",
                       isOn: $model.config.calculator)
             RowDivider()
             SwitchRow(title: "工具栏",
-                      subtitle: model.config.shuangpin ? "双拼时不可用" : "打 v 再按空格：剪贴板、常用语、符号、表情",
+                      subtitle: schemeName.map { "\($0)时不可用" } ?? "打 v 再按空格：剪贴板、常用语、符号、表情",
                       isOn: $model.config.toolbar)
-                .disabled(model.config.shuangpin)
+                .disabled(schemeName != nil)
             RowDivider()
             SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
                       info: "给工具栏里的「剪贴板」用，最多记 20 条，切走输入法就清空。"
@@ -394,6 +411,15 @@ private struct InputPage: View {
                        ("Control + Shift + 空格", "Control+Shift+space")]
         let current = toggleKey.wrappedValue
         return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+    }
+
+    /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
+    private var schemeName: String? {
+        switch model.config.inputScheme {
+        case .quanpin: return nil
+        case .shuangpin: return "双拼"
+        case .wubi86: return "五笔"
+        }
     }
 
     private var schemeOptions: [(String, String)] {

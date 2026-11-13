@@ -757,17 +757,27 @@ pub unsafe extern "C" fn wowtype_session_candidate(
     session: *mut WowtypeSession,
     index: usize,
 ) -> *const c_char {
-    let Some(handle) = (unsafe { session.as_mut() }) else {
-        return ptr::null();
-    };
+    unsafe { shown_candidate(session, index) }.map_or(ptr::null(), |c| c.text.as_ptr())
+}
+
+/// 上一次返回的 frame 里显示的第 index 个候选后面的小字（1.10，五笔的编码提示），没有是空串。
+/// 越界或 NULL 返回 NULL。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_session_candidate_comment(
+    session: *mut WowtypeSession,
+    index: usize,
+) -> *const c_char {
+    unsafe { shown_candidate(session, index) }.map_or(ptr::null(), |c| c.comment.as_ptr())
+}
+
+/// 上一次的 frame 里显示的第 index 个候选。
+unsafe fn shown_candidate<'a>(session: *mut WowtypeSession, index: usize) -> Option<&'a CCandidate> {
+    let handle = unsafe { session.as_mut() }?;
     if index >= handle.frame.cand_count {
-        return ptr::null();
+        return None;
     }
     let at = handle.shown_start + index;
-    handle
-        .c_candidates()
-        .get(at)
-        .map_or(ptr::null(), |c| c.text.as_ptr())
+    handle.c_candidates().get(at)
 }
 
 /// 清空编辑区；commit_pending 非 0 时把已选的词和原始输入放进 frame->commit。

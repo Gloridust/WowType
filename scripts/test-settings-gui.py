@@ -24,6 +24,12 @@ home = tempfile.mkdtemp(prefix="wowtype-gui-test-")
 os.environ.update(HOME=home, XDG_CONFIG_HOME=f"{home}/.config", XDG_DATA_HOME=f"{home}/.local/share",
                   XDG_CACHE_HOME=f"{home}/.cache", XDG_STATE_HOME=f"{home}/.local/state")
 
+# 五笔码表放进数据目录：「五笔输入」能选（没有码表时灰掉，下面也试）
+wubi_table = f"{home}/.local/share/wowtype/wubi86.tsv"
+os.makedirs(os.path.dirname(wubi_table))
+with open(wubi_table, "w", encoding="utf-8") as f:
+    f.write("g\t一\t1\n")
+
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "settings", "wowtype-config")
 ns = runpy.run_path(path, run_name="wowtype_settings_test")
 from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
@@ -97,6 +103,45 @@ def run(app):
         win.layout_row.set_selected(0)
         check(win.arrow_row.get_subtitle() == "← → 选词，↑ 上一页，↓ 展开更多候选", "横排的副标题不对")
     step("方向键", arrow_keys)
+
+    def input_scheme():
+        # 「输入方案」单选：双拼才出方案和显示打的键，五笔才出它的两个开关；双拼、五笔时计算器换大写 V、工具栏灰掉
+        def visible(rows):
+            return [row.get_visible() for row in rows]
+        win.scheme_checks["Wubi86"].set_active(True)
+        pump(0.4)
+        check(win.values["InputScheme"] == "Wubi86", "没存成五笔")
+        check(visible(win.wubi_rows) == [True, True] and visible(win.shuangpin_rows) == [False, False],
+              "五笔时该只出五笔的两个开关")
+        check(win.calc_row.get_subtitle().startswith("五笔时打大写 V") and not win.toolbar_row.get_sensitive(),
+              "五笔时计算器、工具栏的说明不对")
+        check("zriqi" in win.date_row.get_subtitle(), "五笔时日期时间该说打 z 加拼音")
+        text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
+        check("InputScheme=Wubi86" in text and "Shuangpin=False" in text, "五笔写进文件不对")
+        win.wubi_rows[0].set_active(False)
+        check(win.values["WubiAutoCommit"] == "False", "四码唯一自动上屏没存上")
+        win.wubi_rows[0].set_active(True)
+        win.scheme_checks["Shuangpin"].set_active(True)
+        pump(0.4)
+        check(visible(win.wubi_rows) == [False, False] and visible(win.shuangpin_rows) == [True, True],
+              "双拼时该只出双拼的两项")
+        text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
+        check("InputScheme=Shuangpin" in text and "Shuangpin=True" in text, "双拼写进文件不对（旧版要读 Shuangpin）")
+        win.scheme_checks["Quanpin"].set_active(True)
+        pump(0.4)
+        check(not any(visible(win.wubi_rows + win.shuangpin_rows)), "全拼时不该出双拼、五笔的设置")
+        check(win.toolbar_row.get_sensitive() and win.calc_row.get_subtitle() == "v1+2*3 → 7", "全拼时计算器、工具栏不对")
+        # 没有码表：「五笔输入」灰掉，副标题说为什么（另建一页看，看完换回来）
+        os.remove(wubi_table)
+        try:
+            win.build_input()
+            check(not win.scheme_checks["Wubi86"].is_sensitive(), "没有码表时五笔该灰掉")
+        finally:
+            with open(wubi_table, "w", encoding="utf-8") as f:
+                f.write("g\t一\t1\n")
+            win.build_input()
+        check(win.scheme_checks["Wubi86"].is_sensitive(), "有码表时五笔该能选")
+    step("输入方案", input_scheme)
 
     def switches():
         win.theme_row.set_active(True)
