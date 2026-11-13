@@ -180,12 +180,14 @@ impl LocalServer {
                 "翻译失败：没找到 llama-server（在设置的「翻译」页点下载，或者自己装 llama.cpp）"
                     .to_string()
             })?;
-            // 进程一起来就退出，多半是端口被别人抢了（free_port 放掉到 llama-server 绑上之间），
-            // 换个端口马上再试；模型坏了也会这样，试 3 次就报错
+            // 进程一起来（QUICK_EXIT 以内）就退出，多半是端口被别人抢了（free_port 放掉到
+            // llama-server 绑上之间）：换个端口马上再试，最多 3 次。载入了一阵才退出的（模型坏了、
+            // 版本不对）重试也没用，还要再等一遍载入，直接报错
             let mut attempt = 0;
             loop {
                 attempt += 1;
                 let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
+                let launched = Instant::now();
                 let child = spawn_retrying_busy(|| {
                     Command::new(&server)
                         .arg("-m")
@@ -231,9 +233,9 @@ impl LocalServer {
                         break;
                     }
                     Err(message) => {
-                        let exited = !alive(&mut s);
+                        let quick_exit = !alive(&mut s) && launched.elapsed() < QUICK_EXIT;
                         stop(&mut s);
-                        if exited && attempt < 3 {
+                        if quick_exit && attempt < 3 {
                             continue;
                         }
                         return Err(message);
@@ -287,9 +289,14 @@ fn stop(s: &mut State) {
     }
 }
 
+/// llama-server 起来这么久以内就退出，当作端口被抢了、换端口重试；更晚才退出的是真起不来。
+/// 绑端口在载入模型之前，绑不上的话一般几十毫秒就退出；留到 3 秒是给很忙的机器（CI 上测试并行时
+/// 假服务的 Python 启动就要一两秒）。比这更晚才退出的，重试只会再等一遍载入。
+const QUICK_EXIT: Duration = Duration::from_secs(3);
+
 fn free_port() -> Option<u16> {
     // 让系统挑一个；放掉以后马上给 llama-server 用。极少数情况下会被别人抢走，
-    // 那样 llama-server 起来就退出，acquire 换个端口马上重试。
+    // 那样 llama-server 起来就退出，acquire 换个端口马上重试（见 QUICK_EXIT）。
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     listener.local_addr().ok().map(|a| a.port())
 }
@@ -526,19 +533,71 @@ mod tests {
 
     #[test]
     fn server_that_exits_reports_after_retries() {
-        // 起来就退出（模型坏了、端口被抢）：换端口试 3 次，还不行才报错，不会卡住
+        // 起来就退出（端口被抢、模型文件不对）：换端口试 3 次，还不行才报错，不会卡住
         let (dir, mut config) = setup(0);
-        let script = dir.path().join("exits");
-        std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let (script, launches) = counting_script(dir.path(), "exits", "exit 1");
         config.server = script.display().to_string();
         let server = LocalServer::new();
         let started = Instant::now();
         let err = server.acquire(&config).err().unwrap();
         assert!(err.contains("启动后退出了"), "{err}");
         assert!(!server.is_running());
+        assert_eq!(launch_count(&launches), 3);
         assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn server_that_dies_after_loading_is_not_retried() {
+        // 载入了一阵才退出（模型坏了、版本不对）：重试也一样，只起一次
+        let (dir, mut config) = setup(0);
+        let (script, launches) = counting_script(dir.path(), "dies-late", "sleep 4; exit 1");
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        let err = server.acquire(&config).err().unwrap();
+        assert!(err.contains("启动后退出了"), "{err}");
+        assert_eq!(launch_count(&launches), 1);
+    }
+
+    #[test]
+    fn retries_after_a_quick_exit_and_then_serves() {
+        // 第一次起来就退出（像端口被抢），第二次正常：换端口重试后能用
+        if !python_available() {
+            return;
+        }
+        let (dir, mut config) = setup(0);
+        let real = fake_server(dir.path());
+        let (script, launches) = counting_script(
+            dir.path(),
+            "flaky",
+            &format!(
+                "[ \"$(wc -l < \"$0.launches\")\" -le 1 ] && exit 1; exec {} \"$@\"",
+                real.display()
+            ),
+        );
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        drop(server.acquire(&config).unwrap());
+        assert_eq!(launch_count(&launches), 2);
+        assert!(server.is_running());
+        server.shutdown();
+    }
+
+    /// 每次启动往 `<脚本>.launches` 里记一行再跑 body 的 shell 脚本。
+    fn counting_script(dir: &Path, name: &str, body: &str) -> (PathBuf, PathBuf) {
+        let script = dir.join(name);
+        let launches = dir.join(format!("{name}.launches"));
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho x >> \"$0.launches\"\n{body}\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script, launches)
+    }
+
+    fn launch_count(launches: &Path) -> usize {
+        std::fs::read_to_string(launches).map_or(0, |s| s.lines().count())
     }
 
     #[test]
