@@ -13,6 +13,9 @@ counts.tsv 每行「词<TAB>次数」，不带读音：jieba 的词典（tools/j
 所以外部次数不会给每个读音各加一遍。换算系数用两边都有的词估（按词算，见 lexdata.shared_scale）。
 
 不碰的行：表头和注释、频次小于 1 的生僻读音、占位频次的词（见 tools/lexdata.py）。
+
+--max-factor K --floor F：融合后的总频次不超过 K * max(原频次, F)。小语料里一个词出现得多（Tatoeba 的
+「汤姆」），不至于被抬到比「现在」还高；原来只有 1、2 的词（嫉妒、披萨）最多抬到 K * F。
 """
 
 import argparse
@@ -29,6 +32,8 @@ def main():
     ap.add_argument("--label", default="词频", help="日志里的名字")
     ap.add_argument("--raise-only", action="store_true",
                     help="只提不降（外部词频比词库低的词不动）：语料里出现少的词不会比语料里没出现的词更吃亏")
+    ap.add_argument("--max-factor", type=float, default=0, help="每个词最多抬到 K * max(原频次, --floor)；0 不限")
+    ap.add_argument("--floor", type=float, default=0, help="见 --max-factor")
     args = ap.parse_args()
     w = min(max(args.weight, 0.0), 1.0)
 
@@ -41,6 +46,7 @@ def main():
 
     blended_words = 0
     skipped_placeholder = 0
+    capped_words = 0
     for word, rows in lex.readings_by_word().items():
         count = counts.get(word)
         if count is None:
@@ -53,6 +59,11 @@ def main():
         factor = (total * (1.0 - w) + count * scale * w) / total
         if args.raise_only:
             factor = max(factor, 1.0)
+        if args.max_factor > 0:
+            capped = min(factor, args.max_factor * max(total, args.floor) / total)
+            if capped < factor:
+                capped_words += 1
+            factor = capped
         if factor == 1.0:
             continue
         for row in usable:
@@ -62,7 +73,8 @@ def main():
     lex.write(args.output)
     lexdata.log(
         f"{args.label}：融合 {blended_words} 个词（{len(lex.changed)} 行），"
-        f"占位频次/生僻读音跳过 {skipped_placeholder} 个，换算系数 {scale:.4g}，权重 {w:g}")
+        f"占位频次/生僻读音跳过 {skipped_placeholder} 个，换算系数 {scale:.4g}，权重 {w:g}"
+        + (f"，封顶 {capped_words} 个（{args.max_factor:g} 倍，下限 {args.floor:g}）" if args.max_factor > 0 else ""))
 
 
 if __name__ == "__main__":
