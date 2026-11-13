@@ -71,6 +71,7 @@ LEXICON_CANDIDATES = [
 # 改这些要先改规格，scripts/test-config-contract.py 对照
 DEFAULTS = {
     "CandidateLayout": "Horizontal",
+    "ArrowKeys": "Candidates",
     "PageSize": "9",
     "PageKeysMinusEqual": "True",
     "PageKeysBracket": "False",
@@ -208,6 +209,12 @@ SHIFT_TOGGLES = [
     ("不用 Shift 切换", "Off"),
 ]
 
+# 打字途中方向键做什么（#129）；副标题按这个和候选排列说各个方向键做什么，和 macOS 设置一样
+ARROW_KEYS = [
+    ("都用来选词", "Candidates"),
+    ("左右键移动光标", "Caret"),
+]
+
 INITIAL_MODES = [
     ("中文", "Chinese"),
     ("英文", "English"),
@@ -217,6 +224,7 @@ INITIAL_MODES = [
 # 枚举项认哪些写法（区分大小写，认不出的读成默认值，和插件、macOS 一样，见 spec/config.json）
 ENUMS = {
     "CandidateLayout": ("Horizontal", "Vertical"),
+    "ArrowKeys": tuple(value for _label, value in ARROW_KEYS),
     "ShuangpinScheme": tuple(value for _label, value in SHUANGPIN_SCHEMES),
     "ShiftToggle": tuple(value for _label, value in SHIFT_TOGGLES),
     "InitialMode": tuple(value for _label, value in INITIAL_MODES),
@@ -3287,9 +3295,22 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.layout_row = Adw.ComboRow(title="排列方向",
                                        model=Gtk.StringList.new(["横排", "竖排"]))
         self.layout_row.set_selected(1 if self.values["CandidateLayout"] == "Vertical" else 0)
-        self.layout_row.connect("notify::selected", lambda row, _p: self.set_value(
-            "CandidateLayout", "Vertical" if row.get_selected() == 1 else "Horizontal"))
+        self.layout_row.connect("notify::selected", self.on_layout_changed)
         cands.add(self.layout_row)
+        self.arrow_names = [name for _, name in ARROW_KEYS]
+        self.arrow_row = Adw.ComboRow(title="方向键",
+                                      model=Gtk.StringList.new([label for label, _ in ARROW_KEYS]))
+        self.add_info(self.arrow_row,
+                      "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
+                      "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
+                      "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。\n\n"
+                      "GNOME 的 Input Method Panel 扩展画不出编辑区里的光标，那里看不到光标在哪"
+                      "（打字、删除照常对）。")
+        current = self.values.get("ArrowKeys", DEFAULTS["ArrowKeys"])
+        self.arrow_row.set_selected(self.arrow_names.index(current) if current in self.arrow_names else 0)
+        self.arrow_row.connect("notify::selected", self.on_arrow_keys_changed)
+        self.refresh_arrow_keys_subtitle()
+        cands.add(self.arrow_row)
 
         self.page_row = SpinRow.new_with_range(*RANGES["PageSize"], 1)
         self.page_row.set_title("每页个数")
@@ -3300,7 +3321,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.page_row.connect("notify::value", lambda row, _p: self.set_value(
             "PageSize", str(int(row.get_value()))))
         cands.add(self.page_row)
-        page_keys = Adw.ExpanderRow(title="翻页键", subtitle="除了 Page Up / Page Down 和方向键")
+        page_keys = Adw.ExpanderRow(title="翻页键", subtitle="除了 Page Up / Page Down")
         for key, title, subtitle in (
             ("PageKeysMinusEqual", "- 和 =", None),
             ("PageKeysBracket", "[ 和 ]", "打字途中不再出【】"),
@@ -3732,6 +3753,24 @@ class SettingsWindow(Adw.ApplicationWindow):
         toast.connect("button-clicked", lambda _t: self.open_url(ISSUES_URL))
         self.toasts.add_toast(toast)
         return GLib.SOURCE_REMOVE
+
+    def on_layout_changed(self, row, _param):
+        self.set_value("CandidateLayout", "Vertical" if row.get_selected() == 1 else "Horizontal")
+        self.refresh_arrow_keys_subtitle()
+
+    def on_arrow_keys_changed(self, row, _param):
+        self.set_value("ArrowKeys", self.arrow_names[row.get_selected()])
+        self.refresh_arrow_keys_subtitle()
+
+    def refresh_arrow_keys_subtitle(self):
+        """方向键那一行的副标题：这种用法和候选排列下各个方向键做什么（和 macOS 设置一样）。"""
+        if self.values.get("ArrowKeys") == "Caret":
+            text = "↑ ↓ 选词，← → 在拼音里移动光标"
+        elif self.values.get("CandidateLayout") == "Vertical":
+            text = "↑ ↓ 选词，← → 翻页"
+        else:
+            text = "← → 选词，↑ 上一页，↓ 展开更多候选"
+        self.arrow_row.set_subtitle(text)
 
     def refresh_theme(self):
         def done(config):
@@ -5016,6 +5055,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.values = {**DEFAULTS, **keep}
             self.save_config()
             self.layout_row.set_selected(0)
+            self.arrow_row.set_selected(self.arrow_names.index(DEFAULTS["ArrowKeys"]))
             self.page_row.set_value(int(DEFAULTS["PageSize"]))
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")

@@ -25,6 +25,11 @@ public struct WowtypeConfig: Equatable {
         case off = "Off", semicolon = "Semicolon", semicolonQuote = "SemicolonQuote"
     }
 
+    /// 打字途中方向键做什么（#129），见 spec/config.json 的 ArrowKeys
+    public enum ArrowKeys: String, CaseIterable {
+        case candidates = "Candidates", caret = "Caret"
+    }
+
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
 
@@ -53,6 +58,7 @@ public struct WowtypeConfig: Equatable {
     ]
 
     public var horizontal = true
+    public var arrowKeys = ArrowKeys.candidates
     public var pageSize = 9
     public var pageKeysMinus = true
     public var pageKeysBracket = false
@@ -152,6 +158,13 @@ public struct WowtypeConfig: Equatable {
         }
     }
 
+    public var arrowKeysValue: Int32 {
+        switch arrowKeys {
+        case .candidates: return Int32(WOWTYPE_ARROW_KEYS_CANDIDATES)
+        case .caret: return Int32(WOWTYPE_ARROW_KEYS_CARET)
+        }
+    }
+
     /// wowtype_autospace 的 flags：1 汉字和字母之间、2 汉字和数字之间；总开关关着是 0
     public var autoSpaceFlags: Int32 {
         guard autoSpace else { return 0 }
@@ -207,7 +220,7 @@ public struct WowtypeConfig: Equatable {
 
     /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
     public static let keys = [
-        "CandidateLayout", "PageSize", "CandidateFontSize",
+        "CandidateLayout", "ArrowKeys", "PageSize", "CandidateFontSize",
         "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
@@ -245,6 +258,8 @@ public struct WowtypeConfig: Equatable {
         switch key {
         case "CandidateLayout":
             if let v = matchName(value, ["Horizontal", "Vertical"]) { horizontal = v == "Horizontal" }
+        case "ArrowKeys":
+            if let v = matchName(value, ArrowKeys.allCases.map(\.rawValue)) { arrowKeys = ArrowKeys(rawValue: v)! }
         case "PageSize":
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
         case "ShuangpinScheme":
@@ -293,6 +308,7 @@ public struct WowtypeConfig: Equatable {
         }
         switch key {
         case "CandidateLayout": return horizontal ? "Horizontal" : "Vertical"
+        case "ArrowKeys": return arrowKeys.rawValue
         case "PageSize": return String(pageSize)
         case "ShuangpinScheme": return shuangpinScheme
         case "ShiftToggle": return shiftToggle.rawValue
@@ -406,6 +422,9 @@ public struct WowtypeConfig: Equatable {
 
         # 候选排列：Horizontal 横排、Vertical 竖排
         CandidateLayout=Horizontal
+        # 打字途中方向键做什么：Candidates 都用来选词（横排左右键选词、上键上一页、下键展开；
+        # 竖排上下键选词、左右键翻页），Caret 上下键选词、左右键在拼音里移动光标
+        ArrowKeys=Candidates
         # 每页候选个数，3–9
         PageSize=\(d.pageSize)
         # 候选字号（磅），10–40，只有 macOS 有

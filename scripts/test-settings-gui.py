@@ -86,6 +86,18 @@ def run(app):
         win.font_row.set_value(14)
     step("数字框", spin)
 
+    def arrow_keys():
+        # 「方向键」的副标题跟着用法和候选排列走
+        win.layout_row.set_selected(1)
+        check(win.arrow_row.get_subtitle() == "↑ ↓ 选词，← → 翻页", "竖排的副标题不对")
+        win.arrow_row.set_selected(1)
+        check(win.values["ArrowKeys"] == "Caret", "方向键没存成 Caret")
+        check(win.arrow_row.get_subtitle() == "↑ ↓ 选词，← → 在拼音里移动光标", "移光标的副标题不对")
+        win.arrow_row.set_selected(0)
+        win.layout_row.set_selected(0)
+        check(win.arrow_row.get_subtitle() == "← → 选词，↑ 上一页，↓ 展开更多候选", "横排的副标题不对")
+    step("方向键", arrow_keys)
+
     def switches():
         win.theme_row.set_active(True)
         win.theme_row.set_active(False)

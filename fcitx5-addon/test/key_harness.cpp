@@ -129,6 +129,9 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "up") sym = FcitxKey_Up;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
             else if (name == "tab") sym = FcitxKey_Tab;
+            else if (name == "home") sym = FcitxKey_Home;
+            else if (name == "end") sym = FcitxKey_End;
+            else if (name == "del") sym = FcitxKey_Delete;
             if (name == "stab") {
                 send(ic, Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
                 continue;
@@ -1107,6 +1110,41 @@ void runCases(Instance &instance) {
               ic->inputPanel().auxUp().toString().find("没打开") != std::string::npos,
           "默认不记剪贴板，关掉时清空：" + ic->inputPanel().auxUp().toString() + " | " +
               join(page(ic.get())));
+    fresh(ic.get());
+
+    // #129：「方向键」设成左右键移动光标：左键把光标移进拼音，字母插在光标处，退格删光标前一个；
+    // 右键到了末尾不去挑候选，上下键选词
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "ArrowKeys=Caret\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left><left><left>");
+    {
+        const fcitx::Text &shown = ic->inputPanel().preedit();
+        check(shown.cursor() >= 0 && shown.toString().substr(0, static_cast<std::size_t>(shown.cursor())) == "ni",
+              "左键三下光标在 ni 后面：" + shown.toString() + " @" + std::to_string(shown.cursor()));
+    }
+    type(ic.get(), "x");
+    check(preedit(ic.get()).find('x') != std::string::npos && ic->committed.empty(),
+          "字母插在光标处：" + preedit(ic.get()));
+    type(ic.get(), "<bs><end><right>");
+    {
+        auto *list = common();
+        check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()) && list &&
+                  list->cursorIndex() == 0,
+              "退格删掉插进去的 x，End 回末尾，末尾的右键不挑候选：" + preedit(ic.get()));
+    }
+    {
+        const std::string want = page(ic.get()).at(1);
+        type(ic.get(), "<down><sp>");
+        check(ic->committed == want, "下键选第 2 个，空格上屏它：" + ic->committed + " / " + want);
+    }
+    fresh(ic.get());
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left>");
+    check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()),
+          "默认（都用来选词）左键不动编辑区的光标：@" + std::to_string(ic->inputPanel().preedit().cursor()));
     fresh(ic.get());
 
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式

@@ -192,9 +192,16 @@ private struct GeneralPage: View {
             PickerRow(title: "排列方向", selection: $model.config.horizontal,
                       options: [("横排", true), ("竖排", false)])
             RowDivider()
+            PickerRow(title: "方向键", subtitle: arrowKeysSubtitle,
+                      info: "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
+                          + "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
+                          + "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。",
+                      selection: $model.config.arrowKeys,
+                      options: [("都用来选词", .candidates), ("左右键移动光标", .caret)])
+            RowDivider()
             StepperRow(title: "每页个数", value: $model.config.pageSize, range: 3...9)
             RowDivider()
-            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down 和方向键") {
+            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down") {
                 SwitchRow(title: "- 和 =", isOn: $model.config.pageKeysMinus)
                 RowDivider()
                 SwitchRow(title: "[ 和 ]", subtitle: "打字途中不再出【】", isOn: $model.config.pageKeysBracket)
@@ -227,6 +234,15 @@ private struct GeneralPage: View {
             ActionRow(title: "提交问题", action: { NSWorkspace.shared.open(issuesURL) }) {
                 Image(systemName: "arrow.up.right.square").foregroundColor(.secondary)
             }
+        }
+    }
+
+    /// 方向键那一行的副标题：这种用法和候选排列下各个方向键做什么（和 Linux 设置一样）
+    private var arrowKeysSubtitle: String {
+        switch (model.config.arrowKeys, model.config.horizontal) {
+        case (.caret, _): return "↑ ↓ 选词，← → 在拼音里移动光标"
+        case (.candidates, true): return "← → 选词，↑ 上一页，↓ 展开更多候选"
+        case (.candidates, false): return "↑ ↓ 选词，← → 翻页"
         }
     }
 }

@@ -809,6 +809,7 @@ void WowtypeEngine::applyConfig() {
         return envFlag(name, configured);
     };
     horizontal_ = !envOr("WOWTYPE_VERTICAL", *config_.layout == WowtypeLayout::Vertical);
+    arrowKeys_ = *config_.arrowKeys;
     pageSize_ = static_cast<std::size_t>(std::clamp(*config_.pageSize, 3, 9));
     pageMinus_ = *config_.pageKeysMinus;
     pageBracket_ = *config_.pageKeysBracket;
@@ -950,7 +951,8 @@ void WowtypeEngine::applyConfig() {
         translateMode_ = false;
     }
 
-    WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排") << " 每页" << pageSize_
+    WLOG_I() << "WowType: 设置 " << (horizontal_ ? "横排" : "竖排")
+             << (arrowKeys_ == WowtypeArrowKeys::Caret ? " 左右键移光标" : "") << " 每页" << pageSize_
              << " 模糊音=" << fuzzy_ << "(" << fuzzyGroups_ << ")" << " 纠错=" << typo_ << " 扩展区生僻字=" << rareExt_ << " 双拼=" << shuangpin_
              << "(" << shuangpinScheme_ << ")" << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
@@ -1174,6 +1176,8 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.date_time = dateTime_ ? 1 : 0;
     config.emoji_suggest = emojiSuggest_ ? 1 : 0;
     config.horizontal = horizontal_ ? 1 : 0;
+    config.arrow_keys = arrowKeys_ == WowtypeArrowKeys::Caret ? WOWTYPE_ARROW_KEYS_CARET
+                                                             : WOWTYPE_ARROW_KEYS_CANDIDATES;
     config.page_keys = (pageMinus_ ? WOWTYPE_PAGE_KEYS_MINUS : 0u) |
                        (pageBracket_ ? WOWTYPE_PAGE_KEYS_BRACKET : 0u) |
                        (pageComma_ ? WOWTYPE_PAGE_KEYS_COMMA : 0u) |
@@ -1286,7 +1290,17 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         updateInputPanel(ic, state);
         return;
     }
-    // 只是翻页、挪光标：原地摆好候选框
+    // 编辑区里的光标动了（左右键移进拼音，#129）：重画编辑区。只在左右键移光标时看
+    //（「译」里画的是原文框和译文，光标一直在末尾）
+    if (arrowKeys_ == WowtypeArrowKeys::Caret && !translating(ic) && frame && frame->preedit) {
+        const fcitx::Text &shown =
+            inlinePreedit(ic) ? ic->inputPanel().clientPreedit() : ic->inputPanel().preedit();
+        if (shown.cursor() != frame->preedit_cursor) {
+            updateInputPanel(ic, state);
+            return;
+        }
+    }
+    // 只是翻页、挪候选光标：原地摆好候选框
     if (auto *list = dynamic_cast<WowtypeSessionList *>(ic->inputPanel().candidateList().get())) {
         list->mirror(state->panelPage_, state->panelCursor_);
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
@@ -1484,11 +1498,13 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         // 原文和拼音在候选框里，输入框里是译文
         fillTranslateView(ic, state, panel);
     } else {
-        // 编辑区：已选的词 + 还没选的拼音（带下划线）
+        // 编辑区：已选的词 + 还没选的拼音（带下划线）；光标位置会话给（左右键能移到拼音中间，#129）
         fcitx::Text preedit;
         preedit.append(state->selectedText());
         preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
-        preedit.setCursor(static_cast<int>(preedit.textLength()));
+        const WowtypeFrame *frame = wowtype_session_frame(state->session_);
+        const std::size_t cursor = frame && frame->preedit ? frame->preedit_cursor : preedit.textLength();
+        preedit.setCursor(static_cast<int>(std::min(cursor, preedit.textLength())));
         sendPreedit(ic, preedit);
     }
 

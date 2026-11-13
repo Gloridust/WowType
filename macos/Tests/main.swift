@@ -633,6 +633,7 @@ do {
         if d.value(forKey: key) == "False" { all.setValue("True", forKey: key) }
     }
     all.horizontal = false
+    all.arrowKeys = .caret
     all.pageSize = 4
     all.candidateFontSize = 22
     all.shuangpinScheme = "PinyinJiajia"
@@ -655,7 +656,7 @@ do {
         check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
         check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
     }
-    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nArrowKeys=Caret\nPageSize=4\n"),
           "文件里没有的键照模板顺序补在后面")
     check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
           "带空格、引号的值加引号转义", all.serialized(into: nil))
@@ -1066,6 +1067,30 @@ withConfig({ _ in }) { c, client in
     c.toggleMode()
     _ = c.handle(.char(".", [.control]))
     check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
+}
+
+withConfig({ $0.arrowKeys = .caret }) { c, client in
+    // #129：左右键移动拼音里的光标，字母插在光标处（会话做，外壳把光标位置交给应用）；上下键选词
+    type(c, "nihao")
+    let end = client.markedCursor
+    for _ in 0..<3 { _ = c.handle(.key(Keysym.left)) }
+    check(client.markedCursor < end && client.marked.prefix(client.markedCursor) == "ni",
+          "左键把光标移到 ni 后面", "\(client.marked) \(client.markedCursor)")
+    type(c, "x")
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nixhao",
+          "字母插在光标处", client.marked)
+    _ = c.handle(.key(Keysym.backspace))
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nihao", "退格删光标前一个", client.marked)
+    _ = c.handle(.key(Keysym.end))
+    check(c.handle(.key(Keysym.right)) && client.page?.cursor == 0, "末尾的右键吃掉，不挑候选")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 1 && client.page?.expanded == false, "下键选下一个，不展开面板")
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "nihao")
+    _ = c.handle(.key(Keysym.left))
+    check(client.markedCursor == client.marked.utf16.count, "默认（都用来选词）光标一直在末尾", "\(client.markedCursor)")
 }
 
 withConfig({ $0.emojiKey = nil }) { c, _ in

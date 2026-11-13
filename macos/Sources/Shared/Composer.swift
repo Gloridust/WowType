@@ -471,6 +471,7 @@ public final class Composer {
         config.date_time = settings.dateTime ? 1 : 0
         config.emoji_suggest = settings.emojiSuggest ? 1 : 0
         config.horizontal = settings.horizontal ? 1 : 0
+        config.arrow_keys = settings.arrowKeysValue
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
