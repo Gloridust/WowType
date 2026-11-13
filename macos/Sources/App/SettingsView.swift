@@ -1,8 +1,8 @@
 // 设置窗口的界面（SwiftUI，macOS 12 起）。
 //
 // 页面、分组、文字照 Linux 的设置界面（settings/wowtype-config 的 build_general / build_input / build_emoji /
-// build_words），名字和顺序两边一样，选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能
-// （语音、检查更新）不列出来，它们在 wowtype.conf 里的键原样留着。
+// build_voice / build_translate / build_words），名字和顺序两边一样，选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能
+// （检查更新）不列出来，它的键在 wowtype.conf 里原样留着。
 // 每行一个标题，副标题最多一行；说明、注意事项、例子、来源、许可放进 ⓘ（InfoButton）或「更多选项」折叠里。
 // 样子也照 Linux：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片。
 
@@ -86,6 +86,7 @@ struct SettingsView: View {
         case .general: GeneralPage(model: model)
         case .input: InputPage(model: model)
         case .emoji: EmojiPage(model: model)
+        case .voice: VoicePage(model: model)
         case .translate: TranslatePage(model: model)
         case .words: WordsPage(model: model)
         }
@@ -296,6 +297,9 @@ private struct InputPage: View {
             if model.config.shuangpin {
                 RowDivider()
                 PickerRow(title: "双拼方案", selection: $model.config.shuangpinScheme, options: schemeOptions)
+                RowDivider()
+                SwitchRow(title: "编辑区显示打的键", subtitle: "不翻成全拼，中英混打时看得出打了什么",
+                          isOn: $model.config.shuangpinShowKeys)
             }
         }
 
@@ -328,9 +332,8 @@ private struct InputPage: View {
         PrefGroup("快捷输入") {
             SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi", isOn: $model.config.dateTime)
             RowDivider()
-            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时不可用" : "v1+2*3 → 7",
+            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时打大写 V：V1+2*3 → 7" : "v1+2*3 → 7",
                       isOn: $model.config.calculator)
-                .disabled(model.config.shuangpin)
             RowDivider()
             SwitchRow(title: "工具栏",
                       subtitle: model.config.shuangpin ? "双拼时不可用" : "打 v 再按空格：剪贴板、常用语、符号、表情",
@@ -421,6 +424,59 @@ private struct EmojiPage: View {
                        ("Control + Shift + E", "Control+Shift+E"), ("不用快捷键", "")]
         let current = emojiKey.wrappedValue
         return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+    }
+}
+
+// MARK: 语音
+
+/// 和 Linux 设置的「语音」页一样：开关、语音键、复制到剪贴板，下面是识别模型。没有模型时开关灰掉、显示成关着。
+private struct VoicePage: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        let ready = model.voiceModelReady
+        PrefGroup("语音输入", info: "按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
+                  + "说的时候按 Esc 取消。正在打拼音时语音键不起作用。\n\n"
+                  + "右 Option 按下时就开始听，Option+方向键这类组合会让麦克风亮一下就停；不想这样可以换成别的键。"
+                  + "F8–F10 在 Mac 笔记本上默认是媒体键，要在「系统设置 → 键盘」里打开「将 F1、F2 等键用作标准功能键」。") {
+            SwitchRow(title: "语音输入", subtitle: ready ? nil : "先在下面下载语音模型",
+                      isOn: Binding(get: { ready && model.config.voice }, set: { model.config.voice = $0 }))
+                .disabled(!ready)
+            RowDivider()
+            PickerRow(title: "语音键", selection: $model.config.voiceKey, options: voiceKeyOptions)
+                .disabled(!ready || !model.config.voice)
+            RowDivider()
+            SwitchRow(title: "同时复制到剪贴板", isOn: $model.config.voiceCopy)
+                .disabled(!ready || !model.config.voice)
+        }
+        PrefGroup("识别模型", info: "在本机识别，录音不上传。语音模型是微信输入法的离线语音包，属于腾讯，"
+                  + "从腾讯的服务器下载，WowType 不分发它；和这台电脑装没装微信输入法无关。\n\n"
+                  + "模型放在 ~/Library/Application Support/WowType/wtlocal。第一次用语音时系统会问要不要允许 WowType 使用麦克风；"
+                  + "WowType 每次更新后系统可能会再问一次。") {
+            HStack(spacing: 10) {
+                RowLabel(title: "语音模型", subtitle: model.voiceModelStatus)
+                if let (done, total) = model.voiceProgress {
+                    ProgressView(value: Double(done), total: Double(max(total, 1)))
+                        .frame(width: 90)
+                    Button("取消") { model.cancelVoiceDownload() }
+                } else if ready {
+                    IconButton(symbol: "trash", help: "删除语音模型（语音输入会关掉）") { model.removeVoiceModel() }
+                } else {
+                    Button(model.voiceError == nil ? "下载" : "重试") { model.downloadVoiceModel() }
+                }
+            }
+            .rowPadding()
+        }
+    }
+
+    /// 键名同 wowtype.conf 的 VoiceKey（fcitx5 键名）；Linux 拷过来的 Mac 上没有的键（Menu）单独列出来
+    private var voiceKeyOptions: [(String, String)] {
+        let options = VoiceKey.presets.map { ($0.label, $0.name) }
+        let current = model.config.voiceKey
+        if options.contains(where: { $0.1 == current }) { return options }
+        let label = current.isEmpty ? "不用语音键"
+            : VoiceKey(name: current) == nil ? "\(current)（Mac 上没有这个键）" : "其他（\(current)）"
+        return options + [(label, current)]
     }
 }
 

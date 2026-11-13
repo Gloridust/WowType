@@ -28,9 +28,11 @@ fi
 EXTRA=()
 [[ -f "$RIME/cn_dicts/41448.dict.yaml" ]] && EXTRA=(--extra-chars "$RIME/cn_dicts/41448.dict.yaml")
 python3 tools/rime2tsv.py ${EXTRA[@]+"${EXTRA[@]}"} "$RIME/rime_ice.dict.yaml" > "$OUT/lexicon.rime.tsv"
-# 合进 WowType 自己整理的热词（AI、工作、网络用语），见 data/hotwords.tsv
-python3 tools/add_hotwords.py "$OUT/lexicon.rime.tsv" data/hotwords.tsv > "$OUT/lexicon.tsv"
-rm "$OUT/lexicon.rime.tsv"
+# 合进 WowType 自己整理的热词（AI、工作、网络用语），见 data/hotwords.tsv；
+# 再按 data/rime-ice-freq.tsv 修正几个常用词的词频，去掉 data/blocklist.tsv 里的错条目（去次）
+python3 tools/add_hotwords.py "$OUT/lexicon.rime.tsv" data/hotwords.tsv > "$OUT/lexicon.hot.tsv"
+python3 tools/add_hotwords.py "$OUT/lexicon.hot.tsv" data/rime-ice-freq.tsv --block data/blocklist.tsv > "$OUT/lexicon.tsv"
+rm "$OUT/lexicon.rime.tsv" "$OUT/lexicon.hot.tsv"
 cat "$RIME/en_dicts/en.dict.yaml" "$RIME/en_dicts/en_ext.dict.yaml" > "$OUT/english.txt"
 cp "$RIME/LICENSE" "$OUT/LICENSE"
 
@@ -68,7 +70,8 @@ cat > "$OUT/SOURCE.txt" <<EOF
 版本：${COMMIT}（${DATE}）
 lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables，
 另从 cn_dicts/41448.dict.yaml（大字表）补了词库里没有的单字读音（频次记 0.7~0.9），
-再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv；
+再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv、按 data/rime-ice-freq.tsv 修正几个常用词的词频、
+去掉 data/blocklist.tsv 里的错条目；
 english.txt 是 en_dicts/en.dict.yaml 与 en_dicts/en_ext.dict.yaml 原样拼接。
 
 words.lm 是 WowType 的词级语言模型，由 wowtype-lmbuild 从下列语料统计生成，许可证 CC BY-SA 4.0：
@@ -79,7 +82,7 @@ sha256：$LM_SHA256
 EOF
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
-REV=3
+REV=4
 echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)

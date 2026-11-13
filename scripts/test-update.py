@@ -41,6 +41,11 @@ class UpdateTests(unittest.TestCase):
 
     def test_supported_platforms(self):
         cases = [
+            ({"ID": "ubuntu", "VERSION_ID": "22.04"}, "apt-get", "ubuntu22.04", "amd64"),
+            ({"ID": "linuxmint", "VERSION_ID": "21.3", "UBUNTU_CODENAME": "jammy"}, "apt-get", "ubuntu22.04", "amd64"),
+            ({"ID": "deepin", "VERSION_ID": "25", "VERSION_CODENAME": "crimson"}, "apt-get", "deepin25", "amd64"),
+            ({"ID": "deepin", "VERSION_ID": "25.0.9"}, "apt-get", "deepin25", "amd64"),
+            ({"ID": "deepin", "VERSION_ID": "23", "VERSION_CODENAME": "beige"}, "apt-get", "deepin23", "amd64"),
             ({"ID": "ubuntu", "VERSION_ID": "24.04"}, "apt-get", "ubuntu24.04", "amd64"),
             ({"ID": "ubuntu", "VERSION_ID": "26.04"}, "apt-get", "ubuntu26.04", "amd64"),
             ({"ID": "debian", "VERSION_ID": "13"}, "apt-get", "debian13", "amd64"),
@@ -81,7 +86,8 @@ class UpdateTests(unittest.TestCase):
 
     def test_unsupported_platforms_have_guidance(self):
         cases = [
-            {"ID": "ubuntu", "VERSION_ID": "22.04"},
+            {"ID": "ubuntu", "VERSION_ID": "20.04"},
+            {"ID": "Deepin", "VERSION_ID": "20.8", "VERSION_CODENAME": "apricot"},
             {"ID": "debian", "VERSION_ID": "12"},
             {"ID": "debian", "VERSION_ID": "130.1"},
             {"ID": "linuxmint", "VERSION_ID": "22"},
@@ -109,6 +115,14 @@ class UpdateTests(unittest.TestCase):
                 self.assertIn("rpm-ostree", self.platform(info)[3])
         self.assertEqual(self.platform({"ID": "fedora", "VERSION_ID": "44"}, immutable=True)[0], "")
 
+    def test_deepin_solid_still_uses_apt(self):
+        # deepin 25 的磐石系统基于 OSTree，apt-get install 照常能用
+        info = {"ID": "deepin", "VERSION_ID": "25", "VERSION_CODENAME": "crimson"}
+        self.assertEqual(self.platform(info, immutable=True), ("apt-get", "deepin25", "amd64", ""))
+        manager, _distro, _arch, reason = self.platform(info, machine="aarch64")
+        self.assertEqual(manager, "")
+        self.assertIn("x86_64", reason)
+
     def test_os_release_is_data(self):
         data = "ID='linuxmint'\nID_LIKE=\"ubuntu debian\"\nUBUNTU_CODENAME=noble # base\nBAD='unterminated\n"
         with patch("builtins.open", return_value=io.StringIO(data)):
@@ -125,6 +139,8 @@ class UpdateTests(unittest.TestCase):
         cases = [
             ({"ID": "ubuntu", "VERSION_ID": "24.04"}, "wowtype_0.3.9_ubuntu24.04_amd64.deb"),
             ({"ID": "linuxmint", "UBUNTU_CODENAME": "noble"}, "wowtype_0.3.9_ubuntu24.04_amd64.deb"),
+            ({"ID": "ubuntu", "VERSION_ID": "22.04"}, "wowtype_0.3.9_ubuntu22.04_amd64.deb"),
+            ({"ID": "deepin", "VERSION_ID": "25"}, "wowtype_0.3.9_deepin25_amd64.deb"),
             ({"ID": "arch"}, "wowtype-0.3.9-1-x86_64.pkg.tar.zst"),
             ({"ID": "fedora", "VERSION_ID": "44"}, "wowtype-0.3.9-1.fc44.x86_64.rpm"),
         ]
