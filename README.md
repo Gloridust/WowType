@@ -551,6 +551,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 - [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，随安装包一起分发，许可证见 `/usr/share/doc/wowtype/copyright`）
 - [Rime 五笔字型 rime-wubi](https://github.com/rime/rime-wubi)：五笔 86 码表（LGPL-3.0，随安装包一起分发；作者见 `WUBI-AUTHORS`，来源和钉死的提交见 `WUBI-SOURCE.txt`）
+- [Tatoeba](https://tatoeba.org)：中文句子统计出的词频（`data/tatoeba-freq.tsv`，只有词频、不含句子），融进安装包的词库；句子许可证 CC BY 2.0 FR，Tatoeba contributors
 - [万象拼音 rime_wanxiang](https://github.com/amzxyz/rime_wanxiang)：可选词库（CC BY 4.0，不在安装包里，在设置里下载）
 - [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
 - [Unicode CLDR](https://cldr.unicode.org/)：emoji 的中英文关键词（Unicode License v3）
@@ -560,4 +561,4 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 许可证
 
-代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，五笔码表遵循 rime-wubi 的 LGPL-3.0，可选的万象词库包遵循 CC BY 4.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0（词频另融进了 Tatoeba 句子统计出的词频，Tatoeba 句子是 CC BY 2.0 FR，署名见 DATA-SOURCE.txt），五笔码表遵循 rime-wubi 的 LGPL-3.0，可选的万象词库包遵循 CC BY 4.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。
