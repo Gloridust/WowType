@@ -50,6 +50,12 @@ test_system=Linux
 count=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { count=$((count + 1)); printf 'ok %s - %s\n' "$count" "$*"; }
+# macOS 自带的 bash 3.2 在 UTF-8 下把变量名后面紧跟的全角字符（比如全角括号）当成变量名的一部分（set -u 时直接报
+# unbound variable）。变量后面紧跟非 ASCII 字符的一律要写成 ${version}。CI 的 bash 5 复现不了，只能这样查。
+bad=$(cd "$root" && git ls-files -z '*.sh' macos/pkg/scripts | xargs -0 perl -ne 'print "$ARGV:$.: $_" if /\$[A-Za-z_]\w*[^\x00-\x7f]/; close ARGV if eof' || true)
+[[ -z "$bad" ]] || fail "变量后面紧跟中文要加花括号（macOS 的 bash 3.2 会报 unbound variable）：
+$bad"
+
 run() {
   env -u SUDO_USER PATH="$work/bin:$PATH" \
     FIXTURE_LOG="$work/commands" FIXTURE_FETCH_LOG="$work/fetches" \
