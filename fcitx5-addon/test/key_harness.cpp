@@ -1949,6 +1949,19 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      return ic->committed.rfind("你好", 0) == 0 && ic->committed.size() > std::string("你好").size() &&
                             ic->committed.find("EN:") == std::string::npos;
                  }});
+    s.push_back({"打着拼音 Shift 切回中文：原文原样上屏，拼音留着接着打",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                     tapKey(ic, FcitxKey_Shift_R); // 中 → 英 → 译
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>shi");
+                     tapKey(ic, FcitxKey_Shift_R);
+                 },
+                 [](HarnessInputContext *ic) {
+                     // 编辑区画在输入框里还是候选框里看 fcitx5 的设置，两处都算
+                     return ic->committed == "你好" && (inlineText(ic) + preedit(ic)) == "shi" && !page(ic).empty();
+                 }});
     // 另设的切换键（#143）
     auto press = [](HarnessInputContext *ic, Key key) {
         KeyEvent e(ic, key, false);
