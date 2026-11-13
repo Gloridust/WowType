@@ -25,8 +25,8 @@ fn main() {
     let mut lexicon_path = String::new();
     let mut eval_path = String::new();
     let mut lm_path: Option<String> = None;
-    let mut lm2_path: Option<String> = None;
-    let mut lm2_weight = 0.5f64;
+    let mut domain_lm_path: Option<String> = None;
+    let mut domain_lm_weight = wowtype_core::lm::DOMAIN_LM_WEIGHT;
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
     let mut max_candidates = 10usize;
@@ -68,13 +68,13 @@ fn main() {
                 i += 1;
                 lm_path = args.get(i).cloned();
             }
-            "--lm2" => {
+            "--domain-lm" => {
                 i += 1;
-                lm2_path = args.get(i).cloned();
+                domain_lm_path = args.get(i).cloned();
             }
-            "--lm2-weight" => {
+            "--domain-lm-weight" => {
                 i += 1;
-                lm2_weight = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(0.5);
+                domain_lm_weight = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(domain_lm_weight);
             }
             "--arpa" => {
                 i += 1;
@@ -145,7 +145,7 @@ fn main() {
                 println!(
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
-                println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
+                println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin] [--domain-lm <file> [--domain-lm-weight w]]");
                 println!("            [--typo-cost x] [--completion-cost x] [--abbrev-cost x] [--tail-abbrev-cost x] [--no-typo] [--english <file>] [--show-top1]");
                 return;
             }
@@ -176,11 +176,13 @@ fn main() {
         Arc::new(BigramLm::default())
     };
 
-    let lm: Arc<dyn LanguageModel> = if let Some(path) = &lm2_path {
-        let second = wowtype_core::lm::load_lm(path).unwrap_or_else(|e| fail(&format!("{e:#}")));
-        Arc::new(MixedLm::new(lm, second, 1.0 - lm2_weight.clamp(0.0, 1.0)))
-    } else {
-        lm
+    // 领域模型：和插件里一样混在通用模型上（插件的权重固定是 DOMAIN_LM_WEIGHT）
+    let lm: Arc<dyn LanguageModel> = match &domain_lm_path {
+        Some(path) => {
+            let domain = wowtype_core::lm::load_lm(path).unwrap_or_else(|e| fail(&format!("{e:#}")));
+            Arc::new(MixedLm::new(lm, domain, domain_lm_weight))
+        }
+        None => lm,
     };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let ranker = Arc::new(LinearRanker::new(weights));

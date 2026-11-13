@@ -210,8 +210,7 @@ Lexicon=
 | `WOWTYPE_USER_DICT`、`WOWTYPE_HISTORY`、`WOWTYPE_CUSTOM` | 自动学到的词、输入习惯、自定义词的文件路径 |
 | `WOWTYPE_VOICE_MODEL_DIR` | 语音模型目录，默认 `~/.local/share/wowtype/wtlocal`（插件和设置界面都认） |
 | `WOWTYPE_NNLM` | 神经语言模型路径，默认 `~/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin` |
-| `WOWTYPE_LM2` | 领域词级模型路径，默认数据目录下的 `words.extra.lm`；没有就不混 |
-| `WOWTYPE_LM2_WEIGHT` | 领域模型权重，0–1，默认 0.4 |
+| `WOWTYPE_DOMAIN_LM` | 领域词级模型路径，默认数据目录下的 `words.domain.lm`；没有就不混 |
 | `WOWTYPE_NO_UPDATE_CHECK=1` | 不自动检查更新，也不自动打开默认主题 |
 | `WOWTYPE_LOG` | 日志文件路径，默认 `~/.local/state/wowtype/wowtype.log`；`0` 不写 |
 | `WOWTYPE_TRANSLATE=1`、`WOWTYPE_TRANSLATE_URL`、`WOWTYPE_TRANSLATE_MODEL`、`WOWTYPE_TRANSLATE_TARGET` | 互译开关、服务地址、模型、语言 |
@@ -289,7 +288,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `wtlocal/` | 语音模型（约 130MB），在设置的「语音」页下载或删除；没有它语音输入打不开，按语音键只提示去下载 |
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
-| `words.extra.lm` | 可选：领域词级模型，和 `words.lm` 按权重混合，见下 |
+| `words.domain.lm` | 可选：自己训的领域词级模型，和 `words.lm` 混着用，见下 |
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
@@ -310,14 +309,20 @@ WowType 能读它来给整句候选重排（日常整句的首选命中率从约
 模型是腾讯的，WowType 不分发；手上有微信输入法 macOS 版（3.0.0）的安装包或程序时，运行
 `python3 tools/install_wetype_nnlm.py <WeType 的 .zip 或 .app>` 取出来，重启 fcitx5 生效。
 
-**领域词级模型（可选）**：如果手上有一批领域语料（客服、聊天、某专业），可以训一个小词级模型和默认的 `words.lm` 混合，让这个领域的用词排在前面。实测对话语料训的 0.5MB 小模型，1000 句留出 top1 从 60.3% 提到 64.1%。
+**领域词级模型（可选）**：手上有一批某个领域的语料（工作群聊天、某个专业的文档）时，可以用同一个工具训一个小模型，
+放进数据目录叫 `words.domain.lm`，和 `words.lm` 按 6:4 混着用，这个领域里常连着用的词排得更靠前。
+安装包里没有这个文件，不放就不混；macOS 放在 `~/Library/Application Support/WowType/words.domain.lm`。
+语料只有几万句时把门槛调低：
 
 ```bash
 cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
-    --lexicon lexicon.tsv --out words.extra.lm corpus.txt
+    --lexicon ~/.local/share/wowtype/lexicon.tsv --min-unigram 8 --min-count 2 \
+    --out ~/.local/share/wowtype/words.domain.lm corpus.txt
 ```
 
-把 `words.extra.lm` 放进数据目录（或 `WOWTYPE_LM2` 指过去），重启 fcitx5；权重用 `WOWTYPE_LM2_WEIGHT` 调（默认 0.4，0.3–0.5 比较稳）。
+拿 Tatoeba 的 7.8 万句训的模型（1.3 万词，0.5MB）试过：Tatoeba 留出 2000 句 top1 从 1194 句到 1266 句；
+领域外不掉——手写日常句 138 句 119 -> 122，带上文的 533 例 472 -> 474，热词 351 个 312 -> 321。
+涨的主要在训练语料那个领域。重启 fcitx5（macOS 重新登录或重启输入法）生效。
 
 想清空学到的东西：退出 fcitx5，删掉 `~/.local/share/wowtype/user.tsv` 和 `history.tsv`，再启动（自定义词不受影响）。
 

@@ -174,7 +174,10 @@ pub struct Engine {
     base_lexicon: Arc<dyn Lexicon>,
     /// 基础词库 + 用户词的合并视图，束搜索实际用它。
     lexicon: Arc<UserLexicon>,
+    /// 实际用的词级语言模型：通用模型，或者混上了领域模型（[`Engine::set_domain_lm`]）。
     lm: Arc<dyn LanguageModel>,
+    /// 通用模型本身：换掉、去掉领域模型时从它重新混。
+    general_lm: Arc<dyn LanguageModel>,
     ranker: Arc<dyn Ranker>,
     config: EngineConfig,
     /// 用户选词历史：候选文本 -> (次数, 上次时间)。
@@ -201,6 +204,7 @@ impl Engine {
         Self {
             base_lexicon: lexicon,
             lexicon: merged,
+            general_lm: lm.clone(),
             lm,
             ranker: Arc::new(LinearRanker::default()),
             config: EngineConfig::default(),
@@ -229,18 +233,18 @@ impl Engine {
             *slot = model;
         }
     }
-    /// 再加载一个领域词级模型，和当前的按 `weight`（第二路的权重）混合。
-    ///
-    /// 只调用一次；重复调用会在上一次的混合结果上再混一层。
-    pub fn load_lm2<P: AsRef<std::path::Path>>(&mut self, path: P, weight: f64) -> Result<()> {
-        let second = crate::lm::load_lm(path.as_ref())?;
-        let first = self.lm.clone();
-        self.lm = Arc::new(crate::lm::MixedLm::new(
-            first,
-            second,
-            1.0 - weight.clamp(0.0, 1.0),
-        ));
-        Ok(())
+
+    /// 混上一个领域词级模型（用户拿自己的语料用 `wowtype-lmbuild` 训的），None 去掉。
+    /// 再设一次是换掉上一个，不会一层层叠着混。权重是 [`lm::DOMAIN_LM_WEIGHT`]。
+    pub fn set_domain_lm(&mut self, model: Option<Arc<dyn LanguageModel>>) {
+        self.lm = match model {
+            Some(domain) => Arc::new(lm::MixedLm::new(
+                self.general_lm.clone(),
+                domain,
+                lm::DOMAIN_LM_WEIGHT,
+            )),
+            None => self.general_lm.clone(),
+        };
     }
 
     pub fn has_nnlm(&self) -> bool {
@@ -2867,6 +2871,30 @@ mod tests {
             "要整个编码对上"
         );
         assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
+    }
+
+    #[test]
+    fn domain_lm_replaces_instead_of_stacking() {
+        // 领域模型：jin tian 后面接「天」比「田」常见得多
+        struct Domain;
+        impl LanguageModel for Domain {
+            fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+                if prev == Some("今天") && cur == "天" { 2.0 } else { 0.0 }
+            }
+        }
+        let mut e = engine("jin tian\t今天\t1000\ntian\t天\t1000\ntian\t田\t1000\n");
+        let scores = |e: &Engine| -> Vec<(String, f64)> {
+            e.set_context("今天");
+            e.input("tian").into_iter().map(|c| (c.text, c.score)).collect()
+        };
+        let general = scores(&e);
+        e.set_domain_lm(Some(Arc::new(Domain)));
+        let once = scores(&e);
+        assert_ne!(once, general, "混上领域模型要起作用");
+        e.set_domain_lm(Some(Arc::new(Domain)));
+        assert_eq!(scores(&e), once, "再设一次是换掉，不是再混一层");
+        e.set_domain_lm(None);
+        assert_eq!(scores(&e), general, "去掉以后回到通用模型");
     }
 
     #[test]

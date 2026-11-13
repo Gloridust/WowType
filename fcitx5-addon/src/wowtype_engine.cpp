@@ -285,6 +285,16 @@ WowtypeEngineHandle *loadCore(const std::string &userDict, std::string lexicon) 
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
+    // 用户自己训的领域词级模型（可选），和 words.lm 混着用
+    if (const std::string domain = findDataFile("WOWTYPE_DOMAIN_LM", "words.domain.lm");
+        !domain.empty()) {
+        if (wowtype_engine_set_domain_lm(core, domain.c_str()) == 0) {
+            WLOG_I() << "WowType: 载入领域词级模型 " << domain;
+        } else {
+            WLOG_W() << "WowType: 领域词级模型载入失败 " << domain << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        }
+    }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
@@ -793,7 +803,6 @@ void WowtypeEngine::maybeSwitchLexicon() {
     if (core_) {
         wowtype_engine_free(core_);
         core_ = nullptr;
-        lm2Loaded_ = false;
     }
     if (lexicon_ == wantedLexicon_) {
         WLOG_I() << "WowType: 词库文件换了，重新载入 " << lexicon_;
@@ -979,21 +988,6 @@ void WowtypeEngine::applyCoreSettings() {
     }
     wowtype_engine_set_typo_correction(core_, typo_ ? 1 : 0);
     wowtype_engine_set_rare_ext_chars(core_, rareExt_ ? 1 : 0);
-    if (!lm2Loaded_) {
-        const std::string lm2 = findDataFile("WOWTYPE_LM2", "words.extra.lm");
-        if (!lm2.empty()) {
-            double weight = 0.4;
-            if (const char *env = std::getenv("WOWTYPE_LM2_WEIGHT"); env && *env) {
-                weight = std::strtod(env, nullptr);
-            }
-            if (wowtype_engine_load_lm2(core_, lm2.c_str(), static_cast<float>(weight)) == 0) {
-                lm2Loaded_ = true;
-                WLOG_I() << "WowType: 载入领域词级模型 " << lm2 << "（权重 " << weight << "）";
-            } else {
-                WLOG_W() << "WowType: 领域词级模型载入失败 " << lm2;
-            }
-        }
-    }
     if (traditional_ && !conversionLoaded_) {
         const std::string s2t = findDataFile("WOWTYPE_S2T", "s2t.tsv");
         const int loaded =

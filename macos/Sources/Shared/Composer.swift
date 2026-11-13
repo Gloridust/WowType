@@ -46,6 +46,12 @@ public final class Engine {
         Int(wowtype_engine_load_english(handle, path))
     }
 
+    /// 混上领域词级模型（用户自己训的 words.domain.lm），nil 去掉；再调一次是换掉上一个。
+    @discardableResult
+    public func setDomainLM(_ path: String?) -> Bool {
+        wowtype_engine_set_domain_lm(handle, path) == 0
+    }
+
     @discardableResult
     public func loadUserDict(_ path: String) -> Int {
         Int(wowtype_engine_load_user_dict(handle, path))

@@ -518,28 +518,29 @@ pub unsafe extern "C" fn wowtype_engine_load_nnlm(
     }
 }
 
-/// 加载领域词级语言模型并按 weight 混合（第二路权重）。返回 0 成功，-1 失败。
+/// 混上领域词级模型（用户自己训的 words.domain.lm）。path 为 NULL/空串时去掉。
+/// 再调一次是换掉上一个。返回 0 成功，-1 失败（原来的模型不动）。
 #[no_mangle]
-pub unsafe extern "C" fn wowtype_engine_load_lm2(
+pub unsafe extern "C" fn wowtype_engine_set_domain_lm(
     engine: *mut WowtypeEngineHandle,
     path: *const c_char,
-    weight: f32,
 ) -> c_int {
-    if engine.is_null() {
-        set_last_error("engine is null");
-        return -1;
-    }
-    let Some(path) = (unsafe { cstr_to_str(path) }) else {
-        set_last_error("path is null or not utf8");
+    let Some(handle) = (unsafe { engine.as_mut() }) else {
+        set_last_error("engine handle is null");
         return -1;
     };
-    match unsafe { &mut *engine }.engine.load_lm2(path, f64::from(weight)) {
-        Ok(()) => 0,
-        Err(e) => {
-            set_last_error(format!("{e:#}"));
-            -1
-        }
-    }
+    let model = match unsafe { cstr_to_str(path) } {
+        Some(path) if !path.is_empty() => match crate::lm::load_lm(path) {
+            Ok(model) => Some(model),
+            Err(e) => {
+                set_last_error(format!("{e:#}"));
+                return -1;
+            }
+        },
+        _ => None,
+    };
+    handle.engine.set_domain_lm(model);
+    0
 }
 
 /// 开关模糊音（z/zh、an/ang 等）。返回 0 成功，-1 失败。

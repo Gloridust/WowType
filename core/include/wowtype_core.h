@@ -55,7 +55,10 @@ int wowtype_engine_load_english(WowtypeEngineHandle *engine, const char *path);
 /* 载入微信输入法的字级神经语言模型（nlrgpt2_nnlm.bin，不随 WowType 分发），
  * 用来给整句候选重排。返回字表大小，失败返回 -1。 */
 int wowtype_engine_load_nnlm(WowtypeEngineHandle *engine, const char *path);
-int wowtype_engine_load_lm2(WowtypeEngineHandle *engine, const char *path, float weight);
+
+/* 混上用户自己训的领域词级模型（wowtype-lmbuild 生成，和 words.lm 同格式），path 为 NULL/空串时去掉；
+ * 再调一次是换掉上一个，不会叠着混。返回 0 成功，-1 失败（原来的不动）。（1.10） */
+int wowtype_engine_set_domain_lm(WowtypeEngineHandle *engine, const char *path);
 
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
