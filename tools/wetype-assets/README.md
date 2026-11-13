@@ -17,6 +17,9 @@ python3 tools/wetype-assets/scan.py "/Library/Input Methods/WeType.app/Contents/
 
 # 解析 XLLM 容器（大模型）：配置、分词器、张量蓝图
 python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
+
+# 分析五笔词典：头部 + UTF-16 词条扫描
+python3 tools/wetype-assets/wubi.py path/to/swbd86.bin
 ```
 
 ## 已确认的资产
@@ -25,7 +28,7 @@ python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
 |---|---|---|---|
 | `decgnr.bin` | 5 | XLLM 容器：GPT-2（12 层 / 768 维 / 词表 10496 / 位置 512） | 头、配置、分词器、张量蓝图已解；权重区待解 |
 | `mpd_e2e.bin` | 5 | E2E 配套模型（2.7MB） | 未解 |
-| `swbd86/98/nc.bin` | 3 | 五笔码表（86 / 98 / 新世纪），4MB ×3 | 头部可见 ASCII 码（如 `gglg`），容器未解 |
+| `swbd86/98/nc.bin` | 3 | 五笔码表（86 / 98 / 新世纪），4MB ×3 | 已确认 LoudsTrieHashMapReader；词区是 UTF-16，能扫出约 3.9 万词条；码↔词对应未解 |
 | `bwcjpmac_jianpin.bin` | 9 | 简拼词库，12.6MB | 未解 |
 | `slwd_pc_second_level.bin` | 7 | 二级词 / 联想库，51.7MB | 未解 |
 | `noun_tag_dict.bin` | 0 | 词性标注，4.3MB | 未解 |
@@ -34,6 +37,25 @@ python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
 | `lmcnmac.bin` | 0 | 语言模型 | 键是哈希，不可导出 |
 | `bwcnmac.bin` / `bwcnmacv8.bin` | 0 | 拼音词库 | trie 只给音节+频次，词条在 Huffman 值区 |
 
+
+### 五笔词典（`swbd86/98/nc.bin`）
+
+反汇编 `StaticWubiDict::Impl` 的构造函数可以看到它用
+`LoudsTrieHashMapReader<SVDeserializer, DefaultKeyHash, DefaultKeyCheckHash>` 读文件，
+即 **LOUDS 压缩 trie + 哈希表 + 字符串视图值区**。
+
+字节层面已经确认：
+
+- 文件头：`02 9d 30 03 00 13 00 01 00`
+- 末尾 33 字节是单独结构（构造函数用 `size - 0x21` 把正文切出来）
+- 前半部分（约 0x00–0x1D0000）是 trie 和码：能读到 `gglg`、`sgh`、`imyry` 这类 ASCII 码
+- 词条区（约 0x1D0000–0x3E0000）是 UTF-16LE 中文，典型记录：
+  `50 01 <字符数 u8> <UTF-16LE 字符…>`
+  （扫描能拿到约 3.9 万条：艳萍、骑乘、胡须、乙炔、悠哉、邵阳、睡袋、幼师…）
+- 中间还有一段连续递增的 u32 数组（0x150DAA–0x1A3256），像是槽位/偏移表
+
+还没解出来的：LOUDS 位序列、哈希表分段，以及**每条词记录对应哪个五笔码**。
+有了这个对应关系才能生成 `code<TAB>词<TAB>频次` 的词库。
 ### XLLM 容器结构（`dump_xllm.py` 的实测结果）
 
 `+0x00` magic `XLLM`，`+0x20` u64 配置 JSON 长度，`+0x28` 配置 JSON
