@@ -26,6 +26,8 @@ final class AppState {
     private var configStamp: FileStamp?
     private var customStamp: FileStamp?
     private var lastCheck: TimeInterval = 0
+    /// 互译本地模型现在用的 llama-server（空的是没找到）
+    private var llamaServerInUse = ""
     private var missingLexiconLogged: String?
     /// 上一次看系统剪贴板时它的 changeCount（没变就不读）
     private var clipboardChangeCount = -1
@@ -159,8 +161,9 @@ final class AppState {
         guard let translator else { return }
         // 手动建的 Key 文件权限可能太宽，收紧到只有自己能读
         TranslateKeyFile.tighten(translateKeyPath)
+        llamaServerInUse = config.translateLocal ? findLlamaServer() : ""
         translator.configure(config, keyFile: translateKeyPath, defaultLocalModel: localModelPath,
-                             llamaServer: config.translateLocal ? findLlamaServer() : "")
+                             llamaServer: llamaServerInUse)
     }
 
     private func translateSummary() -> String {
@@ -270,8 +273,10 @@ final class AppState {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastCheck >= 1 else { return }
         lastCheck = now
-        if force && translator != nil {
-            // 切换输入框时再找一次 llama-server（设置以后才 brew install 的）、收紧 Key 文件的权限
+        if let translator, force || (config.translate && config.translateLocal && !translator.isReady)
+            || (config.translate && config.translateLocal && llamaServerInUse.isEmpty && !findLlamaServer().isEmpty) {
+            // 切换输入框时、本地模型还没就绪时再看一次：设置窗口里刚下好的模型和 llama-server（或者后来才
+            // brew install 的）下一次按键就能用，不用切输入框；顺带收紧 Key 文件的权限
             applyTranslateSettings()
         }
         if FileStamp(configPath) != configStamp {
