@@ -380,6 +380,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 
 最慢的都是 20 个字母的长句（xiangquzijieshangban）。上限从 18 加到 1000，p95 只多 1 ms 左右。
 #43 在 M2 上测到的「300 比 18 慢两倍多、长句单键 25–45 ms」在这里看不到，所以先不做「先算一页、翻页再补」。
+上面都是模糊音关着（只有兜底）；开着测加 `--fuzzy 0x7C7`（默认的 8 组）或 `--fuzzy 0xFFFF`（全部 16 组）。
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
 
