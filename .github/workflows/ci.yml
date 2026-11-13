@@ -155,22 +155,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      # 发布的词库开了可选数据源 corpus（Tatoeba 语料词频，评测见 docs/DATA.md §3.3）。
-      # Python 包版本和哈希钉死；下载的语料按 sha256 缓存，少连 archive.org（make-data.sh 照样校验）。
-      - name: 词库可选数据源要的 Python 包
-        run: |
-          python3 -m venv "$RUNNER_TEMP/data-venv"
-          "$RUNNER_TEMP/data-venv/bin/pip" install --require-hashes -r tools/requirements-data.txt
-          echo "$RUNNER_TEMP/data-venv/bin" >> "$GITHUB_PATH"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/wowtype-data
-          key: wowtype-data-${{ hashFiles('scripts/make-data.sh') }}
-          restore-keys: wowtype-data-
       - run: scripts/make-data.sh "" dist/data
-        env:
-          WOWTYPE_DATA_EXTRAS: corpus
-          WOWTYPE_DATA_CACHE: ${{ runner.temp }}/wowtype-data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
         # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会自动开 PR 改好（.github/scripts/nix-data-pr.sh）。

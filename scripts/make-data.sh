@@ -13,19 +13,21 @@
 # words.lm 是用 wowtype-lmbuild 从约 5 GB 语料训练的，不在这里重新训练。
 # 想用本机的文件（不下载）：WOWTYPE_LM_FILE=path/to/words.lm scripts/make-data.sh
 #
-# 可选数据源（默认一个都不开，不开时产出和以前逐字节相同）：
-#   WOWTYPE_DATA_EXTRAS="corpus jieba cedict"   空格或逗号分隔，顺序无关；写错名字直接报错
-#     corpus  从语料挖词频融进已有词（只改词频，不加词）。默认语料是钉死版本的 Tatoeba 中文句子
-#             （CC BY 2.0 FR）；WOWTYPE_CORPUS="a.txt b.txt.bz2" 换成本机语料，这时必须
-#             用 WOWTYPE_CORPUS_LICENSE 写清来源和许可证（写进 SOURCE.txt）
+# 语料词频（默认开，不联网、不要额外的 Python 包）：data/tatoeba-freq.tsv 是从钉死版本的 Tatoeba 中文句子
+# （CC BY 2.0 FR）挖出的词频，按权重 0.3 融进已有词（只改词频，不加词），署名写进 SOURCE.txt。
+#   WOWTYPE_NO_CORPUS_FREQ=1             不融这张表（删掉 data/tatoeba-freq.tsv 也一样）
+#   WOWTYPE_CORPUS="a.txt b.txt.bz2"     换成本机语料现挖（要 jieba，见下），必须用 WOWTYPE_CORPUS_LICENSE 写清来源和许可证；
+#                                        带 TAB 的用 WOWTYPE_CORPUS_COLUMN 指定列，繁体加 WOWTYPE_CORPUS_T2S=1
+#   这张表怎么重新生成、怎么核对：scripts/make-tatoeba-freq.sh [--check]
+#
+# 可选数据源（默认不开）：
+#   WOWTYPE_DATA_EXTRAS="jieba cedict"   空格或逗号分隔，顺序无关；写错名字直接报错
 #     jieba   jieba 词典（MIT）的词频融进已有词，再补一批读音可靠的新词（pypinyin 注音，MIT）
 #     cedict  CC-CEDICT（CC BY-SA 4.0）补词库里没有的词（人名地名、专业词），频次统一给很低的值
-# 每个数据源的下载地址和 sha256 都钉在下面，对不上就退出；也可以给本机文件（同样校验 sha256）：
-#   WOWTYPE_TATOEBA_FILE / WOWTYPE_JIEBA_DICT / WOWTYPE_CEDICT_FILE
+# 下载地址和 sha256 都钉在下面，对不上就退出；也可以给本机文件（同样校验）：WOWTYPE_JIEBA_DICT / WOWTYPE_CEDICT_FILE
 # WOWTYPE_DATA_CACHE=<目录>：下载过的文件按 sha256 缓存在这里。
-# 发布的词库开了哪些见 .github/workflows/ci.yml 的 data job；本机想得到同样的词库，要设同样的 WOWTYPE_DATA_EXTRAS。
 # 要的 Python 包（版本钉死）：python3 -m pip install --require-hashes -r tools/requirements-data.txt
-# 许可证说明只在用到时写进 SOURCE.txt（所有安装包都带 SOURCE.txt），评测数字见 docs/DATA.md。
+# 用到的可选数据源的许可证说明写进 SOURCE.txt（所有安装包都带 SOURCE.txt），评测数字见 docs/DATA.md §3.3。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -79,8 +81,10 @@ require_py() {
 EXTRAS=" $(printf '%s' "${WOWTYPE_DATA_EXTRAS:-}" | tr ',' ' ') "
 for x in $EXTRAS; do
   case $x in
-    corpus|jieba|cedict) ;;
-    *) echo "WOWTYPE_DATA_EXTRAS 里的「${x}」不认识，可选：corpus jieba cedict" >&2; exit 1 ;;
+    jieba|cedict) ;;
+    corpus) echo "corpus 不用再写进 WOWTYPE_DATA_EXTRAS：默认就融 data/tatoeba-freq.tsv，换本机语料用 WOWTYPE_CORPUS" >&2
+            exit 1 ;;
+    *) echo "WOWTYPE_DATA_EXTRAS 里的「${x}」不认识，可选：jieba cedict" >&2; exit 1 ;;
   esac
 done
 want() { [[ "$EXTRAS" == *" $1 "* ]]; }
@@ -95,62 +99,60 @@ EXTRA=()
 [[ -f "$RIME/cn_dicts/41448.dict.yaml" ]] && EXTRA=(--extra-chars "$RIME/cn_dicts/41448.dict.yaml")
 python3 tools/rime2tsv.py ${EXTRA[@]+"${EXTRA[@]}"} "$RIME/rime_ice.dict.yaml" > "$OUT/lexicon.rime.tsv"
 
-# 可选数据源。放在热词表之前：data/ 下手工定的词频（只提不降）和黑名单最后套，不会被冲掉，
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# 语料词频和可选数据源都放在热词表之前：data/ 下手工定的词频（只提不降）和黑名单最后套，不会被冲掉，
 # 外部数据源带进来的错条目也能用 data/blocklist.tsv 去掉。
+# 语料词频：每个词最多抬到 20 * max(原频次, 1000)，免得小语料里出现得多的词（Tatoeba 的「汤姆」）抬得离谱；
+# 只数两个字以上的词（单字频次决定 d/l/b、shi 这些短输入的首页）。参数在留出评测上挑的，见 docs/DATA.md §3.3。
+CORPUS_NOTE=""
+corpus_counts=""
+if [[ "${WOWTYPE_NO_CORPUS_FREQ:-}" == "1" ]]; then
+  :
+elif [[ -n "${WOWTYPE_CORPUS:-}" ]]; then
+  if [[ -z "${WOWTYPE_CORPUS_LICENSE:-}" ]]; then
+    echo "用本机语料（WOWTYPE_CORPUS）时要用 WOWTYPE_CORPUS_LICENSE 写清来源和许可证" >&2
+    exit 1
+  fi
+  require_py jieba 0.42.1
+  read -r -a corpus_files <<< "$WOWTYPE_CORPUS"
+  corpus_args=(--column "${WOWTYPE_CORPUS_COLUMN:-0}")
+  if [[ "${WOWTYPE_CORPUS_T2S:-}" == "1" ]]; then
+    require_py opencc-python-reimplemented 0.1.7
+    corpus_args+=(--t2s)
+  fi
+  python3 tools/mine_corpus_freq.py --min-chars 2 "${corpus_args[@]}" "${corpus_files[@]}" > "$tmp/corpus.counts"
+  corpus_counts=$tmp/corpus.counts
+  corpus_sums=""
+  for f in "${corpus_files[@]}"; do
+    corpus_sums+="
+  $(basename "$f")  sha256 $(sha256 "$f")"
+  done
+  CORPUS_NOTE="
+语料词频：用 jieba 0.42.1 给下列本机语料分词，数两个字以上的词，融进已有词的词频（不加新词）：${corpus_sums}
+来源与许可证：${WOWTYPE_CORPUS_LICENSE}
+"
+elif [[ -f data/tatoeba-freq.tsv ]]; then
+  corpus_counts=data/tatoeba-freq.tsv
+  CORPUS_NOTE="
+语料词频：lexicon.tsv 里已有词的词频融进了 data/tatoeba-freq.tsv（scripts/make-tatoeba-freq.sh 生成），
+那是从 Tatoeba（https://tatoeba.org）的中文句子统计出的词频（2026-11-05 的导出，只数两个字以上的词），
+不含句子本身。Tatoeba 的句子许可证是 CC BY 2.0 FR（https://creativecommons.org/licenses/by/2.0/fr/），
+作者是 Tatoeba contributors，各句的作者见 tatoeba.org 上各句的页面。
+"
+fi
+if [[ -n "$corpus_counts" ]]; then
+  python3 tools/blend-freq.py "$OUT/lexicon.rime.tsv" "$corpus_counts" "$tmp/lexicon.corpus.tsv" \
+    --weight "${WOWTYPE_CORPUS_WEIGHT:-0.3}" --max-factor 20 --floor 1000 --label 语料
+  mv "$tmp/lexicon.corpus.tsv" "$OUT/lexicon.rime.tsv"
+fi
+
 NOTICES=""
 APPLIED=""
 if [[ -n "${EXTRAS// /}" ]]; then
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   lex="$OUT/lexicon.rime.tsv"
   step=0
-
-  if want corpus; then
-    # Tatoeba 每周重新导出，官网文件不固定：钉 Internet Archive 存的一份（2026-11-05）
-    TATOEBA_URL=https://web.archive.org/web/20261105045937id_/https://downloads.tatoeba.org/exports/per_language/cmn/cmn_sentences.tsv.bz2
-    TATOEBA_SHA256=d603c1b9c67fb7a5a68c56fe6df5c935025ca1f36a1f9a912c33ed6dbed91743
-    CORPUS_WEIGHT=${WOWTYPE_CORPUS_WEIGHT:-0.3}
-    require_py jieba 0.42.1
-    corpus_args=()
-    if [[ -n "${WOWTYPE_CORPUS:-}" ]]; then
-      if [[ -z "${WOWTYPE_CORPUS_LICENSE:-}" ]]; then
-        echo "用本机语料（WOWTYPE_CORPUS）时要用 WOWTYPE_CORPUS_LICENSE 写清来源和许可证" >&2
-        exit 1
-      fi
-      read -r -a corpus_files <<< "$WOWTYPE_CORPUS"
-      corpus_args=(--column "${WOWTYPE_CORPUS_COLUMN:-0}")
-      if [[ "${WOWTYPE_CORPUS_T2S:-}" == "1" ]]; then
-        require_py opencc-python-reimplemented 0.1.7
-        corpus_args+=(--t2s)
-      fi
-      corpus_license=$WOWTYPE_CORPUS_LICENSE
-    else
-      fetch_pinned "Tatoeba 中文句子" "$TATOEBA_URL" "$TATOEBA_SHA256" "$tmp/cmn_sentences.tsv.bz2" \
-        "${WOWTYPE_TATOEBA_FILE:-}"
-      require_py opencc-python-reimplemented 0.1.7
-      corpus_files=("$tmp/cmn_sentences.tsv.bz2")
-      corpus_args=(--column 3 --t2s)
-      corpus_license="Tatoeba（https://tatoeba.org）的中文句子，2026-11-05 的导出，许可证 CC BY 2.0 FR
-  （https://creativecommons.org/licenses/by/2.0/fr/），作者见 https://tatoeba.org 上各句的页面。
-  下载地址：${TATOEBA_URL}"
-    fi
-    # 不数单字：单字频次决定 d/l/b、shi 这些短输入的首页，语料一融就乱（实测见 docs/DATA.md）
-    python3 tools/mine_corpus_freq.py --min-chars 2 "${corpus_args[@]}" "${corpus_files[@]}" > "$tmp/corpus.counts"
-    step=$((step + 1)); out="$tmp/lexicon.${step}.tsv"
-    python3 tools/blend-freq.py "$lex" "$tmp/corpus.counts" "$out" --weight "$CORPUS_WEIGHT" --label 语料
-    lex=$out
-    corpus_sums=""
-    for f in "${corpus_files[@]}"; do
-      corpus_sums+="
-  $(basename "$f")  sha256 $(sha256 "$f")"
-    done
-    APPLIED+=" corpus"
-    NOTICES+="
-语料词频（corpus）：用 jieba 0.42.1 给下列语料分词，数两个字以上的词，按权重 ${CORPUS_WEIGHT} 融进已有词的词频
-（tools/mine_corpus_freq.py、tools/blend-freq.py），不加新词。语料：${corpus_sums}
-来源与许可证：${corpus_license}
-"
-  fi
 
   if want jieba; then
     JIEBA_DICT_URL=https://raw.githubusercontent.com/fxsjy/jieba/v0.42.1/jieba/dict.txt
@@ -258,7 +260,7 @@ lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及�
 再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv、按 data/rime-ice-freq.tsv 修正几个常用词的词频、
 去掉 data/blocklist.tsv 里的错条目；
 english.txt 是 en_dicts/en.dict.yaml 与 en_dicts/en_ext.dict.yaml 原样拼接。
-
+${CORPUS_NOTE}
 words.lm 是 WowType 的词级语言模型，由 wowtype-lmbuild 从下列语料统计生成，许可证 CC BY-SA 4.0：
   LCCC（https://huggingface.co/datasets/thu-coai/lccc，清华大学 CoAI 组，MIT）
   中文维基百科（https://zh.wikipedia.org/，CC BY-SA 4.0）
@@ -276,7 +278,7 @@ if [[ -n "$NOTICES" ]]; then
 fi
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
-# 5：发布的词库开了 corpus（CI 的 data job 设 WOWTYPE_DATA_EXTRAS=corpus）。本机不开时内容和 4 一样、版本号却是 5。
+# 5：默认融进 Tatoeba 语料词频（data/tatoeba-freq.tsv）。
 REV=5
 echo "$DATE.$REV" > "$OUT/VERSION"
 
