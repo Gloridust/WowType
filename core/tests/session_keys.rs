@@ -467,11 +467,24 @@ fn shuangpin_display_and_date_key() {
     assert_eq!(all[0], "日期");
     assert_eq!(all[1], "2026年11月11日");
 
-    // 双拼不开计算器（v 是韵母键）
+    // 双拼时小写 v 是声母键：v1+2 不算
     let mut session = with(engine);
     type_keys(&mut session, "v");
     session.append("1+2");
     assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
+
+    // 双拼用大写 V 进计算器（#160）：按键进编辑区、算式原样显示、= 上屏结果
+    let mut session = with(engine);
+    let frame = type_keys(&mut session, "V1+2*3");
+    assert_eq!(frame.preedit, "V1+2*3", "算式不当双拼键换成全拼");
+    assert_eq!(texts(&mut session)[..2], ["7", "1+2*3=7"]);
+    let frame = type_keys(&mut session, "=");
+    assert_eq!(frame.commit.as_deref(), Some("7"));
+    assert!(!session.composing());
+    // 大写金额也一样
+    let mut session = with(engine);
+    type_keys(&mut session, "V12345.67");
+    assert_eq!(texts(&mut session)[0], "壹万贰仟叁佰肆拾伍元陆角柒分");
 }
 
 #[test]
@@ -499,6 +512,12 @@ fn calculator() {
         texts(&mut session),
         ["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
     );
+
+    // 全拼时只认小写 v
+    let mut session = with(engine());
+    type_keys(&mut session, "V");
+    session.append("1+2");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
 
     // 关掉计算器：v1+2 不算
     let mut session = with(engine());

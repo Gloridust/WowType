@@ -1310,6 +1310,13 @@ void runCases(Instance &instance) {
     type(ic.get(), "ni;");
     check(ic->committed.find("；") != std::string::npos, "成对之后的分号还是标点：" + ic->committed);
     fresh(ic.get());
+    // #160：双拼时 v 是声母键，计算器用大写 V
+    type(ic.get(), "V1+2*3");
+    check(preedit(ic.get()) == "V1+2*3" && !page(ic.get()).empty() && page(ic.get())[0] == "7",
+          "双拼 V1+2*3 -> 7：" + preedit(ic.get()) + " | " + join(page(ic.get())));
+    type(ic.get(), "=");
+    check(ic->committed == "7", "双拼按 = 上屏结果：" + ic->committed);
+    fresh(ic.get());
     // #122：设置里打开「双拼时编辑区显示打的键」
     {
         std::ofstream(configDir + "/wowtype.conf")
