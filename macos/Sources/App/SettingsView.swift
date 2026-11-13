@@ -296,6 +296,9 @@ private struct InputPage: View {
             if model.config.shuangpin {
                 RowDivider()
                 PickerRow(title: "双拼方案", selection: $model.config.shuangpinScheme, options: schemeOptions)
+                RowDivider()
+                SwitchRow(title: "编辑区显示打的键", subtitle: "不翻成全拼，中英混打时看得出打了什么",
+                          isOn: $model.config.shuangpinShowKeys)
             }
         }
 

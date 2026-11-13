@@ -107,6 +107,8 @@
      ],
      "platforms": ["fcitx5", "settings", "macos"],
      "note": "双拼方案。name 是方案的名字，fcitx5（EnumI18n）和设置界面（SHUANGPIN_SCHEMES）都对照；macOS 的名字列表在 App/SettingsView.swift，测试编不到，只对照存盘名"},
+    {"key": "ShuangpinShowKeys", "type": "bool", "default": false,
+     "platforms": ["fcitx5", "settings", "macos"], "note": "双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong）；中英混打时看得出打了什么（#122）"},
     {"key": "ShiftToggle", "type": "enum", "default": "Both", "values": ["Both", "Left", "Right", "Off"],
      "platforms": ["fcitx5", "settings", "macos"], "note": "单按哪个 Shift 切中英文"},
     {"key": "Traditional", "type": "bool", "default": false,

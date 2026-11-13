@@ -214,6 +214,8 @@ pub struct WowtypeSessionConfig {
     pub toolbar: c_int,
     /// 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0。
     pub clipboard_history: c_int,
+    /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
+    pub shuangpin_keys: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -245,6 +247,7 @@ impl Default for WowtypeSessionConfig {
             translate_mode: c_int::from(config.translate_mode),
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
+            shuangpin_keys: c_int::from(config.shuangpin_keys),
         }
     }
 }
@@ -289,6 +292,7 @@ impl WowtypeSessionConfig {
             // 旧外壳没填这一项（size 短，读出来是 0）时按默认开着
             toolbar: self.toolbar != 0 || (self.size as usize) <= std::mem::offset_of!(Self, toolbar),
             clipboard_history: self.clipboard_history != 0,
+            shuangpin_keys: self.shuangpin_keys != 0,
         }
     }
 }

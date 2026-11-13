@@ -93,6 +93,7 @@ DEFAULTS = {
     "RareExtChars": "False",
     "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
+    "ShuangpinShowKeys": "False",
     "ShiftToggle": "Both",
     "Traditional": "False",
     "PunctuationStyle": "Fullwidth",
@@ -3230,6 +3231,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.scheme_row.connect("notify::selected", lambda row, _p: self.set_value(
             "ShuangpinScheme", self.scheme_names[row.get_selected()]))
         mode.add(self.scheme_row)
+        self.show_keys_row = self.make_switch(
+            "ShuangpinShowKeys", "编辑区显示打的键", "不翻成全拼，中英混打时看得出打了什么")
+        mode.add(self.show_keys_row)
         (self.shuangpin_check if self.values["Shuangpin"] == "True"
          else self.full_pinyin_check).set_active(True)
         self.shuangpin_check.connect("toggled", self.on_shuangpin_toggled)
@@ -3319,6 +3323,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def show_shuangpin(self, on):
         """双拼方案只在双拼时显示；计算器、工具栏双拼时灰掉，副标题说为什么。"""
         self.scheme_row.set_visible(on)
+        self.show_keys_row.set_visible(on)
         self.calc_row.set_sensitive(not on)
         self.calc_row.set_subtitle("双拼时不可用" if on else "v1+2*3 → 7")
         self.toolbar_row.set_sensitive(not on)

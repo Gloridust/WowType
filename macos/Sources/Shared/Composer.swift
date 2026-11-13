@@ -479,6 +479,7 @@ public final class Composer {
         config.translate_mode = translateAvailable ? 1 : 0
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
+        config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()

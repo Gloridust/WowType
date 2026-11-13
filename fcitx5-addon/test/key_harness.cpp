@@ -1243,6 +1243,17 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "ni;");
     check(ic->committed.find("；") != std::string::npos, "成对之后的分号还是标点：" + ic->committed);
+    fresh(ic.get());
+    // #122：设置里打开「双拼时编辑区显示打的键」
+    {
+        std::ofstream(configDir + "/wowtype.conf")
+            << "Shuangpin=True\nShuangpinScheme=Microsoft\nShuangpinShowKeys=True\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "vsgo");
+    check(preedit(ic.get()) == "vsgo", "双拼编辑区显示打的键：" + preedit(ic.get()));
+    type(ic.get(), "<sp>");
+    check(ic->committed == "中国", "显示打的键时照样出中国：" + ic->committed);
     std::filesystem::remove(configDir + "/wowtype.conf");
     addon->reloadConfig();
     fresh(ic.get());
