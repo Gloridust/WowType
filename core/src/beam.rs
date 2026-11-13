@@ -27,10 +27,8 @@ pub struct BeamConfig {
     pub max_expansions_per_state: usize,
     /// 未登录音节的惩罚。越大越倾向词典里的词。
     pub unknown_cost: f64,
-    /// 语言模型权重。
+    /// 语言模型权重（词典代价的权重固定是 1）。
     pub lm_weight: f64,
-    /// 词典代价权重。
-    pub lexicon_weight: f64,
     /// 每处纠错的惩罚（自然对数）。
     pub typo_cost: f64,
     /// 补全每多出一个字母的惩罚（自然对数）。
@@ -66,7 +64,6 @@ impl Default for BeamConfig {
             max_expansions_per_state: 32,
             unknown_cost: 18.0,
             lm_weight: 1.0,
-            lexicon_weight: 1.0,
             typo_cost: 6.0,
             completion_cost: 1.2,
             max_typos: 2,
@@ -509,8 +506,8 @@ fn collect_dfs(
             pinyin_of(keys)
         };
         for entry in entries {
-            let lexical = config.lexicon_weight * lexicon.cost(&entry);
             out.push(Span {
+                lexical: lexicon.cost(&entry),
                 word: BeamWord {
                     text: entry.word,
                     pinyin: pinyin.clone(),
@@ -526,7 +523,6 @@ fn collect_dfs(
                     start,
                     end: edge.end,
                 },
-                lexical,
             });
         }
         if keys.len() < max_syllables && lexicon.has_longer(keys) {
