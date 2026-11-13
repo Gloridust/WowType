@@ -3809,8 +3809,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         taken = fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None))
         row = self.toggle_key_row
         if taken:
-            row.set_subtitle(f"fcitx5 也用 {key_label(key)}「{FCITX_OPTION_NAMES[taken]}」，"
-                             "WowType 收不到，先在 Fcitx 5 配置里删掉它")
+            row.set_subtitle(f"fcitx5 也用 {key_label(key)} {FCITX_OPTION_NAMES[taken]}，"
+                             "WowType 收不到，先在 Fcitx 5 配置里删掉它（见 ⓘ）")
             row.add_css_class("wt-warning")
         else:
             row.set_subtitle("")

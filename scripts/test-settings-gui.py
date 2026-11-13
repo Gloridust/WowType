@@ -100,7 +100,7 @@ def run(app):
         win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+space"}}
         win.toggle_key_row.set_selected(1)
         check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
-        check("「切换输入法」" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
+        check("Ctrl+空格 切换输入法" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
         win.toggle_key_row.set_selected(0)
         check(win.toggle_key_row.get_subtitle() == "", "不用切换键时还有提示")
     step("切换键", toggle_key)
