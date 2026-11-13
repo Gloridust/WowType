@@ -95,13 +95,14 @@
 ### 系统要求
 
 - Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.0 或更新**。Arch 的安装包只有 x86_64
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
-- Ubuntu 22.04（fcitx5 5.0）没有现成安装包，可以[从源码构建](docs/INSTALL.md#ubuntu-2204fcitx5-50)；设置界面和 GNOME 绿色主题在 22.04 上用不了
+- 有现成安装包的发行版：**Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- Ubuntu 22.04 的 fcitx5 是 5.0、GNOME 是 42：绿色候选框主题和语音浮条（GNOME 扩展，要 GNOME 45+）用不了，设置界面暂时打不开（要 libadwaita 1.5），设置用「Fcitx 5 配置」改，见[安装说明](docs/INSTALL.md#ubuntu-2204fcitx5-50)
+- deepin 的安装包只有 x86_64
 - **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
+Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
@@ -111,7 +112,7 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
 2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
-3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
+3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去（deepin 默认就是 fcitx5，不动）
 4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
 装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
@@ -174,7 +175,7 @@ im-config -n fcitx5
 ##### 方式一：安装包
 
 到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
-`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu24.04`、`ubuntu26.04`、`debian13`，架构是 `amd64` 或 `arm64`），词库已经包含在里面。
+`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu22.04`、`ubuntu24.04`、`ubuntu26.04`、`debian13`、`deepin23`、`deepin25`，架构是 `amd64` 或 `arm64`，deepin 只有 `amd64`），词库已经包含在里面。
 不知道自己是哪个发行版、哪种架构：
 
 ```bash

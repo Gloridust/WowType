@@ -1435,6 +1435,16 @@ def update_platform(info=None, machine=None, immutable=None):
     guide = f"安装说明：{INSTALL_GUIDE}"
     if "nixos" in family:
         return "", "", "", "NixOS 请更新 flake 输入后运行 nixos-rebuild switch；" + guide
+    # deepin 25 的磐石系统基于 OSTree，但 apt-get install 照常能用，要在「不可变系统」之前认出来
+    if distro == "deepin":
+        codename = info.get("VERSION_CODENAME", "").lower()
+        base = ("deepin25" if codename == "crimson" or re.fullmatch(r"25(\.\d+)*", version) else
+                "deepin23" if codename == "beige" or re.fullmatch(r"23(\.\d+)*", version) else "")
+        if not base:
+            return "", "", "", f"deepin {version or codename} 没有发布包（有 deepin 23 和 25 的）；{guide}"
+        if machine not in ("x86_64", "amd64"):
+            return "", "", "", f"deepin 的发布包只有 x86_64，{machine} 请从源码构建；{guide}"
+        return "apt-get", base, "amd64", ""
     if immutable or "atomic" in variant or variant in {
             "silverblue", "kinoite", "sericea", "onyx", "coreos"}:
         return "", "", "", "不可变系统请使用系统的分层或声明式配置更新（Fedora Atomic 用 rpm-ostree）；" + guide
@@ -1446,7 +1456,7 @@ def update_platform(info=None, machine=None, immutable=None):
                           "arm64": ("arm64", "aarch64")}.get(machine, ("", ""))
     if not deb_arch:
         return "", "", "", f"发布包只有 x86_64 和 arm64，{machine} 请从源码构建；{guide}"
-    if distro == "ubuntu" and version in ("24.04", "26.04"):
+    if distro == "ubuntu" and version in ("22.04", "24.04", "26.04"):
         return "apt-get", "ubuntu" + version, deb_arch, ""
     if distro == "debian" and (version == "13" or version.startswith("13.")):
         return "apt-get", "debian13", deb_arch, ""
@@ -1455,7 +1465,7 @@ def update_platform(info=None, machine=None, immutable=None):
         codename = info.get("UBUNTU_CODENAME", "")
         if not codename and "ubuntu" in family:
             codename = info.get("VERSION_CODENAME", "")
-        ubuntu = {"noble": "24.04", "resolute": "26.04"}.get(codename)
+        ubuntu = {"jammy": "22.04", "noble": "24.04", "resolute": "26.04"}.get(codename)
         if ubuntu:
             return "apt-get", "ubuntu" + ubuntu, deb_arch, ""
         codename = info.get("DEBIAN_CODENAME", "")
@@ -4710,6 +4720,33 @@ class SettingsWindow(Adw.ApplicationWindow):
         about.present(self)
 
 
+def gui_supported():
+    """设置窗口要 libadwaita 1.5、GTK 4.10 以上（Ubuntu 22.04 是 1.1 / 4.6）。命令行功能不受影响。"""
+    return hasattr(Adw, "AlertDialog") and hasattr(Gtk, "FileDialog")
+
+
+class OldSystemApp(Adw.Application):
+    """系统的 libadwaita / GTK 太旧时，打开设置只说明一下，不让它报错退出。"""
+
+    def __init__(self):
+        super().__init__(application_id=APP_ID)
+        # 插件会带 --page 打开设置；这里不认的话 GApplication 会报「未知选项」
+        self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING, "", "")
+
+    def do_activate(self):
+        window = Adw.ApplicationWindow(application=self, title="WowType 设置",
+                                       default_width=520, default_height=380)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(Adw.HeaderBar())
+        box.append(Adw.StatusPage(
+            icon_name="wowtype", vexpand=True, title="这个系统上打不开设置界面",
+            description=(f"WowType 设置要 libadwaita 1.5 以上，这台电脑是 "
+                         f"{Adw.get_major_version()}.{Adw.get_minor_version()}。\n"
+                         "打字不受影响。设置可以在「Fcitx 5 配置」里改（输入法列表里选 WowType）。")))
+        window.set_content(box)
+        window.present()
+
+
 class SettingsApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id=APP_ID,
@@ -4941,4 +4978,4 @@ if __name__ == "__main__":
             assert "连不上" in str(e) or "超时" in str(e), e
         print("self-test ok")
         sys.exit(0)
-    sys.exit(SettingsApp().run(sys.argv))
+    sys.exit((SettingsApp() if gui_supported() else OldSystemApp()).run(sys.argv))
