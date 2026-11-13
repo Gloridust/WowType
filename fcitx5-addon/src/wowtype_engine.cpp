@@ -285,6 +285,16 @@ WowtypeEngineHandle *loadCore(const std::string &userDict, std::string lexicon) 
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
+    // 用户自己训的领域词级模型（可选），和 words.lm 混着用
+    if (const std::string domain = findDataFile("WOWTYPE_DOMAIN_LM", "words.domain.lm");
+        !domain.empty()) {
+        if (wowtype_engine_set_domain_lm(core, domain.c_str()) == 0) {
+            WLOG_I() << "WowType: 载入领域词级模型 " << domain;
+        } else {
+            WLOG_W() << "WowType: 领域词级模型载入失败 " << domain << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        }
+    }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {

@@ -518,6 +518,31 @@ pub unsafe extern "C" fn wowtype_engine_load_nnlm(
     }
 }
 
+/// 混上领域词级模型（用户自己训的 words.domain.lm）。path 为 NULL/空串时去掉。
+/// 再调一次是换掉上一个。返回 0 成功，-1 失败（原来的模型不动）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_domain_lm(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    let Some(handle) = (unsafe { engine.as_mut() }) else {
+        set_last_error("engine handle is null");
+        return -1;
+    };
+    let model = match unsafe { cstr_to_str(path) } {
+        Some(path) if !path.is_empty() => match crate::lm::load_lm(path) {
+            Ok(model) => Some(model),
+            Err(e) => {
+                set_last_error(format!("{e:#}"));
+                return -1;
+            }
+        },
+        _ => None,
+    };
+    handle.engine.set_domain_lm(model);
+    0
+}
+
 /// 开关模糊音（z/zh、an/ang 等）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_fuzzy(

@@ -2,6 +2,7 @@
 //!
 //! 合成词库：cargo run --release -p wowtype-core --bin wowtype-bench
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
+//! 混上领域词级模型：... -- --lexicon lexicon.tsv --lm words.lm --domain-lm words.domain.lm
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
 //!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
@@ -20,6 +21,7 @@ fn main() {
     let mut total = 100_000usize;
     let mut typing_path: Option<String> = None;
     let mut no_prefix = false;
+    let mut domain_lm_path: Option<String> = None;
     let mut max_candidates: Option<usize> = None;
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
@@ -41,6 +43,10 @@ fn main() {
             "--lm" => {
                 i += 1;
                 lm_path = args.get(i).cloned();
+            }
+            "--domain-lm" => {
+                i += 1;
+                domain_lm_path = args.get(i).cloned();
             }
             "--nnlm" => {
                 i += 1;
@@ -117,6 +123,15 @@ fn main() {
             lm
         }
         None => Arc::new(BigramLm::default()),
+    };
+    // 和 Engine::set_domain_lm 一样混（这里还没有引擎）
+    let lm: Arc<dyn wowtype_core::LanguageModel> = match &domain_lm_path {
+        Some(path) => Arc::new(wowtype_core::lm::MixedLm::new(
+            lm,
+            wowtype_core::lm::load_lm(path).expect("载入领域模型"),
+            wowtype_core::lm::DOMAIN_LM_WEIGHT,
+        )),
+        None => lm,
     };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut config = EngineConfig::default();
