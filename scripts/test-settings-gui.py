@@ -95,7 +95,9 @@ def run(app):
     step("开关", switches)
 
     def toggle_key():
-        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到
+        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到。
+        # fcitx5 的快捷键直接给定，不看这台机器（/etc/xdg 里可能改过）
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+space"}}
         win.toggle_key_row.set_selected(1)
         check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
         check("「切换输入法」" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
