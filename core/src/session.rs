@@ -132,7 +132,16 @@ pub mod key_hints {
 pub trait TranslateBackend {
     /// 开始翻译 text，取消别的请求；正在译或已经译好同一句话时什么也不做。
     fn start(&self, text: &str);
+    /// 取消现在的请求，不管是谁发的。
     fn cancel(&self);
+    /// 现在的请求还是翻译 source 的才取消。一个进程只有一个翻译器、所有输入框共用：
+    /// 输入框 A 清空时，翻译器上跑的可能已经是输入框 B 后来发的请求，不能把它取消掉。
+    /// 会话都在同一个线程上调翻译器（插件的事件循环、macOS 的主线程），先看再取消之间不会有别人 start。
+    fn cancel_source(&self, source: &str) {
+        if self.poll().source == source {
+            self.cancel();
+        }
+    }
     fn poll(&self) -> crate::translate::Snapshot;
     /// 方向标签（「中→英」「英→中」），按 text 判断。
     fn tag(&self, text: &str) -> String;
@@ -144,6 +153,9 @@ impl TranslateBackend for crate::translate::Translator {
     }
     fn cancel(&self) {
         crate::translate::Translator::cancel(self);
+    }
+    fn cancel_source(&self, source: &str) {
+        crate::translate::Translator::cancel_source(self, source);
     }
     fn poll(&self) -> crate::translate::Snapshot {
         crate::translate::Translator::poll(self)
@@ -181,8 +193,9 @@ struct Translation {
     pending: bool,
     /// 什么时候发请求（毫秒）；None 不用发。
     due_ms: Option<u64>,
-    /// 这个会话发过请求、还没取消（多个输入框共用一个翻译器：别的输入框清空不取消它的）。
-    requested: bool,
+    /// 这个会话发出去、还没取消的请求的原文。多个输入框共用一个翻译器：清空时只取消翻译器上
+    /// 还是这句话的请求，别的输入框后来发的不动。
+    requested: Option<String>,
 }
 
 /// 输入模式：中文、英文（按键原样交给应用）、互译（打中文出外文，上屏由外壳接管）。
@@ -794,9 +807,9 @@ impl<'e> Session<'e> {
         t.shown.clear();
         t.pending = false;
         t.due_ms = None;
-        if std::mem::take(&mut t.requested) {
+        if let Some(sent) = t.requested.take() {
             if let Some(translator) = self.translator {
-                translator.cancel();
+                translator.cancel_source(&sent);
             }
         }
     }
@@ -815,8 +828,8 @@ impl<'e> Session<'e> {
         };
         if self.translation.source.is_empty() {
             self.translation.due_ms = None;
-            if std::mem::take(&mut self.translation.requested) {
-                translator.cancel();
+            if let Some(sent) = self.translation.requested.take() {
+                translator.cancel_source(&sent);
             }
             return;
         }
@@ -840,7 +853,7 @@ impl<'e> Session<'e> {
     fn request_translation(&mut self) {
         if let Some(translator) = self.translator {
             translator.start(&self.translation.source);
-            self.translation.requested = true;
+            self.translation.requested = Some(self.translation.source.clone());
         }
     }
 
@@ -866,7 +879,7 @@ impl<'e> Session<'e> {
         let snap = translator.poll();
         let fresh = snap.source == self.translation.source;
         if fresh && snap.state == JobState::Done {
-            self.translation.requested = false;
+            self.translation.requested = None;
             self.clear_translation();
             self.push_commit(&snap.text);
             return;
@@ -953,7 +966,9 @@ impl<'e> Session<'e> {
         } else {
             String::new()
         };
-        let running = t.requested && snap.state == JobState::Running;
+        // 翻译器上跑的是这个会话发的请求才接着轮询（别的输入框的请求不用这边盯）
+        let running =
+            t.requested.as_deref() == Some(snap.source.as_str()) && snap.state == JobState::Running;
         let wake = if t.due_ms.is_some() || t.pending || running {
             TRANSLATE_POLL_MS
         } else {

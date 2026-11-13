@@ -1750,6 +1750,34 @@ fn translate_collects_source_and_requests_after_pause() {
 }
 
 #[test]
+fn clearing_one_session_keeps_another_sessions_request() {
+    // 两个输入框共用一个翻译器：A 发了请求，B 后来发的顶掉了它；A 清空时不能把 B 的请求取消掉
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut a = translating(t);
+    let mut b = translating(t);
+    for (i, c) in "nihao ".chars().enumerate() {
+        a.key(&at(c, 1000 + i as u64));
+    }
+    a.tick(1600);
+    assert_eq!(*t.started.borrow(), ["你好"]);
+    for (i, c) in "shijie ".chars().enumerate() {
+        b.key(&at(c, 2000 + i as u64));
+    }
+    b.tick(2600);
+    let b_source = b.translate_source().to_owned();
+    assert_eq!(*t.started.borrow(), ["你好".to_owned(), b_source.clone()]);
+    a.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(a.translate_source(), "");
+    assert_eq!(t.cancels.get(), 0, "翻译器上跑的是 B 的请求，A 清空不取消");
+    assert_eq!(t.snap.borrow().source, b_source);
+    assert_eq!(t.snap.borrow().state, JobState::Running);
+    // B 自己清空时取消自己的请求
+    b.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(t.cancels.get(), 1);
+}
+
+#[test]
 fn translate_enter_before_done_commits_when_ready() {
     use wowtype_core::translate::JobState;
     let t: &'static FakeTranslator = Box::leak(Box::default());
