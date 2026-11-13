@@ -30,6 +30,7 @@ python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
 | `slwd_pc_second_level.bin` | 7 | 二级词 / 联想库，51.7MB | 未解 |
 | `noun_tag_dict.bin` | 0 | 词性标注，4.3MB | 未解 |
 | `nlrgpt2_nnlm.bin` | 8 | TFLite GPT-2，首词语言模型 | **已被 WowType 使用** |
+| `Resources/vad/`（不在 imeData） | — | VAD：文本配置 + 40 维 CMS + 85KB DNN | 配置、CMS 已解；模型层结构待确认 |
 | `lmcnmac.bin` | 0 | 语言模型 | 键是哈希，不可导出 |
 | `bwcnmac.bin` / `bwcnmacv8.bin` | 0 | 拼音词库 | trie 只给音节+频次，词条在 Huffman 值区 |
 
@@ -48,12 +49,35 @@ python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
 `decgnr.bin` 的蓝图合计 23.6M 参数，但配置是 12 层——说明蓝图表是**单层模板**，
 权重区里按层重复存储（或者部分权重共享），这是下一步要确认的。
 
+
+### VAD（`Resources/vad/`）
+
+不在 `imeData.bundle` 里，而是应用资源目录下的 `vad/`：
+
+| 文件 | 大小 | 内容 |
+|---|---|---|
+| `configure.16k.20221116.offline` | 3.0KB | 文本配置 |
+| `CMS_40dim_chi.bin` | 324B | 40 维 fbank 的 CMS 参数（u32 维度 + 40 个 float，另有 160 字节待确认） |
+| `model_16k_20210121_iter07.bin` | 85KB | 帧分类 DNN |
+
+配置里能直接读到 VAD 的时序参数（`tools/wetype-assets/vad.py` 会打印）：
+
+```
+output_data_ms 40、begin_win_ms 400、begin_confirm_ms 300
+begin_padding_ms 150、end_padding_ms 480、sil_timeout 300
+frame_classifier.feature.name = FBank_16k_E_C_40_Online
+frame_classifier.net_input_win = 4、frame_mtm = 20、sil_thresh = 0.65
+```
+
+模型头是 5 个 u32：`1, 4, 0, 200, 64`（版本 / 层数 / ? / 输入 200 维 / 隐藏 64），
+之后有 21333 个 float。按 `200->64->64->64->1` 算是 21249 个，差 84 个，
+说明文件里还有别的段（标准差在文件中部有明显跳变），需要继续拆。
 ## 下一步（按投入产出）
 
 1. **解 XLLM 权重区**：确认每层权重偏移和量化方式，实现 12 层 GPT-2 前向 → 长句重排
 2. **解五笔码表**：`swbd*.bin` 的容器结构（可以先从 ASCII 码表部分入手）
 3. **解简拼 / 二级词**：提升简拼召回和联想
-4. **语音包里的 VAD 模型**：替换现在的能量 VAD
+4. **VAD 模型**：确认 DNN 层结构和量化方式，替换现在的能量 VAD
 
 ## 贡献注意
 
