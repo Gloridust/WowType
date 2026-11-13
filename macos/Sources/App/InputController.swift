@@ -277,7 +277,6 @@ extension WowTypeInputController: VoiceHost {
     }
 
     func voiceCommit(_ text: String) {
-        composer.dismissPrediction()
         setMarkedText("", cursor: 0)
         showCandidates(nil)
         guard !text.isEmpty else { return }

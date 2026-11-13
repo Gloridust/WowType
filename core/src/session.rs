@@ -2568,7 +2568,7 @@ impl<'e> Session<'e> {
     /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
     pub fn select(&mut self, index: usize) -> Frame {
         self.last_choice = None;
-        if self.tool.is_some() {
+        if self.tool.is_some() || !self.predictions.is_empty() {
             let shown = self.frame(false);
             return self.choose(shown.cand_start + index);
         }
@@ -2577,12 +2577,7 @@ impl<'e> Session<'e> {
         self.forgot = shown.forgot;
         self.learned = shown.learned;
         self.mode_changed = shown.mode_changed;
-        let handled = index < shown.cand_count
-            && if self.predictions.is_empty() {
-                self.choose_now(shown.cand_start + index)
-            } else {
-                self.choose_prediction(index)
-            };
+        let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
         self.frame(handled)
     }
 
