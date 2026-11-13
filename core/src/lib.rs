@@ -1561,7 +1561,7 @@ impl Engine {
             })
             .unwrap_or((0.0, 0.0));
         let (history_hot_val, picked) = history_hot_val;
-        let (history_count, _history_use, history_time_diff) = self
+        let (history_count, history_time_diff) = self
             .history
             .read()
             .ok()
@@ -1582,13 +1582,9 @@ impl Engine {
                     },
                 };
                 let seconds = at_ms.saturating_sub(merged.last_used_ms) as f64 / 1000.0;
-                (
-                    merged.count as f32,
-                    merged.count as f32,
-                    (1.0 + seconds).ln() as f32,
-                )
+                (merged.count as f32, (1.0 + seconds).ln() as f32)
             })
-            .unwrap_or((0.0, 0.0, 0.0));
+            .unwrap_or((0.0, 0.0));
 
         // 上下文：用候选首词去查二元分。
         //
@@ -2671,6 +2667,35 @@ mod tests {
         let at = |word: &str| texts.iter().position(|t| t == word);
         assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
         assert!(at("何") < at("合"), "{texts:?}");
+    }
+
+    #[test]
+    fn single_syllable_ranking_ignores_lm_weight() {
+        // 句首分加的时候乘了 lm_weight，减的时候也要乘同一个数：不管权重多少，
+        // 单音节的候选和分数都只看字频（#200 按长度调权重时减的是没乘系数的，shi 的「十」掉到第 9）
+        let ranked = |lm_weight: f64| {
+            let lexicon: Arc<dyn Lexicon> = Arc::new(
+                MemoryLexicon::from_tsv_str("he\t和\t100000\nhe\t何\t10000\nhe\t合\t1000\n")
+                    .unwrap(),
+            );
+            let mut config = EngineConfig::default();
+            config.beam.lm_weight = lm_weight;
+            Engine::new(lexicon, Arc::new(SentenceStartBoost))
+                .with_config(config)
+                .input("he")
+                .into_iter()
+                .map(|c| (c.text, c.score))
+                .collect::<Vec<_>>()
+        };
+        let reference = ranked(1.0);
+        for lm_weight in [0.5, 0.7, 1.5] {
+            let got = ranked(lm_weight);
+            let texts = |r: &[(String, f64)]| r.iter().map(|c| c.0.clone()).collect::<Vec<_>>();
+            assert_eq!(texts(&got), texts(&reference), "lm_weight {lm_weight}");
+            for (a, b) in got.iter().zip(&reference) {
+                assert!((a.1 - b.1).abs() < 1e-9, "lm_weight {lm_weight}: {a:?} vs {b:?}");
+            }
+        }
     }
 
     #[test]
