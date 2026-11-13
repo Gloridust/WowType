@@ -6,6 +6,7 @@
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
 //!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
 //!   --s2t s2t.tsv 载入简繁表并打开繁体输出
+//!   --fuzzy 分组 打开模糊音（分组是 syllable::fuzzy 的位掩码，比如 0xFFFF 是全部分组）
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -23,6 +24,7 @@ fn main() {
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
     let mut s2t_path: Option<String> = None;
+    let mut fuzzy_groups: Option<u32> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -43,6 +45,13 @@ fn main() {
             "--nnlm" => {
                 i += 1;
                 nnlm_path = args.get(i).cloned();
+            }
+            "--fuzzy" => {
+                i += 1;
+                fuzzy_groups = args.get(i).and_then(|v| {
+                    v.strip_prefix("0x")
+                        .map_or_else(|| v.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
+                });
             }
             "--max" => {
                 i += 1;
@@ -116,6 +125,10 @@ fn main() {
     }
     if no_prefix {
         config.prefix_candidates = 0;
+    }
+    if let Some(groups) = fuzzy_groups {
+        config.fuzzy = true;
+        config.fuzzy_groups = groups & wowtype_core::syllable::fuzzy::ALL;
     }
     config.traditional = s2t_path.is_some();
     let engine = Engine::new(lex, lm).with_config(config);

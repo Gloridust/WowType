@@ -256,8 +256,10 @@ private let shuangpinSchemes: [(String, String)] = [
 
 private let fuzzyGroups: [(String, WritableKeyPath<WowtypeConfig, Bool>)] = [
     ("z = zh", \.fuzzyZh), ("c = ch", \.fuzzyCh), ("s = sh", \.fuzzySh), ("n = l", \.fuzzyNL),
-    ("f = h", \.fuzzyFH), ("r = l", \.fuzzyRL), ("an = ang", \.fuzzyAn), ("ian = iang", \.fuzzyIan),
-    ("uan = uang", \.fuzzyUan), ("en = eng", \.fuzzyEn), ("in = ing", \.fuzzyIn), ("un = ong", \.fuzzyUn),
+    ("f = h", \.fuzzyFH), ("r = l", \.fuzzyRL), ("an = ang", \.fuzzyAn), ("an = ai", \.fuzzyAnAi),
+    ("ian = iang", \.fuzzyIan), ("uan = uang", \.fuzzyUan), ("huang = wang", \.fuzzyHuangWang),
+    ("en = eng", \.fuzzyEn), ("eng = ong", \.fuzzyEngOng), ("in = ing", \.fuzzyIn), ("un = ong", \.fuzzyUn),
+    ("un = iong", \.fuzzyUnIong),
 ]
 
 private struct InputPage: View {

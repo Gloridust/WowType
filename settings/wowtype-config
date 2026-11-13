@@ -90,6 +90,10 @@ DEFAULTS = {
     "FuzzyIan": "True",
     "FuzzyUan": "True",
     "FuzzyUn": "False",
+    "FuzzyAnAi": "False",
+    "FuzzyHuangWang": "False",
+    "FuzzyUnIong": "False",
+    "FuzzyEngOng": "False",
     "TypoCorrection": "True",
     "RareExtChars": "False",
     "Shuangpin": "False",
@@ -184,11 +188,15 @@ FUZZY_GROUPS = [
     ("FuzzyFH", "f = h"),
     ("FuzzyRL", "r = l"),
     ("FuzzyAn", "an = ang"),
+    ("FuzzyAnAi", "an = ai"),
     ("FuzzyIan", "ian = iang"),
     ("FuzzyUan", "uan = uang"),
+    ("FuzzyHuangWang", "huang = wang"),
     ("FuzzyEn", "en = eng"),
+    ("FuzzyEngOng", "eng = ong"),
     ("FuzzyIn", "in = ing"),
     ("FuzzyUn", "un = ong"),
+    ("FuzzyUnIong", "un = iong"),
 ]
 
 SELECT_KEYS = [

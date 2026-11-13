@@ -830,7 +830,9 @@ void WowtypeEngine::applyConfig() {
                    (*config_.fuzzyFH ? 16u : 0u) | (*config_.fuzzyRL ? 32u : 0u) |
                    (*config_.fuzzyAn ? 64u : 0u) | (*config_.fuzzyEn ? 128u : 0u) |
                    (*config_.fuzzyIn ? 256u : 0u) | (*config_.fuzzyIan ? 512u : 0u) |
-                   (*config_.fuzzyUan ? 1024u : 0u) | (*config_.fuzzyUn ? 2048u : 0u);
+                   (*config_.fuzzyUan ? 1024u : 0u) | (*config_.fuzzyUn ? 2048u : 0u) |
+                   (*config_.fuzzyAnAi ? 4096u : 0u) | (*config_.fuzzyHuangWang ? 8192u : 0u) |
+                   (*config_.fuzzyUnIong ? 16384u : 0u) | (*config_.fuzzyEngOng ? 32768u : 0u);
     if (const char *env = std::getenv("WOWTYPE_FUZZY_GROUPS"); env && *env) {
         fuzzyGroups_ = static_cast<unsigned>(std::strtoul(env, nullptr, 0));
     }

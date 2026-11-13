@@ -2887,6 +2887,13 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_letter_typo() {
+        // 音节中间同一个键多按一次（nihhao）也能纠成 ni hao
+        let e = engine("ni hao\t你好\t10000\n");
+        assert!(e.input("nihhao").iter().any(|c| c.text == "你好"));
+    }
+
+    #[test]
     fn fuzzy_groups_filter() {
         let lexicon: Arc<dyn Lexicon> = Arc::new(
             MemoryLexicon::from_tsv_str(
@@ -2943,6 +2950,48 @@ mod tests {
         // an/ang 和 ian/iang 分开：只开 an/ang 时 xian 不等于 xiang
         e.set_fuzzy_groups(fuzzy::AN);
         assert!(!has(&e, "xianfa", "想法"));
+    }
+
+    #[test]
+    fn fuzzy_pair_groups() {
+        use crate::syllable::fuzzy;
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "huang se\t黄色\t5000\njun\t军\t5000\nzhong\t中\t5000\ndan\t单\t5000\nyun\t云\t5000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        e.set_fuzzy_fallback(false);
+        let has =
+            |e: &Engine, input: &str, word: &str| e.input(input).iter().any(|c| c.text == word);
+        // 只开原来的十二组时都对不上（yun = yong 以前算 un = ong，现在归 un = iong）
+        let new_groups = fuzzy::AN_AI | fuzzy::HUANG_WANG | fuzzy::UN_IONG | fuzzy::ENG_ONG;
+        e.set_fuzzy_groups(fuzzy::ALL & !new_groups);
+        let pairs = [("wangse", "黄色"), ("jiong", "军"), ("zheng", "中"), ("dai", "单"), ("yong", "云")];
+        for (input, word) in pairs {
+            assert!(!has(&e, input, word), "{input} 不该出 {word}");
+        }
+        e.set_fuzzy_groups(fuzzy::HUANG_WANG);
+        assert!(has(&e, "wangse", "黄色"));
+        e.set_fuzzy_groups(fuzzy::UN_IONG);
+        assert!(has(&e, "jiong", "军"));
+        assert!(has(&e, "yong", "云"), "yun 是 ün，和 yong 是 un = iong，不是 un = ong");
+        e.set_fuzzy_groups(fuzzy::ENG_ONG);
+        assert!(has(&e, "zheng", "中"));
+        e.set_fuzzy_groups(fuzzy::AN_AI);
+        assert!(has(&e, "dai", "单"));
+        // 和换声母的分组叠着用：zeng 换声母 z -> zh、换韵母 eng -> ong
+        e.set_fuzzy_groups(fuzzy::ENG_ONG);
+        assert!(!has(&e, "zeng", "中"));
+        e.set_fuzzy_groups(fuzzy::ENG_ONG | fuzzy::ZH);
+        assert!(has(&e, "zeng", "中"));
+        // 整个音节换完还能再换韵母：wan -> wang -> huang
+        e.set_fuzzy_groups(fuzzy::HUANG_WANG | fuzzy::AN);
+        assert!(has(&e, "wanse", "黄色"));
     }
 
     /// #93：精确读音本身有词时（zong 有「总」，dan si 有「单丝」），模糊音的词也要列出来、
@@ -3079,7 +3128,20 @@ mod tests {
         assert_eq!(g("guang", "guan"), Some(fuzzy::UAN));
         assert_eq!(g("dong", "dun"), Some(fuzzy::UN));
         assert_eq!(g("chong", "cun"), Some(fuzzy::CH | fuzzy::UN));
-        assert_eq!(g("jiong", "jun"), None, "iong 和 un 不是一组");
+        assert_eq!(g("jiong", "jun"), Some(fuzzy::UN_IONG));
+        assert_eq!(g("yong", "yun"), Some(fuzzy::UN_IONG), "yong 按 iong 算");
+        assert_eq!(g("zheng", "zhong"), Some(fuzzy::ENG_ONG));
+        assert_eq!(g("keng", "kong"), Some(fuzzy::ENG_ONG));
+        assert_eq!(g("zeng", "zhong"), Some(fuzzy::ZH | fuzzy::ENG_ONG));
+        assert_eq!(g("dai", "dan"), Some(fuzzy::AN_AI));
+        assert_eq!(g("huang", "wang"), Some(fuzzy::HUANG_WANG));
+        assert_eq!(g("wan", "huang"), Some(fuzzy::HUANG_WANG | fuzzy::AN));
+        assert_eq!(g("wang", "huan"), Some(fuzzy::HUANG_WANG | fuzzy::UAN));
+        // 韵母只能换一步：要换两步的不算
+        assert_eq!(g("dai", "dang"), None);
+        assert_eq!(g("zhen", "zhong"), None);
+        assert_eq!(g("dun", "deng"), None);
+        assert_eq!(g("wan", "huan"), None);
         assert_eq!(g("huang", "fang"), None, "uang 和 ang 不是一组");
         assert_eq!(g("ren", "leng"), Some(fuzzy::RL | fuzzy::EN));
         assert_eq!(g("nu", "ru"), None);
