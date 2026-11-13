@@ -17,7 +17,16 @@
 
 [![加入 Telegram 交流群](https://img.shields.io/badge/%E5%8A%A0%E5%85%A5%20Telegram%20%E4%BA%A4%E6%B5%81%E7%BE%A4-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/+Kxk-4VkXIS9lODM1)
 
-https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253
+<table>
+<tr>
+<td align="center" width="50%"><video src="https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253" controls muted width="100%"></video></td>
+<td align="center" width="50%"><video src="https://github.com/user-attachments/assets/9a6a6ea9-d3b3-4b7b-8d7b-fc5554c4a8c6" controls muted width="100%"></video></td>
+</tr>
+<tr>
+<td align="center"><sub>介绍视频</sub></td>
+<td align="center"><sub>v0.3.12：互译、语音输入、macOS 版、日期时间、候选更准……</sub></td>
+</tr>
+</table>
 
 </div>
 
