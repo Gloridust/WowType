@@ -1,77 +1,98 @@
 #!/usr/bin/env python3
-"""分析微信输入法的五笔词典（swbd86/98/nc.bin）。
+"""分析微信输入法五笔词典（swbd86.bin / swbd98.bin / swbdnc.bin）的容器结构。
 
-    python3 tools/wetype-assets/wubi.py "/Library/Input Methods/WeType.app/Contents/Resources/imeData.bundle/swbd86.bin"
+    python3 tools/wetype-assets/wubi.py [swbd86.bin …] [--json]
 
-已确认的结构（来自符号和字节分析）：
+只报结构，不输出词条：文件头、尾部结构大小、`50 01 <字数> <UTF-16LE>` 形式的值记录有多少条、
+落在哪段偏移、字数分布，以及前半部分 ASCII 码区的大致范围。
 
-- 文件由 `wxime::data::dict::LoudsTrieHashMapReader<SVDeserializer, ...>` 读取
-  （反汇编 StaticWubiDict::Impl 构造函数可见），即 LOUDS 压缩 trie + 哈希表
-- 值区里有 UTF-16LE 的中文词；大量记录以 `50 01` 开头，后跟字符数（u8）和 UTF-16 字符
-- 文件尾部 33 字节是单独的尾部结构（构造时用 `size - 0x21` 排除）
-
-还没解出来的：
-
-- LOUDS 位序列/标签/哈希表的具体分段
-- 每条值记录和五笔码的对应关系（码在文件前半部分的 ASCII 区）
+WowType 的五笔码表用的是公开的 rime-wubi（scripts/make-wubi.sh），**不用**这里的任何数据；
+这个脚本只是记录格式研究的结论（读文件的是 LoudsTrieHashMapReader：LOUDS trie + 哈希表 + 值区）。
 """
 
 import argparse
-import json
-import struct
-import sys
+import collections
+import os
+import re
+
+from _common import IME_DATA, need, print_json, read_bytes, run
+
+TAIL = 0x21  # 构造函数用 size - 0x21 切出正文，末尾 33 字节是单独的结构
+CODE_RUN = re.compile(rb"[a-y]{2,4}(?=[^a-z])")
 
 
-def u32(data, offset):
-    return struct.unpack_from("<I", data, offset)[0]
-
-
-def scan_words(data):
-    """扫值区里 `50 01 <n> <UTF-16LE 字符>` 形式的记录。"""
-    words = []
-    i = 0
-    n = len(data)
-    while i + 3 < n:
-        if data[i] == 0x50 and data[i + 1] == 0x01:
-            count = data[i + 2]
-            if 1 <= count <= 16 and i + 3 + 2 * count <= n:
-                chars = [data[i + 3 + 2 * k] | (data[i + 4 + 2 * k] << 8) for k in range(count)]
-                if all(0x3400 <= c <= 0x9FFF or 0x3000 <= c <= 0x303F for c in chars):
-                    words.append({"offset": i, "text": "".join(map(chr, chars))})
-                    i += 3 + 2 * count
-                    continue
+def scan_records(data):
+    """数 `50 01 <n> <n 个 UTF-16LE 汉字>` 记录，返回 (条数, 首偏移, 末偏移, 字数分布)。"""
+    count, first, last = 0, -1, -1
+    lengths = collections.Counter()
+    i, n = 0, len(data) - TAIL
+    while True:
+        i = data.find(b"\x50\x01", i, n)
+        if i < 0 or i + 3 > n:
+            break
+        chars = data[i + 2]
+        end = i + 3 + 2 * chars
+        if 1 <= chars <= 16 and end <= n:
+            units = [data[k] | (data[k + 1] << 8) for k in range(i + 3, end, 2)]
+            if all(0x3400 <= u <= 0x9FFF or 0x3000 <= u <= 0x303F for u in units):
+                count += 1
+                lengths[chars] += 1
+                first = i if first < 0 else first
+                last = i
+                i = end
+                continue
         i += 1
-    return words
+    return count, first, last, lengths
+
+
+def ascii_code_region(data):
+    """前半部分像五笔码（2~4 个 a-y）的 ASCII 片段的分布范围（按 64KB 分桶，取命中多的桶）。"""
+    buckets = collections.Counter(m.start() >> 16 for m in CODE_RUN.finditer(data))
+    dense = sorted(b for b, c in buckets.items() if c >= 1000)
+    if not dense:
+        return None
+    return {"from": dense[0] << 16, "to": (dense[-1] + 1) << 16, "runs": sum(buckets[b] for b in dense)}
+
+
+def analyse(path):
+    data = read_bytes(path)
+    need(data, 0, 16 + TAIL, "文件头和尾部")
+    count, first, last, lengths = scan_records(data)
+    return {
+        "path": path,
+        "size": len(data),
+        "header_hex": data[:16].hex(),
+        "tail_bytes": TAIL,
+        "records": count,
+        "records_from": first,
+        "records_to": last,
+        "record_lengths": dict(sorted(lengths.items())),
+        "ascii_codes": ascii_code_region(data),
+    }
 
 
 def main():
-    ap = argparse.ArgumentParser(description="分析五笔词典容器")
-    ap.add_argument("path")
+    ap = argparse.ArgumentParser(description="分析五笔词典容器的结构（不输出词条）")
+    ap.add_argument("paths", nargs="*", default=[os.path.join(IME_DATA, n) for n in ("swbd86.bin", "swbd98.bin", "swbdnc.bin")])
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
-    data = open(args.path, "rb").read()
-    header = list(struct.unpack_from("<4I", data, 0))
-    words = scan_words(data)
-    report = {
-        "path": args.path,
-        "size": len(data),
-        "header": header,
-        "header_hex": data[:16].hex(),
-        "words": len(words),
-        "first": words[:5],
-        "last": words[-3:],
-    }
+    reports = [analyse(p) for p in args.paths]
     if args.json:
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        print_json(reports)
         return
-    print(f"文件：{args.path}（{len(data):,} 字节）")
-    print(f"头部：{report['header_hex']}（u32 {header}）")
-    print(f"`50 01` 词条：{len(words):,} 条")
-    print("前几条：", "、".join(w["text"] for w in words[:8]))
-    if words:
-        print("最后几条：", "、".join(w["text"] for w in words[-5:]))
-    print("（五笔码 ↔ 词条的对应还没解出来，码在文件前半部分的 ASCII 区）")
+    for r in reports:
+        print(f"文件：{r['path']}（{r['size']:,} 字节）")
+        print(f"  头 16 字节：{r['header_hex']}；尾部结构 {r['tail_bytes']} 字节")
+        if r["records"]:
+            print(f"  `50 01` 值记录：{r['records']:,} 条，偏移 0x{r['records_from']:x}–0x{r['records_to']:x}")
+            print(f"  字数分布：{r['record_lengths']}")
+        else:
+            print("  没找到 `50 01` 值记录（版本不同？）")
+        a = r["ascii_codes"]
+        if a:
+            print(f"  ASCII 码区：约 0x{a['from']:x}–0x{a['to']:x}（{a['runs']:,} 段 2~4 位 a-y 串）")
+    print("（码 ↔ 词的对应没有解；WowType 用公开的 rime-wubi 码表，不用这里的数据）")
 
 
 if __name__ == "__main__":
-    main()
+    run(main)

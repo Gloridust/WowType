@@ -324,14 +324,18 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 
 「遍历 trie 导出词库」这条路走不通：trie 只存音节序列和频次，词条在另一套值编码里。
 要拿词条还是得解 `LargeDictValueHuffmanCodec` + 音节 ID 映射，或者换个思路。
-## 13.5 本地资产挖掘工具
 
-`tools/wetype-assets/` 下有可直接运行的解析工具：
+## 13.5 本地资产结构查看工具
 
-- `scan.py`：列出词典目录每份文件的大小、dict_type、头部魔数
-- `dump_xllm.py`：解析 XLLM 大模型容器的配置、分词器和张量蓝图
+`tools/wetype-assets/` 下是只读的结构查看工具（互操作/研究用，读的是用户本机已安装的微信输入法，
+WowType 不带、不下载其中任何数据）：
 
-已确认的格式与后续计划见 `tools/wetype-assets/README.md`。
+- `scan.py`：词典目录每份文件的大小、dict_type、头部魔数
+- `dump_xllm.py`：XLLM 大模型容器的配置、分词器概况和张量蓝图
+- `vad.py`：VAD 资源的配置参数、CMS 维度、DNN 头部
+- `wubi.py`：五笔词典容器（`swbd*.bin`）的结构统计（不输出词条）
+
+用法、边界和已确认的格式见 `tools/wetype-assets/README.md`。
 
 ## 14. 复现指南与失败记录（收尾）
 

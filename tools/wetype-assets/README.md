@@ -1,113 +1,86 @@
-# 微信输入法本地资产挖掘
+# 微信输入法本地资产结构查看工具
 
-目标：把微信输入法（macOS 版）里**能在本地利用**的规则、数据、模型整理出来，
-供 WowType 后续接入。这里只放解析代码，不放任何模型或词库本体。
+这些是**互操作 / 研究用的开发者工具**：读取**用户自己机器上已安装的**微信输入法（WeType，macOS 版），
+打印文件的结构（大小、魔数、超参数、张量形状、记录条数），帮助判断哪些格式值得研究。
 
-## 边界
+**WowType 不带、不打包、不下载微信输入法的任何数据。** 词库、码表、模型权重、分词器都是腾讯的资产，
+WowType 的发行包和任何构建脚本都不会包含或获取它们。WowType 的五笔码表来自公开的 rime-wubi
+（LGPL-3.0，见 `scripts/make-wubi.sh`），拼音词库来自雾凇拼音，都与这里无关。
 
-- 只读自己机器上的安装目录，不联网、不上传、不分发权重
-- 模型和词典是腾讯的资产：仓库里只保留**格式说明 + 解析代码**
-- 用户自己从安装包里取文件（见 `scripts/install_wetype_nnlm.py` 的做法）
+## 边界（硬规则）
+
+- 只读本机安装目录（默认 `/Library/Input Methods/WeType.app`），**不联网**，不上传
+- 默认只打印结构；唯一会写文件的是 `dump_xllm.py --tokens <路径>`，而且**拒绝写进 WowType 仓库目录**
+- 从微信输入法提取的任何东西（词典、码表、模型权重、分词器词表）**不得提交、打包，也不得由任何构建脚本下载**；
+  `.gitignore` 已排除常见的输出名（`wetype-dump/`、`*_vocab.tsv`、`*.tokens.tsv`、`imeData.bundle/`、
+  `swbd*.bin`、`decgnr.bin`、`mpd_e2e.bin`、`nlrgpt2_nnlm.bin`、`*.xnet`）。导出请放在仓库外，比如 `~/wetype-dump/`
+- PR、文档里只贴结构信息（大小、形状、条数），不贴词条、token 或数值
+
+唯一的例外是已有的 `tools/install_wetype_nnlm.py`：它也只是把**用户本机**的 `nlrgpt2_nnlm.bin`
+拷到用户数据目录，WowType 运行时有就用、没有就不用，同样不分发。
 
 ## 工具
 
-```bash
-# 列出词典目录里每份文件的大小、dict_type、头部魔数
-python3 tools/wetype-assets/scan.py "/Library/Input Methods/WeType.app/Contents/Resources/imeData.bundle"
+都不带参数时读默认安装位置，加 `--json` 输出机器可读结果。格式和预期不符（版本变了、选错文件）时给一句话的错误。
 
-# 解析 XLLM 容器（大模型）：配置、分词器、张量蓝图
-python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin
+| 脚本 | 读什么 | 打印什么 |
+|---|---|---|
+| `scan.py [imeData.bundle]` | 词典目录 | 每个文件的大小、`index.json` 里的 dict_type、头 16 字节、可打印比例 |
+| `dump_xllm.py [decgnr.bin] [--tokens 路径]` | XLLM 模型容器 | 头、配置 JSON（超参数）、分词器类型和词表条数、张量蓝图（名字/形状/dtype） |
+| `vad.py [vad 目录]` | `Resources/vad/` | VAD 时序配置、CMS 维度、DNN 头部和几种层结构的参数量比对 |
+| `wubi.py [swbd*.bin …]` | 五笔词典容器 | 文件头、`50 01` 值记录的条数/偏移范围/字数分布、ASCII 码区范围（**不输出词条**） |
 
-# 顺带把词表写成 id<TAB>token
-python3 tools/wetype-assets/dump_xllm.py path/to/decgnr.bin --tokens /tmp/decgnr_vocab.tsv
+`_common.py` 是共用的读文件、边界检查、安全写出。
 
-# 分析五笔词典：头部 + UTF-16 词条扫描
-python3 tools/wetype-assets/wubi.py path/to/swbd86.bin
+## 实测（微信输入法 3.0.1，macOS）
+
+```
+$ python3 tools/wetype-assets/scan.py
+共 30 个文件，index.json 记了 30 个
+（decgnr.bin 74,186,752 字节 dict_type 5；swbd86/98/nc.bin 各约 4.1MB dict_type 3；
+  nlrgpt2_nnlm.bin 16,211,368 字节 dict_type 8；slwd_pc_second_level.bin 51,694,531 字节 dict_type 7 …）
+
+$ python3 tools/wetype-assets/dump_xllm.py
+XLLM 版本 0；配置 394 字节：12 层 / hidden 768 / 12 头 / 词表 10496 / 位置 512
+分词器：0x4000 起 207,575 字节，WordPiece，词表 10463 条
+张量蓝图 17 条（合计 23,604,480 参数），蓝图表结束于 0x128a
+
+$ python3 tools/wetype-assets/vad.py
+begin_win_ms 400、begin_confirm_ms 300、begin_padding_ms 150、end_padding_ms 480、sil_timeout 300
+CMS：40 维，324 字节（剩 160 字节未解）
+模型：85,352 字节，头 [1, 4, 0, 200, 64]，头后 21,333 个 float（4 层 200→64→64→64→1 需 21,249，差 84）
+
+$ python3 tools/wetype-assets/wubi.py
+swbd86.bin：38,797 条值记录（字数 1~5），尾部结构 33 字节，ASCII 码区约 0x0–0x40000
+swbd98.bin：38,624 条；swbdnc.bin：37,766 条
 ```
 
-## 已确认的资产
+## 已确认的格式
 
-| 文件 | dict_type | 内容 | 状态 |
-|---|---|---|---|
-| `decgnr.bin` | 5 | XLLM 容器：GPT-2（12 层 / 768 维 / 词表 10496 / 位置 512） | 头、配置、分词器、张量蓝图已解；权重区待解 |
-| `mpd_e2e.bin` | 5 | E2E 配套模型（2.7MB） | 未解 |
-| `swbd86/98/nc.bin` | 3 | 五笔码表（86 / 98 / 新世纪），4MB ×3 | 已确认 LoudsTrieHashMapReader；词区是 UTF-16，能扫出约 3.9 万词条；码↔词对应未解 |
-| `bwcjpmac_jianpin.bin` | 9 | 简拼词库，12.6MB | 未解 |
-| `slwd_pc_second_level.bin` | 7 | 二级词 / 联想库，51.7MB | 未解 |
-| `noun_tag_dict.bin` | 0 | 词性标注，4.3MB | 未解 |
-| `nlrgpt2_nnlm.bin` | 8 | TFLite GPT-2，首词语言模型 | **已被 WowType 使用** |
-| `Resources/vad/`（不在 imeData） | — | VAD：文本配置 + 40 维 CMS + 85KB DNN | 配置、CMS 已解；模型层结构待确认 |
-| `lmcnmac.bin` | 0 | 语言模型 | 键是哈希，不可导出 |
-| `bwcnmac.bin` / `bwcnmacv8.bin` | 0 | 拼音词库 | trie 只给音节+频次，词条在 Huffman 值区 |
+### XLLM 容器（`decgnr.bin`）
 
+`+0x00` magic `XLLM`、`+0x04` u32 版本、`+0x20` u64 配置 JSON 长度、`+0x28` 配置 JSON；
+之后是分词器 JSON（WordPiece，无 merges）、张量蓝图表（protobuf 风格记录 `1a <len> {0a 名字, 12 形状, 20 dtype}`）、权重区。
+蓝图合计 23.6M 参数而配置是 12 层，说明蓝图是**单层模板**，权重区按层重复（或部分共享），逐张量偏移和量化方式未解。
 
 ### 五笔词典（`swbd86/98/nc.bin`）
 
-反汇编 `StaticWubiDict::Impl` 的构造函数可以看到它用
-`LoudsTrieHashMapReader<SVDeserializer, DefaultKeyHash, DefaultKeyCheckHash>` 读文件，
-即 **LOUDS 压缩 trie + 哈希表 + 字符串视图值区**。
-
-字节层面已经确认：
-
-- 文件头：`02 9d 30 03 00 13 00 01 00`
-- 末尾 33 字节是单独结构（构造函数用 `size - 0x21` 把正文切出来）
-- 前半部分（约 0x00–0x1D0000）是 trie 和码：能读到 `gglg`、`sgh`、`imyry` 这类 ASCII 码
-- 词条区（约 0x1D0000–0x3E0000）是 UTF-16LE 中文，典型记录：
-  `50 01 <字符数 u8> <UTF-16LE 字符…>`
-  （扫描能拿到约 3.9 万条：艳萍、骑乘、胡须、乙炔、悠哉、邵阳、睡袋、幼师…）
-- 中间还有一段连续递增的 u32 数组（0x150DAA–0x1A3256），像是槽位/偏移表
-
-还没解出来的：LOUDS 位序列、哈希表分段，以及**每条词记录对应哪个五笔码**。
-有了这个对应关系才能生成 `code<TAB>词<TAB>频次` 的词库。
-### XLLM 容器结构（`dump_xllm.py` 的实测结果）
-
-`+0x00` magic `XLLM`，`+0x20` u64 配置 JSON 长度，`+0x28` 配置 JSON
-（`model_type`、层数、维度、词表、位置上限等）
-
-配置 JSON 之后：
-
-1. 若干对齐填充
-2. 分词器 JSON（约 207KB，10463 个 token，BPE）
-3. 张量蓝图表（17 条，protobuf 风格：`0a` 名字、`12` 形状、`1a` 附加、`20` dtype）
-4. 权重区（74MB 文件里占大头，逐张量的偏移还没解出来）
-
-
-分词器是 **WordPiece**（vocab 10463，无 merges）：5,938 个单字中文、1,496 个 `##` 子词、105 个特殊 token；
-`--tokens` 可以把词表导成 `id<TAB>token`，后续跑 E2E 前向时用来做编码/解码。
-`decgnr.bin` 的蓝图合计 23.6M 参数，但配置是 12 层——说明蓝图表是**单层模板**，
-权重区里按层重复存储（或者部分权重共享），这是下一步要确认的。
-
+由 `LoudsTrieHashMapReader<SVDeserializer, …>` 读取：LOUDS trie + 哈希表 + 值区。文件末尾 33 字节是单独结构
+（构造时用 `size - 0x21` 切出正文）；前 256KB 左右是 ASCII 码区；值区记录形如 `50 01 <字数 u8> <UTF-16LE>`。
+码 ↔ 词的对应没有解，也**不打算继续解**：五笔码表是公开标准，WowType 直接用 rime-wubi。
 
 ### VAD（`Resources/vad/`）
 
-不在 `imeData.bundle` 里，而是应用资源目录下的 `vad/`：
+文本配置 + 40 维 CMS + 85KB 帧分类 DNN。时序参数见上面的实测；DNN 的层结构还差 84 个 float 对不上。
 
-| 文件 | 大小 | 内容 |
-|---|---|---|
-| `configure.16k.20221116.offline` | 3.0KB | 文本配置 |
-| `CMS_40dim_chi.bin` | 324B | 40 维 fbank 的 CMS 参数（u32 维度 + 40 个 float，另有 160 字节待确认） |
-| `model_16k_20210121_iter07.bin` | 85KB | 帧分类 DNN |
+### 行为规则（只记选项，不取数据）
 
-配置里能直接读到 VAD 的时序参数（`tools/wetype-assets/vad.py` 会打印）：
-
-```
-output_data_ms 40、begin_win_ms 400、begin_confirm_ms 300
-begin_padding_ms 150、end_padding_ms 480、sil_timeout 300
-frame_classifier.feature.name = FBank_16k_E_C_40_Online
-frame_classifier.net_input_win = 4、frame_mtm = 20、sil_thresh = 0.65
-```
-
-模型头是 5 个 u32：`1, 4, 0, 200, 64`（版本 / 层数 / ? / 输入 200 维 / 隐藏 64），
-之后有 21333 个 float。按 `200->64->64->64->1` 算是 21249 个，差 84 个，
-说明文件里还有别的段（标准差在文件中部有明显跳变），需要继续拆。
-## 下一步（按投入产出）
-
-1. **解 XLLM 权重区**：确认每层权重偏移和量化方式，实现 12 层 GPT-2 前向 → 长句重排
-2. **解五笔码表**：`swbd*.bin` 的容器结构（可以先从 ASCII 码表部分入手）
-3. **解简拼 / 二级词**：提升简拼召回和联想
-4. **VAD 模型**：确认 DNN 层结构和量化方式，替换现在的能量 VAD
+微信输入法的五笔设置（设置项文字和本机设置存储里的键名）：输入方案是**一个单选**（拼音 / 双拼 / 五笔……），
+五笔另有「方案」（86 / 98 / 新世纪）和四个开关——五笔编码提示（`enableComment`）、四码唯一上屏（`emitUniqueCandidate`）、
+五笔拼音混输（`enablePinyin`）、第五码首选词上屏（`emitWhenInputNextRune`）。本机存储里的值依次是 开、开、开、关。
+这些规则用于 WowType 五笔模式的设计，见 `docs/plans/wubi-design.md`（随 #193 合入）。
 
 ## 贡献注意
 
-- 提交里不要带 `.xnet` / `.gguf` / `.bin` 等模型文件，`.gitignore` 已经排除了常见后缀
-- 解析代码要有明确的入口和 `--json` 输出，方便别的工具复用
+- 新工具同样只读、不联网、默认只打印结构；需要写文件就用 `_common.open_output`
+- 解析二进制时每次取数都做边界检查（`_common.need` / `unpack` / `uvarint`），格式不符抛 `FormatError`
