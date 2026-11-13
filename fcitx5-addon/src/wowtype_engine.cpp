@@ -1189,9 +1189,8 @@ void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text
 }
 
 void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
-                                 const WowtypeFrame *frame) {
-    // 会话已经记过选词、补好了空格，编辑区是上屏以后的（一般是空的；五笔顶字时是新打的码）；
-    // 这里上屏、记上文、攒着存用户词库
+                                 const WowtypeFrame *frame, bool keepPreedit) {
+    // 会话已经清空编辑区、记过选词、补好了空格；这里上屏、记上文、攒着存用户词库
     const std::string text = frame && frame->commit ? frame->commit : "";
     const bool learned = frame && frame->learned;
     if (ic && !text.empty()) {
@@ -1201,10 +1200,12 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
     }
-    state->forgetCandidates();
-    if (state->composing()) {
-        // 上屏以后还在打字（五笔顶字时新打的字母开始下一个码，离开「译」时正在打的拼音留着）：抄新的候选
+    if (keepPreedit) {
+        // 按键上屏以后还在打字（五笔顶字：首选上屏，新打的字母开始下一个码）：编辑区留着，抄新的候选
+        state->forgetCandidates();
         syncView(state);
+    } else {
+        state->clear();
     }
     if (learned || !text.empty()) {
         rememberContext(text);
@@ -1334,7 +1335,7 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
     }
     if (frame && frame->commit) {
         // 学没学到词看 frame->learned；选了 emoji 由会话记进最近用过
-        finishCommit(ic, state, frame);
+        finishCommit(ic, state, frame, true);
         updateInputPanel(ic, state);
         return;
     }

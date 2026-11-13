@@ -515,7 +515,8 @@ private:
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
     /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
-    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame);
+    void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame,
+                      bool keepPreedit = false);
     /// 上屏已选的词 + 还没选的原始输入（切输入法、打到一半切英文），原始输入也记一次选词。
     void commitInput(fcitx::InputContext *ic, WowtypeState *state);
     /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
