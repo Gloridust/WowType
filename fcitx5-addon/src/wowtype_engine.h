@@ -56,6 +56,19 @@ struct WowtypeLayoutAnnotation {
     }
 };
 
+/// 打字途中方向键做什么（#129）。
+enum class WowtypeArrowKeys { Candidates, Caret };
+FCITX_CONFIG_ENUM_NAME(WowtypeArrowKeys, "Candidates", "Caret");
+
+struct WowtypeArrowKeysAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "都用来选词");
+        config.setValueByPath("EnumI18n/1", "左右键移动光标");
+    }
+};
+
 enum class WowtypeShuangpinScheme { Ziranma, Xiaohe, Microsoft, Sogou, ABC, Ziguang, PinyinJiajia };
 FCITX_CONFIG_ENUM_NAME(WowtypeShuangpinScheme, "Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC",
                        "Ziguang", "PinyinJiajia");
@@ -152,6 +165,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeLayout, fcitx::NoConstrain<WowtypeLayout>,
                   fcitx::DefaultMarshaller<WowtypeLayout>, WowtypeLayoutAnnotation>
         layout{this, "CandidateLayout", "候选排列", WowtypeLayout::Horizontal};
+    fcitx::Option<WowtypeArrowKeys, fcitx::NoConstrain<WowtypeArrowKeys>,
+                  fcitx::DefaultMarshaller<WowtypeArrowKeys>, WowtypeArrowKeysAnnotation>
+        arrowKeys{this, "ArrowKeys", "方向键", WowtypeArrowKeys::Candidates};
     fcitx::Option<int, fcitx::IntConstrain> pageSize{
         this, "PageSize", "每页候选个数", 9, fcitx::IntConstrain(3, 9)};
     fcitx::Option<bool> pageKeysMinus{this, "PageKeysMinusEqual", "翻页键：- =", true};
@@ -220,6 +236,11 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
+        fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
+    // 另设一个切换中 / 英文的快捷键（#143），默认不用；单按 Shift 照常。fcitx5 自己的热键（比如
+    // 切换输入法的 Ctrl+空格）先被 fcitx5 拿走，WowType 收不到，设置界面会提示
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> toggleKey{
+        this, "ToggleKey", "切换中 / 英文的快捷键", fcitx::Key(),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
     fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（最多一小时一次）", true};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
@@ -382,6 +403,9 @@ private:
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
+    bool isToggleKey(const fcitx::Key &key) const;
+    /// 能自己切中 / 英：单按 Shift 没关，或者另设了切换键。都没有时一直是中文（切过去就切不回来）。
+    bool canToggleMode() const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
     /// Shift 键交给会话判断单按（别的键只报一下，打断单按）。返回 true：这个键处理完了
     /// （Shift 键都是；单按切换了模式时吃掉，否则交给应用）。
@@ -505,6 +529,7 @@ private:
     WowtypeConfig config_;
     // 生效中的设置（配置文件 + 环境变量覆盖）
     bool horizontal_ = true;
+    WowtypeArrowKeys arrowKeys_ = WowtypeArrowKeys::Candidates;
     std::size_t pageSize_ = 9;
     bool fuzzy_ = false;
     /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
@@ -543,6 +568,8 @@ private:
     bool emojiSuggest_ = true;
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;
+    /// 另设的切换中 / 英文快捷键，FcitxKey_None 表示不用。
+    fcitx::Key toggleKey_;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
 
     WowtypeVoice *voice_ = nullptr;

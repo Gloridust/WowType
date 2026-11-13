@@ -4,7 +4,8 @@
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
-//!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）
+//!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
+//!   --s2t s2t.tsv 载入简繁表并打开繁体输出
 //!   --fuzzy 分组 打开模糊音（分组是 syllable::fuzzy 的位掩码，比如 0xFFFF 是全部分组）
 
 use std::sync::Arc;
@@ -22,6 +23,7 @@ fn main() {
     let mut max_candidates: Option<usize> = None;
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
+    let mut s2t_path: Option<String> = None;
     let mut fuzzy_groups: Option<u32> = None;
 
     let mut i = 1;
@@ -54,6 +56,10 @@ fn main() {
             "--max" => {
                 i += 1;
                 max_candidates = args.get(i).and_then(|v| v.parse().ok());
+            }
+            "--s2t" => {
+                i += 1;
+                s2t_path = args.get(i).cloned();
             }
             other => {
                 if let Ok(n) = other.parse() {
@@ -120,10 +126,16 @@ fn main() {
     if no_prefix {
         config.prefix_candidates = 0;
     }
-    let mut engine = Engine::new(lex, lm).with_config(config);
     if let Some(groups) = fuzzy_groups {
-        engine.set_fuzzy(true);
-        engine.set_fuzzy_groups(groups);
+        config.fuzzy = true;
+        config.fuzzy_groups = groups & wowtype_core::syllable::fuzzy::ALL;
+    }
+    config.traditional = s2t_path.is_some();
+    let engine = Engine::new(lex, lm).with_config(config);
+    if let Some(path) = &s2t_path {
+        let started = Instant::now();
+        let n = engine.load_conversion(path).expect("载入简繁表");
+        println!("简繁表 {n} 条，载入 {:?}", started.elapsed());
     }
     // 和 wowtype_engine_new 一样在载入时建好模糊音索引，不算进第一次按键
     engine.prepare_fuzzy();
