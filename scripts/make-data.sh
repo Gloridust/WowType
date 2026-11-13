@@ -59,7 +59,7 @@ with open(sys.argv[1], "rb") as f:
         h.update(block)
 print(h.hexdigest())' "$OUT/words.lm")
 if [[ "$actual" != "$LM_SHA256" ]]; then
-  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256，实际 $actual）" >&2
+  echo "words.lm 的 sha256 对不上（应为 ${LM_SHA256}，实际 ${actual}）" >&2
   exit 1
 fi
 
@@ -67,7 +67,7 @@ COMMIT=$(git -C "$RIME" rev-parse HEAD 2>/dev/null || echo unknown)
 DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)
 cat > "$OUT/SOURCE.txt" <<EOF
 数据来源：雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），许可证 GPL-3.0，见 LICENSE。
-版本：$COMMIT（$DATE）
+版本：${COMMIT}（${DATE}）
 lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables，
 另从 cn_dicts/41448.dict.yaml（大字表）补了词库里没有的单字读音（频次记 0.7~0.9），
 再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv、按 data/rime-ice-freq.tsv 修正几个常用词的词频、
@@ -86,7 +86,7 @@ REV=4
 echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)
-echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice $DATE，修订 $REV）"
+echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice ${DATE}，修订 ${REV}）"
 if (( LINES < 100000 )); then
   echo "词库条数太少，rime-ice 的目录结构可能变了" >&2
   exit 1

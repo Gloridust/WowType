@@ -19,7 +19,7 @@ command -v rpmbuild >/dev/null || { echo "需要 rpmbuild（dnf install rpm-buil
 OUT=$(realpath -m "${2:-dist}")
 DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
-  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
+  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
 done
 mkdir -p "$OUT"
 
