@@ -2464,6 +2464,18 @@ dan	单	5000
         assert!(has(&e, "zong", "中"), "平翘舌仍然有效");
     }
 
+
+    #[test]
+    fn duplicate_letter_typo() {
+        // 微信输入法的 RepeatPrevChar：同一个键多按一次（nihhao）应当能纠成 ni hao
+        let mut e = engine("ni hao	你好	10000
+");
+        assert!(
+            e.input("nihhao").iter().any(|c| c.text == "你好"),
+            "多按一个 h 应当被纠错"
+        );
+    }
+
     #[test]
     fn fuzzy_groups_filter() {
         let lexicon: Arc<dyn Lexicon> = Arc::new(
