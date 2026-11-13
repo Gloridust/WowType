@@ -94,6 +94,15 @@ def run(app):
         win.shift_free_row.set_active(True)
     step("开关", switches)
 
+    def toggle_key():
+        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到
+        win.toggle_key_row.set_selected(1)
+        check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
+        check("「切换输入法」" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
+        win.toggle_key_row.set_selected(0)
+        check(win.toggle_key_row.get_subtitle() == "", "不用切换键时还有提示")
+    step("切换键", toggle_key)
+
     def entries():
         win.url_row.set_text("http://127.0.0.1:9/v1")
         win.key_entry.set_text("sk-test")
