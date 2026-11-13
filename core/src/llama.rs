@@ -181,17 +181,19 @@ impl LocalServer {
                     .to_string()
             })?;
             let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
-            let child = Command::new(&server)
-                .arg("-m")
-                .arg(&config.model)
-                .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-                // 一句话用不了多少上下文；一个并发槽，内存最省
-                .args(["-c", "2048", "-np", "1"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| format!("翻译失败：启动 llama-server 失败（{e}）"))?;
+            let child = spawn_retrying_busy(|| {
+                Command::new(&server)
+                    .arg("-m")
+                    .arg(&config.model)
+                    .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+                    // 一句话用不了多少上下文；一个并发槽，内存最省
+                    .args(["-c", "2048", "-np", "1"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+            })
+            .map_err(|e| format!("翻译失败：启动 llama-server 失败（{e}）"))?;
             s.running = Some(Running {
                 child,
                 port,
@@ -335,6 +337,25 @@ fn spawn_watchdog(state: Arc<(Mutex<State>, Condvar)>, generation: u64, idle: Du
             }
         })
         .ok();
+}
+
+/// 起进程，碰上 ETXTBSY（Text file busy）就稍等重试几次。刚写好的可执行文件（刚下载的
+/// llama-server、测试写的假服务）还被别的线程 fork 出来、没来得及 exec 的子进程拿着写句柄时，
+/// exec 它会报这个错；那个子进程一 exec 句柄就关了。
+fn spawn_retrying_busy(
+    mut spawn: impl FnMut() -> std::io::Result<std::process::Child>,
+) -> std::io::Result<std::process::Child> {
+    const ETXTBSY: i32 = 26; // Linux 和 macOS 都是 26
+    let mut tries = 0;
+    loop {
+        match spawn() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
 }
 
 /// 测试用的假 llama-server（translate 的测试也用）。
