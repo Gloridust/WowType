@@ -2468,7 +2468,7 @@ impl<'e> Session<'e> {
             comment,
             ..Candidate::default()
         };
-        // custom.tsv 里编码正好是这个码的，不管编码像不像拼音（dz → 地址）
+        // custom.tsv 里编码正好是这个码的，不管编码像不像拼音（dd → 地址）
         let mut all: Vec<Candidate> = engine
             .lexicon()
             .custom_phrases()

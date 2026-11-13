@@ -6,11 +6,15 @@
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
 //!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
 //!   --s2t s2t.tsv 载入简繁表并打开繁体输出
+//! 五笔：... -- --lexicon lexicon.tsv --wubi wubi86.tsv
+//!   码表载入耗时和内存；按输入会话逐键打码表里的码（四码唯一上屏、顶字都照真的走）和几句 z 临时拼音，
+//!   统计每次按键（会话处理 + 取这一页候选）的耗时分布
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use wowtype_core::lm::BigramLm;
+use wowtype_core::session::{Config, Key, Session};
 use wowtype_core::{Engine, EngineConfig, Lexicon, MemoryLexicon, SYLLABLES};
 
 fn main() {
@@ -23,6 +27,7 @@ fn main() {
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
     let mut s2t_path: Option<String> = None;
+    let mut wubi_path: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -51,6 +56,10 @@ fn main() {
             "--s2t" => {
                 i += 1;
                 s2t_path = args.get(i).cloned();
+            }
+            "--wubi" => {
+                i += 1;
+                wubi_path = args.get(i).cloned();
             }
             other => {
                 if let Ok(n) = other.parse() {
@@ -132,6 +141,10 @@ fn main() {
         println!("神经语言模型载入 {:?}", started.elapsed());
     }
 
+    if let Some(path) = wubi_path {
+        wubi_latency(&engine, &path);
+        return;
+    }
     if let Some(path) = typing_path {
         typing_latency(&engine, &path);
         return;
@@ -186,5 +199,49 @@ fn typing_latency(engine: &Engine, path: &str) {
     );
     for (ms, prefix) in samples.iter().rev().take(5) {
         println!("  {ms:7.2} ms  {prefix}");
+    }
+}
+
+/// 五笔：码表载入，再按会话逐键打码（每 7 条取一条的码，加几句 z 临时拼音）。
+fn wubi_latency(engine: &Engine, path: &str) {
+    let started = Instant::now();
+    let n = engine.load_wubi(path).expect("载入五笔码表");
+    let table = engine.wubi().expect("码表");
+    println!(
+        "五笔码表 {n} 条，载入 {:?}，约占内存 {:.1} MB",
+        started.elapsed(),
+        table.heap_bytes() as f64 / 1048576.0
+    );
+    let data = std::fs::read_to_string(path).expect("读码表");
+    let mut cases: Vec<String> = data
+        .lines()
+        .step_by(7)
+        .filter_map(|line| line.split('\t').next().map(str::to_owned))
+        .collect();
+    cases.extend(["znihao", "zwoshizhongguoren", "zshurufa", "zriqi"].map(String::from));
+    let mut session = Session::with_engine(engine);
+    session.configure(Config { wubi: true, ..Config::default() });
+    let mut samples: Vec<(f64, String)> = Vec::new();
+    for code in &cases {
+        for (i, c) in code.chars().enumerate() {
+            let t = Instant::now();
+            session.key(&Key::char(c));
+            let _ = session.shown().len();
+            samples.push((t.elapsed().as_secs_f64() * 1000.0, code[..=i].to_owned()));
+        }
+        session.reset(false);
+    }
+    samples.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let pick = |q: f64| samples[((samples.len() - 1) as f64 * q) as usize].0;
+    println!(
+        "五笔按键 {} 次  p50 {:.3} ms  p95 {:.3}  p99 {:.3}  最慢 {:.3} ms",
+        samples.len(),
+        pick(0.5),
+        pick(0.95),
+        pick(0.99),
+        samples.last().map(|s| s.0).unwrap_or(0.0)
+    );
+    for (ms, keys) in samples.iter().rev().take(5) {
+        println!("  {ms:7.3} ms  {keys}");
     }
 }

@@ -128,6 +128,13 @@ impl WubiTable {
         self.entries.is_empty()
     }
 
+    /// 大致占多少内存（字节，压测看）。
+    pub fn heap_bytes(&self) -> usize {
+        self.entries.capacity() * std::mem::size_of::<Entry>()
+            + self.words.capacity()
+            + self.by_word.capacity() * std::mem::size_of::<u32>()
+    }
+
     fn word(&self, index: usize) -> &str {
         let e = &self.entries[index];
         &self.words[e.start as usize..(e.start + e.len) as usize]
