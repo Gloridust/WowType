@@ -31,6 +31,9 @@
 	<true/>
 	<key>LSBackgroundOnly</key>
 	<false/>
+	<!-- 语音输入：第一次按语音键时系统会问要不要允许 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>按住语音键说话，WowType 在本机把说的话识别成文字。</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>TISInputSourceID</key>

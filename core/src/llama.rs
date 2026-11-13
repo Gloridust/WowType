@@ -180,48 +180,67 @@ impl LocalServer {
                 "翻译失败：没找到 llama-server（在设置的「翻译」页点下载，或者自己装 llama.cpp）"
                     .to_string()
             })?;
-            let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
-            let child = Command::new(&server)
-                .arg("-m")
-                .arg(&config.model)
-                .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-                // 一句话用不了多少上下文；一个并发槽，内存最省
-                .args(["-c", "2048", "-np", "1"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+            // 进程一起来（QUICK_EXIT 以内）就退出，多半是端口被别人抢了（free_port 放掉到
+            // llama-server 绑上之间）：换个端口马上再试，最多 3 次。载入了一阵才退出的（模型坏了、
+            // 版本不对）重试也没用，还要再等一遍载入，直接报错
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let port = free_port().ok_or("翻译失败：找不到空闲端口")?;
+                let launched = Instant::now();
+                let child = spawn_retrying_busy(|| {
+                    Command::new(&server)
+                        .arg("-m")
+                        .arg(&config.model)
+                        .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+                        // 一句话用不了多少上下文；一个并发槽，内存最省
+                        .args(["-c", "2048", "-np", "1"])
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                })
                 .map_err(|e| format!("翻译失败：启动 llama-server 失败（{e}）"))?;
-            s.running = Some(Running {
-                child,
-                port,
-                config: config.clone(),
-            });
-            s.generation += 1;
-            s.starting = true;
-            let generation = s.generation;
-            drop(s);
-            // 等模型载入：不拿着锁，免得插件线程的 poll / 配置被卡住
-            let ready = wait_healthy(port, LOAD_TIMEOUT, || {
-                let mut s = lock.lock().unwrap();
-                s.generation == generation && alive(&mut s)
-            });
-            s = lock.lock().unwrap();
-            s.starting = false;
-            cvar.notify_all();
-            if s.generation != generation {
-                return Err("翻译已取消".to_string());
-            }
-            if let Err(message) = ready {
-                stop(&mut s);
-                return Err(message);
-            }
-            if config.idle_secs > 0 {
-                spawn_watchdog(
-                    Arc::clone(&self.state),
-                    generation,
-                    Duration::from_secs(config.idle_secs),
-                );
+                s.running = Some(Running {
+                    child,
+                    port,
+                    config: config.clone(),
+                });
+                s.generation += 1;
+                s.starting = true;
+                let generation = s.generation;
+                drop(s);
+                // 等模型载入：不拿着锁，免得插件线程的 poll / 配置被卡住
+                let ready = wait_healthy(port, LOAD_TIMEOUT, || {
+                    let mut s = lock.lock().unwrap();
+                    s.generation == generation && alive(&mut s)
+                });
+                s = lock.lock().unwrap();
+                s.starting = false;
+                cvar.notify_all();
+                if s.generation != generation {
+                    return Err("翻译已取消".to_string());
+                }
+                match ready {
+                    Ok(()) => {
+                        if config.idle_secs > 0 {
+                            spawn_watchdog(
+                                Arc::clone(&self.state),
+                                generation,
+                                Duration::from_secs(config.idle_secs),
+                            );
+                        }
+                        break;
+                    }
+                    Err(message) => {
+                        let quick_exit = !alive(&mut s) && launched.elapsed() < QUICK_EXIT;
+                        stop(&mut s);
+                        if quick_exit && attempt < 3 {
+                            continue;
+                        }
+                        return Err(message);
+                    }
+                }
             }
         }
         let port = s.running.as_ref().map(|r| r.port).unwrap_or(0);
@@ -270,9 +289,14 @@ fn stop(s: &mut State) {
     }
 }
 
+/// llama-server 起来这么久以内就退出，当作端口被抢了、换端口重试；更晚才退出的是真起不来。
+/// 绑端口在载入模型之前，绑不上的话一般几十毫秒就退出；留到 3 秒是给很忙的机器（CI 上测试并行时
+/// 假服务的 Python 启动就要一两秒）。比这更晚才退出的，重试只会再等一遍载入。
+const QUICK_EXIT: Duration = Duration::from_secs(3);
+
 fn free_port() -> Option<u16> {
     // 让系统挑一个；放掉以后马上给 llama-server 用。极少数情况下会被别人抢走，
-    // 那样 llama-server 起不来，wait_healthy 会报错，下一次翻译换个端口重来。
+    // 那样 llama-server 起来就退出，acquire 换个端口马上重试（见 QUICK_EXIT）。
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     listener.local_addr().ok().map(|a| a.port())
 }
@@ -335,6 +359,25 @@ fn spawn_watchdog(state: Arc<(Mutex<State>, Condvar)>, generation: u64, idle: Du
             }
         })
         .ok();
+}
+
+/// 起进程，碰上 ETXTBSY（Text file busy）就稍等重试几次。刚写好的可执行文件（刚下载的
+/// llama-server、测试写的假服务）还被别的线程 fork 出来、没来得及 exec 的子进程拿着写句柄时，
+/// exec 它会报这个错；那个子进程一 exec 句柄就关了。
+fn spawn_retrying_busy(
+    mut spawn: impl FnMut() -> std::io::Result<std::process::Child>,
+) -> std::io::Result<std::process::Child> {
+    const ETXTBSY: i32 = 26; // Linux 和 macOS 都是 26
+    let mut tries = 0;
+    loop {
+        match spawn() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && tries < 10 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            other => return other,
+        }
+    }
 }
 
 /// 测试用的假 llama-server（translate 的测试也用）。
@@ -486,6 +529,75 @@ mod tests {
         assert_ne!(server.pid(), Some(pid), "进程没了就重起");
         server.shutdown();
         assert!(!server.is_running());
+    }
+
+    #[test]
+    fn server_that_exits_reports_after_retries() {
+        // 起来就退出（端口被抢、模型文件不对）：换端口试 3 次，还不行才报错，不会卡住
+        let (dir, mut config) = setup(0);
+        let (script, launches) = counting_script(dir.path(), "exits", "exit 1");
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        let started = Instant::now();
+        let err = server.acquire(&config).err().unwrap();
+        assert!(err.contains("启动后退出了"), "{err}");
+        assert!(!server.is_running());
+        assert_eq!(launch_count(&launches), 3);
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn server_that_dies_after_loading_is_not_retried() {
+        // 载入了一阵才退出（模型坏了、版本不对）：重试也一样，只起一次
+        let (dir, mut config) = setup(0);
+        let (script, launches) = counting_script(dir.path(), "dies-late", "sleep 4; exit 1");
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        let err = server.acquire(&config).err().unwrap();
+        assert!(err.contains("启动后退出了"), "{err}");
+        assert_eq!(launch_count(&launches), 1);
+    }
+
+    #[test]
+    fn retries_after_a_quick_exit_and_then_serves() {
+        // 第一次起来就退出（像端口被抢），第二次正常：换端口重试后能用
+        if !python_available() {
+            return;
+        }
+        let (dir, mut config) = setup(0);
+        let real = fake_server(dir.path());
+        let (script, launches) = counting_script(
+            dir.path(),
+            "flaky",
+            &format!(
+                "[ \"$(wc -l < \"$0.launches\")\" -le 1 ] && exit 1; exec {} \"$@\"",
+                real.display()
+            ),
+        );
+        config.server = script.display().to_string();
+        let server = LocalServer::new();
+        drop(server.acquire(&config).unwrap());
+        assert_eq!(launch_count(&launches), 2);
+        assert!(server.is_running());
+        server.shutdown();
+    }
+
+    /// 每次启动往 `<脚本>.launches` 里记一行再跑 body 的 shell 脚本。
+    fn counting_script(dir: &Path, name: &str, body: &str) -> (PathBuf, PathBuf) {
+        let script = dir.join(name);
+        let launches = dir.join(format!("{name}.launches"));
+        std::fs::write(
+            &script,
+            format!("#!/bin/sh\necho x >> \"$0.launches\"\n{body}\n"),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (script, launches)
+    }
+
+    fn launch_count(launches: &Path) -> usize {
+        std::fs::read_to_string(launches).map_or(0, |s| s.lines().count())
     }
 
     #[test]

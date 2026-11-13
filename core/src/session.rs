@@ -19,10 +19,14 @@
 //! [`Session::choose`]，表情面板往编辑区加搜索词用 [`Session::append`]，这些过渡用法挪完以后会删掉。
 
 use crate::datetime::LocalTime;
+pub use crate::symbols::PunctStyle;
+use crate::translate::JobState;
 use crate::Engine;
 
 /// 平台无关的键码：XKB keysym 的子集（fcitx5 直接用，macOS 外壳把 kVK_* 翻成这个）。
 pub mod keysym {
+    pub const SHIFT_L: u32 = 0xffe1;
+    pub const SHIFT_R: u32 = 0xffe2;
     pub const BACKSPACE: u32 = 0xff08;
     pub const TAB: u32 = 0xff09;
     pub const RETURN: u32 = 0xff0d;
@@ -45,6 +49,8 @@ pub mod keysym {
     pub const KP_0: u32 = 0xffb0;
     pub const KP_9: u32 = 0xffb9;
     pub const SPACE: u32 = 0x20;
+    pub const HOME: u32 = 0xff50;
+    pub const END: u32 = 0xff57;
     pub const PERCENT: u32 = 0x25;
     pub const APOSTROPHE: u32 = 0x27;
     pub const PAREN_LEFT: u32 = 0x28;
@@ -84,6 +90,9 @@ pub enum KeyAction {
     NextPage,
     PrevCandidate,
     NextCandidate,
+    /// 外壳只是告诉会话有这个键（松开的、外壳自己处理掉的）：单按 Shift 的判断要看到按住
+    /// Shift 时的每个键；会话不处理它。
+    Observe,
 }
 
 /// 一次按键。
@@ -93,10 +102,126 @@ pub struct Key {
     pub modifiers: u32,
     /// 松开（按下是 false）。
     pub release: bool,
-    /// 光标前一个字符，不知道是 None（以后挪标点、小数点时用）。
+    /// 应用里光标前一个字符（外壳读周围文字得到），读不到是 None。
+    /// 数字后面的标点保持英文、自动空格都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
     pub prev_char: Option<char>,
     /// 外壳认出来的全局热键（翻页、移光标），没有是 None。
     pub action: KeyAction,
+    /// 输入框的情况，[`key_hints`] 的位掩码。
+    pub hints: u32,
+    /// 按键码（硬件键码），不知道是 0。单按 Shift 时按下、松开按键码对上才算同一个键：
+    /// xkb 选项或输入法布局重新翻译时，松开那一下可能翻成别的符号。
+    pub code: u32,
+    /// 按住不放的自动重复。
+    pub repeat: bool,
+    /// 按键时刻（毫秒，单调递增的任意起点），不知道是 0。单按 Shift 看按住多久。
+    pub time_ms: u64,
+}
+
+/// 外壳告诉会话的输入框情况（[`Key::hints`]）。
+pub mod key_hints {
+    /// 密码框、网址框、邮箱框：不自动补空格。
+    pub const NO_AUTO_SPACE: u32 = 1 << 0;
+    /// 外壳开着自己的面板（表情面板、工具栏）：这时按 Shift 不切中英文。
+    pub const PANEL_OPEN: u32 = 1 << 1;
+    /// 不能翻译的输入框（密码框）：「译」里也照常上屏，不攒原文、不往外发。
+    pub const NO_TRANSLATE: u32 = 1 << 2;
+}
+
+/// 互译用的翻译器（[`crate::translate::Translator`]，或外壳自己的实现）。都不阻塞。
+pub trait TranslateBackend {
+    /// 开始翻译 text，取消别的请求；正在译或已经译好同一句话时什么也不做。
+    fn start(&self, text: &str);
+    /// 取消现在的请求，不管是谁发的。
+    fn cancel(&self);
+    /// 现在的请求还是翻译 source 的才取消。一个进程只有一个翻译器、所有输入框共用：
+    /// 输入框 A 清空时，翻译器上跑的可能已经是输入框 B 后来发的请求，不能把它取消掉。
+    /// 会话都在同一个线程上调翻译器（插件的事件循环、macOS 的主线程），先看再取消之间不会有别人 start。
+    fn cancel_source(&self, source: &str) {
+        if self.poll().source == source {
+            self.cancel();
+        }
+    }
+    fn poll(&self) -> crate::translate::Snapshot;
+    /// 方向标签（「中→英」「英→中」），按 text 判断。
+    fn tag(&self, text: &str) -> String;
+}
+
+impl TranslateBackend for crate::translate::Translator {
+    fn start(&self, text: &str) {
+        crate::translate::Translator::start(self, text);
+    }
+    fn cancel(&self) {
+        crate::translate::Translator::cancel(self);
+    }
+    fn cancel_source(&self, source: &str) {
+        crate::translate::Translator::cancel_source(self, source);
+    }
+    fn poll(&self) -> crate::translate::Snapshot {
+        crate::translate::Translator::poll(self)
+    }
+    fn tag(&self, text: &str) -> String {
+        crate::translate::direction_tag(&self.config(), text)
+    }
+}
+
+/// 原文停下来这么久才发请求（句末标点立刻发）。
+pub const TRANSLATE_DELAY_MS: u64 = 500;
+/// 等译文时多久再叫一次会话（[`Frame::wake_after_ms`]）。
+pub const TRANSLATE_POLL_MS: u32 = 50;
+
+/// 互译时外壳要画的（[`Frame::translate`]）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranslateView {
+    /// 攒着的原文（编辑区里画在拼音前面）。
+    pub source: String,
+    /// 显示的译文：原文改了、新译文还没写到上一句那么长时先留着上一句，免得一闪一闪。
+    pub text: String,
+    /// 译完了（text 是最终结果）。
+    pub done: bool,
+    /// 候选框上方：方向标签 + 「互译：」。
+    pub title: String,
+    /// 候选框下方的一行：出错原因、「翻译中…」、怎么上屏；没有是空串。
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Translation {
+    source: String,
+    shown: String,
+    /// 按过回车：译好了就上屏。
+    pending: bool,
+    /// 什么时候发请求（毫秒）；None 不用发。
+    due_ms: Option<u64>,
+    /// 这个会话发出去、还没取消的请求的原文。多个输入框共用一个翻译器：清空时只取消翻译器上
+    /// 还是这句话的请求，别的输入框后来发的不动。
+    requested: Option<String>,
+}
+
+/// 输入模式：中文、英文（按键原样交给应用）、互译（打中文出外文，上屏由外壳接管）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mode {
+    #[default]
+    Chinese,
+    English,
+    Translate,
+}
+
+/// 用哪边的 Shift 单按切换中英文（[`Config::shift_toggle`]）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShiftToggle {
+    #[default]
+    Both,
+    Left,
+    Right,
+    Off,
+}
+
+/// 单按 Shift：按下以后、松开以前没按别的键，也没按太久（[`Config::shift_tap_ms`]）。
+#[derive(Clone, Copy, Debug, Default)]
+struct ShiftTap {
+    /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
+    down: Option<(u32, u32, u64)>,
 }
 
 impl Key {
@@ -208,6 +333,19 @@ pub struct Frame {
     pub has_next: bool,
     /// 这次调用忘掉了一个学过的词（Ctrl+Delete）：外壳该马上存用户词库和输入习惯。
     pub forgot: bool,
+    /// 这次上屏里有引擎学到的选词（选了引擎的候选、原样上屏输入）：外壳攒够次数存一次用户词库。
+    /// 只上屏了标点、emoji、计算结果、日期时间的是 false。
+    pub learned: bool,
+    /// 这次调用以后的输入模式。
+    pub mode: Mode,
+    /// 这次调用切换了输入模式（单按 Shift、set_mode）：外壳更新状态栏、提示。
+    pub mode_changed: bool,
+    /// 互译中（「译」、有翻译器、输入框能翻译）：外壳画原文、译文、提示。
+    pub translate: Option<TranslateView>,
+    /// 大于 0：过这么久（毫秒）调一次 [`Session::tick`]（等译文、等发请求）。
+    pub wake_after_ms: u32,
+    /// 候选框上方的提示（工具栏、表情面板），没有是空串。
+    pub aux: String,
 }
 
 /// 候选框的样子。
@@ -218,6 +356,37 @@ pub enum Panel {
     Normal,
     /// 横排时按下键展开的面板：[`GRID_COLS`] 列，一屏 [`GRID_ROWS`] 行，光标所在行标 1–6。
     Expanded,
+    /// 表情面板（表情快捷键、工具栏的「符号」「表情」）：和展开面板一样的网格，编辑区是搜索词。
+    Emoji,
+    /// v + 空格的工具栏（菜单、剪贴板、常用语）：竖排一列，一页 [`TOOL_PAGE`] 个。
+    Tool,
+}
+
+/// 工具栏一页几个。
+pub const TOOL_PAGE: usize = 9;
+/// 表情面板最多列这么多个（不搜索时是全部 emoji）。
+const MAX_EMOJI: usize = 2000;
+const TOOL_MENU: [&str; 4] = ["剪贴板", "常用语", "符号", "表情"];
+
+/// 开着的面板（[`Session::open_tool`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// v + 空格的菜单：剪贴板、常用语、符号、表情
+    Menu,
+    Clipboard,
+    Phrases,
+    /// 表情面板；symbols 是从菜单「符号」进来的（不搜索时列全部符号，选的不记进最近用过）
+    Emoji { symbols: bool },
+}
+
+#[derive(Clone, Debug)]
+struct ToolState {
+    tool: Tool,
+    items: Vec<Candidate>,
+    /// 光标在 items 里的位置（不分页）
+    cursor: usize,
+    /// 表情面板的搜索词（打拼音或英文）
+    query: String,
 }
 
 /// 展开面板一行几个候选。
@@ -266,7 +435,7 @@ pub struct View {
 pub struct Config {
     /// 一页几个候选（数字按键 emoji 只在第一页里找数字字）。
     pub page_size: usize,
-    /// V 模式计算器（v 后面打算式）。双拼时不开（v 是韵母键）。
+    /// V 模式计算器（v 后面打算式）。双拼时用大写 V（小写 v 是声母键）。
     pub calculator: bool,
     /// 打 riqi、shijian 这类时给日期时间候选。
     pub date_time: bool,
@@ -280,6 +449,22 @@ pub struct Config {
     /// 以词定字：打拼音途中 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字（#83）。
     /// `[ ]` 设成翻页键时让给翻页。
     pub pick_char: bool,
+    /// 标点样式：全角（中文标点）或半角（原样交给应用）。
+    pub punct_style: PunctStyle,
+    /// 中英文之间自动补空格，[`crate::autospace`] 的 `LETTERS | DIGITS` 位掩码，0 是关。
+    pub auto_space: u32,
+    /// 用哪边的 Shift 单按切换中英文。
+    pub shift_toggle: ShiftToggle,
+    /// 按住 Shift 多久以内松开才算单按（毫秒）：按久了多半是想打大写或者犹豫了。
+    pub shift_tap_ms: u32,
+    /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
+    pub translate_mode: bool,
+    /// 只打一个 v 再按空格打开工具栏（双拼、互译时不开）。
+    pub toolbar: bool,
+    /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
+    pub clipboard_history: bool,
+    /// 双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong）；中英混打时看得出打了什么（#122）。
+    pub shuangpin_keys: bool,
 }
 
 impl Default for Config {
@@ -293,6 +478,14 @@ impl Default for Config {
             page_keys: page_keys::MINUS,
             select_keys: SelectKeys::Off,
             pick_char: true,
+            punct_style: PunctStyle::Fullwidth,
+            auto_space: 0,
+            shift_toggle: ShiftToggle::Both,
+            shift_tap_ms: 500,
+            translate_mode: false,
+            toolbar: true,
+            clipboard_history: false,
+            shuangpin_keys: false,
         }
     }
 }
@@ -342,6 +535,8 @@ pub type Clock = fn() -> Option<LocalTime>;
 
 /// 选了开头的词以后，拿已上屏的字 + 已选的词当上文，最多这么多字节。
 const CONTEXT_BYTES: usize = 24;
+/// 会话自己记的上文最多留几个字（排序用的上文、学搭配都只看最后几个字）。
+const CONTEXT_CHARS: usize = 20;
 /// emoji 推荐插在第几个（首选和次选后面）。
 const EMOJI_SLOT: usize = 2;
 
@@ -374,6 +569,27 @@ pub struct Session<'e> {
     last_choice: Option<Candidate>,
     /// 这次调用忘掉了学过的词（frame 取走）。
     forgot: bool,
+    /// 这次调用上屏的里有学到的选词（frame 取走）。
+    learned: bool,
+    /// 双引号、单引号各自上一次给的是不是左引号（每个会话一份）。
+    quotes: [bool; 2],
+    /// 应用里光标前的字（这次按键时外壳给的；上屏以后是上屏的最后一个字）。自动空格看它，不知道是 None。
+    prev_char: Option<char>,
+    /// 会话自己记的上一个字：上屏的最后一个字，或者交给应用的数字、标点。
+    /// 外壳读不到周围文字时，标点看它（3.14 的点）。
+    last_char: Option<char>,
+    /// 这次按键时外壳给的输入框情况（[`key_hints`]）。
+    hints: u32,
+    mode: Mode,
+    /// 这次调用切换了模式（frame 取走）。
+    mode_changed: bool,
+    shift: ShiftTap,
+    translator: Option<&'e dyn TranslateBackend>,
+    translation: Translation,
+    /// 开着的工具栏 / 表情面板；None 是没开。
+    tool: Option<ToolState>,
+    /// 最近一次按键或 tick 的时刻（毫秒）。
+    now_ms: u64,
 }
 
 impl Default for Session<'_> {
@@ -395,6 +611,18 @@ impl Default for Session<'_> {
             pending: None,
             last_choice: None,
             forgot: false,
+            learned: false,
+            quotes: [false; 2],
+            prev_char: None,
+            last_char: None,
+            hints: 0,
+            mode: Mode::Chinese,
+            mode_changed: false,
+            shift: ShiftTap::default(),
+            translator: None,
+            translation: Translation::default(),
+            tool: None,
+            now_ms: 0,
         }
     }
 }
@@ -465,13 +693,54 @@ impl<'e> Session<'e> {
     /// 处理一次按键。
     pub fn key(&mut self, key: &Key) -> Frame {
         self.last_choice = None;
+        if key.time_ms != 0 {
+            self.now_ms = key.time_ms;
+        }
+        if let Some(handled) = self.shift_key(key) {
+            return self.frame(handled);
+        }
+        if key.action == KeyAction::Observe {
+            return self.frame(false);
+        }
+        if !key.release {
+            self.prev_char = key.prev_char;
+            self.hints = key.hints;
+            if key.prev_char.is_some() {
+                self.last_char = key.prev_char;
+            }
+        }
         let handled = self.handle_key(key);
+        // 交给应用的退格、方向键、Delete……之后光标前是什么就不知道了（3 退格以后的点是句号）；
+        // 交给应用的数字、标点上面已经记了，单按修饰键不算
+        if !key.release
+            && !handled
+            && key.prev_char.is_none()
+            && visible_symbol(key.keysym).is_none()
+            && !is_modifier_keysym(key.keysym)
+        {
+            self.last_char = None;
+        }
         self.frame(handled)
     }
 
     fn handle_key(&mut self, key: &Key) -> bool {
         if key.release {
             return false;
+        }
+        if self.tool.is_some() {
+            return self.tool_key(key);
+        }
+        if self.mode == Mode::English && !self.composing() {
+            return self.english_key(key);
+        }
+        if !self.translation.source.is_empty() && !self.translating() {
+            // 「译」里攒着原文时换到了不能翻译的输入框（密码框）：原文先原样上屏
+            self.commit_source();
+        }
+        if self.translating() && !self.composing() {
+            if let Some(handled) = self.translate_key(key) {
+                return handled;
+            }
         }
         if self.composing() && key.is_forget() {
             self.forget_current();
@@ -486,6 +755,10 @@ impl<'e> Session<'e> {
             }
         }
         let sym = key.keysym;
+        // 打字途中的隔音符（xi'an）下面单独处理
+        if let Some(c) = visible_symbol(sym).filter(|&c| !(c == '\'' && self.composing())) {
+            return self.symbol_key(c, key);
+        }
         if (u32::from(b'a')..=u32::from(b'z')).contains(&sym)
             || (u32::from(b'A')..=u32::from(b'Z')).contains(&sym)
         {
@@ -499,6 +772,821 @@ impl<'e> Session<'e> {
             return true;
         }
         false
+    }
+
+    /// 换翻译器（None：没有翻译器，「译」里也照常上屏）。换掉时攒着的原文丢掉。
+    pub fn set_translator(&mut self, translator: Option<&'e dyn TranslateBackend>) {
+        let same = match (self.translator, translator) {
+            (Some(a), Some(b)) => std::ptr::addr_eq(a as *const dyn TranslateBackend, b as *const dyn TranslateBackend),
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            return;
+        }
+        self.clear_translation();
+        self.translator = translator;
+    }
+
+    /// 互译中：「译」、有翻译器、输入框能翻译（不是密码框）。
+    pub fn translating(&self) -> bool {
+        self.mode == Mode::Translate
+            && self.translator.is_some()
+            && self.hints & key_hints::NO_TRANSLATE == 0
+    }
+
+    /// 攒着的原文（互译）。
+    pub fn translate_source(&self) -> &str {
+        &self.translation.source
+    }
+
+    /// 丢掉攒着的原文，取消这个会话发的请求（输入框失去焦点、放弃输入）。
+    pub fn clear_translation(&mut self) {
+        let t = &mut self.translation;
+        t.source.clear();
+        t.shown.clear();
+        t.pending = false;
+        t.due_ms = None;
+        if let Some(sent) = t.requested.take() {
+            if let Some(translator) = self.translator {
+                translator.cancel_source(&sent);
+            }
+        }
+    }
+
+    /// 定时器到了（外壳按 frame 的 wake_after_ms 排的）：该发请求的发，按过回车且译好了的上屏。
+    pub fn tick(&mut self, now_ms: u64) -> Frame {
+        self.last_choice = None;
+        self.now_ms = now_ms;
+        self.poll_translation();
+        self.frame(true)
+    }
+
+    fn poll_translation(&mut self) {
+        let Some(translator) = self.translator else {
+            return;
+        };
+        if self.translation.source.is_empty() {
+            self.translation.due_ms = None;
+            if let Some(sent) = self.translation.requested.take() {
+                translator.cancel_source(&sent);
+            }
+            return;
+        }
+        if !self.translating() {
+            return;
+        }
+        if self.translation.due_ms.is_some_and(|due| self.now_ms >= due) {
+            self.translation.due_ms = None;
+            self.request_translation();
+        }
+        let snap = translator.poll();
+        let fresh = snap.source == self.translation.source;
+        if fresh && snap.state == JobState::Error {
+            self.translation.pending = false;
+        }
+        if self.translation.pending && fresh && snap.state == JobState::Done {
+            self.commit_translation();
+        }
+    }
+
+    fn request_translation(&mut self) {
+        if let Some(translator) = self.translator {
+            translator.start(&self.translation.source);
+            self.translation.requested = Some(self.translation.source.clone());
+        }
+    }
+
+    /// 原文变了：过 TRANSLATE_DELAY_MS（now 时立刻）再发请求。
+    fn source_changed(&mut self, now: bool) {
+        self.translation.pending = false;
+        if self.translation.source.is_empty() {
+            self.clear_translation();
+            return;
+        }
+        let delay = if now { 0 } else { TRANSLATE_DELAY_MS };
+        self.translation.due_ms = Some(self.now_ms + delay);
+    }
+
+    /// 回车、空格：译好了就上屏译文；还没译好（或出错了，回车就是重试）记下来，好了再上屏。
+    fn commit_translation(&mut self) {
+        let Some(translator) = self.translator else {
+            return;
+        };
+        if self.translation.source.is_empty() {
+            return;
+        }
+        let snap = translator.poll();
+        let fresh = snap.source == self.translation.source;
+        if fresh && snap.state == JobState::Done {
+            self.translation.requested = None;
+            self.clear_translation();
+            self.push_commit(&snap.text);
+            return;
+        }
+        self.translation.pending = true;
+        if !fresh || matches!(snap.state, JobState::Error | JobState::Idle) {
+            self.translation.due_ms = None;
+            self.request_translation();
+        }
+    }
+
+    /// Shift+回车、离开「译」：原文原样上屏。
+    fn commit_source(&mut self) {
+        let source = std::mem::take(&mut self.translation.source);
+        self.clear_translation();
+        self.push_commit(&source);
+    }
+
+    /// 互译、没在打拼音时的键。Some：处理完了；None：照常处理（字母开始拼音，标点、数字进原文）。
+    fn translate_key(&mut self, key: &Key) -> Option<bool> {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return None;
+        }
+        if self.translation.source.is_empty() {
+            return None;
+        }
+        match key.keysym {
+            keysym::RETURN | keysym::KP_ENTER => {
+                if key.modifiers & modifier::SHIFT != 0 {
+                    self.commit_source();
+                } else {
+                    self.commit_translation();
+                }
+                Some(true)
+            }
+            keysym::SPACE => {
+                self.commit_translation();
+                Some(true)
+            }
+            keysym::ESCAPE => {
+                self.clear_translation();
+                Some(true)
+            }
+            keysym::BACKSPACE => {
+                self.translation.source.pop();
+                self.source_changed(false);
+                Some(true)
+            }
+            keysym::LEFT | keysym::RIGHT | keysym::UP | keysym::DOWN | keysym::HOME | keysym::END
+            | keysym::DELETE | keysym::PAGE_UP | keysym::PAGE_DOWN | keysym::TAB
+            | keysym::ISO_LEFT_TAB => {
+                // 原文里没有光标，别让应用里的光标乱跑
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    /// 互译时外壳要画的，顺便看要不要再叫会话（等发请求、等译文）。
+    fn translate_view(&mut self) -> Option<(TranslateView, u32)> {
+        if !self.translating() {
+            return None;
+        }
+        let translator = self.translator?;
+        let snap = translator.poll();
+        let t = &mut self.translation;
+        let fresh = !t.source.is_empty() && snap.source == t.source;
+        let failed = fresh && snap.state == JobState::Error;
+        let done = fresh && snap.state == JobState::Done;
+        let text = if fresh && !failed { snap.text.as_str() } else { "" };
+        if t.source.is_empty() || failed {
+            t.shown.clear();
+        } else if done || text.len() >= t.shown.len() {
+            t.shown = text.to_owned();
+        }
+        let status = if failed {
+            format!("{}（回车重试）", snap.error)
+        } else if t.pending {
+            "翻译中…好了就上屏".to_owned()
+        } else if !t.source.is_empty() && !done {
+            "翻译中…".to_owned()
+        } else if !t.source.is_empty() && self.input.is_empty() {
+            "回车上屏 · Shift+回车上屏原文 · Esc 清空".to_owned()
+        } else {
+            String::new()
+        };
+        // 翻译器上跑的是这个会话发的请求才接着轮询（别的输入框的请求不用这边盯）
+        let running =
+            t.requested.as_deref() == Some(snap.source.as_str()) && snap.state == JobState::Running;
+        let wake = if t.due_ms.is_some() || t.pending || running {
+            TRANSLATE_POLL_MS
+        } else {
+            0
+        };
+        let view = TranslateView {
+            source: t.source.clone(),
+            text: t.shown.clone(),
+            done,
+            title: format!("{} 互译：", translator.tag(&t.source)),
+            status,
+        };
+        Some((view, wake))
+    }
+
+    /// 开着的面板，None 是没开。
+    pub fn open_panel(&self) -> Option<Tool> {
+        self.tool.as_ref().map(|t| t.tool)
+    }
+
+    /// 打开工具栏的一页或表情面板（外壳的菜单、按钮用；v + 空格会话自己开）。打到一半的丢掉。
+    pub fn open_tool(&mut self, tool: Tool) -> Frame {
+        self.last_choice = None;
+        self.open_tool_now(tool, String::new());
+        self.frame(true)
+    }
+
+    /// 关上工具栏 / 表情面板。
+    pub fn close_panel(&mut self) -> Frame {
+        self.last_choice = None;
+        self.close_tool();
+        self.frame(true)
+    }
+
+    /// 表情面板快捷键：开着就关上。打了一半的拼音拿来当搜索词（xiao + 快捷键 → 笑相关的 emoji）；
+    /// 已经选了词的，先把打的原样上屏（和回车一样）。
+    pub fn toggle_emoji_panel(&mut self) -> Frame {
+        self.last_choice = None;
+        if matches!(self.open_panel(), Some(Tool::Emoji { .. })) {
+            self.close_tool();
+            return self.frame(true);
+        }
+        let mut query = String::new();
+        if self.composing() {
+            if self.selections.is_empty() {
+                query = self
+                    .remaining()
+                    .chars()
+                    .filter(char::is_ascii_alphabetic)
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect();
+                self.clear();
+            } else {
+                self.commit_input_now();
+            }
+        }
+        self.open_tool_now(Tool::Emoji { symbols: false }, query);
+        self.frame(true)
+    }
+
+    fn opens_toolbar(&self) -> bool {
+        self.config.toolbar
+            && !self.shuangpin()
+            && !self.translating()
+            && !self.expanded
+            && self.input == "v"
+            && self.selections.is_empty()
+    }
+
+    fn open_tool_now(&mut self, tool: Tool, query: String) {
+        if self.composing() {
+            self.clear();
+        }
+        let mut state = ToolState {
+            tool,
+            items: Vec::new(),
+            cursor: 0,
+            query,
+        };
+        let item = |shown: String, commit: String| Candidate {
+            text: shown,
+            commit,
+            kind: CandidateKind::Plain,
+            ..Candidate::default()
+        };
+        match tool {
+            Tool::Menu => {
+                state.items = TOOL_MENU.iter().map(|m| item((*m).to_owned(), String::new())).collect();
+            }
+            Tool::Clipboard => {
+                if self.config.clipboard_history {
+                    state.items = crate::clipboard::history()
+                        .into_iter()
+                        .map(|text| item(tool_line(&text), text))
+                        .collect();
+                }
+            }
+            Tool::Phrases => {
+                if let Some(engine) = self.engine {
+                    // 自定义词按 custom.tsv 的顺序：「编码　词」
+                    state.items = engine
+                        .lexicon()
+                        .custom_phrases()
+                        .into_iter()
+                        .map(|(code, word)| {
+                            let shown = if code.is_empty() {
+                                tool_line(&word)
+                            } else {
+                                format!("{code}\u{3000}{}", tool_line(&word))
+                            };
+                            item(shown, crate::unescape_custom(&word))
+                        })
+                        .collect();
+                }
+            }
+            Tool::Emoji { .. } => {}
+        }
+        self.tool = Some(state);
+        if matches!(tool, Tool::Emoji { .. }) {
+            self.search_emoji();
+        }
+        self.generation += 1;
+    }
+
+    fn close_tool(&mut self) {
+        if self.tool.take().is_some() {
+            self.generation += 1;
+        }
+    }
+
+    /// 按搜索词重新列表情面板，光标回到第一个。
+    fn search_emoji(&mut self) {
+        let engine = self.engine;
+        let Some(state) = self.tool.as_mut() else {
+            return;
+        };
+        let Tool::Emoji { symbols } = state.tool else {
+            return;
+        };
+        let mut texts: Vec<String> = Vec::new();
+        let mut add = |text: String| {
+            if !texts.contains(&text) {
+                texts.push(text);
+            }
+        };
+        if state.query.is_empty() && symbols {
+            crate::symbols::SYMBOLS.iter().for_each(|s| add(s.text.to_owned()));
+        } else {
+            if state.query.is_empty() {
+                crate::recent_emoji::list().into_iter().for_each(&mut add);
+            }
+            // 拼音（经引擎转成中文词）、英文、符号名一起找；引擎还没载入好时只按英文和符号名
+            crate::emoji::panel_search(engine, &state.query, MAX_EMOJI)
+                .into_iter()
+                .for_each(&mut add);
+        }
+        state.items = texts
+            .into_iter()
+            .map(|text| Candidate {
+                commit: text.clone(),
+                emoji: text.clone(),
+                text,
+                kind: CandidateKind::Emoji,
+                ..Candidate::default()
+            })
+            .collect();
+        state.cursor = 0;
+        self.generation += 1;
+    }
+
+    /// 工具栏或表情面板开着时的按键。返回 false 的只有修饰键本身和带 Ctrl / Alt / Super 的组合键
+    /// （收起面板，交给应用：复制粘贴等）。别的键都吃掉，免得打进应用。
+    fn tool_key(&mut self, key: &Key) -> bool {
+        if is_modifier_keysym(key.keysym) {
+            return false;
+        }
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            self.close_tool();
+            return false;
+        }
+        let Some(state) = self.tool.clone() else {
+            return false;
+        };
+        if matches!(state.tool, Tool::Emoji { .. }) {
+            self.emoji_key(key, state);
+        } else {
+            self.list_key(key, state);
+        }
+        true
+    }
+
+    fn list_key(&mut self, key: &Key, state: ToolState) {
+        let n = state.items.len();
+        let page = state.cursor / TOOL_PAGE * TOOL_PAGE;
+        let mut cursor = state.cursor;
+        match key.keysym {
+            keysym::ESCAPE => return self.close_tool(),
+            keysym::BACKSPACE => {
+                // 退格返回上一层，在菜单里就关上
+                if state.tool == Tool::Menu {
+                    self.close_tool();
+                } else {
+                    self.open_tool_now(Tool::Menu, String::new());
+                }
+                return;
+            }
+            keysym::SPACE | keysym::RETURN | keysym::KP_ENTER => {
+                if n == 0 {
+                    self.close_tool();
+                } else {
+                    self.select_tool(cursor.min(n - 1));
+                }
+                return;
+            }
+            keysym::DOWN | keysym::RIGHT if n > 0 => cursor = (cursor + 1).min(n - 1),
+            keysym::UP | keysym::LEFT => cursor = cursor.saturating_sub(1),
+            keysym::PAGE_DOWN | keysym::EQUAL | keysym::PERIOD | keysym::BRACKET_RIGHT => {
+                if page + TOOL_PAGE < n {
+                    cursor = page + TOOL_PAGE;
+                }
+            }
+            keysym::PAGE_UP | keysym::MINUS | keysym::COMMA | keysym::BRACKET_LEFT => {
+                cursor = page.saturating_sub(TOOL_PAGE);
+            }
+            sym => {
+                if let Some(d) = digit_of(sym).filter(|&d| d >= 1) {
+                    if page + d - 1 < n {
+                        self.select_tool(page + d - 1);
+                    }
+                }
+                return;
+            }
+        }
+        if let Some(state) = self.tool.as_mut() {
+            state.cursor = cursor;
+        }
+    }
+
+    fn emoji_key(&mut self, key: &Key, state: ToolState) {
+        let n = state.items.len();
+        let sym = key.keysym;
+        match sym {
+            keysym::ESCAPE => return self.close_tool(),
+            keysym::BACKSPACE => {
+                // 删搜索词的最后一个字母，删空了再按就关上
+                if state.query.is_empty() {
+                    return self.close_tool();
+                }
+                if let Some(state) = self.tool.as_mut() {
+                    state.query.pop();
+                }
+                return self.search_emoji();
+            }
+            keysym::SPACE | keysym::RETURN | keysym::KP_ENTER => {
+                if n == 0 {
+                    self.close_tool();
+                } else {
+                    self.commit_tool(state.cursor.min(n - 1));
+                }
+                return;
+            }
+            _ => {}
+        }
+        if let Some(c) = char::from_u32(sym).filter(char::is_ascii_alphabetic) {
+            if let Some(state) = self.tool.as_mut() {
+                state.query.push(c.to_ascii_lowercase());
+            }
+            return self.search_emoji();
+        }
+        if n == 0 {
+            return;
+        }
+        let screen = GRID_SCREEN;
+        let mut cursor = state.cursor;
+        match sym {
+            keysym::LEFT => cursor = cursor.saturating_sub(1),
+            keysym::RIGHT => cursor = (cursor + 1).min(n - 1),
+            // 第一行再往上：不动（不像展开面板那样收起）
+            keysym::UP if cursor >= GRID_COLS => cursor -= GRID_COLS,
+            keysym::UP => {}
+            keysym::DOWN => {
+                if cursor + GRID_COLS < n {
+                    cursor += GRID_COLS;
+                } else if cursor / GRID_COLS + 1 < n.div_ceil(GRID_COLS) {
+                    cursor = n - 1; // 最后一行不满时落到最后一个
+                }
+            }
+            keysym::PAGE_DOWN | keysym::EQUAL => cursor = (cursor + screen).min(n - 1),
+            keysym::PAGE_UP | keysym::MINUS => {
+                cursor = if cursor >= screen {
+                    cursor - screen
+                } else {
+                    cursor % GRID_COLS
+                };
+            }
+            sym => {
+                if let Some(d) = digit_of(sym).filter(|d| (1..=GRID_COLS).contains(d)) {
+                    let index = cursor / GRID_COLS * GRID_COLS + d - 1;
+                    if index < n {
+                        self.commit_tool(index);
+                    }
+                }
+                return;
+            }
+        }
+        if let Some(state) = self.tool.as_mut() {
+            state.cursor = cursor;
+        }
+    }
+
+    /// 选工具栏里的第 index 项：菜单进下一层，剪贴板、常用语、表情上屏。
+    fn select_tool(&mut self, index: usize) {
+        let Some(state) = self.tool.as_ref() else {
+            return;
+        };
+        if index >= state.items.len() {
+            return;
+        }
+        if state.tool != Tool::Menu {
+            return self.commit_tool(index);
+        }
+        let next = match index {
+            0 => Tool::Clipboard,
+            1 => Tool::Phrases,
+            2 => Tool::Emoji { symbols: true },
+            _ => Tool::Emoji { symbols: false },
+        };
+        self.open_tool_now(next, String::new());
+    }
+
+    fn commit_tool(&mut self, index: usize) {
+        let Some(state) = self.tool.take() else {
+            return;
+        };
+        self.generation += 1;
+        let Some(item) = state.items.get(index) else {
+            return;
+        };
+        let text = item.commit.clone();
+        self.emit(&text);
+        if state.tool == (Tool::Emoji { symbols: false }) {
+            crate::recent_emoji::remember(&text);
+        }
+        self.last_choice = Some(item.clone());
+    }
+
+    /// 工具栏 / 表情面板开着时的 frame：候选是面板的条目，编辑区是搜索词。
+    fn tool_frame(&self, frame: &mut Frame) {
+        let Some(state) = &self.tool else {
+            return;
+        };
+        let n = state.items.len();
+        let emoji = matches!(state.tool, Tool::Emoji { .. });
+        let size = if emoji { GRID_SCREEN } else { TOOL_PAGE };
+        let cursor = state.cursor.min(n.saturating_sub(1));
+        let start = cursor / size * size;
+        frame.panel = if emoji { Panel::Emoji } else { Panel::Tool };
+        frame.cand_start = start;
+        frame.cand_count = n.saturating_sub(start).min(size);
+        frame.cand_cursor = (n > 0).then_some(cursor - start);
+        frame.has_prev = start > 0;
+        frame.has_next = start + size < n;
+        frame.preedit = state.query.clone();
+        frame.preedit_cursor = state.query.len();
+        frame.aux = self.tool_hint(state);
+    }
+
+    fn tool_hint(&self, state: &ToolState) -> String {
+        let empty = state.items.is_empty();
+        match state.tool {
+            Tool::Menu => "工具栏：数字键选择，Esc 关闭".to_owned(),
+            Tool::Clipboard if !empty => "剪贴板：选一条上屏，退格返回".to_owned(),
+            Tool::Clipboard if self.config.clipboard_history => {
+                "剪贴板：还没有记录，复制过的文字会出现在这里".to_owned()
+            }
+            Tool::Clipboard => "剪贴板：没打开，在设置里打开「记录剪贴板历史」".to_owned(),
+            Tool::Phrases if empty => "常用语：还没有，在设置的「自定义词」里添加".to_owned(),
+            Tool::Phrases => "常用语：选一条上屏，退格返回".to_owned(),
+            Tool::Emoji { symbols } => {
+                let name = if symbols { "符号" } else { "表情" };
+                if state.query.is_empty() {
+                    format!("{name}：打拼音或英文搜索，Esc 关闭")
+                } else if empty {
+                    format!("{name}：没找到「{}」", state.query)
+                } else {
+                    format!("{name}：{}", state.query)
+                }
+            }
+        }
+    }
+
+    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，否则是候选（C 接口读这个）。
+    pub fn display_candidates(&mut self) -> &[Candidate] {
+        if self.tool.is_some() {
+            return self.tool.as_ref().map_or(&[], |t| t.items.as_slice());
+        }
+        self.candidates()
+    }
+
+    /// 外壳要上屏一段与拼音无关的字（工具栏、表情面板、语音识别结果）：互译时进原文，
+    /// 否则照会话的规矩（补空格、记上文）放进 frame 的 commit。prev_char 是应用里光标前的字（读不到 None）。
+    pub fn commit_text(&mut self, text: &str, prev_char: Option<char>) -> Frame {
+        self.last_choice = None;
+        self.prev_char = prev_char;
+        self.emit(text);
+        self.frame(true)
+    }
+
+    /// 现在的输入模式。
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// 切到 mode（外部命令、设置里的默认模式、外壳全局的模式）。切到英文时打到一半的原样上屏。
+    pub fn set_mode(&mut self, mode: Mode) -> Frame {
+        self.last_choice = None;
+        self.switch_mode(mode);
+        self.frame(true)
+    }
+
+    fn switch_mode(&mut self, mode: Mode) {
+        if mode == self.mode {
+            return;
+        }
+        if self.mode == Mode::Translate {
+            // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
+            self.commit_source();
+        }
+        if mode == Mode::English && self.composing() {
+            // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
+            self.commit_input_now();
+        }
+        self.mode = mode;
+        self.mode_changed = true;
+    }
+
+    /// 单按 Shift 循环切换：中 → 英 →（有「译」时）译 → 中。
+    fn toggle_mode(&mut self) {
+        let next = match self.mode {
+            Mode::Chinese => Mode::English,
+            Mode::English if self.config.translate_mode => Mode::Translate,
+            Mode::English | Mode::Translate => Mode::Chinese,
+        };
+        self.switch_mode(next);
+    }
+
+    /// Shift 的按下、松开，以及打断单按的别的键。Some：处理完了（handled 是里面的值，
+    /// 单按切换了模式时为 true）；None：接着照常处理（Shift 的按下也接着处理：展开面板要收起）。
+    ///
+    /// 和以前 Linux 外壳的规矩一样：按下时带着 Ctrl / Alt / Super、外壳开着面板时不算；
+    /// 按住不放的自动重复不重新计时；松开时按键码认（没有键码时按符号）；
+    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算。
+    fn shift_key(&mut self, key: &Key) -> Option<bool> {
+        let sym = key.keysym;
+        let is_shift = sym == keysym::SHIFT_L || sym == keysym::SHIFT_R;
+        if !key.release {
+            if !is_shift {
+                self.shift.down = None;
+                return None;
+            }
+            let wanted = match self.config.shift_toggle {
+                ShiftToggle::Both => true,
+                ShiftToggle::Left => sym == keysym::SHIFT_L,
+                ShiftToggle::Right => sym == keysym::SHIFT_R,
+                ShiftToggle::Off => false,
+            };
+            let other = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0;
+            let panel = key.hints & key_hints::PANEL_OPEN != 0 || self.tool.is_some();
+            if wanted && !other && !panel {
+                let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
+                if !held {
+                    self.shift.down = Some((sym, key.code, key.time_ms));
+                }
+            } else {
+                self.shift.down = None;
+            }
+            return None;
+        }
+        let Some((down_sym, down_code, down_at)) = self.shift.down else {
+            return is_shift.then_some(false);
+        };
+        let same = if key.code != 0 && down_code != 0 {
+            key.code == down_code
+        } else {
+            sym == down_sym
+        };
+        if !same {
+            if !is_shift {
+                self.shift.down = None;
+                return None;
+            }
+            return Some(false);
+        }
+        self.shift.down = None;
+        let held_ms = key.time_ms.saturating_sub(down_at);
+        if key.time_ms != 0 && down_at != 0 && held_ms > u64::from(self.config.shift_tap_ms) {
+            return Some(false);
+        }
+        self.toggle_mode();
+        Some(true)
+    }
+
+    /// 英文模式、没在打字：按键交给应用；汉字后面打字母、数字要补空格时自己连空格一起上屏。
+    fn english_key(&mut self, key: &Key) -> bool {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return false;
+        }
+        let Some(c) = char::from_u32(key.keysym).filter(|c| c.is_ascii_graphic()) else {
+            return false;
+        };
+        if c.is_ascii_alphanumeric() && self.space_before(c) {
+            self.emit(&c.to_string());
+            return true;
+        }
+        self.last_char = Some(c);
+        false
+    }
+
+    /// 字母、隔音符以外的可见 ASCII 字符（标点、符号、数字），会话的选词、翻页规则都没用上它时。
+    ///
+    /// - 正在输入：先上屏候选（光标停在句首词上时接着选，直到整句上屏），再上屏这个字符
+    ///   （全角样式下有中文标点的换成中文标点，数字后面的保持英文）
+    /// - 没在输入：有中文标点的换成中文标点上屏；数字前面要补空格（汉字后面打数字）就自己上屏；
+    ///   别的交给应用
+    fn symbol_key(&mut self, c: char, key: &Key) -> bool {
+        if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
+            return false;
+        }
+        if self.composing() {
+            for _ in 0..16 {
+                if !self.composing() {
+                    break;
+                }
+                self.commit_current();
+            }
+            let prev = self.last_char;
+            let text = self.punct_text(c, prev).unwrap_or_else(|| c.to_string());
+            self.emit(&text);
+            return true;
+        }
+        if self.translating() {
+            // 互译时打的字都进原文：数字、没有中文写法的符号、数字后面的点（3.14）也是
+            let text = self.punct_text(c, self.last_char).unwrap_or_else(|| c.to_string());
+            self.emit(&text);
+            return true;
+        }
+        if c.is_ascii_digit() {
+            if self.space_before(c) {
+                self.emit(&c.to_string());
+                return true;
+            }
+            self.last_char = Some(c);
+            return false;
+        }
+        match self.punct_text(c, self.last_char) {
+            Some(text) => {
+                self.emit(&text);
+                true
+            }
+            None => {
+                self.last_char = Some(c);
+                false
+            }
+        }
+    }
+
+    /// c 在全角样式下换成的中文标点；半角样式、数字后面、没有中文标点的是 None。
+    fn punct_text(&mut self, c: char, prev: Option<char>) -> Option<String> {
+        crate::symbols::punct_with(c, self.config.punct_style, prev, &mut self.quotes).map(str::to_owned)
+    }
+
+    /// 上屏 text 之前要不要补一个空格（汉字和字母、数字之间，设置里的 AutoSpace）。
+    /// 只看应用里光标前那个字，读不到（外壳没给）、密码框网址框邮箱框都不补。
+    fn space_before(&self, first: char) -> bool {
+        self.config.auto_space != 0
+            && self.hints & key_hints::NO_AUTO_SPACE == 0
+            && self
+                .prev_char
+                .is_some_and(|prev| crate::autospace::needs_space(prev, first, self.config.auto_space))
+    }
+
+    /// 上屏一段字（接在这次调用已经要上屏的后面）：要补空格就补，记下光标前的字和上文。
+    fn emit(&mut self, text: &str) {
+        let Some(first) = text.chars().next() else {
+            return;
+        };
+        if self.translating() {
+            // 互译：上屏的字攒成原文，过一会儿（句末标点立刻）发请求
+            self.translation.source.push_str(text);
+            self.source_changed(ends_sentence(text));
+            self.remember(text);
+            return;
+        }
+        let spaced = if self.space_before(first) {
+            format!(" {text}")
+        } else {
+            text.to_owned()
+        };
+        self.pending.get_or_insert_with(String::new).push_str(&spaced);
+        self.remember(text);
+    }
+
+    /// 上屏了 text（或进了原文）：记下光标前的字和上文。
+    fn remember(&mut self, text: &str) {
+        let last = text.chars().last();
+        self.prev_char = last;
+        self.last_char = last;
+        self.context = char_tail(&(self.context.clone() + text), CONTEXT_CHARS);
+        self.fresh = false;
+    }
+
+    /// 直接上屏（译文、原文），不进原文、不补空格。
+    fn push_commit(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        self.pending.get_or_insert_with(String::new).push_str(text);
+        self.remember(text);
     }
 
     /// 正在输入时的键（字母、隔音符除外）。Some：处理完了（handled 是里面的值）；
@@ -531,6 +1619,12 @@ impl<'e> Session<'e> {
                 self.clear();
                 return Some(true);
             }
+            keysym::SPACE if self.opens_toolbar() => {
+                // 只打了一个 v 再按空格：打开工具栏（vim、vscode 这些照常打字，v1+2*3 照常算算式）
+                self.clear();
+                self.open_tool(Tool::Menu);
+                return Some(true);
+            }
             keysym::SPACE => return Some(self.commit_current()),
             keysym::RETURN | keysym::KP_ENTER => {
                 // 回车：已选的词 + 原始字母上屏
@@ -539,8 +1633,8 @@ impl<'e> Session<'e> {
             }
             _ => {}
         }
-        if self.config.calculator && !self.shuangpin() {
-            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
+        if self.config.calculator {
+            // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）。双拼时是大写 V
             if sym == keysym::EQUAL && self.calc_active() && self.input.len() > 1 {
                 // = 上屏计算结果（第一个候选）
                 return Some(self.commit_current());
@@ -594,7 +1688,8 @@ impl<'e> Session<'e> {
                 KeyAction::NextPage => self.next_page(),
                 KeyAction::PrevCandidate => self.move_cursor(true),
                 KeyAction::NextCandidate => self.move_cursor(false),
-                KeyAction::None => {}
+                // OBSERVE 在 key() 里就返回了，到不了这里
+                KeyAction::None | KeyAction::Observe => {}
             }
             return Some(true);
         }
@@ -921,12 +2016,18 @@ impl<'e> Session<'e> {
 
     /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
     /// 和回车一样也记一次选词。
+    ///
+    /// 互译时 commit_pending 的拼音先进原文，原文再原样上屏（切走输入法、换输入框）；
+    /// 不上屏时互译攒着的原文不动（外壳上屏以后清编辑区也调这个），要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
         if commit_pending && self.composing() {
             self.commit_input_now();
         } else {
             self.clear();
+        }
+        if commit_pending && !self.translation.source.is_empty() {
+            self.commit_source();
         }
         self.frame(true)
     }
@@ -939,10 +2040,24 @@ impl<'e> Session<'e> {
             handled,
             commit: self.pending.take(),
             forgot: std::mem::take(&mut self.forgot),
+            learned: std::mem::take(&mut self.learned),
+            mode: self.mode,
+            mode_changed: std::mem::take(&mut self.mode_changed),
+            translate: None,
+            wake_after_ms: 0,
+            aux: String::new(),
             preedit_cursor: preedit.len(),
             preedit,
             ..Frame::default()
         };
+        if self.tool.is_some() {
+            self.tool_frame(&mut frame);
+            return frame;
+        }
+        if let Some((view, wake)) = self.translate_view() {
+            frame.translate = Some(view);
+            frame.wake_after_ms = wake;
+        }
         if n == 0 {
             return frame;
         }
@@ -968,6 +2083,15 @@ impl<'e> Session<'e> {
 
     /// 候选框的状态（过渡：fcitx5 外壳按它摆自己的候选列表）。
     pub fn view(&mut self) -> View {
+        if let Some(state) = &self.tool {
+            let emoji = matches!(state.tool, Tool::Emoji { .. });
+            return View {
+                page: state.cursor / TOOL_PAGE,
+                cursor: state.cursor,
+                expanded: emoji,
+                grid_cursor: state.cursor,
+            };
+        }
         self.candidates();
         View {
             page: self.page,
@@ -980,10 +2104,13 @@ impl<'e> Session<'e> {
     /// 候选框里显示的候选（一页，或展开面板的一屏）。
     pub fn shown(&mut self) -> &[Candidate] {
         let frame = self.frame(false);
-        // frame 会取走要上屏的字；这里只是看，放回去
+        // frame 会取走要上屏的字和几个标记；这里只是看，放回去
         self.pending = frame.commit;
         self.forgot = frame.forgot;
-        &self.candidates[frame.cand_start..frame.cand_start + frame.cand_count]
+        self.learned = frame.learned;
+        self.mode_changed = frame.mode_changed;
+        let (start, count) = (frame.cand_start, frame.cand_count);
+        &self.display_candidates()[start..start + count]
     }
 
     /// 上一次调用上屏的字是选哪个候选来的；原样上屏输入、没上屏是 None。
@@ -1090,19 +2217,32 @@ impl<'e> Session<'e> {
         let Some(now) = (self.clock)() else {
             return;
         };
-        let extra = crate::datetime::candidates(&key, &now)
+        let extra: Vec<Candidate> = crate::datetime::candidates(&key, &now)
             .into_iter()
-            .map(|text| Candidate::plain(text, input.len()));
+            .map(|text| Candidate::plain(text, input.len()))
+            .collect();
+        if extra.is_empty() {
+            return;
+        }
+        // 写法是给「时间」这个词的：接着前文打时它可能不在第一（日期后面接 shijian，
+        // 语料里「…日事件」多，事件排第一），先把它挪到第一，写法再跟在后面
+        if let Some(word) = crate::datetime::trigger_word(&key) {
+            if let Some(at) = all.iter().position(|c| c.text == word).filter(|&at| at > 0) {
+                let trigger = all.remove(at);
+                all.insert(0, trigger);
+            }
+        }
         all.splice(1..1, extra);
     }
 
-    /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。双拼时 v 是韵母键，不开。
+    /// V 模式（计算器）：没选过词、v 开头、后面只有数字和运算符。
+    /// 双拼时 v 是声母键（v1 是「选第一个候选」），改用大写 V（#160）。
     fn calc_active(&self) -> bool {
-        let shuangpin = self.engine.is_some_and(|e| e.config().shuangpin);
-        if !self.config.calculator || shuangpin || !self.selections.is_empty() {
+        if !self.config.calculator || !self.selections.is_empty() {
             return false;
         }
-        let Some(rest) = self.input.strip_prefix('v') else {
+        let prefix = if self.shuangpin() { 'V' } else { 'v' };
+        let Some(rest) = self.input.strip_prefix(prefix) else {
             return false;
         };
         rest.bytes()
@@ -1110,11 +2250,19 @@ impl<'e> Session<'e> {
     }
 
     /// 还没选词那部分输入的显示：全拼分音节（nihao → ni hao），双拼显示成全拼
-    /// （vsgo → zhong'guo），和微信输入法一样。分不出来就原样。
+    /// （vsgo → zhong'guo），和微信输入法一样；设置了 `shuangpin_keys` 时双拼显示打的键。
+    /// 分不出来就原样。
     fn segmented_remaining(&mut self) -> String {
         let input = self.remaining().to_owned();
+        if self.calc_active() {
+            // 算式原样显示（双拼时不能当成按键换成全拼）
+            return input;
+        }
         if let Some(engine) = self.engine {
             if engine.config().shuangpin {
+                if self.config.shuangpin_keys {
+                    return input;
+                }
                 return engine
                     .shuangpin_display(&input)
                     .filter(|shown| !shown.is_empty())
@@ -1169,6 +2317,13 @@ impl<'e> Session<'e> {
     /// 序号不对时什么也不做（handled = false）。过渡：外壳的鼠标点候选、展开面板点一行用。
     pub fn choose(&mut self, index: usize) -> Frame {
         self.last_choice = None;
+        if self.tool.is_some() {
+            let ok = self.tool.as_ref().is_some_and(|t| index < t.items.len());
+            if ok {
+                self.select_tool(index);
+            }
+            return self.frame(ok);
+        }
         let handled = self.choose_now(index);
         self.frame(handled)
     }
@@ -1176,9 +2331,15 @@ impl<'e> Session<'e> {
     /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
     pub fn select(&mut self, index: usize) -> Frame {
         self.last_choice = None;
+        if self.tool.is_some() {
+            let shown = self.frame(false);
+            return self.choose(shown.cand_start + index);
+        }
         let shown = self.frame(false);
         self.pending = shown.commit;
         self.forgot = shown.forgot;
+        self.learned = shown.learned;
+        self.mode_changed = shown.mode_changed;
         let handled = index < shown.cand_count && self.choose_now(shown.cand_start + index);
         self.frame(handled)
     }
@@ -1192,6 +2353,8 @@ impl<'e> Session<'e> {
             CandidateKind::Emoji => {
                 let text = self.selected_text() + &chosen.commit;
                 self.finish(text);
+                // 打字推荐的 emoji：记进最近用过（表情面板里排最前）
+                crate::recent_emoji::remember(&chosen.emoji);
                 self.last_choice = Some(chosen);
             }
             CandidateKind::Plain if chosen.consumed >= remaining => {
@@ -1232,6 +2395,7 @@ impl<'e> Session<'e> {
     fn commit_with(&mut self, tail: &str, tail_pinyin: &str) {
         let text = self.selected_text() + tail;
         if self.engine.is_some() && !text.is_empty() {
+            self.learned = true;
             if !tail.is_empty() {
                 // 带上拼音：选够次数后引擎会自动把这个词收进用户词库
                 self.learn(tail, tail_pinyin);
@@ -1278,7 +2442,7 @@ impl<'e> Session<'e> {
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。
     fn finish(&mut self, text: String) {
         self.clear();
-        self.pending = (!text.is_empty()).then_some(text);
+        self.emit(&text);
     }
 
     /// 选了句首词，压进已选栈（测试里不带引擎时用）。
@@ -1350,6 +2514,57 @@ fn add_keycap(all: &mut Vec<Candidate>, input_len: usize, page_size: usize) {
 }
 
 /// 只留尾部 max_bytes 字节，起点对齐到字符边界。
+/// text 最后 max_chars 个字。
+fn char_tail(text: &str, max_chars: usize) -> String {
+    let skip = text.chars().count().saturating_sub(max_chars);
+    text.chars().skip(skip).collect()
+}
+
+/// 工具栏列表里一行显示的样子：换行显示成 ⏎，制表符换成空格，太长的截断（40 个字）。
+fn tool_line(text: &str) -> String {
+    const MAX: usize = 40;
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == MAX {
+            out.push('…');
+            break;
+        }
+        match c {
+            '\n' => out.push('⏎'),
+            '\t' | '\r' => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// 数字键（主键盘、小键盘）的数字。
+fn digit_of(sym: u32) -> Option<usize> {
+    match sym {
+        0x30..=0x39 => Some((sym - 0x30) as usize),
+        keysym::KP_0..=0xffb9 => Some((sym - keysym::KP_0) as usize),
+        _ => None,
+    }
+}
+
+/// 句末（。！？…. ! ? 换行）：原文打到这里立刻发翻译请求。
+fn ends_sentence(text: &str) -> bool {
+    ["。", "！", "？", "…", ".", "!", "?", "\n"]
+        .iter()
+        .any(|end| text.ends_with(end))
+}
+
+/// 单独的修饰键（Shift、Ctrl、Alt、Super、CapsLock、AltGr……）。
+fn is_modifier_keysym(sym: u32) -> bool {
+    (0xffe1..=0xffee).contains(&sym) || (0xfe01..=0xfe13).contains(&sym)
+}
+
+/// 字母、空格以外的可见 ASCII 字符（标点、符号、数字）。
+fn visible_symbol(sym: u32) -> Option<char> {
+    let c = char::from_u32(sym).filter(|c| c.is_ascii_graphic())?;
+    (!c.is_ascii_alphabetic()).then_some(c)
+}
+
 fn utf8_tail(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;
@@ -1405,10 +2620,11 @@ mod tests {
     fn letters_and_apostrophe() {
         let session = typed("xi'an");
         assert_eq!(session.input(), "xi'an");
-        // 开头的隔音符不进编辑区
+        // 开头的隔音符不进编辑区：没在打字时它是单引号，换成中文引号上屏
         let mut session = Session::new();
-        assert!(!session.key(&Key::char('\'')).handled);
+        let frame = session.key(&Key::char('\''));
         assert!(!session.composing());
+        assert_eq!(frame.commit.as_deref(), Some("‘"));
     }
 
     #[test]

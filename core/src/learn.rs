@@ -110,11 +110,17 @@ pub struct LearnedLm<'a> {
     pub pairs: &'a UserPairs,
     pub start: Option<&'a str>,
     pub at_ms: u64,
+    /// 光标前已经有字（接着前文打）：第一个词不是句首，不加基础模型的句首分。
+    pub mid_sentence: bool,
 }
 
 impl LanguageModel for LearnedLm<'_> {
     fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
-        let base = self.base.score(prev, cur);
+        let base = if prev.is_none() && self.mid_sentence {
+            0.0
+        } else {
+            self.base.score(prev, cur)
+        };
         match prev.or(self.start) {
             Some(prev) => base + self.pairs.bonus(prev, cur, self.at_ms),
             None => base,
@@ -164,10 +170,7 @@ pub fn save_history<P: AsRef<Path>>(
         ));
     }
     // 先写临时文件再改名，写到一半断电也不会把旧文件弄坏
-    let tmp = path.with_extension("tsv.tmp");
-    std::fs::write(&tmp, out).with_context(|| format!("写入 {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("改名为 {}", path.display()))?;
-    Ok(())
+    crate::fsutil::write_atomic(path, out.as_bytes())
 }
 
 /// 读回 [`save_history`] 写的文件，返回读到的条数。坏行跳过。
@@ -234,6 +237,7 @@ mod tests {
             pairs: &pairs,
             start: Some("发"),
             at_ms: 1000,
+            mid_sentence: false,
         };
         assert!(lm.score(Some("发"), "给") > lm.score(Some("发"), "个"));
         // 句首没有前一个词时用 start
