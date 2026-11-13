@@ -25,12 +25,16 @@ cargo run -p wowtype-core --bin wowtype-demo -- --lexicon lexicon.tsv nihao
 不会出现"打到一半没有候选"。
 
 支持**模糊音**（默认关闭）：`--fuzzy`（插件里在设置界面打开，或 `WOWTYPE_FUZZY=1`）开启后，
-`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 12 组，可以分别开关
+`zidao` → 知道（zh/z）、`sangdian` → 商店（ang/an）。一共 16 组，可以分别开关
 （`Engine::set_fuzzy_groups` / `wowtype_engine_set_fuzzy_groups`，位掩码见 `syllable::fuzzy`）：
-z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong，默认开平翘舌和前后鼻音这 8 组（un=ong 默认关）。
-模糊索引只建一份：按「全部分组都打开」归并声母、韵母（`syllable::fuzzy_key`），查到以后再用
-`fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了（n 和 r 都归到 l，但 n/r 本身不算一组，会被过滤掉）。
-改开关不用重建 55 万词的索引。
+z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong，默认开平翘舌和前后鼻音这 8 组；
+un=ong 和后加的 an=ai、huang=wang、un=iong（jun=jiong、yun=yong）、eng=ong 默认关（后四组微信输入法也有）。
+两个音节算相同：声母最多换一步、韵母最多换一步，另外可以整个音节换一次（huang=wang 只能这么表达）。
+所以 `zeng` 开着 z=zh、eng=ong 能出「中」，`wanse` 开着 huang=wang、an=ang 能出「黄色」；
+n=l、r=l 都开着 n 也不等于 r，an=ai、an=ang 都开着 ai 也不等于 ang。
+模糊索引只建一份：键是「全部分组都打开」时能互相换的那一类音节（`syllable::fuzzy_key`），查到以后再用
+`fuzzy_groups_between` 逐个音节检查用到的分组是不是都打开了。每个音节记着类和「位置」（从类的起点换过来经过的分组），
+两个音节之间的分组就是位置的异或，查一次表，不用拆声母韵母。改开关不用重建 55 万词的索引。
 模糊读音和精确读音一起参与组句、排序，不是精确读音没词才退过去：`zong` 也列出「中」，
 `dansi` 首选「但是」而不是「单丝」。每用一处模糊音（一个声母或韵母）代价多 `fuzzy_penalty`（默认 2.5），
 差不多常用时精确读音在前。
@@ -378,6 +382,7 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 
 最慢的都是 20 个字母的长句（xiangquzijieshangban）。上限从 18 加到 1000，p95 只多 1 ms 左右。
 #43 在 M2 上测到的「300 比 18 慢两倍多、长句单键 25–45 ms」在这里看不到，所以先不做「先算一页、翻页再补」。
+上面都是模糊音关着（只有兜底）；开着测加 `--fuzzy 0x7C7`（默认的 8 组）或 `--fuzzy 0xFFFF`（全部 16 组）。
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
 

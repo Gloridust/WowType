@@ -285,6 +285,16 @@ WowtypeEngineHandle *loadCore(const std::string &userDict, std::string lexicon) 
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
+    // 用户自己训的领域词级模型（可选），和 words.lm 混着用
+    if (const std::string domain = findDataFile("WOWTYPE_DOMAIN_LM", "words.domain.lm");
+        !domain.empty()) {
+        if (wowtype_engine_set_domain_lm(core, domain.c_str()) == 0) {
+            WLOG_I() << "WowType: 载入领域词级模型 " << domain;
+        } else {
+            WLOG_W() << "WowType: 领域词级模型载入失败 " << domain << "："
+                         << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        }
+    }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
@@ -855,7 +865,9 @@ void WowtypeEngine::applyConfig() {
                    (*config_.fuzzyFH ? 16u : 0u) | (*config_.fuzzyRL ? 32u : 0u) |
                    (*config_.fuzzyAn ? 64u : 0u) | (*config_.fuzzyEn ? 128u : 0u) |
                    (*config_.fuzzyIn ? 256u : 0u) | (*config_.fuzzyIan ? 512u : 0u) |
-                   (*config_.fuzzyUan ? 1024u : 0u) | (*config_.fuzzyUn ? 2048u : 0u);
+                   (*config_.fuzzyUan ? 1024u : 0u) | (*config_.fuzzyUn ? 2048u : 0u) |
+                   (*config_.fuzzyAnAi ? 4096u : 0u) | (*config_.fuzzyHuangWang ? 8192u : 0u) |
+                   (*config_.fuzzyUnIong ? 16384u : 0u) | (*config_.fuzzyEngOng ? 32768u : 0u);
     if (const char *env = std::getenv("WOWTYPE_FUZZY_GROUPS"); env && *env) {
         fuzzyGroups_ = static_cast<unsigned>(std::strtoul(env, nullptr, 0));
     }

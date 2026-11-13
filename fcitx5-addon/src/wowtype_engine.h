@@ -208,6 +208,10 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> fuzzyIan{this, "FuzzyIan", "模糊音：ian = iang", true};
     fcitx::Option<bool> fuzzyUan{this, "FuzzyUan", "模糊音：uan = uang", true};
     fcitx::Option<bool> fuzzyUn{this, "FuzzyUn", "模糊音：un = ong", false};
+    fcitx::Option<bool> fuzzyAnAi{this, "FuzzyAnAi", "模糊音：an = ai", false};
+    fcitx::Option<bool> fuzzyHuangWang{this, "FuzzyHuangWang", "模糊音：huang = wang", false};
+    fcitx::Option<bool> fuzzyUnIong{this, "FuzzyUnIong", "模糊音：un = iong", false};
+    fcitx::Option<bool> fuzzyEngOng{this, "FuzzyEngOng", "模糊音：eng = ong", false};
     fcitx::Option<bool> typo{this, "TypoCorrection", "按错键自动纠正", true};
     fcitx::Option<bool> rareExt{this, "RareExtChars", "候选末尾列出扩展 B 区以后的生僻字", false};
     fcitx::Option<WowtypeInputScheme, fcitx::NoConstrain<WowtypeInputScheme>,

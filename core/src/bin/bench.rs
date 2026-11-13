@@ -2,10 +2,12 @@
 //!
 //! 合成词库：cargo run --release -p wowtype-core --bin wowtype-bench
 //! 真实词库：cargo run --release -p wowtype-core --bin wowtype-bench -- --lexicon lexicon.tsv
+//! 混上领域词级模型：... -- --lexicon lexicon.tsv --lm words.lm --domain-lm words.domain.lm
 //! 逐键延迟：... -- --lexicon lexicon.tsv --typing cases.tsv
 //!   （cases.tsv 每行第一列是输入，逐个前缀模拟打字，统计每次按键的耗时分布）
 //!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
 //!   --s2t s2t.tsv 载入简繁表并打开繁体输出
+//!   --fuzzy 分组 打开模糊音（分组是 syllable::fuzzy 的位掩码，比如 0xFFFF 是全部分组）
 //! 五笔：... -- --lexicon lexicon.tsv --wubi wubi86.tsv
 //!   码表载入耗时和内存；按输入会话逐键打码表里的码（四码唯一上屏、顶字都照真的走）和几句 z 临时拼音，
 //!   统计每次按键（会话处理 + 取这一页候选）的耗时分布
@@ -23,10 +25,12 @@ fn main() {
     let mut total = 100_000usize;
     let mut typing_path: Option<String> = None;
     let mut no_prefix = false;
+    let mut domain_lm_path: Option<String> = None;
     let mut max_candidates: Option<usize> = None;
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
     let mut s2t_path: Option<String> = None;
+    let mut fuzzy_groups: Option<u32> = None;
     let mut wubi_path: Option<String> = None;
 
     let mut i = 1;
@@ -45,9 +49,20 @@ fn main() {
                 i += 1;
                 lm_path = args.get(i).cloned();
             }
+            "--domain-lm" => {
+                i += 1;
+                domain_lm_path = args.get(i).cloned();
+            }
             "--nnlm" => {
                 i += 1;
                 nnlm_path = args.get(i).cloned();
+            }
+            "--fuzzy" => {
+                i += 1;
+                fuzzy_groups = args.get(i).and_then(|v| {
+                    v.strip_prefix("0x")
+                        .map_or_else(|| v.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
+                });
             }
             "--max" => {
                 i += 1;
@@ -118,6 +133,15 @@ fn main() {
         }
         None => Arc::new(BigramLm::default()),
     };
+    // 和 Engine::set_domain_lm 一样混（这里还没有引擎）
+    let lm: Arc<dyn wowtype_core::LanguageModel> = match &domain_lm_path {
+        Some(path) => Arc::new(wowtype_core::lm::MixedLm::new(
+            lm,
+            wowtype_core::lm::load_lm(path).expect("载入领域模型"),
+            wowtype_core::lm::DOMAIN_LM_WEIGHT,
+        )),
+        None => lm,
+    };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut config = EngineConfig::default();
     if let Some(max) = max_candidates {
@@ -125,6 +149,10 @@ fn main() {
     }
     if no_prefix {
         config.prefix_candidates = 0;
+    }
+    if let Some(groups) = fuzzy_groups {
+        config.fuzzy = true;
+        config.fuzzy_groups = groups & wowtype_core::syllable::fuzzy::ALL;
     }
     config.traditional = s2t_path.is_some();
     let engine = Engine::new(lex, lm).with_config(config);

@@ -89,6 +89,17 @@ int main(int argc, char **argv) {
     check(c && wowtype_candidates_len(c) > 0, "predict_next 有结果");
     wowtype_candidates_free(c);
 
+    /* 领域模型：设两次是换掉不是叠着混；混上以后联想照样按通用模型；设错的路径不动原来的 */
+    if (*bigram) {
+        check(wowtype_engine_set_domain_lm(e, bigram) == 0, "set_domain_lm");
+        check(wowtype_engine_set_domain_lm(e, bigram) == 0, "set_domain_lm 再设一次");
+        c = wowtype_engine_predict_next(e, "今天", 3);
+        check(c && wowtype_candidates_len(c) > 0, "混上领域模型后 predict_next 有结果");
+        wowtype_candidates_free(c);
+    }
+    check(wowtype_engine_set_domain_lm(e, "/nonexistent/words.domain.lm") == -1, "set_domain_lm 文件不在返回 -1");
+    check(wowtype_engine_set_domain_lm(e, NULL) == 0, "set_domain_lm(NULL) 去掉");
+
     check(wowtype_engine_add_user_word(e, "wo wo te", "我特") == 0, "add_user_word");
     c = wowtype_engine_input(e, "wowote");
     check(c && has_candidate(c, "我特"), "user word 可输入");
