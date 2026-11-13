@@ -53,6 +53,13 @@ build_deb() { # <包名> <版本> <架构> <依赖> <简介> <详细说明>
 data_copyright() { # <数据目录>：copyright 里词库那几段
   echo "Files: usr/share/wowtype/lexicon.tsv usr/share/wowtype/english.txt"
   echo "Comment: 转换自雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），见 DATA-SOURCE.txt"
+  # make-data.sh 用了可选数据源（WOWTYPE_DATA_EXTRAS）时，来源、许可证全文和署名都写在 SOURCE.txt 里
+  local extras
+  extras=$(sed -n 's/^额外数据源：\([a-z ]*\).*/\1/p' "$1/SOURCE.txt")
+  if [[ -n "$extras" ]]; then
+    echo " lexicon.tsv 另用了这些数据源：${extras}（corpus = 语料词频，jieba = jieba/pypinyin，MIT；"
+    echo " cedict = CC-CEDICT，CC BY-SA 4.0），来源、许可证和署名见 DATA-SOURCE.txt 的「额外数据源」一节。"
+  fi
   echo "License: GPL-3.0"
   sed 's/^$/./; s/^/ /' "$1/LICENSE"
   echo
