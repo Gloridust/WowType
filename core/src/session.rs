@@ -306,6 +306,8 @@ fn calc_char(sym: u32) -> Option<char> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     pub text: String,
+    /// 词库里的写法：开着繁体时 text 是转换过的字，拼成词去学时用这个。空的当和 text 一样。
+    pub plain: String,
     pub pinyin: String,
     /// 用掉的原始输入字节数。
     pub bytes: usize,
@@ -1959,6 +1961,13 @@ impl<'e> Session<'e> {
             return false;
         }
         let pick = if last { chars[chars.len() - 1] } else { chars[0] };
+        // 开着繁体时也取词库写法里的同一个字（字数对不上就不知道是哪个，留空）
+        let plain: Vec<char> = self.plain_of(&chosen.text).chars().collect();
+        let plain = if plain.len() == chars.len() {
+            (if last { plain[plain.len() - 1] } else { plain[0] }).to_string()
+        } else {
+            String::new()
+        };
         // 拼音按音节对上字数时带上这个字的读音（以后拼成词能学），对不上就不带
         let syllables: Vec<&str> = chosen.pinyin.split_whitespace().collect();
         let pinyin = if syllables.len() == chars.len() {
@@ -1970,6 +1979,7 @@ impl<'e> Session<'e> {
         if chosen.consumed < self.remaining().len() {
             self.push_selection(Selection {
                 text: pick.to_string(),
+                plain,
                 pinyin,
                 bytes: chosen.consumed,
             });
@@ -2366,6 +2376,7 @@ impl<'e> Session<'e> {
                 // 句首词：先放进已选栈，剩下的拼音继续选
                 self.learn(&chosen.text, &chosen.pinyin);
                 self.push_selection(Selection {
+                    plain: self.plain_of(&chosen.text),
                     text: chosen.text,
                     pinyin: chosen.pinyin,
                     bytes: chosen.consumed,
@@ -2414,7 +2425,14 @@ impl<'e> Session<'e> {
                     pinyin.push(' ');
                 }
                 pinyin.push_str(tail_pinyin);
-                self.learn_composed(&text, &pinyin);
+                // 学词库里的写法（开着繁体时上屏的是转换过的字）
+                let mut plain: String = self
+                    .selections
+                    .iter()
+                    .map(|s| if s.plain.is_empty() { s.text.as_str() } else { s.plain.as_str() })
+                    .collect();
+                plain += &self.plain_of(tail);
+                self.learn_composed(&plain, &pinyin);
             }
         }
         self.finish(text);
@@ -2428,6 +2446,12 @@ impl<'e> Session<'e> {
         let context = self.context.clone() + &self.selected_text();
         engine.set_context(utf8_tail(&context, CONTEXT_BYTES));
         engine.record_selection_with_pinyin(word, Some(pinyin).filter(|p| !p.is_empty()));
+    }
+
+    /// 候选在词库里的写法（开着繁体时候选是转换过的），见 [`Engine::lexicon_form`]。
+    fn plain_of(&self, shown: &str) -> String {
+        self.engine
+            .map_or_else(|| shown.to_string(), |engine| engine.lexicon_form(shown))
     }
 
     /// 记分几次选出来拼成的词，见 [`Engine::record_composed_word`]。上文是还没选词时的上文。
@@ -2658,6 +2682,7 @@ mod tests {
             text: "你好".into(),
             pinyin: "ni hao".into(),
             bytes: 5,
+            ..Default::default()
         });
         let frame = session.reset(true);
         assert_eq!(frame.commit.as_deref(), Some("你好zhongguo"));
@@ -2673,6 +2698,7 @@ mod tests {
             text: "你好".into(),
             pinyin: "ni hao".into(),
             bytes: 5,
+            ..Default::default()
         });
         let frame = session.frame(true);
         assert_eq!(frame.preedit, "你好ma");

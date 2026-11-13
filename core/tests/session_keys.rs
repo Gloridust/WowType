@@ -18,7 +18,7 @@ use wowtype_core::lm::BigramLm;
 use wowtype_core::session::{
     keysym, modifier, CandidateKind, Config, Frame, Key, Panel, PunctStyle, Selection, Session,
 };
-use wowtype_core::{Engine, Lexicon, MemoryLexicon};
+use wowtype_core::{Converter, Engine, Lexicon, MemoryLexicon};
 
 /// 按一串键，和 key_harness 的 type() 一样：<sp> <bs> <cr> <esc> 等是特殊键，其余按字符。
 fn type_keys(session: &mut Session, keys: &str) -> Frame {
@@ -72,6 +72,7 @@ fn select_prefix(session: &mut Session, text: &str, pinyin: &str, bytes: usize) 
         text: text.into(),
         pinyin: pinyin.into(),
         bytes,
+        ..Default::default()
     });
 }
 
@@ -560,6 +561,53 @@ fn choose_sentence_start_then_the_rest() {
     assert_eq!(frame.commit.as_deref(), Some("你好中国"));
     assert!(frame.preedit.is_empty());
     assert!(!session.composing());
+}
+
+#[test]
+fn traditional_learns_the_lexicon_form() {
+    // 开着繁体学到的词要按词库的写法（简体）收：关掉繁体照样能用，开着时只转一次。
+    // 「萬里」再转一次会变成「萬裏」（里 -> 裏），收成繁体的话就会显示错。
+    // 词库里 万、里 都不是首选，没学之前 wanli 出的是「晚理」
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("wan\t晚\t9000\nwan\t万\t100\nli\t理\t9000\nli\t里\t100\n")
+            .unwrap(),
+    );
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.install_converter(Converter::from_tsv_str("万\t萬\n里\t裏\n万里\t萬里\n").unwrap());
+    engine.set_traditional(true);
+    let shown = |engine: &Engine| {
+        let mut session = with_engine_ref(engine);
+        type_keys(&mut session, "wanli");
+        texts(&mut session)
+    };
+    assert_eq!(shown(&engine)[0], "晚理");
+    {
+        // 一个字一个字选出来（萬、裏），拼成的词马上收进用户词库
+        let mut session = with_engine_ref(&engine);
+        type_keys(&mut session, "wanli");
+        choose_text(&mut session, "萬");
+        let frame = choose_text(&mut session, "裏");
+        assert_eq!(frame.commit.as_deref(), Some("萬裏"), "上屏的是候选显示的字");
+    }
+    let learned: Vec<String> = engine.user_words().into_iter().map(|(_, w, _)| w).collect();
+    assert_eq!(learned, ["万里"], "学的是词库里的写法");
+
+    // 开着繁体：学到的词排第一，转一次显示（萬里），没有再转一次的「萬裏」
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "萬里", "{candidates:?}");
+    assert!(!candidates.contains(&"萬裏".to_string()), "{candidates:?}");
+
+    // 关掉繁体：学到的词照样排第一，是简体
+    engine.set_traditional(false);
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "万里", "{candidates:?}");
+    assert!(candidates.iter().all(|c| !c.contains('萬')), "{candidates:?}");
+}
+
+fn with_engine_ref(engine: &Engine) -> Session<'_> {
+    let mut session = Session::with_engine(engine);
+    session.set_clock(fixed_time);
+    session
 }
 
 #[test]
