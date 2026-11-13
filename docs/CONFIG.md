@@ -273,6 +273,10 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 
+构建时还可以用 `WOWTYPE_CORPUS` 指定公开语料（纯文本，可多个文件），
+脚本会挖词频、按 `WOWTYPE_CORPUS_WEIGHT`（默认 0.3）融进词库；只改词频、不新增词条。
+语料许可证跟着语料本身，构建产物里会生成 `CORPUS-NOTICE.txt`。
+
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
 是用清华的对话语料 [LCCC](https://huggingface.co/datasets/thu-coai/lccc)（MIT）加中文维基百科（CC BY-SA 4.0）训练的，

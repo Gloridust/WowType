@@ -31,6 +31,22 @@ python3 tools/rime2tsv.py ${EXTRA[@]+"${EXTRA[@]}"} "$RIME/rime_ice.dict.yaml" >
 # 合进 WowType 自己整理的热词（AI、工作、网络用语），见 data/hotwords.tsv
 python3 tools/add_hotwords.py "$OUT/lexicon.rime.tsv" data/hotwords.tsv > "$OUT/lexicon.tsv"
 rm "$OUT/lexicon.rime.tsv"
+
+# 可选：从公开语料挖词频，按比例融进词库（WOWTYPE_CORPUS 指定语料文件，可多个）。
+# 例：WOWTYPE_CORPUS=/path/tatoeba_cmn.txt WOWTYPE_CORPUS_WEIGHT=0.3 scripts/make-data.sh
+if [[ -n "${WOWTYPE_CORPUS:-}" ]]; then
+  # shellcheck disable=SC2086
+  python3 tools/mine_corpus_freq.py --min-count 1 ${WOWTYPE_CORPUS} > "$OUT/corpus-freq.tsv"
+  python3 tools/blend-freq.py "$OUT/lexicon.tsv" "$OUT/corpus-freq.tsv" "$OUT/lexicon.corpus.tsv" \
+    --weight "${WOWTYPE_CORPUS_WEIGHT:-0.3}"
+  mv "$OUT/lexicon.corpus.tsv" "$OUT/lexicon.tsv"
+  rm -f "$OUT/corpus-freq.tsv"
+  cat > "$OUT/CORPUS-NOTICE.txt" <<EOF
+词频融合用的语料：${WOWTYPE_CORPUS}
+许可证跟着各语料本身（例如 Tatoeba 是 CC BY 2.0），融合只改词频、不新增词条。
+EOF
+fi
+
 cat "$RIME/en_dicts/en.dict.yaml" "$RIME/en_dicts/en_ext.dict.yaml" > "$OUT/english.txt"
 cp "$RIME/LICENSE" "$OUT/LICENSE"
 
