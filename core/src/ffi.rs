@@ -529,6 +529,43 @@ pub unsafe extern "C" fn wowtype_engine_set_fuzzy(
     0
 }
 
+/// 打开/关闭五笔模式（候选改为按五笔码查表，需要先加载码表）。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_set_wubi(
+    engine: *mut WowtypeEngineHandle,
+    on: c_int,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    unsafe { &mut *engine }.engine.set_wubi(on != 0);
+    0
+}
+
+/// 加载五笔码表（每行：码、词、频次，TAB 分隔）。返回条目数，失败 -1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_wubi(
+    engine: *mut WowtypeEngineHandle,
+    path: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(path) = cstr_to_str(path) else {
+        set_last_error("path is null");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_wubi(path) {
+        Ok(count) => i32::try_from(count).unwrap_or(i32::MAX),
+        Err(err) => {
+            set_last_error(&format!("加载五笔码表失败: {err}"));
+            -1
+        }
+    }
+}
+
 /// 设置打开的模糊音分组（位掩码：1 z/zh，2 c/ch，4 s/sh，8 n/l，16 f/h，32 r/l，
 /// 64 an/ang，128 en/eng，256 in/ing，512 ian/iang，1024 uan/uang，2048 un/ong）。总开关仍是 wowtype_engine_set_fuzzy。返回 0 成功，-1 失败。
 #[no_mangle]

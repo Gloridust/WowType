@@ -58,6 +58,8 @@ int wowtype_engine_load_nnlm(WowtypeEngineHandle *engine, const char *path);
 
 /* 开关模糊音（z/zh、c/ch、s/sh、an/ang、en/eng、in/ing）。返回 0 成功。 */
 int wowtype_engine_set_fuzzy(WowtypeEngineHandle *engine, int on);
+int wowtype_engine_set_wubi(WowtypeEngineHandle *engine, int on);
+int wowtype_engine_load_wubi(WowtypeEngineHandle *engine, const char *path);
 /* 打开的模糊音分组（位掩码）：1 z/zh，2 c/ch，4 s/sh，8 n/l，16 f/h，32 r/l，
  * 64 an/ang，128 en/eng，256 in/ing，512 ian/iang，1024 uan/uang，2048 un/ong。
  * 默认 1|2|4|64|128|256|512|1024。 */

@@ -33,6 +33,7 @@ pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
 pub mod wordlm;
+pub mod wubi;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -93,6 +94,8 @@ pub struct EngineConfig {
     pub fuzzy_groups: u32,
     /// 每用一处模糊音（一个声母或韵母）多出的代价（自然对数），越大越靠后。
     pub fuzzy_penalty: f64,
+    /// 五笔模式：按五笔码查表，而不是拼音。
+    pub wubi: bool,
     /// 是否使用双拼。
     pub shuangpin: bool,
     /// 双拼方案（自然码、小鹤……）。
@@ -128,6 +131,7 @@ impl Default for EngineConfig {
             fuzzy: false,
             fuzzy_groups: crate::syllable::fuzzy::DEFAULT,
             fuzzy_penalty: 2.5,
+            wubi: false,
             shuangpin: false,
             shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
             english_candidate: true,
@@ -183,6 +187,8 @@ pub struct Engine {
     english: RwLock<Arc<HashMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
+    /// 五笔码表（公开码表生成；五笔模式下用它出候选）。
+    wubi: RwLock<Option<Arc<wubi::WubiDict>>>,
 }
 
 impl Engine {
@@ -202,6 +208,7 @@ impl Engine {
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
+            wubi: RwLock::new(None),
         }
     }
 
@@ -217,6 +224,24 @@ impl Engine {
     pub fn set_nnlm(&self, model: Option<Arc<nnlm::Nnlm>>) {
         if let Ok(mut slot) = self.nnlm.write() {
             *slot = model;
+        }
+    }
+    /// 打开五笔模式（候选改为按五笔码查表，需要先 load_wubi）。
+    pub fn set_wubi(&mut self, on: bool) {
+        self.config.wubi = on;
+    }
+
+    /// 加载五笔码表（code、词、频次三列），返回条目数。
+    pub fn load_wubi<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let dict = wubi::WubiDict::load_tsv(path)?;
+        let len = dict.len();
+        self.set_wubi_dict(Some(Arc::new(dict)));
+        Ok(len)
+    }
+
+    pub fn set_wubi_dict(&self, dict: Option<Arc<wubi::WubiDict>>) {
+        if let Ok(mut slot) = self.wubi.write() {
+            *slot = dict;
         }
     }
 
@@ -646,8 +671,41 @@ impl Engine {
         self.try_input_at(raw, now_ms())
     }
 
+    /// 五笔候选：码原样查表，精确匹配优先，再带出以它开头的长码。
+    fn wubi_candidates(&self, raw: &str) -> Vec<Candidate> {
+        let Ok(dict) = self.wubi.read() else {
+            return Vec::new();
+        };
+        let Some(dict) = dict.as_ref() else {
+            return Vec::new();
+        };
+        let lower = raw.trim().to_ascii_lowercase();
+        if lower.is_empty() || !lower.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Vec::new();
+        }
+        let limit = self.config.max_candidates.max(1);
+        dict.candidates(&lower, limit)
+            .into_iter()
+            .map(|(word, freq)| Candidate {
+                text: word.clone(),
+                pinyin: String::new(),
+                score: freq.max(1.0).ln(),
+                features: Feature::default(),
+                words: vec![CandidateWord {
+                    text: word,
+                    pinyin: String::new(),
+                    freq,
+                    known: true,
+                }],
+                consumed: raw.len(),
+            })
+            .collect()
+    }
+
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        let mut result = if self.config.shuangpin {
+        let mut result = if self.config.wubi {
+            self.wubi_candidates(raw)
+        } else if self.config.shuangpin {
             self.shuangpin_candidates(raw, at_ms)?
         } else {
             self.pinyin_candidates(raw, None, at_ms)?
@@ -2417,6 +2475,21 @@ mod tests {
             "要整个编码对上"
         );
         assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
+    }
+
+    #[test]
+    fn wubi_mode() {
+        let mut e = engine("ni hao\t你好\t1000\n");
+        let dict = Arc::new(crate::wubi::WubiDict::from_tsv_str(
+            "a\t工\t100\naa\t式\t50\naaaa\t工\t10\n",
+        ));
+        e.set_wubi_dict(Some(dict));
+        e.set_wubi(true);
+        let candidates = e.input("a");
+        assert_eq!(candidates[0].text, "工");
+        assert!(candidates.iter().any(|c| c.text == "式"), "前缀码也要给: {candidates:?}");
+        e.set_wubi(false);
+        assert!(!e.input("a").iter().any(|c| c.text == "工"));
     }
 
     #[test]
