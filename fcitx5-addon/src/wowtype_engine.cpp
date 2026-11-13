@@ -1241,7 +1241,14 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         updateInputPanel(ic, state);
         return;
     }
-    // 只是翻页、挪光标：原地摆好候选框
+    // 编辑区里的光标动了（方向键移进拼音，#129）：重画编辑区
+    const fcitx::Text &shown =
+        inlinePreedit(ic) ? ic->inputPanel().clientPreedit() : ic->inputPanel().preedit();
+    if (frame && frame->preedit && shown.cursor() != frame->preedit_cursor) {
+        updateInputPanel(ic, state);
+        return;
+    }
+    // 只是翻页、挪候选光标：原地摆好候选框
     if (auto *list = dynamic_cast<WowtypeSessionList *>(ic->inputPanel().candidateList().get())) {
         list->mirror(state->panelPage_, state->panelCursor_);
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
