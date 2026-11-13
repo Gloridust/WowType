@@ -77,6 +77,32 @@ words.lm 是 WowType 的词级语言模型，由 wowtype-lmbuild 从下列语料
 下载地址：$LM_URL
 sha256：$LM_SHA256
 EOF
+
+# 可选：用 CC-CEDICT（CC BY-SA 4.0）补一批主词库没有的词（人名、地名、专业词）。
+# 这些词没有词频，统一给 10；WOWTYPE_CEDICT=1 才开。
+if [[ "${WOWTYPE_CEDICT:-}" == "1" ]]; then
+  tmp=$(mktemp -d)
+  curl -fsSL --retry 3 https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdbg.txt.gz     | gzip -dc > "$tmp/cedict.u8"
+  python3 tools/cedict2tsv.py "$tmp/cedict.u8" > "$tmp/cedict.tsv"
+  python3 tools/add-words.py "$OUT/lexicon.tsv" "$tmp/cedict.tsv" "$OUT/lexicon.cedict.tsv"
+  mv "$OUT/lexicon.cedict.tsv" "$OUT/lexicon.tsv"
+  rm -rf "$tmp"
+  cat > "$OUT/CEDICT-NOTICE.txt" <<'EOF'
+词库里的补充词条来自 CC-CEDICT（https://www.mdbg.net/chinese/dictionary?page=cc-cedict）。
+
+  CC-CEDICT is licensed under the Creative Commons Attribution-ShareAlike 4.0
+  International License: https://creativecommons.org/licenses/by-sa/4.0/
+
+词频一栏是统一给的固定值，不是 CC-CEDICT 的数据。
+EOF
+  cat >> "$OUT/SOURCE.txt" <<EOF
+
+CC-CEDICT 补词：见 CEDICT-NOTICE.txt（CC BY-SA 4.0）。
+EOF
+else
+  echo "跳过 CC-CEDICT 补词（WOWTYPE_CEDICT=1 打开）"
+fi
+
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
 REV=3

@@ -269,9 +269,13 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `history.tsv` | 输入习惯：选过哪些词、哪些词常连着用 |
 | `emoji-recent.txt` | 最近用过的 emoji（表情面板里排最前） |
 | `lexicon.tsv.wcache` | 词库快照，让第二次启动更快（约 0.3 秒）；删了会自动重建 |
+| `CEDICT-NOTICE.txt` | 词库里 CC-CEDICT 补词部分的许可证说明（构建时可选生成） |
 | `wtlocal/` | 语音模型（约 130MB），在设置的「语音」页下载或删除；没有它语音输入打不开，按语音键只提示去下载 |
 | `dicts/wanxiang/` | 可选：万象词库包（`lexicon.tsv`、许可证、来源说明），在设置里下载，见下 |
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
+
+词库（`lexicon.tsv`）由 `scripts/make-data.sh` 从雾凇拼音生成；设 `WOWTYPE_CEDICT=1` 时再用 CC-CEDICT
+补一批人名、地名、专业词（CC BY-SA 4.0，见 `CEDICT-NOTICE.txt`）。
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），
