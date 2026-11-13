@@ -425,6 +425,10 @@ typedef struct {
     int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、互译时不开），默认 1 */
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
     int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
+    int translate_one_shot; /* 1.10 起：双击 Shift 单次互译（translate_mode 时才起作用），默认 0：
+                             * 单按 Shift 只在中 ↔ 英之间切；0.3 秒内连按两下进「译」只翻一句，译文上屏
+                             * （或 Esc、Shift+回车、单按 Shift 放弃）后回到原来的模式；
+                             * wowtype_session_toggle_translate 进的「译」也只翻一句 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -477,6 +481,10 @@ const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pe
 /* 切换输入模式（1.10 起，WOWTYPE_MODE_*）：外部命令、设置里的默认模式、外壳全局的模式用。
  * 切到英文时打到一半的（已选的词 + 原始输入）放进 frame->commit。 */
 const WowtypeFrame *wowtype_session_set_mode(WowtypeSession *session, int mode);
+/* 进出「译」的快捷键（1.10 起，设置里的 TranslateModeKey）：在「译」里回到进来前的模式（常驻「译」时
+ * 回中文），不在就进「译」（translate_one_shot 时只翻一句）。没有「译」（translate_mode 为 0）时不接，
+ * frame->handled 为 0，键交给应用。 */
+const WowtypeFrame *wowtype_session_toggle_translate(WowtypeSession *session);
 /* 现在的输入模式（1.10 起），WOWTYPE_MODE_*；session 为 NULL 时是中文。 */
 int wowtype_session_mode(const WowtypeSession *session);
 

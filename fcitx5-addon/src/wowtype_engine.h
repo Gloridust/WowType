@@ -224,6 +224,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> translateModeKey{
         this, "TranslateModeKey", "进出互译的快捷键", fcitx::Key(),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
+    // 双击 Shift 单次互译（#191），默认关：关着时 Shift 照旧 中 → 英 → 译 → 中
+    fcitx::Option<bool> translateOneShot{
+        this, "TranslateOneShot", "双击 Shift 单次互译（单按 Shift 只切中英，翻完一句自动回来）", false};
     fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（最多一小时一次）", true};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
     fcitx::Option<bool> translate{this, "Translate", "互译（Shift 切到「译」，打中文出外文）",
@@ -399,6 +402,10 @@ private:
     /// notify：弹出「中 / 英 / 译」提示（外部命令切的不弹，免得 vim 每按一次 Esc 闪一下）。
     void switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii, bool translate,
                     bool notify);
+    /// 会话自己切了模式（frame->mode_changed）：外壳的全局模式跟上、提示一下，不动编辑区。
+    void followMode(fcitx::InputContext *ic, int mode);
+    /// 记日志、提示现在的模式（notify 时）、更新状态栏。
+    void announceMode(fcitx::InputContext *ic, bool notify);
 
     // 互译模式：打的字先攒成原文，模型译好后上屏译文
     /// 现在是互译模式，而且这个输入框能用（密码框里不翻译、不往外发）。
@@ -549,6 +556,8 @@ private:
     fcitx::Key emojiKey_;
     fcitx::Key toggleKey_;
     fcitx::Key translateModeKey_;
+    /// 双击 Shift 单次互译（会话做双击判定和翻完回去，这里只传设置）。
+    bool translateOneShot_ = false;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
 
     WowtypeVoice *voice_ = nullptr;

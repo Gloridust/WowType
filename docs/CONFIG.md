@@ -35,6 +35,11 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 单按 Shift 就在 **中 → 英 → 译 → 中** 之间切换（没填好服务时只在中英之间切）。
 左 Shift 被 fcitx5 拿去「临时切换输入法」时切不到「译」，用右 Shift，或在设置「输入」页打开「Shift 只给 WowType 用」。
 
+不想每次都 Shift 一路切过去、翻完再切回来，在「翻译」页打开「双击 Shift 单次互译」（`TranslateOneShot=True`）：
+单按 Shift 只在中英之间切；0.3 秒内连按两下 Shift（或按「进出互译的快捷键」）进「译」，只翻这一句，
+译文上屏后自动回到原来的中文或英文（`Esc`、`Shift+回车`、单按 Shift 也算放弃，一样回去）。
+拼音打到一半时双击，打的拼音会带进「译」接着打；单按切英文时打的字母先留在输入框里，按下一个键时才原样上屏。
+
 切到「译」后照常打中文，用起来和微信输入法的「中英互译」一样：打的字攒在候选框里（顶上写着「中→英 互译」），
 不上屏；停 0.5 秒（打了句号、问号就立刻）发给服务，译文边出边写进输入框（带下划线），只给一种。
 接着打字时输入框里先留着上一句的译文，新的出来再换。
@@ -147,6 +152,7 @@ TranslateTarget=en
 TranslateBaseUrl=
 TranslateModel=
 TranslateFormal=False
+TranslateOneShot=False
 TranslateLocal=True
 TranslateLocalModel=
 TranslateLlamaServer=
@@ -159,7 +165,7 @@ Lexicon=
 |---|---|
 | `CandidateLayout` | `Horizontal` 横排、`Vertical` 竖排 |
 | `PageSize` | 每页候选个数，3–9 |
-| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`CheckUpdate` | `True` / `False` |
+| `Fuzzy`、`TypoCorrection`、`Shuangpin`、`Traditional`、`DateTime`、`Calculator`、`Toolbar`、`ClipboardHistory`、`Voice`、`VoiceCopy`、`EmojiSuggest`、`Translate`、`TranslateFormal`、`TranslateOneShot`、`CheckUpdate` | `True` / `False` |
 | `AutoSpace`、`AutoSpaceLetters`、`AutoSpaceDigits` | 中英文之间自动加空格：总开关（默认关）、汉字和字母之间、汉字和数字之间。要应用报告光标前的文字才生效（终端等不支持），密码、网址、邮箱输入框不加 |
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
@@ -171,7 +177,7 @@ Lexicon=
 | `InitialMode` | 从别的输入法切到 WowType、开机后第一次用时的模式：`Chinese`（默认）、`English`、`Last`（和上次切走时一样）。换窗口不算，中英文照旧全局保持；关了 Shift 切换（`ShiftToggle=Off`）、也没另设切换键（`ToggleKey`）时总是中文。只在 Linux（macOS 每个应用一份模式，还没有这一项） |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
 | `ToggleKey` | 另设一个切换中 / 英文的快捷键（fcitx5 键名，如 `Control+space`、`Control+Shift+space`），留空不用；单按 Shift 照常。在「译」里按回到中文。fcitx5 自己的全局快捷键先处理：`Control+space` 默认是 fcitx5「切换启用/禁用输入法」的键（macOS 上是系统切换输入法的键），要先在那边删掉，设置界面会提示 |
-| `TranslateModeKey` | 进出「译」的快捷键（如 `Control+Shift+Y`），留空不用：不在「译」里按就进「译」，在「译」里按回到中文；互译没打开、翻译没配好时这个键交给应用。和 `ToggleKey` 设成同一个键时算这个 |
+| `TranslateModeKey` | 进出「译」的快捷键（如 `Control+Shift+Y`），留空不用：不在「译」里按就进「译」，在「译」里按回到中文（`TranslateOneShot` 开着时回到进来前的模式，翻完一句也自动回去）；互译没打开、翻译没配好时这个键交给应用。和 `ToggleKey` 设成同一个键时算这个 |
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键。macOS 上默认 `Control+period`，`Super` 当 `Control`（见 [macOS](#macos)） |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
 | `TranslateBaseUrl`、`TranslateModel` | 翻译服务（OpenAI 格式）的地址和模型，见[互译](#互译) |

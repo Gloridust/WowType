@@ -413,15 +413,15 @@ public final class Composer {
     /// 进不了「译」（没开互译、没配好）时不接，交给应用。
     private func handleModeKey(_ key: KeyInput) -> Bool {
         if let translateModeKey = config.translateModeKey, translateModeKey.matches(key) {
-            if mode == .translate {
-                switchMode(to: .chinese)
-                return true
+            // 在「译」里按回到进来前的模式（常驻「译」时回中文）；不在就进「译」，开着双击 Shift 单次互译时
+            // 只翻一句（会话做，和 Linux 一样）
+            guard mode == .translate || translateAvailable else { return false }
+            configure() // 翻译器可能刚配好：「译」这一档跟着
+            guard let frame = wowtype_session_toggle_translate(session), frame.pointee.handled != 0 else {
+                return false
             }
-            if translateAvailable {
-                switchMode(to: .translate)
-                return true
-            }
-            return false
+            apply(frame)
+            return true
         }
         if let toggleKey = config.toggleKey, toggleKey.matches(key) {
             switchMode(to: mode == .chinese ? .english : .chinese)
@@ -506,6 +506,7 @@ public final class Composer {
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
+        config.translate_one_shot = settings.translateOneShot ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -579,7 +580,9 @@ public final class Composer {
             return false
         }
         let handled = frame.pointee.handled != 0
-        if handled {
+        if handled || frame.pointee.commit != nil {
+            // 没处理的键也可能带着要上屏的字：单按 Shift 切英文时留着的字母（双击 Shift 单次互译开着时），
+            // 按下一个键时先原样上屏，这个键再交给应用
             apply(frame)
         }
         return handled

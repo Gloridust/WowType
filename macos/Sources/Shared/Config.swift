@@ -116,6 +116,8 @@ public struct WowtypeConfig: Equatable {
     public var translateModel = ""
     /// 译文用正式语气（默认聊天口吻）
     public var translateFormal = false
+    /// 双击 Shift 单次互译（#191）：单按 Shift 只切中英，双击 Shift（或按互译键）翻一句就回来
+    public var translateOneShot = false
     /// 用本地模型（HY-MT），默认是。配置文件里没写这一项、又填了 TranslateBaseUrl 时是 False（见 parse，三端一样）
     public var translateLocal = true
     /// 本地模型文件，留空用数据目录下 models/HY-MT1.5-1.8B-Q4_K_M.gguf
@@ -217,8 +219,8 @@ public struct WowtypeConfig: Equatable {
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "Voice", "VoiceKey", "VoiceCopy", "EmojiKey",
         "ToggleKey", "TranslateModeKey",
-        "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
-        "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
+        "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateOneShot",
+        "TranslateLocal", "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
 
     /// 开关类的键（True / False）
@@ -234,7 +236,8 @@ public struct WowtypeConfig: Equatable {
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory, "Voice": \.voice, "VoiceCopy": \.voiceCopy,
-        "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateLocal": \.translateLocal,
+        "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateOneShot": \.translateOneShot,
+        "TranslateLocal": \.translateLocal,
     ]
 
     /// 按文件里的写法改一项。不认识的键、认不出的值不管（保持原值）。
@@ -500,6 +503,9 @@ public struct WowtypeConfig: Equatable {
         TranslateModel=
         # 译文用正式语气（默认聊天口吻）
         TranslateFormal=\(b(d.translateFormal))
+        # 双击 Shift 单次互译：打开后单按 Shift 只在中英之间切，0.3 秒内连按两下 Shift（或按上面的互译键）
+        # 进「译」只翻一句，译文上屏（或 Esc 放弃）后回到原来的模式
+        TranslateOneShot=\(b(d.translateOneShot))
         # 用本地模型（腾讯 HY-MT 1.5 1.8B，离线）翻译，默认 True；False 用上面的服务。
         # 删掉这一行时：上面填了 TranslateBaseUrl 就当 False（以前的设置照旧用服务），没填就是 True。
         # 模型和运行它的 llama-server 在设置窗口「翻译」页一键下载，放在数据目录的 models/ 和 llama/

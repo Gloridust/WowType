@@ -524,6 +524,12 @@ private struct TranslatePage: View {
                                                 ("Control + Shift + 空格", "Control+Shift+space")],
                                                current: model.config.translateModeKey))
             RowDivider()
+            SwitchRow(title: "双击 Shift 单次互译", subtitle: "单按 Shift 只切中英，翻完一句自动回来",
+                      info: "打开后单按 Shift 只在中、英之间切；0.3 秒内连按两下 Shift（或按上面的快捷键）进「译」，"
+                          + "只翻这一句：译文上屏、Esc 或单按 Shift 放弃后，回到原来的中文或英文。"
+                          + "关着时和以前一样，单按 Shift 在 中 → 英 → 译 之间切。",
+                      isOn: $model.config.translateOneShot)
+            RowDivider()
             PickerRow(title: "翻译成", info: "中文翻成这种语言；这种语言（和别的外文）翻成中文。",
                       selection: $model.config.translateTarget, options: translateLanguages)
             RowDivider()
@@ -554,12 +560,17 @@ private struct TranslatePage: View {
         if let key = model.config.translateModeKey {
             let label = key.name.replacingOccurrences(of: "+", with: " + ")
                 .replacingOccurrences(of: "space", with: "空格")
-            return "按 \(label) 进出「译」" + (model.config.shiftToggle == .off ? "" : "；单按 Shift：中 → 英 → 译 → 中")
+            return "按 \(label) 进出「译」" + (model.config.shiftToggle == .off ? "" : "；" + shiftCycle)
         }
         if model.config.shiftToggle == .off {
             return "「输入」页关掉了 Shift 切换，切不到「译」；可以设一个进出互译的快捷键"
         }
-        return "单按 Shift：中 → 英 → 译 → 中"
+        return shiftCycle
+    }
+
+    /// Shift 怎么切到「译」（看双击 Shift 单次互译开没开，和 Linux 设置一样）
+    private var shiftCycle: String {
+        model.config.translateOneShot ? "单按 Shift 切中英，双击 Shift 翻一句" : "单按 Shift：中 → 英 → 译 → 中"
     }
 
     private var serviceGroup: some View {
