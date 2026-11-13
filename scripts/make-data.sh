@@ -31,6 +31,43 @@ python3 tools/rime2tsv.py ${EXTRA[@]+"${EXTRA[@]}"} "$RIME/rime_ice.dict.yaml" >
 # 合进 WowType 自己整理的热词（AI、工作、网络用语），见 data/hotwords.tsv
 python3 tools/add_hotwords.py "$OUT/lexicon.rime.tsv" data/hotwords.tsv > "$OUT/lexicon.tsv"
 rm "$OUT/lexicon.rime.tsv"
+# 可选：用 jieba（MIT）的词频补一批常用词、给已有词加一路频次。需要 jieba 和 pypinyin；
+# 没装就跳过（CI 上没装这两个包，产出和以前一样）。WOWTYPE_NO_JIEBA=1 可以强制跳过。
+if [[ "${WOWTYPE_NO_JIEBA:-}" != "1" ]] && python3 -c 'import jieba, pypinyin' >/dev/null 2>&1; then
+  python3 tools/jieba2tsv.py --min-freq 20 > "$OUT/jieba.tsv"
+  python3 tools/merge-lexicon.py "$OUT/lexicon.tsv" "$OUT/jieba.tsv" "$OUT/lexicon.merged.tsv"
+  mv "$OUT/lexicon.merged.tsv" "$OUT/lexicon.tsv"
+  rm -f "$OUT/jieba.tsv"
+  cat > "$OUT/JIEBA-NOTICE.txt" <<'EOF'
+lexicon.tsv 里的一部分词条和词频来自 jieba 的词典（MIT License）：
+
+  Copyright (c) 2013 Sun Junyi
+
+读音由 pypinyin 生成（MIT License）：
+
+  Copyright (c) 2012 mozillazg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+EOF
+else
+  echo "跳过 jieba 词频合并（没装 jieba/pypinyin，或 WOWTYPE_NO_JIEBA=1）"
+fi
 cat "$RIME/en_dicts/en.dict.yaml" "$RIME/en_dicts/en_ext.dict.yaml" > "$OUT/english.txt"
 cp "$RIME/LICENSE" "$OUT/LICENSE"
 
@@ -57,7 +94,7 @@ with open(sys.argv[1], "rb") as f:
         h.update(block)
 print(h.hexdigest())' "$OUT/words.lm")
 if [[ "$actual" != "$LM_SHA256" ]]; then
-  echo "words.lm 的 sha256 对不上（应为 $LM_SHA256，实际 $actual）" >&2
+  echo "words.lm 的 sha256 对不上（应为 ${LM_SHA256}，实际 ${actual}）" >&2
   exit 1
 fi
 
@@ -65,7 +102,7 @@ COMMIT=$(git -C "$RIME" rev-parse HEAD 2>/dev/null || echo unknown)
 DATE=$(git -C "$RIME" log -1 --format=%cs 2>/dev/null || date +%F)
 cat > "$OUT/SOURCE.txt" <<EOF
 数据来源：雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），许可证 GPL-3.0，见 LICENSE。
-版本：$COMMIT（$DATE）
+版本：${COMMIT}（${DATE}）
 lexicon.tsv 由 WowType 的 tools/rime2tsv.py 转换自 rime_ice.dict.yaml 及其 import_tables，
 另从 cn_dicts/41448.dict.yaml（大字表）补了词库里没有的单字读音（频次记 0.7~0.9），
 再用 tools/add_hotwords.py 合进 WowType 的热词表 data/hotwords.tsv；
@@ -83,7 +120,7 @@ REV=3
 echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)
-echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice $DATE，修订 $REV）"
+echo "词库 $LINES 条 -> $OUT/lexicon.tsv（rime-ice ${DATE}，修订 ${REV}）"
 if (( LINES < 100000 )); then
   echo "词库条数太少，rime-ice 的目录结构可能变了" >&2
   exit 1

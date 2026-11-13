@@ -100,6 +100,9 @@ engine)
   for f in lexicon.tsv english.txt words.lm; do
     install -Dm644 "$data/$f" "$stage/usr/share/wowtype/$f"
   done
+  if [[ -f "$data/JIEBA-NOTICE.txt" ]]; then
+    install -Dm644 "$data/JIEBA-NOTICE.txt" "$stage/usr/share/doc/wowtype/JIEBA-NOTICE.txt"
+  fi
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
   install -Dm644 "$data/SOURCE.txt" "$doc/DATA-SOURCE.txt"
