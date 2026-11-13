@@ -36,28 +36,30 @@ impl Engine {
         let Some(prev) = self.prediction_prev(context) else {
             return Vec::new();
         };
-        let mut found = self.lm.top_next(&prev, POOL);
+        // (词, 分数, 语言模型给的分)：分数里加上了用户用过这个搭配的分
+        let mut found: Vec<(String, f64, f64)> =
+            self.lm.top_next(&prev, POOL).into_iter().map(|(w, s)| (w, s, s)).collect();
         if let Ok(pairs) = self.pairs.read() {
             let now = crate::now_ms();
             for (word, entry) in pairs.followers(&prev) {
                 let bonus = (PAIR_WEIGHT * (1.0 + decayed(entry, now)).ln()).min(PAIR_BONUS_CAP);
-                match found.iter_mut().find(|(w, _)| w == word) {
+                match found.iter_mut().find(|(w, _, _)| w == word) {
                     Some(item) => item.1 += bonus,
-                    None => found.push((word.to_owned(), LEARNED_BASE + bonus)),
+                    None => found.push((word.to_owned(), LEARNED_BASE + bonus, LEARNED_BASE)),
                 }
             }
         }
-        found.retain(|(word, score)| {
-            let chars = word.chars().count();
-            let floor = if chars == 1 { MIN_SINGLE_LOGP } else { MIN_LOGP };
+        found.retain(|(word, score, _)| {
+            let floor = if word.chars().count() == 1 { MIN_SINGLE_LOGP } else { MIN_LOGP };
             *score >= floor && *word != prev && word.chars().all(is_han)
         });
-        found.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let Some(best) = found.first().map(|(_, s)| *s) else {
+        // 和最好的差多少按语言模型给的分比：用过的词排到前面，但不把别的挤掉
+        let Some(best) = found.iter().map(|f| f.2).reduce(f64::max) else {
             return Vec::new();
         };
+        found.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let mut out: Vec<(String, f64)> = Vec::new();
-        for (word, score) in found {
+        for (word, score, _) in found {
             if score < best - RANGE || out.len() >= limit.min(MAX_SHOWN) {
                 break;
             }

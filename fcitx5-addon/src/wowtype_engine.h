@@ -447,6 +447,7 @@ private:
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
+    void fillPredictionPanel(fcitx::InputPanel &panel, WowtypeState *state);
     /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
     void sampleClipboard(fcitx::InputContext *ic);
 
