@@ -27,7 +27,7 @@ Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负�
 [安装说明](../docs/INSTALL.md)。Ubuntu 22.04（Fcitx5 5.0）要从源码编，见安装说明里的说明。
 
 5.1 以后才有的接口按版本判断：5.1.11 起才有自定义的中 / 英提示气泡（`WOWTYPE_HAVE_CUSTOM_IM_INFO`），
-更早的显示 Fcitx 5 默认的输入法提示。插件清单（`wowtype-addon.conf`）里要求的 fcitx5 版本是编译时用的版本。
+更早的显示 Fcitx 5 默认的输入法提示。插件清单（`wowtype-addon.conf`）里要求的 fcitx5 版本是编译时版本的「主.次.0」（5.1.x 上编的写 5.1.0）。
 
 在仓库根目录构建并安装：
 
