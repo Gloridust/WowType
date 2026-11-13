@@ -83,13 +83,6 @@ struct WowtypeInputSchemeAnnotation {
     }
 };
 
-/// 存盘、但不在 fcitx5 配置工具里列出来的项（旧版的 Shuangpin 开关，跟着 InputScheme 写）。
-struct WowtypeHiddenAnnotation {
-    bool skipDescription() const { return true; }
-    bool skipSave() const { return false; }
-    void dumpDescription(fcitx::RawConfig &) const {}
-};
-
 enum class WowtypeShuangpinScheme { Ziranma, Xiaohe, Microsoft, Sogou, ABC, Ziguang, PinyinJiajia };
 FCITX_CONFIG_ENUM_NAME(WowtypeShuangpinScheme, "Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC",
                        "Ziguang", "PinyinJiajia");
@@ -217,9 +210,6 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeInputScheme, fcitx::NoConstrain<WowtypeInputScheme>,
                   fcitx::DefaultMarshaller<WowtypeInputScheme>, WowtypeInputSchemeAnnotation>
         inputScheme{this, "InputScheme", "输入方案", WowtypeInputScheme::Quanpin};
-    // 旧版的双拼开关：只为旧版本读得懂，见 loadWowtypeConfig
-    fcitx::Option<bool, fcitx::NoConstrain<bool>, fcitx::DefaultMarshaller<bool>, WowtypeHiddenAnnotation>
-        shuangpin{this, "Shuangpin", "双拼输入", false};
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
         shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
@@ -244,10 +234,10 @@ FCITX_CONFIGURATION(
                                  "以词定字：打拼音时 [ ] 上屏候选的第一个、最后一个字", true};
     fcitx::Option<bool> dateTime{this, "DateTime",
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
-    fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
+    fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3；双拼、五笔时是大写 V）",
                                    true};
     fcitx::Option<bool> toolbar{this, "Toolbar",
-                                "v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）",
+                                "v + 空格打开工具栏（剪贴板、常用语、符号、表情；双拼、五笔时不开）",
                                 true};
     // 默认关：fcitx5 的 clipboard 插件不告诉我们哪条是密码管理器复制的密码
     fcitx::Option<bool> clipboardHistory{this, "ClipboardHistory",
@@ -349,11 +339,6 @@ inline fcitx::RawConfig wowtypeTopLevel(const fcitx::RawConfig &raw) {
     return out;
 }
 
-/// 旧版的 Shuangpin 开关跟着 InputScheme（读完、存盘前都调）：旧版本读到的是现在的方案，五笔在旧版本里是全拼。
-inline void syncWowtypeLegacy(WowtypeConfig &config) {
-    config.shuangpin.setValue(*config.inputScheme == WowtypeInputScheme::Shuangpin);
-}
-
 inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &file) {
     const fcitx::RawConfig raw = wowtypeTopLevel(file);
     config.load(raw);
@@ -364,11 +349,11 @@ inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &fil
         (*config.translateBaseUrl).find_first_not_of(" \t\r\n") != std::string::npos) {
         config.translateLocal.setValue(false);
     }
-    // 0.3.12 及以前没有 InputScheme，只有 Shuangpin 开关
-    if (!raw.valueByPath("InputScheme") && *config.shuangpin) {
+    // 0.3.12 及以前的双拼开关：只在没有 InputScheme 时算。WowtypeConfig 里没有它，存盘时就没了
+    const std::string *oldShuangpin = raw.valueByPath("Shuangpin");
+    if (!raw.valueByPath("InputScheme") && oldShuangpin && *oldShuangpin == "True") {
         config.inputScheme.setValue(WowtypeInputScheme::Shuangpin);
     }
-    syncWowtypeLegacy(config);
 }
 
 class WowtypeEngine;

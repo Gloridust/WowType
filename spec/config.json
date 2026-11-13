@@ -115,7 +115,7 @@
      "platforms": ["fcitx5", "settings", "macos"],
      "note": "输入方案：全拼、双拼、五笔 86。五笔要数据目录里有 wubi86.tsv，没有时设置里五笔灰掉，插件照全拼打并提示。name 三端都对照（fcitx5 的 EnumI18n、设置界面的 INPUT_SCHEMES、macOS 的 WowtypeConfig.inputSchemes）",
      "whenMissing": {
-       "$comment": "文件里没有 InputScheme 这一行时：Shuangpin 是 True 就是 value，否则用 default。三端读文件时都照这条规矩。",
+       "$comment": "文件里没有 InputScheme 这一行时：Shuangpin 是 True 就是 value，否则用 default。三端读文件时都照这条规矩。Shuangpin 已经不是设置项：只在这里读，三端存盘时都不写它，文件里有的那行下次存盘就没了。",
        "ifTrue": "Shuangpin",
        "value": "Shuangpin",
        "why": "0.3.12 及以前只有 Shuangpin 开关，升级后双拼用户接着用双拼",
@@ -128,10 +128,6 @@
          {"file": {"Shuangpin": "False", "InputScheme": "Shuangpin"}, "expect": "Shuangpin"}
        ]
      }},
-    {"key": "Shuangpin", "type": "bool", "default": false,
-     "platforms": ["fcitx5", "settings", "macos"],
-     "mirrors": {"key": "InputScheme", "value": "Shuangpin"},
-     "note": "旧版的双拼开关，界面上不出（fcitx5 配置工具里也不列）。三端读完、写文件时都写成「InputScheme 是 Shuangpin」，旧版本读得懂；读的时候只在文件里没有 InputScheme 时看它（见 InputScheme 的 whenMissing）"},
     {"key": "ShuangpinScheme", "type": "enum", "default": "Ziranma",
      "values": [
        {"value": "Ziranma", "name": "自然码"},
