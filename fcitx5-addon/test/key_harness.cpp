@@ -1141,6 +1141,45 @@ void runCases(Instance &instance) {
     }
     fresh(ic.get());
     {
+        // #158：切到英文后换到别的输入法再切回来，回到中文（InitialMode 默认 Chinese）；换窗口不算
+        const auto english = [&]() {
+            fresh(ic.get());
+            type(ic.get(), "a");
+            const bool ascii = ic->passed == "a" && preedit(ic.get()).empty();
+            fresh(ic.get());
+            return ascii;
+        };
+        tapShift(FcitxKey_Shift_R);
+        ic->focusOut();
+        ic->focusIn();
+        check(english(), "换窗口后还是英文");
+        instance.setCurrentInputMethod(ic.get(), "testim", true);
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(!english(), "从别的输入法切回来是中文");
+        // InitialMode=English：切回来是英文（#121）
+        std::ofstream(configDir + "/wowtype.conf") << "InitialMode=English\n";
+        addon->reloadConfig();
+        check(!english(), "改设置不改当前的模式");
+        instance.setCurrentInputMethod(ic.get(), "testim", true);
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(english(), "InitialMode=English：切回来是英文");
+        // InitialMode=Last：和切走时一样
+        std::ofstream(configDir + "/wowtype.conf") << "InitialMode=Last\n";
+        addon->reloadConfig();
+        tapShift(FcitxKey_Shift_R);
+        instance.setCurrentInputMethod(ic.get(), "testim", true);
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(!english(), "InitialMode=Last：切走时是中文，切回来还是中文");
+        tapShift(FcitxKey_Shift_R);
+        instance.setCurrentInputMethod(ic.get(), "testim", true);
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(english(), "InitialMode=Last：切走时是英文，切回来还是英文");
+        tapShift(FcitxKey_Shift_R);
+        std::filesystem::remove(configDir + "/wowtype.conf");
+        addon->reloadConfig();
+        check(!english(), "测完回到中文");
+    }
+    {
         // #82：认 Shift 松开要看键码。xkb 选项（grp:shifts_toggle 等）或 fcitx5 按输入法布局重新翻译时，
         // 松开那一下 Shift 已经算按着，同一个键（左 Shift 键码 50）可能翻成 ISO_Next_Group
         const auto english = [&]() {

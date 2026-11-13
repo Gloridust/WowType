@@ -783,6 +783,7 @@ impl Engine {
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
+        pin_single_initial(&normalized, &mut result);
         self.promote_custom(&mut result);
         self.append_raw_candidate(raw_display.unwrap_or(display), &mut result);
         let english_only = drop_forced_chinese(&mut result);
@@ -1782,6 +1783,43 @@ pub fn unescape_custom(text: &str) -> String {
         }
     }
     out
+}
+
+/// 只打一个声母（l、b、zh）时固定排第一的字：词库按读音分的词频把它们排得太后
+/// （了 le 348 万，来 1484 万；不 299 万，把 380 万），而且第一个候选不该随上文、选过的字变来变去
+/// （#156）。没列的声母照词频排。
+const SINGLE_INITIAL_TOP: &[(&str, &str)] = &[
+    ("b", "不"),
+    ("d", "的"),
+    ("g", "个"),
+    ("h", "和"),
+    ("j", "就"),
+    ("l", "了"),
+    ("n", "你"),
+    ("q", "去"),
+    ("r", "人"),
+    ("s", "是"),
+    ("sh", "是"),
+    ("t", "他"),
+    ("w", "我"),
+    ("y", "一"),
+    ("z", "在"),
+    ("zh", "这"),
+];
+
+/// 输入只是一个声母时，把 [`SINGLE_INITIAL_TOP`] 里的字挪到第一个（在选过最多的字前面；
+/// 自定义词、自定义编码之后还会排到它前面）。候选里没有这个字就不动。
+fn pin_single_initial(input: &str, candidates: &mut Vec<Candidate>) {
+    let Some(&(_, top)) = SINGLE_INITIAL_TOP.iter().find(|(key, _)| *key == input) else {
+        return;
+    };
+    if let Some(i) = candidates
+        .iter()
+        .position(|c| c.text == top && c.words.len() == 1)
+    {
+        let pinned = candidates.remove(i);
+        candidates.insert(0, pinned);
+    }
 }
 
 fn promote_picked(candidates: &mut Vec<Candidate>) {
@@ -3486,6 +3524,33 @@ mod tests {
         let e = default_engine();
         let cands = e.input("zg");
         assert!(cands.iter().any(|c| c.text == "中国"), "{:?}", cands);
+    }
+
+    #[test]
+    fn single_initial_pins_the_common_char_first() {
+        // #156：只打 l，词频更高的「来」「里」不能排在「了」前面；选过别的字也不换掉第一个
+        let e = engine(concat!(
+            "lai\t来\t14837007\n",
+            "li\t里\t7329328\n",
+            "le\t了\t3481243\n",
+            "liao\t了\t999\n",
+            "ba\t把\t3798288\n",
+            "bu\t不\t2985809\n",
+            "fa\t发\t3000000\n",
+            "fang\t放\t4000000\n",
+        ));
+        let texts = |raw: &str| e.input(raw).into_iter().map(|c| c.text).collect::<Vec<_>>();
+        assert_eq!(texts("l")[0], "了", "{:?}", texts("l"));
+        assert_eq!(texts("b")[0], "不", "{:?}", texts("b"));
+        // 没列的声母照词频
+        assert_eq!(texts("f")[0], "放", "{:?}", texts("f"));
+        // 打全的拼音不受影响
+        assert_eq!(texts("lai")[0], "来");
+        for _ in 0..5 {
+            e.record_selection("来");
+        }
+        let l = texts("l");
+        assert_eq!(&l[..2], ["了", "来"], "选过的字排第二，第一个不变：{l:?}");
     }
 
     #[test]

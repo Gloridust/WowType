@@ -113,6 +113,20 @@ struct WowtypeShiftAnnotation {
     }
 };
 
+/// 切到 WowType 时用中文还是英文（#158、#121）。
+enum class WowtypeInitialMode { Chinese, English, Last };
+FCITX_CONFIG_ENUM_NAME(WowtypeInitialMode, "Chinese", "English", "Last");
+
+struct WowtypeInitialModeAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "中文");
+        config.setValueByPath("EnumI18n/1", "英文");
+        config.setValueByPath("EnumI18n/2", "和上次切走时一样");
+    }
+};
+
 /// 互译语言（代码和核心的 translate::LANGUAGES 一致）。
 enum class WowtypeTranslateTarget { en, ja, ko, fr, de, es, ru, pt, it, vi, th, id, ar };
 FCITX_CONFIG_ENUM_NAME(WowtypeTranslateTarget, "en", "ja", "ko", "fr", "de", "es", "ru", "pt",
@@ -167,6 +181,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeShiftToggle, fcitx::NoConstrain<WowtypeShiftToggle>,
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
+    fcitx::Option<WowtypeInitialMode, fcitx::NoConstrain<WowtypeInitialMode>,
+                  fcitx::DefaultMarshaller<WowtypeInitialMode>, WowtypeInitialModeAnnotation>
+        initialMode{this, "InitialMode", "切到 WowType 时", WowtypeInitialMode::Chinese};
     fcitx::Option<bool> traditional{this, "Traditional", "输出繁体字", false};
     fcitx::Option<WowtypePunctStyle, fcitx::NoConstrain<WowtypePunctStyle>,
                   fcitx::DefaultMarshaller<WowtypePunctStyle>, WowtypePunctStyleAnnotation>
@@ -366,6 +383,8 @@ private:
     bool handleShiftKey(fcitx::InputContext *ic, WowtypeState *state, fcitx::KeyEvent &event);
     /// 把全局的中 / 英 / 译对齐到这个输入框的会话（切英文时会话上屏打到一半的）。
     void syncMode(fcitx::InputContext *ic, WowtypeState *state);
+    /// 按「切到 WowType 时」（InitialMode）定中 / 英：从别的输入法切回来、启动后第一次用时调。
+    void applyInitialMode(fcitx::InputContext *ic, WowtypeState *state);
     /// 切到指定模式。离开「译」上屏攒着的原文，切到英文上屏打到一半的；
     /// notify：弹出「中 / 英 / 译」提示（外部命令切的不弹，免得 vim 每按一次 Esc 闪一下）。
     void switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii, bool translate,
@@ -500,6 +519,9 @@ private:
     /// 配置文件里的双拼方案名（传给核心）。
     std::string shuangpinScheme_ = "Ziranma";
     WowtypeShiftToggle shiftToggle_ = WowtypeShiftToggle::Both;
+    WowtypeInitialMode initialMode_ = WowtypeInitialMode::Chinese;
+    /// 启动后还没切到过 WowType：第一次切过来（包括 WowType 是默认输入法时第一次获得焦点）按 InitialMode 定模式
+    bool initialModeApplied_ = false;
     WowtypePunctStyle punctStyle_ = WowtypePunctStyle::Fullwidth;
     /// 打开的翻页键组（Page Up/Down、方向键、fcitx 全局翻页键一直可用）
     bool pageMinus_ = true;

@@ -217,6 +217,7 @@ def check_settings(spec, wc, home):
 
     # 选项列表：(界面上的名字, 存盘名)
     lists = {"ShuangpinScheme": wc.SHUANGPIN_SCHEMES, "ShiftToggle": wc.SHIFT_TOGGLES,
+             "InitialMode": wc.INITIAL_MODES,
              "SelectKeys": wc.SELECT_KEYS, "PunctuationStyle": wc.PUNCT_STYLES}
     for key, items in lists.items():
         same([value for _label, value in items], enum_values(by_key[key]), f"设置界面：{key} 的选项")
