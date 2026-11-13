@@ -27,6 +27,8 @@ def main():
     ap.add_argument("output")
     ap.add_argument("--weight", type=float, default=0.3, help="外部词频的比重，0~1")
     ap.add_argument("--label", default="词频", help="日志里的名字")
+    ap.add_argument("--raise-only", action="store_true",
+                    help="只提不降（外部词频比词库低的词不动）：语料里出现少的词不会比语料里没出现的词更吃亏")
     args = ap.parse_args()
     w = min(max(args.weight, 0.0), 1.0)
 
@@ -49,6 +51,8 @@ def main():
             continue
         total = sum(r[3] for r in usable)
         factor = (total * (1.0 - w) + count * scale * w) / total
+        if args.raise_only:
+            factor = max(factor, 1.0)
         if factor == 1.0:
             continue
         for row in usable:

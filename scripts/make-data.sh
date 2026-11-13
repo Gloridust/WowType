@@ -22,6 +22,8 @@
 #     cedict  CC-CEDICT（CC BY-SA 4.0）补词库里没有的词（人名地名、专业词），频次统一给很低的值
 # 每个数据源的下载地址和 sha256 都钉在下面，对不上就退出；也可以给本机文件（同样校验 sha256）：
 #   WOWTYPE_TATOEBA_FILE / WOWTYPE_JIEBA_DICT / WOWTYPE_CEDICT_FILE
+# WOWTYPE_DATA_CACHE=<目录>：下载过的文件按 sha256 缓存在这里。
+# 发布的词库开了哪些见 .github/workflows/ci.yml 的 data job；本机想得到同样的词库，要设同样的 WOWTYPE_DATA_EXTRAS。
 # 要的 Python 包（版本钉死）：python3 -m pip install --require-hashes -r tools/requirements-data.txt
 # 许可证说明只在用到时写进 SOURCE.txt（所有安装包都带 SOURCE.txt），评测数字见 docs/DATA.md。
 set -euo pipefail
@@ -41,18 +43,25 @@ with open(sys.argv[1], "rb") as f:
 print(h.hexdigest())' "$1"
 }
 
-# fetch_pinned <名字> <URL> <sha256> <输出文件> [本机文件]：下载（或复制本机文件）并核对 sha256
+# fetch_pinned <名字> <URL> <sha256> <输出文件> [本机文件]：下载（或复制本机文件）并核对 sha256。
+# WOWTYPE_DATA_CACHE=<目录> 时下载过的文件按 sha256 存在那里，下次直接用（CI 用它少连 archive.org）。
 fetch_pinned() {
-  local name=$1 url=$2 want=$3 out=$4 local_file=${5:-} got
+  local name=$1 url=$2 want=$3 out=$4 local_file=${5:-} got cache=${WOWTYPE_DATA_CACHE:-}
   if [[ -n "$local_file" ]]; then
     cp "$local_file" "$out"
+  elif [[ -n "$cache" && -f "$cache/$want" ]]; then
+    cp "$cache/$want" "$out"
   else
-    curl -fsSL --retry 3 -o "$out" "$url"
+    curl -fsSL --retry 5 --retry-delay 10 -o "$out" "$url"
   fi
   got=$(sha256 "$out")
   if [[ "$got" != "$want" ]]; then
     echo "${name} 的 sha256 对不上（应为 ${want}，实际 ${got}）" >&2
     exit 1
+  fi
+  if [[ -n "$cache" && -z "$local_file" && ! -f "$cache/$want" ]]; then
+    mkdir -p "$cache"
+    cp "$out" "$cache/$want"
   fi
 }
 
@@ -90,7 +99,7 @@ python3 tools/rime2tsv.py ${EXTRA[@]+"${EXTRA[@]}"} "$RIME/rime_ice.dict.yaml" >
 # 外部数据源带进来的错条目也能用 data/blocklist.tsv 去掉。
 NOTICES=""
 APPLIED=""
-if [[ "$EXTRAS" != "  " ]]; then
+if [[ -n "${EXTRAS// /}" ]]; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   lex="$OUT/lexicon.rime.tsv"
@@ -125,7 +134,8 @@ if [[ "$EXTRAS" != "  " ]]; then
   （https://creativecommons.org/licenses/by/2.0/fr/），作者见 https://tatoeba.org 上各句的页面。
   下载地址：${TATOEBA_URL}"
     fi
-    python3 tools/mine_corpus_freq.py "${corpus_args[@]}" "${corpus_files[@]}" > "$tmp/corpus.counts"
+    # 不数单字：单字频次决定 d/l/b、shi 这些短输入的首页，语料一融就乱（实测见 docs/DATA.md）
+    python3 tools/mine_corpus_freq.py --min-chars 2 "${corpus_args[@]}" "${corpus_files[@]}" > "$tmp/corpus.counts"
     step=$((step + 1)); out="$tmp/lexicon.${step}.tsv"
     python3 tools/blend-freq.py "$lex" "$tmp/corpus.counts" "$out" --weight "$CORPUS_WEIGHT" --label 语料
     lex=$out
@@ -136,7 +146,7 @@ if [[ "$EXTRAS" != "  " ]]; then
     done
     APPLIED+=" corpus"
     NOTICES+="
-语料词频（corpus）：用 jieba 0.42.1 给下列语料分词计数，按权重 ${CORPUS_WEIGHT} 融进已有词的词频
+语料词频（corpus）：用 jieba 0.42.1 给下列语料分词，数两个字以上的词，按权重 ${CORPUS_WEIGHT} 融进已有词的词频
 （tools/mine_corpus_freq.py、tools/blend-freq.py），不加新词。语料：${corpus_sums}
 来源与许可证：${corpus_license}
 "
@@ -152,7 +162,8 @@ if [[ "$EXTRAS" != "  " ]]; then
     step=$((step + 1)); out="$tmp/lexicon.${step}.tsv"
     python3 tools/blend-freq.py "$lex" "$tmp/jieba.counts" "$out" --weight 0.3 --label jieba
     lex=$out
-    python3 tools/jieba2tsv.py --dict "$tmp/jieba.dict" --new --lexicon "$lex" --min-freq 50 > "$tmp/jieba.new"
+    python3 tools/jieba2tsv.py --dict "$tmp/jieba.dict" --new --min-chars 2 --lexicon "$lex" --min-freq 50 \
+      > "$tmp/jieba.new"
     step=$((step + 1)); out="$tmp/lexicon.${step}.tsv"
     python3 tools/add-words.py "$lex" "$tmp/jieba.new" "$out" --label jieba
     lex=$out

@@ -9,7 +9,8 @@
 tools/make_corpus_eval.py 生成的「拼音<TAB>句子」是第 2 列）。分词用 jieba，只留 1~8 个汉字的词。
 语料是繁体时加 --t2s（要 opencc，比如 pip 的 opencc-python-reimplemented）。
 
-做评测时别把评测句子放进语料：先用 tools/make_corpus_eval.py 按固定种子切出训练/留出两份，只挖训练那份。
+做评测时别把评测句子放进语料：先按固定种子切出训练/留出两份（比如 #196 的 tools/make_corpus_eval.py），
+只挖训练那份。docs/DATA.md 的评测就是这么做的。
 语料的许可证跟着语料走（Tatoeba 是 CC BY 2.0 FR），make-data.sh 会把署名写进 SOURCE.txt。
 """
 
@@ -34,6 +35,8 @@ def main():
     ap.add_argument("--column", type=int, default=0,
                     help="句子在 TAB 分隔的第几列（从 1 数）；0 表示整行")
     ap.add_argument("--min-count", type=int, default=1)
+    ap.add_argument("--min-chars", type=int, default=1,
+                    help="只数至少这么多字的词（2 = 不数单字：单字的频次决定 d/l/b 这类简拼的首页）")
     ap.add_argument("--t2s", action="store_true", help="繁转简（需要 opencc）")
     args = ap.parse_args()
 
@@ -61,7 +64,7 @@ def main():
                     line = converter.convert(line)
                 sentences += 1
                 for word in jieba.cut(line):
-                    if CJK.match(word):
+                    if len(word) >= args.min_chars and CJK.match(word):
                         counts[word] += 1
 
     kept = sorted(((w, c) for w, c in counts.items() if c >= args.min_count),

@@ -150,6 +150,87 @@ lmcnmac.bin 导不出来（§3），所以自己从语料训练。`wowtype-lmbui
 `scripts/make-data.sh` 从 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)
 下载并核对 sha256。不带 NNLM 时（安装包用户的情况）日常句 84.8%、维基句 60.2%，逐键平均约 1.9 ms，和不带它时一样。
 
+### 3.3 构建词库的可选数据源
+
+`scripts/make-data.sh` 默认只用雾凇拼音和 `data/` 下的手工表；`WOWTYPE_DATA_EXTRAS` 可以再开下面几个
+（空格或逗号分隔，写错名字直接报错）。不开时产出和以前逐字节相同。
+
+| 名字 | 做什么 | 来源（钉死版本 + sha256） | 许可证 |
+|---|---|---|---|
+| `corpus` | 语料分词计数，按权重 0.3 融进已有词的词频；只数两个字以上的词，不加词 | Tatoeba 中文句子 2026-11-05 导出（Internet Archive 上存的一份）；或 `WOWTYPE_CORPUS` 指定本机语料 | CC BY 2.0 FR（本机语料要用 `WOWTYPE_CORPUS_LICENSE` 写明） |
+| `jieba` | jieba 词典里频次 >= 20 的多字词按权重 0.3 融进词频；再补词库没有的词（换算后频次 >= 50），读音用 pypinyin 注 | jieba 0.42.1 的 `dict.txt`（GitHub tag），pypinyin 0.55.0 | MIT |
+| `cedict` | 补词库没有的词（最多 4 个字，去掉异体、台湾用词、儿化），频次统一给 10 | CC-CEDICT 2026-11-04 版（Internet Archive 上存的一份） | CC BY-SA 4.0 |
+
+- 下载的文件都核对 sha256，对不上就退出；也能给本机文件（`WOWTYPE_TATOEBA_FILE`、`WOWTYPE_JIEBA_DICT`、
+  `WOWTYPE_CEDICT_FILE`，一样校验）。`WOWTYPE_DATA_CACHE=<目录>` 把下载过的文件按 sha256 存起来，下次不再下载。
+- Python 包：`python3 -m pip install --require-hashes -r tools/requirements-data.txt`（版本、哈希钉死；
+  脚本会核对已装的版本，分词和注音随版本变）。
+- 本机语料：`WOWTYPE_CORPUS="a.txt b.txt.bz2"`，一行一句；带 TAB 的用 `WOWTYPE_CORPUS_COLUMN` 指定列，
+  繁体加 `WOWTYPE_CORPUS_T2S=1`，权重 `WOWTYPE_CORPUS_WEIGHT`（默认 0.3）。SOURCE.txt 里只记文件名和 sha256，不记路径。
+- 都在合热词表之前做：`data/rime-ice-freq.tsv`（只提不降）和 `data/blocklist.tsv` 最后套，不会被冲掉；
+  外部来源带进来的错条目也能用黑名单去掉。
+- 用到的数据源的来源、许可证全文和署名追加在 `SOURCE.txt` 末尾的「额外数据源」一节。所有安装包都带 SOURCE.txt
+  （deb/rpm/Arch 装成 `/usr/share/doc/wowtype/DATA-SOURCE.txt`，macOS 在 Resources 里，数据压缩包和 Nix 也有），
+  deb 的 copyright 文件也会提一句。没用的数据源不写。
+
+工具（`tools/`）：`lexdata.py` 是共用的读写规则，`blend-freq.py` 融合词频，`add-words.py` 补词，
+`jieba2tsv.py`、`cedict2tsv.py`、`mine_corpus_freq.py` 把各来源转成这两个工具吃的格式。几条规则：
+
+- 「#」开头的表头和没改的行原样写回；改过的频次取整但不低于 1。频次小于 1 的单字是大字表的生僻读音
+  （`LexEntry::is_rare`，不参与组句），一律不动——以前 `:.0f` 会把 3.7 万个这样的读音改成 1，让它们进束搜索。
+- 占位频次（雾凇 ext/tencent 词表的 100，引擎加载时按组成部分重估）的词不融合、也不拿来算换算系数。
+- 按词融合，不按行：多音词各读音的频次之和当这个词的频次，融合后按原比例分回各读音，
+  换算系数也按词算（以前多音词的计数会给每个读音各加一遍、在换算系数里也重复算）。
+- jieba 新词的读音：pypinyin 按单字默认读音猜的多音字（雾凇里这个字常用读音不止一个）整个词不要；
+  按单字猜的读音还必须是雾凇里这个字的常用读音（频次 >= 1）。
+
+#### 评测（2026-11-14，本机 macOS，release 构建，`wowtype-eval --lm words.lm`）
+
+用例：Tatoeba 中文句子按固定种子（20261114，#196 的 `tools/make_corpus_eval.py`）切出的留出 3000 句；
+手写日常句 138 句（`tools/eval/daily_sentences.txt`）；逐词上下文 533 条（`tools/eval/context.tsv`）。
+`corpus` 一行用的是钉死的 Tatoeba 导出去掉这 3000 句、再去掉和日常句相同的句子之后挖的词频（86208 句），
+所以三组都是留出的；用全部 89248 句时 Tatoeba 一组不能算（评测句子在语料里）。
+同一份 rime-ice（927e1cf）、同一个 words.lm。「+/-」是逐句比较：基线错、新的对 / 基线对、新的错。
+
+| 词库 | Tatoeba 留出 3000 句 top1 / top3 | 日常句 138 top1 / top3 | 上下文 533 top1 / top3 |
+|---|---|---|---|
+| 基线（不开） | 1843 (61.4%) / 2051 (68.4%) | 119 (86.2%) / 125 (90.6%) | 472 (88.6%) / 521 (97.7%) |
+| `corpus` | **1903 (63.4%)** / 2105 (70.2%)，+92 -32 | **123 (89.1%)** / 129 (93.5%)，+4 -0 | 473 (88.7%) / 522 (97.9%)，+2 -1 |
+| `jieba` | 1843 (61.4%) / 2061 (68.7%)，+35 -35 | 118 (85.5%) / 126 (91.3%)，+0 -1 | 473 (88.7%) / 522 (97.9%)，+2 -1 |
+| `cedict` | 1843 (61.4%) / 2051 (68.4%)，+0 -0 | 119 (86.2%) / 125 (90.6%)，+0 -0 | 472 (88.6%) / 521 (97.7%)，+0 -0 |
+
+短输入（`wowtype-show --english --lm --max 18`，和插件一样）：`corpus` 下 d、l、b、ma、shi、ni、wo、zai、bu、de、le
+的 18 个候选和基线完全一样；xz、nh、shim 第 5~9 个有调换（xz 多了「鞋子」，nh 多了「女孩」），首选不变。
+fcitx5 按键测试里依赖词库的输入（nihao、zhongdi、kyi、yongzwen、kaixin、jixu……）首选也不变。
+
+试过、没采用的：
+
+- 语料把单字也融进去：Tatoeba +137 -67、日常句 +6 -0，但 d、l、b、shi 等首页全变了（shi 的「师」从第 6 掉到第 10），
+  改坏的大多是单字同音（再→在、是→市），所以只数两个字以上的词。
+- 语料只提不降（`blend-freq.py --raise-only`）：Tatoeba 1897，比双向融合的 1903 略差，日常句、上下文一样。
+- 语料权重 0.15 / 0.5（含单字时）：Tatoeba 1910 / 1923，日常句 124 / 123，0.3（125）最好。
+- jieba 权重 0.15 / 0.5、带不带单字：Tatoeba 1820~1852，日常句 118~120，都在噪声里，没有一组三项都不掉。
+- CC-CEDICT 频次给 100（让引擎当占位频次重估）：Tatoeba 少 1 句，其余不变。
+
+`corpus` 已知的毛病：语料里出现过、但雾凇里频次只有 1~2 的词会被抬到几千到几万，大多是该抬的
+（嫉妒、披萨：`pisa` 以前首选是「屁嫂」），也有 jieba 切出来的碎片（般的、道菜）——`daocai` 的首选变成了「道菜」。
+Tatoeba 是翻译腔的短句，汤姆、玛丽这类人名会被抬高。
+
+jieba 新词的读音抽查（固定种子各抽 300 个，人工核对）：
+
+- 以前的做法（#195，7259 个新词）：5 个确定读错（武都 wu dou、薄一波 bao、泊头 po、贝可勒尔 lei、王大珩 hang），
+  另有 4 个人名姓氏读音存疑（区、盖、单），1.7%~3.0%；能用 CC-CEDICT 核对的 933 个里 33 个对不上（3.5%）。
+- 现在的做法（6011 个新词，多音字按单字猜的 1250 个不收）：300 个里没有读错的；能用 CC-CEDICT 核对的 827 个里
+  10 个对不上，其中儿化写法 2 个、「出血」读 xie 3 个（雾凇也收了这个读音）、半生不熟 shu/shou 1 个，
+  真错的是唱喏、恁般、那末、长机 4 个（约 0.5%）。
+- 读音之外，新词里有一成左右是 jieba 词典里的碎片和小说人名（黄蓉知、慈禧一、一个三十多岁）。
+
+新词抢首选的情况（用每个新词自己的拼音打一遍，和基线比）：`cedict` 12033 个拼音里新词排第一 3610 个、
+首选变了 1379 个（多数是把拼不成词的句子换成了词，比如 aiqitunsuan「爱妻运算」→「嗳气吞酸」，
+也有 aiyouteng「哎哟疼」→「爱优腾」这种）；`jieba` 5848 个拼音里首选变了 2880 个。
+
+结论：只有 `corpus` 在三组留出用例上都不掉、短输入首选不变；`jieba`、`cedict` 在整句上看不出好处，留作可选。
+
 ## 4. Cell 词典（`cell_dict.*.zh`）
 
 运行中的 WeType 从
