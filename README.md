@@ -20,7 +20,7 @@
 <table>
 <tr>
 <td align="center" width="50%"><video src="https://github.com/user-attachments/assets/b9ee2854-3718-461b-a58c-0a0e72f78253" controls muted width="100%"></video></td>
-<td align="center" width="50%"><video src="V0312_VIDEO_URL" controls muted width="100%"></video></td>
+<td align="center" width="50%"><video src="https://github.com/user-attachments/assets/9a6a6ea9-d3b3-4b7b-8d7b-fc5554c4a8c6" controls muted width="100%"></video></td>
 </tr>
 <tr>
 <td align="center"><sub>介绍视频</sub></td>
