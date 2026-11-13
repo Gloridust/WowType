@@ -339,6 +339,9 @@ public final class Composer {
         if openPanel != nil {
             return handleToolKey(key)
         }
+        if handleModeKey(key) {
+            return true
+        }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
         // 都由会话处理（「译」里攒着原文时输入框变成了不能翻译的，会话先把原文原样上屏）
         if mode == .translate && !isComposing
@@ -402,6 +405,27 @@ public final class Composer {
         raw.modifiers = key.modifiers.rawValue
         raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
         wowtype_session_key(session, &raw)
+    }
+
+    /// 设置里另设的切换中 / 英、进出「译」快捷键（#143、#87），和 Linux 一样：两个一样时算进出「译」；
+    /// 进不了「译」（没开互译、没配好）时不接，交给应用。
+    private func handleModeKey(_ key: KeyInput) -> Bool {
+        if let translateModeKey = config.translateModeKey, translateModeKey.matches(key) {
+            if mode == .translate {
+                switchMode(to: .chinese)
+                return true
+            }
+            if translateAvailable {
+                switchMode(to: .translate)
+                return true
+            }
+            return false
+        }
+        if let toggleKey = config.toggleKey, toggleKey.matches(key) {
+            switchMode(to: mode == .chinese ? .english : .chinese)
+            return true
+        }
+        return false
     }
 
     /// 单按 Shift：中 → 英 → 译 → 中（没配好互译时只在中英之间切），和 Linux 一样。

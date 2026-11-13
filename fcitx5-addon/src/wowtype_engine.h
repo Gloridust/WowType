@@ -216,6 +216,14 @@ FCITX_CONFIGURATION(
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
+    // 另设的快捷键（#143、#87），默认不用；单按 Shift 照常。fcitx5 自己的热键（比如切换输入法的
+    // Ctrl+空格）先被 fcitx5 拿走，WowType 收不到，设置界面会提示
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> toggleKey{
+        this, "ToggleKey", "切换中 / 英文的快捷键", fcitx::Key(),
+        fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> translateModeKey{
+        this, "TranslateModeKey", "进出互译的快捷键", fcitx::Key(),
+        fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
     fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（最多一小时一次）", true};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
     fcitx::Option<bool> translate{this, "Translate", "互译（Shift 切到「译」，打中文出外文）",
@@ -377,6 +385,8 @@ private:
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
+    /// 设置里的切换中 / 英、进出互译快捷键：切了返回 true；切不了（没开互译）不接，交给应用。
+    bool handleModeKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
     /// Shift 键交给会话判断单按（别的键只报一下，打断单按）。返回 true：这个键处理完了
     /// （Shift 键都是；单按切换了模式时吃掉，否则交给应用）。
@@ -537,6 +547,8 @@ private:
     bool emojiSuggest_ = true;
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;
+    fcitx::Key toggleKey_;
+    fcitx::Key translateModeKey_;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
 
     WowtypeVoice *voice_ = nullptr;

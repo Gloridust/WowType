@@ -140,6 +140,8 @@ VoiceKey=Alt_R
 VoiceCopy=False
 EmojiSuggest=True
 EmojiKey=Super+period
+ToggleKey=
+TranslateModeKey=
 Translate=False
 TranslateTarget=en
 TranslateBaseUrl=
@@ -168,6 +170,8 @@ Lexicon=
 | `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off`。fcitx5 自己的全局快捷键（「临时切换输入法」「切换输入法」「向前切换输入法」等任何一项）里用了同一个 Shift 时，fcitx5 先处理，WowType 收不到；设置界面「输入」页会提示，并能一键把 Shift 从 fcitx5 那边去掉（改的是 `~/.config/fcitx5/config`，关掉开关就还原；这个文件写不了时提示「只在这次有效」，NixOS 见[安装说明](INSTALL.md#单按-shift-在-nixos-上)） |
 | `InitialMode` | 从别的输入法切到 WowType、开机后第一次用时的模式：`Chinese`（默认）、`English`、`Last`（和上次切走时一样）。换窗口不算，中英文照旧全局保持；关了 Shift 切换（`ShiftToggle=Off`）时总是中文。只在 Linux（macOS 每个应用一份模式，还没有这一项） |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
+| `ToggleKey` | 另设一个切换中 / 英文的快捷键（fcitx5 键名，如 `Control+space`、`Control+Shift+space`），留空不用；单按 Shift 照常。在「译」里按回到中文。fcitx5 自己的全局快捷键先处理：`Control+space` 默认是 fcitx5「切换启用/禁用输入法」的键（macOS 上是系统切换输入法的键），要先在那边删掉，设置界面会提示 |
+| `TranslateModeKey` | 进出「译」的快捷键（如 `Control+Shift+Y`），留空不用：不在「译」里按就进「译」，在「译」里按回到中文；互译没打开、翻译没配好时这个键交给应用。和 `ToggleKey` 设成同一个键时算这个 |
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键。macOS 上默认 `Control+period`，`Super` 当 `Control`（见 [macOS](#macos)） |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
 | `TranslateBaseUrl`、`TranslateModel` | 翻译服务（OpenAI 格式）的地址和模型，见[互译](#互译) |
@@ -228,7 +232,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 
 现在认的项：`CandidateLayout`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
 `Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
-`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
+`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`ToggleKey`、`TranslateModeKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
 检查更新 macOS 还没做，对应的项写了也不起作用。
 
 [工具栏](#v--空格工具栏)和表情面板和 Linux 上一样用，不同的是：
