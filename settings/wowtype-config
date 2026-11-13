@@ -103,8 +103,6 @@ DEFAULTS = {
     "TypoCorrection": "True",
     "RareExtChars": "False",
     "InputScheme": "Quanpin",
-    # 旧版的双拼开关：写文件时跟着 InputScheme 写，旧版本读得懂；读的时候只在没有 InputScheme 时看它
-    "Shuangpin": "False",
     "ShuangpinScheme": "Ziranma",
     "ShuangpinShowKeys": "False",
     "WubiAutoCommit": "True",
@@ -399,6 +397,7 @@ def read_config():
     except OSError:
         return values, extra
     seen = set()
+    old_shuangpin = False
     in_group = False
     for line in lines:
         if line.strip().startswith("["):
@@ -408,20 +407,17 @@ def read_config():
         if not in_group and sep and key in DEFAULTS:
             values[key] = normalize_value(key, unquote_value(value.strip()))
             seen.add(key)
+        elif not in_group and sep and key == "Shuangpin":
+            # 0.3.12 及以前的双拼开关：只在没有 InputScheme 时算，不放进「不认识的行」，下次存盘就没了
+            old_shuangpin = unquote_value(value.strip()) == "True"
         elif line.strip():
             extra.append(line)
     # 0.3.10 及以前没有 TranslateLocal：已经填好翻译接口的，接着用接口（设置里默认是本地模型）
     if "TranslateLocal" not in seen and values["TranslateBaseUrl"].strip():
         values["TranslateLocal"] = "False"
-    # 0.3.12 及以前没有 InputScheme，只有 Shuangpin 开关
-    if "InputScheme" not in seen and values["Shuangpin"] == "True":
+    if "InputScheme" not in seen and old_shuangpin:
         values["InputScheme"] = "Shuangpin"
-    return with_legacy_shuangpin(values), extra
-
-
-def with_legacy_shuangpin(values):
-    """Shuangpin（旧版的双拼开关）跟着 InputScheme：旧版本读到的也是现在的方案（五笔在旧版本里是全拼）。"""
-    return {**values, "Shuangpin": "True" if values["InputScheme"] == "Shuangpin" else "False"}
+    return values, extra
 
 
 def find_wubi_table():
@@ -445,7 +441,6 @@ def quote_value(value):
 
 
 def write_config(values, extra):
-    values = with_legacy_shuangpin(values)
     lines = [f"{key}={quote_value(values[key])}" for key in DEFAULTS]
     write_atomic(CONFIG_FILE, "\n".join(lines + extra) + "\n")
 

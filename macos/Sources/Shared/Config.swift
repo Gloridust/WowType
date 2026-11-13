@@ -33,12 +33,16 @@ public struct WowtypeConfig: Equatable {
     /// 输入方案：全拼、双拼、五笔 86（见 spec/config.json 的 InputScheme）
     public enum InputScheme: String, CaseIterable {
         case quanpin = "Quanpin", shuangpin = "Shuangpin", wubi86 = "Wubi86"
-    }
 
-    /// 输入方案在设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）。
-    public static let inputSchemes: [(String, InputScheme)] = [
-        ("拼音输入", .quanpin), ("双拼输入", .shuangpin), ("五笔输入", .wubi86),
-    ]
+        /// 设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）
+        public var name: String {
+            switch self {
+            case .quanpin: return "拼音输入"
+            case .shuangpin: return "双拼输入"
+            case .wubi86: return "五笔输入"
+            }
+        }
+    }
 
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
@@ -212,7 +216,7 @@ public struct WowtypeConfig: Equatable {
         var inGroup = false
         var sawTranslateLocal = false
         var sawInputScheme = false
-        var legacyShuangpin: String?
+        var oldShuangpin = false
         // Swift 把 \r\n 当成一个字符，用 isNewline 才认得出 Windows 换行
         for raw in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
             let line = trim(Substring(raw))
@@ -229,8 +233,8 @@ public struct WowtypeConfig: Equatable {
             let key = trim(line[..<eq])
             let value = unquote(trim(line[line.index(after: eq)...]))
             if key == "Shuangpin" {
-                // 旧版的双拼开关只在没有 InputScheme 时算（0.3.12 及以前只有它），见下面
-                legacyShuangpin = value
+                // 0.3.12 及以前的双拼开关：只在没有 InputScheme 时算，见下面；存盘时删掉（见 serialized）
+                oldShuangpin = value == "True"
                 continue
             }
             config.setValue(value, forKey: key)
@@ -240,8 +244,8 @@ public struct WowtypeConfig: Equatable {
         if !sawTranslateLocal {
             config.translateLocal = impliedTranslateLocal(baseUrl: config.translateBaseUrl)
         }
-        if !sawInputScheme, let legacyShuangpin {
-            config.setValue(legacyShuangpin, forKey: "Shuangpin")
+        if !sawInputScheme, oldShuangpin {
+            config.inputScheme = .shuangpin
         }
         return config
     }
@@ -260,7 +264,7 @@ public struct WowtypeConfig: Equatable {
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
         "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong", "FuzzyEngOng",
-        "TypoCorrection", "RareExtChars", "InputScheme", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys",
+        "TypoCorrection", "RareExtChars", "InputScheme", "ShuangpinScheme", "ShuangpinShowKeys",
         "WubiAutoCommit", "WubiHint", "ShiftToggle",
         "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
@@ -303,13 +307,6 @@ public struct WowtypeConfig: Equatable {
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
         case "InputScheme":
             if let v = matchName(value, InputScheme.allCases.map(\.rawValue)) { inputScheme = InputScheme(rawValue: v)! }
-        case "Shuangpin":
-            // 旧版的双拼开关，跟着 InputScheme（parse 只在文件里没有 InputScheme 时拿它来定方案）
-            if value == "True" {
-                inputScheme = .shuangpin
-            } else if value == "False", inputScheme == .shuangpin {
-                inputScheme = .quanpin
-            }
         case "ShuangpinScheme":
             if let v = matchName(value, WowtypeConfig.shuangpinSchemes) { shuangpinScheme = v }
         case "ShiftToggle":
@@ -359,8 +356,6 @@ public struct WowtypeConfig: Equatable {
         case "ArrowKeys": return arrowKeys.rawValue
         case "PageSize": return String(pageSize)
         case "InputScheme": return inputScheme.rawValue
-        // 写文件时跟着 InputScheme 写，旧版本读得懂（五笔在旧版本里是全拼）
-        case "Shuangpin": return shuangpin ? "True" : "False"
         case "ShuangpinScheme": return shuangpinScheme
         case "ShiftToggle": return shiftToggle.rawValue
         case "PunctuationStyle": return halfwidthPunct ? "Halfwidth" : "Fullwidth"
@@ -385,6 +380,7 @@ public struct WowtypeConfig: Equatable {
     /// 只动认识的键：值读出来已经一样的那行原样不动（大小写、引号、两边的空格都留着），不一样的只换 = 后面的值。
     /// 注释、空行、不认识的键（语音这些 macOS 还没有的）、[分组] 原样留着，所以 Linux 拷过来的文件
     /// 改完拿回 Linux 照样能用。文件里没有、又不是默认值的键补在最后一个设置后面（[分组] 前面）。
+    /// 只删一种行：0.3.12 及以前的 Shuangpin 开关（三端存盘都不写它）。
     /// text 是 nil 或空的（还没有文件）时从带说明的模板开始。
     public func serialized(into text: String?) -> String {
         guard let text, text.contains(where: { !$0.isWhitespace }) else {
@@ -395,6 +391,7 @@ public struct WowtypeConfig: Equatable {
         var seen = Set<String>()
         var firstGroup: Int?
         var crlf = false
+        var oldShuangpin: [Int] = []
         for i in lines.indices {
             var line = lines[i]
             let cr = line.hasSuffix("\r")
@@ -413,6 +410,10 @@ public struct WowtypeConfig: Equatable {
                 continue
             }
             let key = trim(line[..<eq])
+            if key == "Shuangpin" {
+                oldShuangpin.append(i)
+                continue
+            }
             guard let wanted = value(forKey: key) else {
                 continue
             }
@@ -430,6 +431,12 @@ public struct WowtypeConfig: Equatable {
             }
             lines[i] = String(line[..<start]) + quote(wanted) + (cr ? "\r" : "")
         }
+
+        // 0.3.12 及以前的双拼开关（parse 读过了）：删掉，方案只看 InputScheme（这些行都在 [分组] 前面）
+        for i in oldShuangpin.reversed() {
+            lines.remove(at: i)
+        }
+        firstGroup = firstGroup.map { $0 - oldShuangpin.count }
 
         // 文件里没有的键读出来是默认值；TranslateLocal 没写时跟着 TranslateBaseUrl 走（见 parse），按读回来的值比
         var implied = WowtypeConfig()
@@ -517,8 +524,6 @@ public struct WowtypeConfig: Equatable {
 
         # 输入方案：Quanpin 全拼、Shuangpin 双拼、Wubi86 五笔 86
         InputScheme=\(d.inputScheme.rawValue)
-        # 旧版的双拼开关：跟着 InputScheme 写，给旧版本看的，改上面那行
-        Shuangpin=\(b(d.shuangpin))
         # 双拼方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
         # Ziguang 紫光、PinyinJiajia 拼音加加
         ShuangpinScheme=\(d.shuangpinScheme)

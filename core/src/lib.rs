@@ -203,7 +203,6 @@ pub struct Engine {
     wubi: RwLock<Option<Arc<wubi::WubiTable>>>,
 }
 
-
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
         let merged = Arc::new(UserLexicon::new(lexicon.clone()));
@@ -3053,7 +3052,7 @@ mod tests {
         e.set_fuzzy_fallback(false);
         let has =
             |e: &Engine, input: &str, word: &str| e.input(input).iter().any(|c| c.text == word);
-        // 只开原来的十二组时都对不上（yun = yong 以前算 un = ong，现在归 un = iong）
+        // 只开另外十二组时都对不上（yun 是 ün：yun = yong 算 un = iong，不算 un = ong）
         let new_groups = fuzzy::AN_AI | fuzzy::HUANG_WANG | fuzzy::UN_IONG | fuzzy::ENG_ONG;
         e.set_fuzzy_groups(fuzzy::ALL & !new_groups);
         let pairs = [("wangse", "黄色"), ("jiong", "军"), ("zheng", "中"), ("dai", "单"), ("yong", "云")];

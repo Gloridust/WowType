@@ -124,7 +124,7 @@ def run(app):
         check(win.calc_row.get_subtitle().startswith("五笔时打大写 V") and not win.toolbar_row.get_sensitive(),
               "五笔时计算器、工具栏的说明不对")
         text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
-        check("InputScheme=Wubi86" in text and "Shuangpin=False" in text, "五笔写进文件不对")
+        check("InputScheme=Wubi86" in text and "\nShuangpin=" not in text, "五笔写进文件不对")
         win.scheme_rows["Wubi86"][0].set_active(False)
         check(win.values["WubiAutoCommit"] == "False", "四码唯一自动上屏没存上")
         win.scheme_rows["Wubi86"][0].set_active(True)
@@ -133,7 +133,7 @@ def run(app):
         check(visible(win.scheme_rows["Wubi86"]) == [False, False] and visible(win.scheme_rows["Shuangpin"]) == [True, True],
               "双拼时该只出双拼的两项")
         text = open(ns["CONFIG_FILE"], encoding="utf-8").read()
-        check("InputScheme=Shuangpin" in text and "Shuangpin=True" in text, "双拼写进文件不对（旧版要读 Shuangpin）")
+        check("InputScheme=Shuangpin" in text and "\nShuangpin=" not in text, "双拼写进文件不对")
         win.scheme_checks["Quanpin"].set_active(True)
         pump(0.4)
         check(not any(visible(win.scheme_rows["Wubi86"] + win.scheme_rows["Shuangpin"])), "全拼时不该出双拼、五笔的设置")
@@ -216,7 +216,13 @@ def run(app):
                 current = w.get_current_folder()
                 return current is not None and current.get_path() == folder
             check(pump_until(folder_ready), "文件对话框没切到目标目录")
-            w.response(Gtk.ResponseType.ACCEPT)
+            # 目录还在载入时点「保存」会被对话框吞掉（窗口还开着）：没写出文件就再点
+            for _ in range(10):
+                if not w.get_visible():
+                    break
+                w.response(Gtk.ResponseType.ACCEPT)
+                if pump_until(lambda: os.path.exists(target), 3):
+                    break
         check(pump_until(lambda: os.path.exists(target)), "导出自定义词没写出文件")
     step("导出自定义词（保存）", export_words)
     step("打开网址", lambda: win.open_url("https://example.invalid/"))

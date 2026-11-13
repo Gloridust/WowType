@@ -535,7 +535,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # 「这一版要注意」只写给下一个版本，发完这一版就删掉这一节
           cat > notes.md <<EOF
+          ## 这一版要注意
+
+          - 模糊音：\`yun = yong\` 从「un = ong」挪到了新的「un = iong」一组（默认关）。以前开着「un = ong」、打 \`yong\` 要出「云」的，到设置里再打开「un = iong」。
+
           ## 安装（Ubuntu / Debian、deepin、Arch Linux、Fedora、NixOS）
 
           一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：

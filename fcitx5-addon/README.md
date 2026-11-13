@@ -121,7 +121,7 @@ bigram 格式（可选）：
 ## 配置
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
-`FuzzyZh` 等 9 组模糊音、`InputScheme`（拼音、双拼、五笔）、`ShuangpinScheme`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
+`FuzzyZh` 等 16 组模糊音、`InputScheme`（拼音、双拼、五笔）、`ShuangpinScheme`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
 `Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`

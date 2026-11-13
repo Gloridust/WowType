@@ -507,7 +507,7 @@ do {
     var wubi = WowtypeConfig()
     wubi.inputScheme = .wubi86
     let written = wubi.serialized(into: "Shuangpin=True\n")
-    check(written.contains("Shuangpin=False") && written.contains("InputScheme=Wubi86"), "写回去 Shuangpin 跟着方案", written)
+    check(!written.contains("Shuangpin=") && written.contains("InputScheme=Wubi86"), "写回去删掉旧的 Shuangpin 开关", written)
 
     var noTable = WowtypeConfig()
     noTable.inputScheme = .wubi86
@@ -719,6 +719,7 @@ do {
     all.arrowKeys = .caret
     all.pageSize = 4
     all.candidateFontSize = 22
+    all.inputScheme = .wubi86
     all.shuangpinScheme = "PinyinJiajia"
     all.shiftToggle = .off
     all.halfwidthPunct = true

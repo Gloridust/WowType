@@ -173,7 +173,7 @@ struct CandidateLayout {
     }
 
     /// 序号、词、词后面的小字（编码提示）连成一串：序号和小字用小一号的字、序号的颜色，基线对齐。
-    func content(label: String, text: String, comment: String = "", labelColor: NSColor, textColor: NSColor,
+    func content(label: String, text: String, comment: String, labelColor: NSColor, textColor: NSColor,
                  commentColor: NSColor = .clear) -> NSAttributedString {
         let out = NSMutableAttributedString(string: label, attributes: [
             .font: labelFont, .foregroundColor: labelColor, .kern: Self.labelGap,
@@ -191,7 +191,7 @@ struct CandidateLayout {
         return ceil(line) + Self.cellPadding.height * 2
     }
 
-    private func contentWidth(label: String, text: String, comment: String = "") -> CGFloat {
+    private func contentWidth(label: String, text: String, comment: String) -> CGFloat {
         ceil(content(label: label, text: text, comment: comment, labelColor: .clear, textColor: .clear).size().width)
     }
 

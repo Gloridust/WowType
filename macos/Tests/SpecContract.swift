@@ -131,22 +131,25 @@ func checkConfigContract() {
     let schemeNames = (byKey["InputScheme"]?["values"]?.array ?? []).map {
         ($0["name"]?.string ?? "", $0["value"]?.string ?? "")
     }
-    check(WowtypeConfig.inputSchemes.map { $0.0 } == schemeNames.map { $0.0 }
-          && WowtypeConfig.inputSchemes.map { $0.1.rawValue } == schemeNames.map { $0.1 },
-          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(WowtypeConfig.inputSchemes)")
-    // 跟着别的项写的旧开关（Shuangpin 跟着 InputScheme）：读出来、写回去都跟着
+    let ourSchemes = WowtypeConfig.InputScheme.allCases.map { ($0.name, $0.rawValue) }
+    check(ourSchemes.map { $0.0 } == schemeNames.map { $0.0 } && ourSchemes.map { $0.1 } == schemeNames.map { $0.1 },
+          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(ourSchemes)")
+    // whenMissing 的 ifTrue 指着的旧键（InputScheme 的 Shuangpin）已经不是设置项：从只有旧键的文件读进来，
+    // 在设置窗口里改成每一个可选值（包括默认值）存盘，读回来是改的值，文件里没有旧键了
     for s in mine {
-        guard let key = s["key"]?.string, let target = s["mirrors"]?["key"]?.string,
-              let value = s["mirrors"]?["value"]?.string else { continue }
-        for c in byKey[target]?["whenMissing"]?["cases"]?.array ?? [] {
-            let file = (c["file"]?.object ?? [:]).sorted { $0.key < $1.key }
-                .map { "\($0.key)=\($0.value.string ?? "")\n" }.joined()
-            let parsed = WowtypeConfig.parse(file)
-            let want = parsed.value(forKey: target) == value ? "True" : "False"
-            check(parsed.value(forKey: key) == want, "契约：文件是 \(file.debugDescription) 时 \(key) 跟着 \(target)",
-                  parsed.value(forKey: key) ?? "nil")
-            let written = parsed.serialized(into: file)
-            check(written.contains("\(key)=\(want)"), "契约：文件是 \(file.debugDescription) 时写回去 \(key)=\(want)", written)
+        guard let key = s["key"]?.string, let old = s["whenMissing"]?["ifTrue"]?.string, byKey[old] == nil else {
+            continue
+        }
+        let file = "\(old)=True\n"
+        let base = WowtypeConfig.parse(file)
+        for value in enumValues(s) {
+            var wanted = base
+            wanted.setValue(value, forKey: key)
+            let written = wanted.merged(changesFrom: base, into: file)
+            check(WowtypeConfig.parse(written).value(forKey: key) == value,
+                  "契约：\(old)=True 的文件改成 \(key)=\(value) 存盘再读", written)
+            check(!written.split(separator: "\n").contains { $0.hasPrefix("\(old)=") },
+                  "契约：存盘以后文件里还有旧键 \(old)", written)
         }
     }
     let languages = (byKey["TranslateTarget"]?["values"]?.array ?? []).map {

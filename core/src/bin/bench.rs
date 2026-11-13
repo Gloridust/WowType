@@ -133,15 +133,6 @@ fn main() {
         }
         None => Arc::new(BigramLm::default()),
     };
-    // 和 Engine::set_domain_lm 一样混（这里还没有引擎）
-    let lm: Arc<dyn wowtype_core::LanguageModel> = match &domain_lm_path {
-        Some(path) => Arc::new(wowtype_core::lm::MixedLm::new(
-            lm,
-            wowtype_core::lm::load_lm(path).expect("载入领域模型"),
-            wowtype_core::lm::DOMAIN_LM_WEIGHT,
-        )),
-        None => lm,
-    };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut config = EngineConfig::default();
     if let Some(max) = max_candidates {
@@ -155,7 +146,10 @@ fn main() {
         config.fuzzy_groups = groups & wowtype_core::syllable::fuzzy::ALL;
     }
     config.traditional = s2t_path.is_some();
-    let engine = Engine::new(lex, lm).with_config(config);
+    let mut engine = Engine::new(lex, lm).with_config(config);
+    if let Some(path) = &domain_lm_path {
+        engine.set_domain_lm(Some(wowtype_core::lm::load_lm(path).expect("载入领域模型")));
+    }
     if let Some(path) = &s2t_path {
         let started = Instant::now();
         let n = engine.load_conversion(path).expect("载入简繁表");
