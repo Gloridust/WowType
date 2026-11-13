@@ -226,6 +226,13 @@ R1-b 的「合词保底」是在排序时打补丁；根子在建库。需要原
 5. **音节表和自定义词规则三份**（`core/src/syllable.rs`、`settings/wowtype-config:261,435,466`、`CustomWords.swift:155`）：核心导出「校验/规范化编码」「猜拼音」两个 C 函数，Swift 直接调；Python 设置通过一个小命令行（`wowtype-check`，已有 `core/src/bin/check.rs`）调。
 6. macOS 启动时比对核心 ABI 版本（`macos/Sources/App/main.swift:22` 现在只打印）。
 
+**进度（feat/a4-cleanup）**
+- 3：删掉了 `_append`、`_set_context`、`_last_choice`。`_input`、`_remaining`、`_selected_text` 两个外壳画编辑区还在用（8 处），frame 里补齐这些字段之前先留着。
+- 4：Linux 换词库、换翻译器、关输入法时先让所有会话放开再释放。macOS 的 Composer 拿着 `Engine` 的强引用，旧引擎要等所有输入框都换过去才释放，不会悬空；这期间没激活的输入框学到的词记在旧引擎里，会丢，没改。
+- 5：编码整理（`wowtype_custom_code`）和猜拼音（`wowtype_guess_pinyin`）进了核心，macOS 设置直接调，删掉了 Swift 自己的音节表、切分和查词库。Python 设置不链接核心，还是自己一份，但音节表补齐了 biang、cei、nia，核心的测试（`settings_syllable_table_matches`）会比对两份表；改成调 `wowtype-check` 留到以后。
+- 6：做了，主版本不一致时启动就退出。
+- 1、2 没做：会话的行为用例都写进了 `core/tests/session_keys.rs`；两个外壳的按键测试留着当集成测试（真键码 → 会话 → 上屏），不删。App 层测试要 AppKit，CI 的 docker swift 编不了，留到以后。
+
 ---
 
 ## 10. 建议的 PR 清单（按合并顺序）
