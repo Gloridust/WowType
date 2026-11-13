@@ -176,6 +176,8 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeShuangpinScheme, fcitx::NoConstrain<WowtypeShuangpinScheme>,
                   fcitx::DefaultMarshaller<WowtypeShuangpinScheme>, WowtypeShuangpinAnnotation>
         shuangpinScheme{this, "ShuangpinScheme", "双拼方案", WowtypeShuangpinScheme::Ziranma};
+    fcitx::Option<bool> shuangpinShowKeys{this, "ShuangpinShowKeys",
+                                          "双拼时编辑区显示打的键（不翻成全拼）", false};
     fcitx::Option<WowtypeShiftToggle, fcitx::NoConstrain<WowtypeShiftToggle>,
                   fcitx::DefaultMarshaller<WowtypeShiftToggle>, WowtypeShiftAnnotation>
         shiftToggle{this, "ShiftToggle", "单按 Shift 切换中英文", WowtypeShiftToggle::Both};
@@ -509,6 +511,8 @@ private:
     bool calculator_ = true;
     bool toolbar_ = true;
     bool clipboardHistory_ = false;
+    /// 双拼时编辑区显示打的键（#122）
+    bool shuangpinShowKeys_ = false;
     /// 自动补空格（wowtype_autospace 的 flags）：1 字母、2 数字，0 关。
     int autoSpaceFlags_ = 0;
     bool shuangpin_ = false;

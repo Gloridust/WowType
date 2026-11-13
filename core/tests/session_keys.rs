@@ -448,6 +448,16 @@ fn shuangpin_display_and_date_key() {
     assert!(frame.preedit.contains("zhong"), "{}", frame.preedit);
     assert_eq!(texts(&mut session)[0], "中国");
 
+    // #122：设置了显示双拼键时编辑区是打的键，候选照旧
+    let mut session = with(engine);
+    session.configure(Config {
+        shuangpin_keys: true,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "vsgo");
+    assert_eq!(frame.preedit, "vsgo");
+    assert_eq!(texts(&mut session)[0], "中国");
+
     let mut session = with(engine);
     type_keys(&mut session, "riqi");
     let all = texts(&mut session);

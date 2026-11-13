@@ -450,6 +450,8 @@ pub struct Config {
     pub toolbar: bool,
     /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
     pub clipboard_history: bool,
+    /// 双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong）；中英混打时看得出打了什么（#122）。
+    pub shuangpin_keys: bool,
 }
 
 impl Default for Config {
@@ -470,6 +472,7 @@ impl Default for Config {
             translate_mode: false,
             toolbar: true,
             clipboard_history: false,
+            shuangpin_keys: false,
         }
     }
 }
@@ -2231,11 +2234,15 @@ impl<'e> Session<'e> {
     }
 
     /// 还没选词那部分输入的显示：全拼分音节（nihao → ni hao），双拼显示成全拼
-    /// （vsgo → zhong'guo），和微信输入法一样。分不出来就原样。
+    /// （vsgo → zhong'guo），和微信输入法一样；设置了 `shuangpin_keys` 时双拼显示打的键。
+    /// 分不出来就原样。
     fn segmented_remaining(&mut self) -> String {
         let input = self.remaining().to_owned();
         if let Some(engine) = self.engine {
             if engine.config().shuangpin {
+                if self.config.shuangpin_keys {
+                    return input;
+                }
                 return engine
                     .shuangpin_display(&input)
                     .filter(|shown| !shown.is_empty())

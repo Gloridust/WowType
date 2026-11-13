@@ -75,6 +75,8 @@ public struct WowtypeConfig: Equatable {
     public var rareExtChars = false
     public var shuangpin = false
     public var shuangpinScheme = "Ziranma"
+    /// 双拼时编辑区显示打的键（uivs），不翻成全拼（#122）
+    public var shuangpinShowKeys = false
     public var shiftToggle = ShiftToggle.both
     public var traditional = false
     public var halfwidthPunct = false
@@ -201,7 +203,8 @@ public struct WowtypeConfig: Equatable {
         "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
-        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShiftToggle", "Traditional",
+        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys", "ShiftToggle",
+        "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
@@ -216,7 +219,8 @@ public struct WowtypeConfig: Equatable {
         "FuzzyNL": \.fuzzyNL, "FuzzyFH": \.fuzzyFH, "FuzzyRL": \.fuzzyRL, "FuzzyAn": \.fuzzyAn,
         "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
         "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
-        "Shuangpin": \.shuangpin, "Traditional": \.traditional, "PickChar": \.pickChar,
+        "Shuangpin": \.shuangpin, "ShuangpinShowKeys": \.shuangpinShowKeys,
+        "Traditional": \.traditional, "PickChar": \.pickChar,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
@@ -420,6 +424,8 @@ public struct WowtypeConfig: Equatable {
         # Ziguang 紫光、PinyinJiajia 拼音加加
         Shuangpin=\(b(d.shuangpin))
         ShuangpinScheme=\(d.shuangpinScheme)
+        # 双拼时编辑区显示打的键（不翻成全拼）
+        ShuangpinShowKeys=\(b(d.shuangpinShowKeys))
 
         # 单按哪个 Shift 切中英文：Both、Left、Right、Off
         ShiftToggle=Both

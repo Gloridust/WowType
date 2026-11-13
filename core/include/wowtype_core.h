@@ -424,6 +424,7 @@ typedef struct {
     int translate_mode;  /* 1.10 起：单按 Shift 的循环里有「译」（配好了翻译服务），默认 0 */
     int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、互译时不开），默认 1 */
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
+    int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。

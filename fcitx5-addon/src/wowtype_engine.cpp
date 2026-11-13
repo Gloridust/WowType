@@ -808,6 +808,7 @@ void WowtypeEngine::applyConfig() {
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
     clipboardHistory_ = envOr("WOWTYPE_CLIPBOARD_HISTORY", *config_.clipboardHistory);
+    shuangpinShowKeys_ = *config_.shuangpinShowKeys;
     if (!clipboardHistory_) {
         wowtype_clipboard_clear();
     }
@@ -1144,6 +1145,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
     config.translate_mode = translateAvailable() ? 1 : 0;
     config.toolbar = toolbar_ ? 1 : 0;
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
+    config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
     wowtype_session_configure(state->session_, &config);
 }
 
