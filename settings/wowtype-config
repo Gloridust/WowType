@@ -695,17 +695,6 @@ FCITX_OPTION_NAMES = {
     "DeactivateKeys": "取消激活输入法",
 }
 FCITX_SHIFT_OPTIONS = tuple(FCITX_OPTION_NAMES)
-# fcitx5 全局快捷键在它自己设置界面里的叫法（提示「被 fcitx5 占着」时用）
-FCITX_HOTKEY_NAMES = {
-    "TriggerKeys": "切换启用/禁用输入法",
-    "AltTriggerKeys": "临时在当前和第一个输入法之间切换",
-    "EnumerateForwardKeys": "向前切换输入法",
-    "EnumerateBackwardKeys": "向后切换输入法",
-    "EnumerateGroupForwardKeys": "向前切换分组",
-    "EnumerateGroupBackwardKeys": "向后切换分组",
-    "ActivateKeys": "启用输入法",
-    "DeactivateKeys": "禁用输入法",
-}
 # 配置文件里没写这一项时 fcitx5 用的默认值（globalconfig.cpp）
 FCITX_HOTKEY_DEFAULTS = {
     "AltTriggerKeys": ["Shift_L"],
@@ -866,8 +855,8 @@ def fcitx_hotkey_taking(key, hotkey=None):
     if not key:
         return None
     hotkey = saved_fcitx_hotkey()[0] if hotkey is None else hotkey
-    for option, value in hotkey.items():
-        if any(same_key(key, k) for k in key_list(value)):
+    for option in FCITX_SHIFT_OPTIONS:
+        if any(same_key(key, k) for k in key_list(hotkey.get(option))):
             return option
     return None
 
@@ -3819,7 +3808,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         key = self.values.get("ToggleKey", "")
         taken = fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None))
         self.toggle_key_row.set_subtitle(
-            f"fcitx5 也用 {key_label(key)}（{FCITX_HOTKEY_NAMES.get(taken, taken)}），"
+            f"fcitx5 也用 {key_label(key)}「{FCITX_OPTION_NAMES[taken]}」，"
             "WowType 收不到，先在 Fcitx 5 配置里删掉它" if taken else "")
 
     def refresh_shift_conflict(self):
