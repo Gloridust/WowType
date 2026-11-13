@@ -324,6 +324,15 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 
 「遍历 trie 导出词库」这条路走不通：trie 只存音节序列和频次，词条在另一套值编码里。
 要拿词条还是得解 `LargeDictValueHuffmanCodec` + 音节 ID 映射，或者换个思路。
+## 13.5 本地资产挖掘工具
+
+`tools/wetype-assets/` 下有可直接运行的解析工具：
+
+- `scan.py`：列出词典目录每份文件的大小、dict_type、头部魔数
+- `dump_xllm.py`：解析 XLLM 大模型容器的配置、分词器和张量蓝图
+
+已确认的格式与后续计划见 `tools/wetype-assets/README.md`。
+
 ## 14. 复现指南与失败记录（收尾）
 
 这一节给后来者：怎么从零复现这套分析，以及**哪些路走过、为什么没走通**。
