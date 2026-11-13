@@ -157,12 +157,12 @@ jobs:
       - run: scripts/make-data.sh "" dist/data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
-        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会开 issue 写好要改的内容。
+        # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会自动开 PR 改好（.github/scripts/nix-data-pr.sh）。
         run: |
           built=$(<dist/data/VERSION)
           pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
           if [ "$built" != "$pinned" ]; then
-            echo "::warning title=Nix 词库版本落后::这次构建的词库是 $built，nix/package.nix 还固定在 $pinned。发版后按自动开的 issue 更新。"
+            echo "::warning title=Nix 词库版本落后::这次构建的词库是 $built，nix/package.nix 还固定在 $pinned。发版时会自动开 PR 更新。"
           fi
       - run: scripts/package-deb.sh data dist/data dist/pkg
       - uses: actions/upload-artifact@v4
@@ -502,6 +502,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -589,33 +590,8 @@ jobs:
           fi
           echo "release 分支 → $GITHUB_REF_NAME（$sha）"
       - name: Nix 词库跟上这一版
-        # nix/package.nix 固定用某次发布页上的词库包；这一版换了词库，就开 issue 写好要改的三行
+        # 这一版换了词库，就把 nix/package.nix 改好开 PR 到 main（开不了 PR 时退回开 issue），见脚本开头
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          tarball=$(cd dist && ls wowtype-data-rime-ice-*.tar.gz)
-          built=${tarball#wowtype-data-rime-ice-}
-          built=${built%.tar.gz}
-          pinned=$(sed -n 's/^ *dataVersion = "\(.*\)";/\1/p' nix/package.nix)
-          if [ "$built" = "$pinned" ]; then
-            echo "Nix 包的词库已经是 $built"
-            exit 0
-          fi
-          hex=$(sha256sum "dist/$tarball" | cut -d' ' -f1)
-          sri=$(python3 -c 'import base64, sys; print("sha256-" + base64.b64encode(bytes.fromhex(sys.argv[1])).decode())' "$hex")
-          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$tarball"
-          cat > issue.md <<EOF
-          $GITHUB_REF_NAME 的词库是 \`$built\`，nix/package.nix 还固定在 \`$pinned\`，NixOS 用户拿到的是旧词库。
-
-          把 nix/package.nix 里这三处改成：
-
-          \`\`\`nix
-          dataVersion = "$built";
-          url = "$url";
-          hash = "$sri";
-          \`\`\`
-
-          合进 main 后，跟 release 分支的 NixOS 用户在下一次发版时拿到新词库。
-          EOF
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "Nix 包的词库更新到 $built" --body-file issue.md
+        run: .github/scripts/nix-data-pr.sh dist/wowtype-data-rime-ice-*.tar.gz

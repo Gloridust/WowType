@@ -24,8 +24,8 @@ let
   version = (lib.importTOML ../core/Cargo.toml).package.version;
 
   # 词库不在 git 里：用发布页上的词库压缩包（scripts/package-deb.sh data 打的），按哈希固定。
-  # 换词库时改这里的版本号和 hash（发布页 SHA256SUMS 里有；
-  # nix hash convert --hash-algo sha256 <十六进制> 转成 SRI 格式）。
+  # 换了词库的版本发版后，发布流程会自动开 PR 改这三行（.github/scripts/nix-data-pr.sh）；
+  # 手动改的话 hash 在发布页 SHA256SUMS 里，nix hash convert --hash-algo sha256 <十六进制> 转成 SRI 格式。
   dataVersion = "2026.11.11.3";
   data = fetchurl {
     url = "https://github.com/Gloridust/WowType/releases/download/v0.3.12/wowtype-data-rime-ice-${dataVersion}.tar.gz";
