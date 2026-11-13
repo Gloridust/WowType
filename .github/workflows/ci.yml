@@ -467,6 +467,53 @@ jobs:
           grep -q '1\.你好' dist/show.txt
           wowtype-config --self-test
 
+  ubuntu2204:
+    # fcitx5 5.0 的底线：只编译、跑按键测试、装到系统里，不出安装包（不在 release 的 needs 里，和 openSUSE 一样）
+    name: 源码安装 · Ubuntu 22.04（fcitx5 5.0）
+    needs: data
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: 系统依赖
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake extra-cmake-modules \
+            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
+            fcitx5 fcitx5-modules ca-certificates curl git file python3
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu22.04
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: 按键测试（fcitx5 5.0 + 真实词库和语言模型）
+        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
+      - name: 编译并安装到系统 Fcitx 目录（22.04 的 libadwaita 太旧，不装设置界面）
+        run: |
+          cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DWOWTYPE_INSTALL_SETTINGS=OFF
+          cmake --build build -j"$(nproc)"
+          cmake --install build
+      - name: 插件路径、依赖、插件清单要求的 fcitx5 版本
+        run: |
+          addon_dir="$(pkg-config --variable=libdir Fcitx5Core)/fcitx5"
+          test -f "$addon_dir/libwowtype.so"
+          ldd "$addon_dir/libwowtype.so" | tee ldd.txt
+          if grep -q 'not found' ldd.txt; then exit 1; fi
+          version="$(pkg-config --modversion Fcitx5Core)"
+          grep -n "core:" /usr/share/fcitx5/addon/wowtype.conf
+          grep -qx "0=core:$version" /usr/share/fcitx5/addon/wowtype.conf
+          test ! -e /usr/bin/wowtype-config
+
   nix:
     # flake.lock 固定的是 nixos-unstable；用户一般用 inputs.nixpkgs.follows 跟自己系统的 nixpkgs，
     # 所以稳定版也要能编。新稳定版出来（每年 5 月、11 月）时把 nixos-26.05 换成新的。
