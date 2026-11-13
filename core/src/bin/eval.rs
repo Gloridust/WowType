@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use wowtype_core::lm::{ArpaLm, BigramLm, LanguageModel};
+use wowtype_core::lm::{ArpaLm, BigramLm, LanguageModel, MixedLm};
 use wowtype_core::rank::{FeatureWeights, LinearRanker};
 use wowtype_core::{Engine, EngineConfig, Lexicon, MemoryLexicon};
 
@@ -24,6 +24,8 @@ fn main() {
     let mut lexicon_path = String::new();
     let mut eval_path = String::new();
     let mut lm_path: Option<String> = None;
+    let mut lm2_path: Option<String> = None;
+    let mut lm2_weight = 0.5f64;
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
     let mut max_candidates = 10usize;
@@ -64,6 +66,14 @@ fn main() {
             "--lm" => {
                 i += 1;
                 lm_path = args.get(i).cloned();
+            }
+            "--lm2" => {
+                i += 1;
+                lm2_path = args.get(i).cloned();
+            }
+            "--lm2-weight" => {
+                i += 1;
+                lm2_weight = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(0.5);
             }
             "--arpa" => {
                 i += 1;
@@ -165,6 +175,12 @@ fn main() {
         Arc::new(BigramLm::default())
     };
 
+    let lm: Arc<dyn LanguageModel> = if let Some(path) = &lm2_path {
+        let second = wowtype_core::lm::load_lm(path).unwrap_or_else(|e| fail(&format!("{e:#}")));
+        Arc::new(MixedLm::new(lm, second, 1.0 - lm2_weight.clamp(0.0, 1.0)))
+    } else {
+        lm
+    };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let ranker = Arc::new(LinearRanker::new(weights));
     let mut config = EngineConfig {

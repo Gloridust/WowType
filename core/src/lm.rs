@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
@@ -462,5 +463,59 @@ ngram 2=2
         let lm = BigramLm::from_bigram_tsv_str("你\t好\t4\n好\t你\t1\n").unwrap();
         assert!(lm.total() > 0.0);
         assert_eq!(lm.vocab(), 2);
+    }
+}
+
+/// 两路语言模型加权混合：ln P = weight * P_a + (1 - weight) * P_b。
+///
+/// 用来把通用词级 LM 和领域 LM（比如对话语料训的）合在一起：
+/// 两路的错误不完全重合，混合后通常比任何一路稳。
+pub struct MixedLm {
+    first: Arc<dyn LanguageModel>,
+    second: Arc<dyn LanguageModel>,
+    weight: f64,
+}
+
+impl MixedLm {
+    /// `weight` 是第一路（通常是通用模型）的权重，0..=1。
+    pub fn new(
+        first: Arc<dyn LanguageModel>,
+        second: Arc<dyn LanguageModel>,
+        weight: f64,
+    ) -> Self {
+        Self {
+            first,
+            second,
+            weight: weight.clamp(0.0, 1.0),
+        }
+    }
+}
+
+impl LanguageModel for MixedLm {
+    fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
+        self.weight * self.first.score(prev, cur) + (1.0 - self.weight) * self.second.score(prev, cur)
+    }
+
+    fn has_bigram(&self, prev: &str, cur: &str) -> bool {
+        self.first.has_bigram(prev, cur) || self.second.has_bigram(prev, cur)
+    }
+}
+
+#[cfg(test)]
+mod mixed_lm_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    struct Fixed(f64);
+    impl LanguageModel for Fixed {
+        fn score(&self, _prev: Option<&str>, _cur: &str) -> f64 {
+            self.0
+        }
+    }
+
+    #[test]
+    fn mixed_score_is_weighted() {
+        let m = MixedLm::new(Arc::new(Fixed(-2.0)), Arc::new(Fixed(-4.0)), 0.25);
+        assert!((m.score(None, "x") - (-3.5)).abs() < 1e-9);
     }
 }
