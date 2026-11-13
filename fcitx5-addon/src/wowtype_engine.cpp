@@ -155,6 +155,8 @@ std::string userConfigDir() {
 // 语音浮条：WowType 的 GNOME 扩展注册这个名字，插件把语音状态发给它画。
 // 信号 State(u 状态, s 文字, i 音量 0–100, i x, i y, i w, i h, b 相对窗口, d 缩放)，
 // x/y/w/h 是光标矩形，和 kimpanel 的 SetSpotRect / SetRelativeSpotRectV2 同一个意思。
+// 扩展画好了回一个 Ack(u 状态) 给插件；一次说话里等了 kOverlayAckUsec 还没有回执（扩展在这个
+// GNOME 上画出错、或者是不会回执的旧版扩展），就改在候选框里提示，不会什么都不显示（#170）。
 constexpr const char *kOverlayService = "io.github.gloridust.WowType.VoiceOverlay";
 constexpr const char *kOverlayPath = "/io/github/gloridust/WowType";
 constexpr const char *kOverlayInterface = "io.github.gloridust.WowType.Voice1";
@@ -163,6 +165,7 @@ constexpr uint32_t kOverlayListening = 1;
 constexpr uint32_t kOverlayRecognizing = 2;
 constexpr uint32_t kOverlayDone = 3;
 constexpr uint32_t kOverlayError = 4;
+constexpr uint64_t kOverlayAckUsec = 800 * 1000;
 
 /// 用户输入习惯（词的热度、词搭配）和用户词库放在同一个目录：history.tsv。
 std::string historyPathFor(const std::string &userDict) {
@@ -675,12 +678,25 @@ void WowtypeEngine::setupVoiceOverlay() {
             [this](const std::string &, const std::string &, const std::string &owner) {
                 if (owner != overlayOwner_) {
                     overlayOwner_ = owner;
+                    // 换了一个扩展实例（重新登录、扩展重载）：再给浮条一次机会
+                    overlayBroken_ = false;
+                    overlayAcked_ = false;
+                    overlaySentAt_ = 0;
                     WLOG_I() << "WowType: 语音浮条" << (owner.empty() ? "不在了" : "就绪");
                 }
+            });
+        overlayAckSlot_ = overlayBus_->addMatch(
+            fcitx::dbus::MatchRule(kOverlayService, kOverlayPath, kOverlayInterface, "Ack"),
+            [this](fcitx::dbus::Message &msg) {
+                if (msg.sender() == overlayOwner_) {
+                    overlayAcked_ = true;
+                }
+                return true;
             });
     } catch (const std::exception &e) {
         // 没有会话总线（比如测试里）：用文字提示
         WLOG_I() << "WowType: 连不上会话总线，语音用文字提示：" << e.what();
+        overlayAckSlot_.reset();
         overlayWatch_.reset();
         overlayWatcher_.reset();
         overlayBus_.reset();
@@ -709,6 +725,23 @@ void WowtypeEngine::sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state,
     msg << state << label << static_cast<int32_t>(std::clamp(level, 0, 100)) << x << y << w << h
         << relative << scale;
     msg.send();
+    if (state != kOverlayHide && state != kOverlayDone && !overlaySentAt_) {
+        overlaySentAt_ = fcitx::now(CLOCK_MONOTONIC);
+    }
+}
+
+void WowtypeEngine::checkOverlayAck(fcitx::InputContext *ic) {
+    if (!overlaySentAt_ || overlayAcked_ || overlayBroken_ ||
+        fcitx::now(CLOCK_MONOTONIC) - overlaySentAt_ < kOverlayAckUsec) {
+        return;
+    }
+    overlayBroken_ = true;
+    WLOG_W() << "WowType: 语音浮条没有回应（GNOME 扩展画的时候出错了？），改在候选框里提示；"
+                "重新登录后会再试浮条";
+    // 正留着的错误提示马上换到候选框里；录音、识别中的提示下一轮就按候选框画
+    if (voiceErrorUntil_ && !voiceErrorText_.empty()) {
+        showVoice(ic, "🎙 " + voiceErrorText_, {});
+    }
 }
 
 void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
@@ -2079,6 +2112,7 @@ bool WowtypeEngine::pollVoice() {
         cancelVoice();
         return false;
     }
+    checkOverlayAck(ic);
     const int phase = wowtype_voice_poll(voice_);
     const std::string text = wowtype_voice_text(voice_);
     switch (phase) {
@@ -2189,6 +2223,8 @@ void WowtypeEngine::clearVoice(bool done) {
                          done ? "识别完成" : "", 0);
     }
     voiceShowing_ = false;
+    overlaySentAt_ = 0;
+    overlayAcked_ = false;
     voiceLevels_.clear();
     voiceFrame_ = 0;
     voiceErrorUntil_ = 0;

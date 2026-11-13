@@ -4,6 +4,8 @@
 //
 // 数据来自 fcitx5 里的 WowType 插件：插件发现这个扩展注册了 BUS_NAME，就不再在候选框里
 // 写文字提示，改为每 50 毫秒发一次 State 信号（状态、文字、音量、光标矩形）。
+// 每画好一个状态回插件一个 Ack；插件一次说话里等不到回执，就退回候选框里的文字提示（#170），
+// 所以这里画出错时不能回执，错误写进 journal（journalctl --user -b | grep -i wowtype）。
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -87,7 +89,7 @@ export class VoiceOverlay {
 
         this._signalId = Gio.DBus.session.signal_subscribe(
             null, INTERFACE, 'State', OBJECT_PATH, null, Gio.DBusSignalFlags.NONE,
-            (_conn, _sender, _path, _iface, _signal, params) => this._onState(params.deepUnpack()));
+            (_conn, sender, _path, _iface, _signal, params) => this._onSignal(sender, params));
         this._nameId = Gio.bus_own_name(
             Gio.BusType.SESSION, BUS_NAME, Gio.BusNameOwnerFlags.NONE, null, null, null);
     }
@@ -151,6 +153,27 @@ export class VoiceOverlay {
     }
 
     // ── 信号 ────────────────────────────────────────────────────────────
+    _onSignal(sender, params) {
+        let state;
+        try {
+            const args = params.deepUnpack();
+            state = args[0];
+            this._onState(args);
+        } catch (e) {
+            console.error(`WowType 语音浮条画不出来（状态 ${state}）：`, e);
+            return;
+        }
+        // 真的显示出来了才回执；收起时也回，插件不等这个
+        if (state !== STATE_HIDE && !this._pill.visible)
+            return;
+        try {
+            Gio.DBus.session.emit_signal(sender, OBJECT_PATH, INTERFACE, 'Ack',
+                new GLib.Variant('(u)', [state]));
+        } catch (e) {
+            console.error('WowType 语音浮条回执发不出去：', e);
+        }
+    }
+
     _onState([state, label, level, x, y, w, h, relative, scale]) {
         this._lastSignal = GLib.get_monotonic_time();
         if (state === STATE_HIDE) {
