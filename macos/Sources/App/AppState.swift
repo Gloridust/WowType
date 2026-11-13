@@ -80,6 +80,9 @@ final class AppState {
     }
 
     /// 本地翻译模型，设置里 TranslateLocalModel 留空时用（同 Linux 的 ~/.local/share/wowtype/models/）
+    /// 语音识别模型（设置窗口「语音」页下载），同 Linux 的 ~/.local/share/wowtype/wtlocal
+    var voiceModelDir: String { VoiceModelInstaller.folder(in: supportDir).path }
+
     var localModelPath: String {
         supportDir.appendingPathComponent("models/HY-MT1.5-1.8B-Q4_K_M.gguf").path
     }

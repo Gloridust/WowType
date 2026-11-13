@@ -624,7 +624,7 @@ do {
     }
     check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
           "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
-    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+    check(d.value(forKey: "CheckUpdate") == nil, "不认识的键没有写法")
 
     // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
     var all = WowtypeConfig()
@@ -641,6 +641,7 @@ do {
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
     all.translateModel = "qwen 2.5"
@@ -1690,6 +1691,25 @@ do {
     check(LocalModel.safeLinkTarget("libllama.0.9.0.dylib"), "链接指向同目录的文件")
     check(!LocalModel.safeLinkTarget("../evil.dylib") && !LocalModel.safeLinkTarget("/usr/lib/libz.dylib")
           && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
+}
+
+// MARK: 语音键
+
+do {
+    let d = WowtypeConfig()
+    check(d.voice && d.voiceKey == "Alt_R" && !d.voiceCopy, "语音默认开、右 Option、不复制")
+    let option = VoiceKey(name: "Alt_R")
+    check(option?.keyCode == 0x3D && option?.isModifier == true, "Alt_R 是右 Option")
+    // 右 Option 按着时 modifierFlags 带 NX_DEVICERALTKEYMASK（0x40），左 Option 是 0x20
+    check(option?.isDown(rawFlags: 0x80000 | 0x40) == true && option?.isDown(rawFlags: 0x80000 | 0x20) == false,
+          "分得清左右 Option")
+    check(VoiceKey(name: "F8")?.keyCode == 0x64 && VoiceKey(name: "F8")?.isModifier == false, "F8 不是修饰键")
+    check(VoiceKey(name: "Menu") == nil && VoiceKey(name: "") == nil && VoiceKey(name: "none") == nil,
+          "Mac 上没有的键、留空：不用语音键")
+    let c = WowtypeConfig.parse("Voice=False\nVoiceKey=F9\nVoiceCopy=True")
+    check(!c.voice && c.voiceKey == "F9" && c.voiceCopy, "读语音设置")
+    check(voiceWave([]) == "▁▁▁▁▁▁" && voiceWave([100, 0]) == "▁▁▁▁█▁"
+          && voiceWave([0, 10, 20, 30, 40, 50, 60]).count == 6, "音量画成 6 个竖条（和 Linux 一样）")
 }
 
 // MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）
