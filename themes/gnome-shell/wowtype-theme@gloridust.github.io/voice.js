@@ -163,8 +163,8 @@ export class VoiceOverlay {
             console.error(`WowType 语音浮条画不出来（状态 ${state}）：`, e);
             return;
         }
-        // 真的显示出来了才回执；收起时也回，插件不等这个
-        if (state !== STATE_HIDE && !this._pill.visible)
+        // 真的显示出来了才回执；收起不回（插件不等这个）
+        if (state === STATE_HIDE || !this._pill.visible)
             return;
         try {
             Gio.DBus.session.emit_signal(sender, OBJECT_PATH, INTERFACE, 'Ack',

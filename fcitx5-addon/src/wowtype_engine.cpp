@@ -688,7 +688,11 @@ void WowtypeEngine::setupVoiceOverlay() {
         overlayAckSlot_ = overlayBus_->addMatch(
             fcitx::dbus::MatchRule(kOverlayService, kOverlayPath, kOverlayInterface, "Ack"),
             [this](fcitx::dbus::Message &msg) {
-                if (msg.sender() == overlayOwner_) {
+                uint32_t state = kOverlayHide;
+                msg >> state;
+                // 只算这次说话里、显示出来的状态的回执：上一次收起时的回执可能这时才到
+                if (msg.sender() == overlayOwner_ && overlaySentAt_ && state != kOverlayHide &&
+                    state != kOverlayDone) {
                     overlayAcked_ = true;
                 }
                 return true;
