@@ -216,6 +216,12 @@ pub struct WowtypeSessionConfig {
     pub clipboard_history: c_int,
     /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
     pub shuangpin_keys: c_int,
+    /// 1.10 起：五笔（引擎要载入五笔码表），默认 0。
+    pub wubi: c_int,
+    /// 1.10 起：五笔四码唯一自动上屏，默认 1。
+    pub wubi_auto_commit: c_int,
+    /// 1.10 起：五笔编码提示，默认 1。
+    pub wubi_hint: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -248,6 +254,9 @@ impl Default for WowtypeSessionConfig {
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
             shuangpin_keys: c_int::from(config.shuangpin_keys),
+            wubi: c_int::from(config.wubi),
+            wubi_auto_commit: c_int::from(config.wubi_auto_commit),
+            wubi_hint: c_int::from(config.wubi_hint),
         }
     }
 }
@@ -293,6 +302,9 @@ impl WowtypeSessionConfig {
             toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
+            wubi: self.wubi != 0,
+            wubi_auto_commit: self.wubi_auto_commit != 0,
+            wubi_hint: self.wubi_hint != 0,
         }
     }
 }
@@ -321,6 +333,8 @@ pub struct WowtypeCandidateInfo {
     pub kind: c_int,
     pub commit: *const c_char,
     pub emoji: *const c_char,
+    /// 1.10 起：候选后面的小字（五笔还要打的码、反查的五笔码），没有是空串。
+    pub comment: *const c_char,
 }
 
 pub const WOWTYPE_CAND_WORD: c_int = 0;
@@ -333,6 +347,7 @@ struct CCandidate {
     pinyin: CString,
     commit: CString,
     emoji: CString,
+    comment: CString,
     consumed: usize,
     kind: c_int,
 }
@@ -347,6 +362,7 @@ impl CCandidate {
             kind: self.kind,
             commit: self.commit.as_ptr(),
             emoji: self.emoji.as_ptr(),
+            comment: self.comment.as_ptr(),
         }
     }
 
@@ -356,6 +372,7 @@ impl CCandidate {
             pinyin: to_c(&c.pinyin),
             commit: to_c(&c.commit),
             emoji: to_c(&c.emoji),
+            comment: to_c(&c.comment),
             consumed: c.consumed,
             kind: match c.kind {
                 CandidateKind::Word => WOWTYPE_CAND_WORD,

@@ -35,6 +35,7 @@ pub mod voice_ffi;
 #[cfg(not(feature = "voice"))]
 pub mod voice_stub;
 pub mod wordlm;
+pub mod wubi;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -193,6 +194,17 @@ pub struct Engine {
     english: RwLock<Arc<HashMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
+    /// 五笔码表（选了五笔才载入，见 [`Engine::load_wubi`]）。
+    wubi: RwLock<Option<Arc<wubi::WubiTable>>>,
+}
+
+/// 五笔的一个候选（[`Engine::wubi_lookup`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WubiCandidate {
+    /// 上屏的字（繁体输出时已经转好）。
+    pub text: String,
+    /// 码表里的码：等于打的码是精确候选，更长的是逐码提示（后面几码是还要打的）。
+    pub code: String,
 }
 
 impl Engine {
@@ -212,6 +224,7 @@ impl Engine {
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
+            wubi: RwLock::new(None),
         }
     }
 
@@ -573,6 +586,53 @@ impl Engine {
         });
         list.truncate(self.config.max_candidates.max(1));
         *candidates = list;
+    }
+
+    /// 载入五笔码表（`wubi86.tsv`），替换上一次载入的，返回条数。
+    pub fn load_wubi<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
+        let table = wubi::WubiTable::load_tsv(path)?;
+        let len = table.len();
+        self.set_wubi(Some(Arc::new(table)));
+        Ok(len)
+    }
+
+    /// 换五笔码表，None 卸掉。
+    pub fn set_wubi(&self, table: Option<Arc<wubi::WubiTable>>) {
+        if let Ok(mut slot) = self.wubi.write() {
+            *slot = table;
+        }
+    }
+
+    /// 载入了的五笔码表。
+    pub fn wubi(&self) -> Option<Arc<wubi::WubiTable>> {
+        self.wubi.read().ok().and_then(|t| t.clone())
+    }
+
+    /// 五笔：打了 code 时的候选（见 [`wubi::WubiTable::lookup`]）。繁体输出时转成繁体，
+    /// 转完重复的只留前面那个，顺序不动（码位是固定的，不按分数重排）。没有码表时为空。
+    pub fn wubi_lookup(&self, code: &str, more: usize) -> Vec<WubiCandidate> {
+        let Some(table) = self.wubi() else {
+            return Vec::new();
+        };
+        let converter = if self.config.traditional {
+            self.converter.read().ok().map(|c| c.clone()).filter(|c| !c.is_empty())
+        } else {
+            None
+        };
+        let mut out: Vec<WubiCandidate> = Vec::new();
+        for hit in table.lookup(code, more) {
+            let text = match &converter {
+                Some(converter) => converter.convert(hit.word),
+                None => hit.word.to_owned(),
+            };
+            if !out.iter().any(|c| c.text == text) {
+                out.push(WubiCandidate {
+                    text,
+                    code: hit.code.to_owned(),
+                });
+            }
+        }
+        out
     }
 
     pub fn set_max_candidates(&mut self, max_candidates: usize) {
