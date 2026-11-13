@@ -225,7 +225,7 @@ jobs:
             libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
             fcitx5 fcitx5-modules \
             ca-certificates curl git dpkg-dev file python3 \
-            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11
       - uses: actions/checkout@v4
       - name: Rust
         run: |
@@ -281,6 +281,8 @@ jobs:
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
           # 插件清单要求编译时 fcitx5 的「主.次.0」（22.04 是 5.0.0），fcitx5 小版本落后一点的系统也能加载
           grep -qx "0=core:$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0" /usr/share/fcitx5/addon/wowtype.conf
+      - name: 设置界面：每页、每个对话框点一遍（无头；22.04 的老 libadwaita 用替身控件）
+        run: dbus-run-session -- xvfb-run -a python3 scripts/test-settings-gui.py /usr/bin/wowtype-config
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}-${{ matrix.arch }}

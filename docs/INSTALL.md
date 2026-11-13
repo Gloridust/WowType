@@ -4,7 +4,7 @@ WowType 是 Fcitx 5 的输入法插件。安装时需要让插件、Fcitx 5 和�
 安装包因此按发行版构建。源码构建会使用本机的 Fcitx 5 开发文件。
 
 最低要求：Fcitx 5.0、C++20 编译器、CMake 3.16。构建使用当前稳定版 Rust 和仓库的 `Cargo.lock`。
-默认启用的语音功能需要 ALSA。设置界面需要 Python 3、PyGObject、GTK 4、**libadwaita 1.5+**；
+默认启用的语音功能需要 ALSA。设置界面需要 Python 3、PyGObject、GTK 4.6+、libadwaita 1.1+；
 绿色候选框主题和语音浮条（GNOME 扩展）需要 GNOME 45+。
 
 ## 选择安装方式
@@ -14,7 +14,7 @@ WowType 是 Fcitx 5 的输入法插件。安装时需要让插件、Fcitx 5 和�
 | Arch Linux | 一键安装或本机 `makepkg` | 预编译包只有 x86_64；依赖不满足时先 `sudo pacman -Syu` |
 | EndeavourOS / Garuda / CachyOS | Arch 安装路径或本机打包 | 系统必须与所用 Arch 动态库兼容；加载失败时本机重编译 |
 | Manjaro | 本机 `makepkg` | 使用自己的软件源，脚本不会自动套用 Arch 包 |
-| Ubuntu 22.04 / 24.04 / 26.04 | 对应版本 deb | amd64、arm64；不跨 Ubuntu 版本混装。22.04 有几样用不了，见[下面](#ubuntu-2204fcitx5-50) |
+| Ubuntu 22.04 / 24.04 / 26.04 | 对应版本 deb | amd64、arm64；不跨 Ubuntu 版本混装。22.04 上 GNOME 扩展用不了，见[下面](#ubuntu-2204fcitx5-50) |
 | Debian 13 / 13.x | Debian 13 deb | amd64、arm64 |
 | deepin 23 / 25 | 对应版本 deb | 只有 amd64；不改输入法框架（deepin 默认就是 fcitx5） |
 | Mint / Pop!_OS 等衍生版 | 明确声明兼容基线时使用 deb | `jammy → ubuntu22.04`、`noble → ubuntu24.04`、`resolute → ubuntu26.04`、`trixie → debian13` |
@@ -77,12 +77,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile m
 
 #### Ubuntu 22.04（fcitx5 5.0）
 
-22.04 一般直接用上面的一键安装。它的 fcitx5 是 5.0.14（backports 里也没有更新的），打字、语音、互译都能用，
-有几样用不了：
+22.04 一般直接用上面的一键安装。它的 fcitx5 是 5.0.14（backports 里也没有更新的），打字、语音、互译、
+设置界面都能用（22.04 的 libadwaita 是 1.1，设置界面里几个新控件换成了样子差不多的旧控件）。用不了的是：
 
-- **设置界面**：要 libadwaita 1.5+，22.04 是 1.1，打开只会提示用不了。
-  设置用 Fcitx 5 自带的配置工具（`fcitx5-config-qt`）改 WowType 的选项，
-  或者直接改 `~/.config/fcitx5/conf/wowtype.conf`（键名和取值见[设置说明](CONFIG.md)），两种改的是同一个文件。
 - **绿色候选框主题和语音浮条**：GNOME 扩展要 GNOME 45+，22.04 是 42。候选框是 Fcitx 5 默认的样子，
   语音输入的提示显示在候选框里。
 
