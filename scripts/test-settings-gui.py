@@ -86,6 +86,18 @@ def run(app):
         win.font_row.set_value(14)
     step("数字框", spin)
 
+    def arrow_keys():
+        # 「方向键」的副标题跟着用法和候选排列走
+        win.layout_row.set_selected(1)
+        check(win.arrow_row.get_subtitle() == "↑ ↓ 选词，← → 翻页", "竖排的副标题不对")
+        win.arrow_row.set_selected(1)
+        check(win.values["ArrowKeys"] == "Caret", "方向键没存成 Caret")
+        check(win.arrow_row.get_subtitle() == "↑ ↓ 选词，← → 在拼音里移动光标", "移光标的副标题不对")
+        win.arrow_row.set_selected(0)
+        win.layout_row.set_selected(0)
+        check(win.arrow_row.get_subtitle() == "← → 选词，↑ 上一页，↓ 展开更多候选", "横排的副标题不对")
+    step("方向键", arrow_keys)
+
     def switches():
         win.theme_row.set_active(True)
         win.theme_row.set_active(False)
@@ -93,6 +105,17 @@ def run(app):
             row.set_active(not row.get_active())
         win.shift_free_row.set_active(True)
     step("开关", switches)
+
+    def toggle_key():
+        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到。
+        # fcitx5 的快捷键直接给定，不看这台机器（/etc/xdg 里可能改过）
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+space"}}
+        win.toggle_key_row.set_selected(1)
+        check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
+        check("Ctrl+空格 切换输入法" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
+        win.toggle_key_row.set_selected(0)
+        check(win.toggle_key_row.get_subtitle() == "", "不用切换键时还有提示")
+    step("切换键", toggle_key)
 
     def entries():
         win.url_row.set_text("http://127.0.0.1:9/v1")

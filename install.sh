@@ -134,11 +134,11 @@ macos_install() { # <只打印计划：0 / 1>
   tmp=$(mktemp -d)
   trap 'rm -rf "${tmp:-}"' EXIT
 
-  say "WowType $version（macOS）"
+  say "WowType ${version}（macOS）"
   fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null ||
     die "下载 $base/SHA256SUMS 失败，请检查版本和网络；发布页：https://github.com/$REPO/releases"
   expected=$(manifest_hash "$package" "$tmp/SHA256SUMS") ||
-    die "WowType $version 没有 macOS 安装包（$package）；发布页：https://github.com/$REPO/releases"
+    die "WowType $version 没有 macOS 安装包（${package}）；发布页：https://github.com/$REPO/releases"
   say "下载并校验 $package"
   fetch "$base/$package" "$tmp/$package"
   actual=$(shasum -a 256 "$tmp/$package")
@@ -334,11 +334,11 @@ main() {
   trap 'rm -rf "${tmp:-}"' EXIT
   chmod 755 "$tmp"   # apt 用 _apt 用户读本地包
 
-  say "WowType $version（$ID → $distro）"
+  say "WowType ${version}（$ID → ${distro}）"
   fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" 2>/dev/null ||
     die "下载 $base/SHA256SUMS 失败，请检查版本和网络；发布页：https://github.com/$REPO/releases"
   manifest_hash "$package" "$tmp/SHA256SUMS" >/dev/null ||
-    source_install "WowType $version 没有 $distro 的有效安装包（$package）"
+    source_install "WowType $version 没有 $distro 的有效安装包（${package}）"
   files=("$package")
   # 0.3.3 及以前的 deb 词库是单独的包；其他格式不安装 deb 数据包。
   local hash filename data=

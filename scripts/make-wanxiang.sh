@@ -48,14 +48,14 @@ IMPORTS=$(sed -n '/^import_tables:/,/^[^ ]/p' "$SRC/wanxiang.dict.yaml" |
 cat > "$OUT/SOURCE.txt" <<EOF
 数据来源：万象拼音 rime_wanxiang（https://github.com/amzxyz/rime_wanxiang，作者 amzxyz），
 许可证 CC BY 4.0，见 LICENSE。
-版本：$COMMIT（$DATE）
+版本：${COMMIT}（${DATE}）
 
 WowType 做的改动（tools/rime2tsv.py、tools/add_hotwords.py，脚本 scripts/make-wanxiang.sh）：
 - 只取 wanxiang.dict.yaml 引用的这些词库：$IMPORTS
   没有收 ${SKIP[*]}（错音错字，WowType 没有读音提示）。
 - 拼音去掉声调，ü 写成 v（ā bà -> a ba，lǜ -> lv），只留文字、拼音、词频三列。
 - 同一个词同一个读音出现多次时取最大词频。
-- 词频整体乘同一个系数，让总和为 $SCALE_TOTAL（和默认的雾凇词库同一个量级），
+- 词频整体乘同一个系数，让总和为 ${SCALE_TOTAL}（和默认的雾凇词库同一个量级），
   排序不变。
 - 合进 WowType 的热词表 data/hotwords.tsv（AI、工作、网络用语）。
 没有用万象的 .gram 语法模型。
@@ -66,13 +66,13 @@ VERSION="${DATE//-/.}.$REV"
 echo "$VERSION" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)
-echo "词库 $LINES 条 -> $OUT/lexicon.tsv（万象 $DATE，修订 $REV）"
+echo "词库 $LINES 条 -> $OUT/lexicon.tsv（万象 ${DATE}，修订 ${REV}）"
 if (( LINES < 500000 )); then
   echo "词库条数太少，rime_wanxiang 的目录结构可能变了" >&2
   exit 1
 fi
 for word in 你好 中国 输入法; do
-  grep -qP "\t$word\t" "$OUT/lexicon.tsv" || { echo "词库里没有「$word」，转换有问题" >&2; exit 1; }
+  grep -qP "\t$word\t" "$OUT/lexicon.tsv" || { echo "词库里没有「${word}」，转换有问题" >&2; exit 1; }
 done
 
 if [[ -n "$PKG" ]]; then

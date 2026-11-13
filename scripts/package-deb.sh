@@ -122,7 +122,8 @@ Files: *
 License: MIT or Apache-2.0
 
 Files: usr/share/wowtype/s2t.tsv
-Comment: 由 OpenCC 的字符映射表生成（tools/opencc2tsv.py）
+Comment: 由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+ 版本见文件头，https://github.com/BYVoid/OpenCC
 License: Apache-2.0
 
 Files: usr/lib/*/fcitx5/libwowtype.so
@@ -160,7 +161,11 @@ data)
   version=${version//-/.}
   # 不用 deb 的系统：解压到 ~/.local/share/wowtype/ 即可
   tarball="$OUT/wowtype-data-rime-ice-$version.tar.gz"
-  tar -C "$data" -czf "$tarball" lexicon.tsv english.txt words.lm LICENSE SOURCE.txt
+  # 可复现：固定文件顺序、时间和属主，gzip 不写时间戳。内容不变时每次打出来的包
+  # sha256 都一样，打包脚本（如 AUR）钉住的校验和不会因为重新发版而失效。
+  tar -C "$data" --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --owner=0 --group=0 --numeric-owner -cf - \
+    lexicon.tsv english.txt words.lm LICENSE SOURCE.txt | gzip -n >"$tarball"
   echo "$tarball"
   ;;
 
