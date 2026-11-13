@@ -182,7 +182,7 @@ WubiHint=True                    # 编码提示
 |---|---|
 | CI data job（`.github/workflows/ci.yml:158`） | `make-data.sh` 之后加 `scripts/make-wubi.sh "" dist/data`。<br>artifact 上传的是整个 `dist/data`（:169-173），下游 job 自动拿到。 |
 | 版本号（`scripts/make-data.sh:83` `REV`） | 加了文件要把 `REV` 加 1，否则 `VERSION` 不变。<br>`nix-data-pr.sh:23-26` 看版本号相同就不更新 Nix。 |
-| deb（`scripts/package-deb.sh`） | - `check_data` 必需文件（:71）加 `wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS`<br>- 装到 `/usr/share/wowtype` 的循环（:101）加 `wubi86.tsv`<br>- doc 目录加 `WUBI-SOURCE.txt`、`WUBI-AUTHORS`（:106 附近）<br>- `data_copyright()`（:53-67）加一段 `Files: usr/share/wowtype/wubi86.tsv`、`License: LGPL-3.0`，正文缩进贴 `WUBI-LICENSE`<br>- 数据 tarball（:156）的清单加这几个文件<br>- #194 已经在这里加过可选的 wubi，以这次为准合并 |
+| deb（`scripts/package-deb.sh`） | - `check_data` 必需文件（:71）加 `wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS`<br>- 装到 `/usr/share/wowtype` 的循环（:101）加 `wubi86.tsv`<br>- doc 目录加 `WUBI-SOURCE.txt`、`WUBI-AUTHORS`（:106 附近）<br>- `data_copyright()`（:53-67）加一段 `Files: usr/share/wowtype/wubi86.tsv`、`License: LGPL-3.0`，正文缩进贴 `WUBI-LICENSE`<br>- 数据 tarball（:158-160，已按 #203 做成可复现的 tar）的清单加这几个文件<br>- #194 已经在这里加过可选的 wubi，以这次为准合并 |
 | rpm（`scripts/package-rpm.sh`） | - 检查（:21）和拷贝（:37）<br>- `%install`（:127）<br>- `LICENSE.rime-wubi` 加进 `%license`（:137、:142）<br>- COPYRIGHT（:56-64）加一段<br>- `License:`（:81）加 `AND LGPL-3.0-only` |
 | Arch（`scripts/package-arch.sh`） | - 检查（:19）、拷贝（:32）、`install`（:86）<br>- `/usr/share/licenses/wowtype/LICENSE.rime-wubi`<br>- `license=`（:48）加 `'LGPL-3.0-only'` |
 | openSUSE 源码安装（`ci.yml:467`） | 显式的 `install -m644` 清单加 `wubi86.tsv` |
