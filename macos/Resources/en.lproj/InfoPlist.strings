@@ -3,3 +3,5 @@
 "CFBundleDisplayName" = "WowType";
 "io.github.gloridust.inputmethod.WowType" = "WowType";
 "io.github.gloridust.inputmethod.WowType.Hans" = "WowType";
+
+"NSMicrophoneUsageDescription" = "Hold the voice key and speak; WowType turns your speech into text on this Mac.";

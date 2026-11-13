@@ -8,7 +8,7 @@ wowtype-config-dump 是 scripts/addon-test.sh 编出来的（fcitx5-addon/test/c
 WowtypeConfig 的键、类型、默认值、范围、可选值。macOS 那端在 macos/test.sh 里对照同一份规格。
 
 设置界面（settings/wowtype-config）没有 .py 后缀，用 importlib 按路径导入。不用装 GTK：导入前塞一个假的 gi，
-它在模块顶层只用到 gi.require_version 和 Adw 的两个基类。XDG 目录都指到临时目录，不碰自己的配置。
+它在模块顶层只用到 gi.require_version、几个当基类的控件和 GObject.Property。XDG 目录都指到临时目录，不碰自己的配置。
 """
 
 import hashlib
@@ -145,11 +145,15 @@ def check_spec(spec, pack):
 
 
 def fake_gi():
-    """够设置界面在顶层用的假 gi：require_version 什么都不做，gi.repository 里随便取的名字都是空类。"""
+    """够设置界面在顶层用的假 gi：require_version 什么都不做，gi.repository 里随便取的名字都是空类，
+    调用它（比如类体里的 GObject.Property(...)）也只得到一个空类。"""
 
     class Stub(type):
         def __getattr__(cls, name):
             return Stub(name, (), {})
+
+        def __call__(cls, *_args, **_kwargs):
+            return Stub(cls.__name__, (), {})
 
     gi = types.ModuleType("gi")
     gi.require_version = lambda *_args: None
@@ -217,6 +221,7 @@ def check_settings(spec, wc, home):
 
     # 选项列表：(界面上的名字, 存盘名)
     lists = {"ShuangpinScheme": wc.SHUANGPIN_SCHEMES, "ShiftToggle": wc.SHIFT_TOGGLES,
+             "InitialMode": wc.INITIAL_MODES,
              "SelectKeys": wc.SELECT_KEYS, "PunctuationStyle": wc.PUNCT_STYLES}
     for key, items in lists.items():
         same([value for _label, value in items], enum_values(by_key[key]), f"设置界面：{key} 的选项")

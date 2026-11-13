@@ -1,0 +1,23 @@
+# 雾凇词库（rime-ice）的常用词词频修正，格式同 data/hotwords.tsv（拼音<TAB>词<TAB>词频，只提不降）。
+# 只给 scripts/make-data.sh 用：数值是照雾凇的词频尺度定的，万象词库不用。
+#
+# 雾凇里两千多个常用词的词频挤在 50 万上下（现在 503182、行政 500367），谁排前面全看句首语言模型分，
+# 简拼 xz 先出「行政」、nh 先出「您好」。这里把明显更常打的抬上去；几个热词也给到比 30000 高：
+# 30000 在简拼里压不过地名（pyq -> 番禺区）；雾凇里本来就有、但词频很低的新词也抬上来
+# （黑神话 134，heishenhua 首选成了「黑 | 神华」）。
+xian zai	现在	2000000
+wei xin	微信	2000000
+ni hao	你好	1000000
+lao shi	老师	500000
+gong zhong hao	公众号	500000
+peng you quan	朋友圈	500000
+xiao hong shu	小红书	500000
+wei sha	为啥	300000
+zai jian le	再见了	100000
+mei shi le	没事了	100000
+deng hui	等会	100000
+ci tiao	词条	100000
+yong yuan de shen	永远的神	100000
+hei shen hua	黑神话	100000
+ha ji mi	哈基米	100000
+ban wei	班味	100000

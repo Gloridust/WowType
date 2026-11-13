@@ -1,0 +1,3 @@
+# 从词库里去掉的词（所有读音都去）：雾凇里的错条目，留着会被组进整句。
+# 格式：拼音<TAB>词（拼音只是注释，按词去）。scripts/make-data.sh 用 tools/add_hotwords.py --block 处理。
+qu ci	去次

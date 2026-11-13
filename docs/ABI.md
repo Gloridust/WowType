@@ -24,6 +24,7 @@
 | 1.7 | 0.3.11 | 打字途中 `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete` 忘掉光标处学错的词（会话里处理，带 Ctrl 的这几个键外壳也要交给 `_key`），`WowtypeFrame` 末尾加 `forgot`：1 时外壳马上存用户词库和输入习惯；`wowtype_engine_save_user_dict` 用户词库空的时候也写（只有注释行）、返回 0，以前返回 -1 |
 | 1.8 | 0.3.11 | 以词定字：`WowtypeSessionConfig` 末尾加 `pick_char`（默认 1），打拼音途中 `[` `]` 上屏光标处候选的第一个、最后一个字（`page_keys` 带 `[ ]` 时让给翻页） |
 | 1.9 | 0.3.11 | 加 `wowtype_engine_set_rare_ext_chars`：是否出 CJK 扩展 B 区及以后的单字（通用规范汉字表里的除外），默认不出（以前总是出） |
+| 1.10 | 下一版 | 输入会话接管标点、自动空格、上文、中 / 英 / 译和单按 Shift、互译、工具栏和表情面板：`WowtypeKey` 加 `hints`、`code`、`repeat`、`time_ms`（`KEY_HINT_*`、`KEY_ACTION_OBSERVE`），`WowtypeSessionConfig` 加 `punct_style`、`auto_space`、`shift_toggle`、`shift_tap_ms`、`translate_mode`、`toolbar`、`clipboard_history`，`WowtypeFrame` 加 `learned`、`mode`、`mode_changed`、`translating`、`translate_*`（`aux`、`wake_after_ms` 开始用，`panel` 加 2 表情面板、3 工具栏）；加 `wowtype_session_set_mode`、`_mode`、`_set_translator`、`_set_translate_backend`、`_tick`、`_commit_text`、`_translate_clear`、`_translate_source`、`_toggle_emoji_panel`、`_open_tool`、`_open_panel`、`wowtype_recent_emoji_path`、`_list`、`wowtype_custom_code`、`wowtype_guess_pinyin`（自定义词的编码整理、猜拼音，macOS 设置不再自己抄音节表），`WowtypeSessionConfig` 加 `shuangpin_keys`（双拼编辑区显示打的键）；删掉会话的过渡函数 `_append`、`_set_context`、`_last_choice` |
 
 ## 所有权和生命周期
 
@@ -44,12 +45,13 @@
 - 返回指针的函数失败时返回 NULL，返回 `int` 的失败时返回负数（个别函数的约定写在头文件注释里）。
 - 失败原因用 `wowtype_last_error()` 取（线程局部）。
 
-## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加选词键、翻页和展开面板，1.7 加 Ctrl+Delete 忘掉学错的词）
+## 输入会话（`wowtype_session_*`，1.3 起，1.4 加候选，1.5 加选词，1.6 加选词键、翻页和展开面板，1.7 加 Ctrl+Delete 忘掉学错的词，1.10 加标点、自动空格、上文、中 / 英 / 译和单按 Shift、互译、工具栏和表情面板）
 
-输入行为正在从 fcitx5 外壳一块一块挪进核心（[PORTING.md](PORTING.md) 第 2 步），外壳以后主要依赖这一组。
+输入行为都在会话里，两个外壳（fcitx5、macOS）只把平台的按键翻成键码交给会话、照 frame 画编辑区和候选框、上屏、读周围文字和系统剪贴板、排定时器（[PORTING.md](PORTING.md)）。
 
-- **暂定**：挪完之前，这组函数不在上面「只加不删」的承诺里。标了「过渡」的函数（`wowtype_session_input`、`_remaining`、`_selected_text`、`_append`、`_set_context`、`_candidate_total`、`_candidate_info`、`_choose`、`_view`、`_last_choice`）是给还没挪完的 fcitx5 外壳用的，挪完就删（`_choose` 现在只给标点上屏首选和鼠标点候选用，标点挪进来、点候选改用 `_select` 以后删；`_view`、`_last_choice` 是外壳照会话摆候选框、上屏后记 emoji 用的，候选框整个由 frame 驱动以后删）；删的时候次版本加一，写进上面的版本记录。fcitx5 外壳和核心一起发版，不受影响；别的外壳先只用 `_new`、`_set_engine`、`_configure`、`_key`、`_frame`、`_candidate`、`_select`、`_reset`、`_free`。
-- **`handled`**：现在 0 的意思是「会话还不管这个键」，外壳接着用自己的逻辑处理。挪完以后 0 就是「交给应用」。还在外壳里的：标点、工具栏、表情面板、中 / 英 / 译和互译、语音键。
+- **1.10 删掉的过渡函数**：`wowtype_session_append`、`_set_context`（上文由会话自己记，表情面板的搜索词也在会话里）、`_last_choice`（学没学到词看 `frame->learned`，选了 emoji 由会话记进最近用过）。fcitx5 外壳和核心一起发版，不受影响。
+- **留着的读法**：`_input`、`_remaining`、`_selected_text`（外壳判断在不在打字、拼编辑区），以及整个候选列表 `_candidate_total`、`_candidate_info`、`_choose`、`_view`（fcitx5 的候选框 CommonCandidateList 要整个列表和页码、光标）。这些和别的会话函数一样按上面「只加不删」的规矩来。
+- **`handled`**：0 就是「交给应用」。还在外壳里的只有语音键（录音、浮条和平台的麦克风绑在一起）。
 - **候选框**（1.6）：frame 的 `cand_count` 是候选框里显示的个数（一页，或展开面板的一屏），`cand_cursor` 是光标在里面的位置（光标不在这一页上时是 -1），`has_prev` / `has_next` 是还能不能往前 / 往后翻，`panel` 说现在是普通候选框还是展开面板；显示的第 i 个用 `wowtype_session_candidate(s, i)` 取，点它用 `wowtype_session_select(s, i)`。
 - **结构体**：`WowtypeKey`、`WowtypeSessionConfig`、`WowtypeFrame`、`WowtypeCandidateInfo` 第一个字段都是 `size`。外壳填 `sizeof`，核心按它读，缺的字段当 0（`WowtypeSessionConfig` 例外：缺的字段用默认值）；核心返回的 frame 也带 `size`，外壳读新字段前先看它。
 - **所有权**：`wowtype_session_new` 的结果用 `wowtype_session_free` 释放。`_key`、`_reset` 返回的 `WowtypeFrame *`、里面的字符串、过渡函数返回的字符串，都归会话所有，**在同一个会话的下一次调用前有效**（包括松开键那一次），不是线程局部缓冲。要留着就自己拷。
@@ -58,7 +60,7 @@
 - **线程**：一个会话只在一个线程里用。
 - **键码**：`keysym` 是 XKB keysym 的子集，`modifiers` 是 `WOWTYPE_MOD_*`（取值和 X11 / fcitx5 的 KeyState 一样）。macOS 外壳把 `kVK_*` / `flagsChanged:` 翻成这个。
 
-已经挪进会话的行为（`core/tests/session_keys.rs` 测，和 `fcitx5-addon/test/key_harness.cpp` 里的同名用例对应）：
+会话的行为（`core/tests/session_keys.rs` 测，和 `fcitx5-addon/test/key_harness.cpp`、`macos/Tests/main.swift` 里的同名用例对应）：
 
 | 键 | 会话做什么 |
 |---|---|
@@ -77,11 +79,19 @@
 | PgUp / PgDn、`page_keys` 里的键 | 翻页；`- =`、`[ ]`、`, .`、`Tab` 翻不动时吃掉（不当标点上屏），只有一页时不管 |
 | `action` | 外壳认出来的全局翻页 / 移光标键，有候选时照做，翻不动也吃掉 |
 | 展开面板 | 6×6 一屏；方向键移光标，第一行再按上收起，PgUp / PgDn、`- =` 一次一屏，数字选光标那一行的第几个，空格选光标处，Esc 收起；别的键先收起再照常处理。收起后停在光标那一页 |
+| 标点、符号（1.10） | 打字途中：先上屏候选（光标在句首词上时接着选，直到整句上屏），再上屏它（全角样式下有中文标点的换成中文标点，数字后面的保持英文）；没在打字：有中文标点的换成中文标点上屏，半角样式、数字后面的、没有中文写法的（`/ + @`）交给应用。引号左右交替的状态每个会话一份 |
+| 数字（没在打字，1.10） | 汉字后面要补空格（`auto_space`）时连空格一起上屏，否则交给应用 |
+| Shift（1.10） | 单按切换中 → 英 →（`translate_mode` 时）译 → 中：按下时带 Ctrl / Alt / Super、开着面板不算；自动重复不重新计时；松开时按键码认；中间按了别的键（外壳自己处理掉的用 `KEY_ACTION_OBSERVE` 报）不算；按住超过 `shift_tap_ms` 不算。切英文时打到一半的原样上屏，离开「译」时原文原样上屏 |
+| 英文模式（1.10） | 只管汉字后面打字母、数字时补空格，别的键交给应用 |
+| 互译（1.10） | 上屏的字攒成原文（`frame->translate_*`），0.5 秒没再打字（句末标点立刻）发请求，`frame->wake_after_ms` 时外壳调 `_tick`；没在打拼音时：回车上屏译文（没译完先记下，译好了在 `_tick` 的 commit 里）、Shift+回车上屏原文、空格上屏译文、Esc 清空、退格删原文、方向键吃掉、数字和符号进原文 |
+| v + 空格、表情快捷键（1.10） | 工具栏（菜单、剪贴板、常用语，竖排一页 9 个）和表情 / 符号面板（6 列网格，字母搜索）；开着时按键都归面板，带 Ctrl / Alt / Super 的收起面板、交给应用；`frame->panel` 是 3 / 2，提示在 `frame->aux` |
 
 | 其他 | 会话做什么 |
 |---|---|
 | 候选 | 引擎的候选，加上：首选是整句时推荐一个 emoji（插第 3 个）；第一页里的数字字后面跟按键 emoji（八 → 8️⃣）；没选过词时打 riqi / shijian / xingqi 在首选后面插日期时间（双拼看首选的拼音）；V 模式（`v` + 算式，双拼不开）候选是结果和「算式=结果」 |
 | 编辑区 | 已选的词 + 剩余部分分好音节（`nihao` → `ni'hao`，双拼显示成全拼）；没有引擎时是原始输入 |
 | 选词（`_select`、`_choose`） | 候选没用完输入：进已选栈，记一次选词，候选换成剩下的；用完了：已选的词 + 这个候选上屏，记选词（带拼音，选够次数收进用户词库），分几次选出来的整句也记一次；emoji 和日期时间、计算结果这类候选只上屏不记；序号不对 `handled` = 0；`_select` 的序号是候选框里显示的（一页，或展开面板的一屏），`_choose` 是整个列表的 |
-| 上屏输入（回车，`_reset` 带 commit_pending 也一样） | 已选的词 + 原始输入上屏（回车、切输入法、打到一半切英文），原始输入也记一次选词；什么也没打就不上屏 |
+| 上屏输入（回车，`_reset` 带 commit_pending 也一样） | 已选的词 + 原始输入上屏（回车、切输入法、打到一半切英文），原始输入也记一次选词；什么也没打就不上屏。互译时拼音先进原文，原文再原样上屏 |
+| 上文（1.10） | 会话自己记上屏的最后 20 个字，排序和学搭配都看它；外壳不用再 `set_context` |
+| 外壳的上屏（`_commit_text`，1.10） | 工具栏、语音这类与拼音无关的字：互译时进原文，否则补好空格放进 commit |
 | 学习的上文 | 记选词前把引擎的上文设成算候选时那个（已上屏的字 + 已选的词的尾部） |
