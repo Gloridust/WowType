@@ -82,7 +82,7 @@ sha256：$LM_SHA256
 EOF
 # 词库包版本 = rime-ice 日期 + WowType 自己的修订号；只改了热词表等、rime-ice 没变时加 REV，
 # 否则同版本号的包 apt 不会更新。rime-ice 换新日期时 REV 归 0。
-REV=4
+REV=5
 echo "$DATE.$REV" > "$OUT/VERSION"
 
 LINES=$(grep -vc '^#' "$OUT/lexicon.tsv" || true)

@@ -19,6 +19,9 @@ DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
   [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
 done
+for f in wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS; do
+  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-wubi.sh" >&2; exit 1; }
+done
 mkdir -p "$OUT"
 
 work=$(mktemp -d)
@@ -30,6 +33,7 @@ tar --exclude=target --exclude='build*' -cf - \
   Cargo.toml Cargo.lock core voice voice-daemon fcitx5-addon icons themes settings README.md |
   tar -xf - -C "$work/source"
 cp "$DATA"/{lexicon.tsv,english.txt,words.lm,LICENSE,SOURCE.txt} "$work/source/dist/data/"
+cp "$DATA"/{wubi86.tsv,WUBI-LICENSE,WUBI-SOURCE.txt,WUBI-AUTHORS} "$work/source/dist/data/"
 if [[ -f "$DATA/VERSION" ]]; then
   cp "$DATA/VERSION" "$work/source/dist/data/"
 fi
@@ -45,7 +49,7 @@ pkgrel=1
 pkgdesc='WeChat-style pinyin input method for fcitx5, with bundled dictionaries and language model'
 arch=('x86_64')
 url='https://github.com/Gloridust/WowType'
-license=('MIT' 'Apache-2.0' 'GPL-3.0-only' 'CC-BY-SA-4.0' 'Unicode-3.0')
+license=('MIT' 'Apache-2.0' 'GPL-3.0-only' 'CC-BY-SA-4.0' 'Unicode-3.0' 'LGPL-3.0-only')
 depends=('fcitx5' 'alsa-lib' 'gcc-libs' 'glibc' 'python')
 makedepends=('rust' 'cmake' 'extra-cmake-modules' 'pkgconf')
 optdepends=('python-gobject: settings app' 'gtk4: settings app' 'libadwaita: settings app'
@@ -83,13 +87,16 @@ package() {
   for bin in wowtype-check wowtype-show; do
     install -Dm755 "target/release/$bin" "$pkgdir/usr/bin/$bin"
   done
-  install -m644 dist/data/{lexicon.tsv,english.txt,words.lm} "$pkgdir/usr/share/wowtype/"
+  install -m644 dist/data/{lexicon.tsv,english.txt,words.lm,wubi86.tsv} "$pkgdir/usr/share/wowtype/"
   install -Dm644 README.md "$pkgdir/usr/share/doc/wowtype/README.md"
   install -Dm644 dist/data/SOURCE.txt "$pkgdir/usr/share/doc/wowtype/DATA-SOURCE.txt"
+  install -Dm644 dist/data/WUBI-SOURCE.txt "$pkgdir/usr/share/doc/wowtype/WUBI-SOURCE.txt"
+  install -Dm644 dist/data/WUBI-AUTHORS "$pkgdir/usr/share/doc/wowtype/WUBI-AUTHORS"
   if [[ -f dist/data/VERSION ]]; then
     install -Dm644 dist/data/VERSION "$pkgdir/usr/share/doc/wowtype/DATA-VERSION"
   fi
   install -Dm644 dist/data/LICENSE "$pkgdir/usr/share/licenses/wowtype/LICENSE.rime-ice"
+  install -Dm644 dist/data/WUBI-LICENSE "$pkgdir/usr/share/licenses/wowtype/LICENSE.rime-wubi"
 }
 PKGBUILD
 } > "$work/PKGBUILD"

@@ -156,6 +156,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: scripts/make-data.sh "" dist/data
+      # 五笔 86 码表（rime-wubi，LGPL-3.0，钉死的提交）和许可证、作者、来源，和词库放在同一个目录
+      - run: scripts/make-wubi.sh "" dist/data
       - name: Nix 包的词库版本
         # nix/package.nix 固定用某次发布页上的词库包。词库换了版本（rime-ice 更新或 REV 加一）时，
         # 新词库包要等这次发版后才有下载地址，所以这里只提醒；发版时 release job 会自动开 PR 改好（.github/scripts/nix-data-pr.sh）。
@@ -270,6 +272,8 @@ jobs:
           # 词库和语言模型在安装包里
           test -s /usr/share/wowtype/words.lm && test -s /usr/share/wowtype/english.txt
           cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
+          cmp /usr/share/wowtype/wubi86.tsv dist/data/wubi86.tsv
+          grep -q 'Files: usr/share/wowtype/wubi86.tsv' /usr/share/doc/wowtype/copyright
           wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
           wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee /tmp/show.txt
           grep -q '1\.你好' /tmp/show.txt
@@ -344,6 +348,8 @@ jobs:
           test -s /usr/share/wowtype/english.txt
           cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
           cmp /usr/share/wowtype/words.lm dist/data/words.lm
+          cmp /usr/share/wowtype/wubi86.tsv dist/data/wubi86.tsv
+          test -s /usr/share/licenses/wowtype/LICENSE.rime-wubi
           wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
           # 不用 grep -q 直接接在管道后面，避免 pipefail 把上游 SIGPIPE 当成测试失败。
           wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee dist/show.txt
@@ -419,6 +425,8 @@ jobs:
           test -s /usr/share/wowtype/english.txt
           cmp /usr/share/wowtype/lexicon.tsv dist/data/lexicon.tsv
           cmp /usr/share/wowtype/words.lm dist/data/words.lm
+          cmp /usr/share/wowtype/wubi86.tsv dist/data/wubi86.tsv
+          test -s /usr/share/licenses/wowtype/LICENSE.rime-wubi
           wowtype-check --lexicon /usr/share/wowtype/lexicon.tsv --s2t /usr/share/wowtype/s2t.tsv
           # 不用 grep -q 直接接在管道后面，避免 pipefail 把上游 SIGPIPE 当成测试失败。
           wowtype-show --lexicon /usr/share/wowtype/lexicon.tsv nihao | tee dist/show.txt
@@ -464,7 +472,7 @@ jobs:
           cmake --build build -j"$(nproc)"
           cmake --install build
           install -m755 target/release/wowtype-check target/release/wowtype-show /usr/bin/
-          install -m644 dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm /usr/share/wowtype/
+          install -m644 dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm dist/data/wubi86.tsv /usr/share/wowtype/
       - name: 插件路径、依赖、真实词库和设置界面
         run: |
           addon_dir="$(pkg-config --variable=libdir Fcitx5Core)/fcitx5"
@@ -556,6 +564,7 @@ jobs:
           或者下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\` 双击安装。安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词级语言模型 words.lm 是 CC BY-SA 4.0。
+          五笔 86 码表 wubi86.tsv 来自 [rime-wubi](https://github.com/rime/rime-wubi)（LGPL-3.0），作者和钉死的提交见随包的 WUBI-AUTHORS、WUBI-SOURCE.txt。
 
           可选词库：\`wowtype-data-wanxiang-*.tar.gz\` 是从[万象拼音](https://github.com/amzxyz/rime_wanxiang)（CC BY 4.0）转换的词库，不在安装包里。
           想用的话在「WowType 设置 → 输入 → 词库」里选「万象拼音」并下载，或运行 \`wowtype-config --install-lexicon wanxiang\`；随时可以切回默认的雾凇。
