@@ -28,6 +28,8 @@ final class AppState {
     private var lastCheck: TimeInterval = 0
     /// 互译本地模型现在用的 llama-server（空的是没找到）
     private var llamaServerInUse = ""
+    /// 上次找 llama-server 的时间（没找到时最多 5 秒找一次，不在按键路径上每秒查文件）
+    private var llamaProbe: TimeInterval = 0
     private var missingLexiconLogged: String?
     /// 上一次看系统剪贴板时它的 changeCount（没变就不读）
     private var clipboardChangeCount = -1
@@ -270,16 +272,25 @@ final class AppState {
         }
     }
 
+    /// 用本地模型互译、之前没找到 llama-server 时，最多 5 秒看一次现在有没有了。
+    private func llamaServerAppeared(now: TimeInterval) -> Bool {
+        guard config.translate, config.translateLocal, llamaServerInUse.isEmpty, now - llamaProbe >= 5 else {
+            return false
+        }
+        llamaProbe = now
+        return !findLlamaServer().isEmpty
+    }
+
     /// 看看设置、自定义词、词库文件改了没有（按键时调，一秒最多看一次；切换输入框时 force）。
     /// 设置改了马上生效；换了词库在后台载入，载完之前照旧用旧的。
     func checkForChanges(force: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastCheck >= 1 else { return }
         lastCheck = now
-        if let translator, force || (config.translate && config.translateLocal && !translator.isReady)
-            || (config.translate && config.translateLocal && llamaServerInUse.isEmpty && !findLlamaServer().isEmpty) {
-            // 切换输入框时、本地模型还没就绪时再看一次：设置窗口里刚下好的模型和 llama-server（或者后来才
-            // brew install 的）下一次按键就能用，不用切输入框；顺带收紧 Key 文件的权限
+        if translator != nil && (force || llamaServerAppeared(now: now)) {
+            // 切换输入框时再配一次（顺带收紧 Key 文件的权限）；本地模型的 llama-server 之前没找到、现在有了
+            // （设置窗口里刚下好，或者后来才 brew install 的）也重配，不用切输入框。
+            // 模型文件不用这样盯：核心判断「就绪」时每次都现看模型在不在
             applyTranslateSettings()
         }
         if FileStamp(configPath) != configStamp {
