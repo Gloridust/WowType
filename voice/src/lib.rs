@@ -46,7 +46,8 @@ impl VoiceSession {
         Self {
             trigger: VoiceTrigger::new(cfg),
             framer: Framer::default(),
-            vad: Vad::default(),
+            // 时序对齐微信 VAD 配置：300ms 起始确认、480ms 结束挂起
+            vad: Vad::with_confirm(6.0, vad::CONFIRM_FRAMES, vad::HANGOVER_FRAMES),
             asr,
             sink,
             typer: Typer::new(),

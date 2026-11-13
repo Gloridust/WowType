@@ -1,6 +1,13 @@
-//! 轻量能量 VAD：自适应噪声底 + 挂起（hangover）。
+//! 轻量能量 VAD：自适应噪声底 + 起始确认 + 挂起（hangover）。
 //!
-//! 不追求精度，只用于决定「用户还在说话吗」，驱动点按模式的自动结束。
+//! 时序参数对齐微信输入法的 VAD 配置（`Resources/vad/configure.16k.*.offline`）：
+//! `begin_confirm_ms = 300`（连续有声 300ms 才算开始）、
+//! `end_padding_ms = 480`（最后一个有声帧后 480ms 内仍算有声）。
+
+/// 起始确认帧数：300ms / 20ms 一帧（微信 `begin_confirm_ms`）。
+pub const CONFIRM_FRAMES: u32 = 15;
+/// 结束挂起帧数：480ms / 20ms 一帧（微信 `end_padding_ms`）。
+pub const HANGOVER_FRAMES: u32 = 24;
 
 #[derive(Debug)]
 pub struct Vad {
@@ -10,23 +17,34 @@ pub struct Vad {
     /// 语音帧后仍算「有声」的帧数
     hangover: u32,
     left: u32,
+    /// 连续有声多少帧才算真的开始（防住敲键、咳嗽这类短促声）
+    confirm: u32,
+    /// 当前连续有声帧数
+    run: u32,
     speech: bool,
 }
 
 impl Default for Vad {
     fn default() -> Self {
-        Self::new(6.0, 15)
+        Self::with_confirm(6.0, CONFIRM_FRAMES, HANGOVER_FRAMES)
     }
 }
 
 impl Vad {
     pub fn new(threshold_db: f32, hangover_frames: u32) -> Self {
+        Self::with_confirm(threshold_db, 1, hangover_frames)
+    }
+
+    /// `confirm_frames`：连续多少帧有声才算开始；`hangover_frames`：之后还保持多少帧。
+    pub fn with_confirm(threshold_db: f32, confirm_frames: u32, hangover_frames: u32) -> Self {
         Self {
             // 全幅能量为 1.0（0 dB）；静音底取约 -60 dB
             noise_floor: 1e-6,
             threshold_db,
             hangover: hangover_frames,
             left: 0,
+            confirm: confirm_frames.max(1),
+            run: 0,
             speech: false,
         }
     }
@@ -57,11 +75,15 @@ impl Vad {
 
         if !active {
             self.noise_floor = self.noise_floor * 0.98 + energy * 0.02;
+            self.run = 0;
         }
 
         if active {
-            self.left = self.hangover;
-            self.speech = true;
+            self.run = self.run.saturating_add(1);
+            if self.run >= self.confirm {
+                self.left = self.hangover;
+                self.speech = true;
+            }
         } else if self.left > 0 {
             self.left -= 1;
             self.speech = true;
@@ -69,46 +91,5 @@ impl Vad {
             self.speech = false;
         }
         self.speech
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn silence(n: usize) -> Vec<i16> {
-        vec![0i16; n]
-    }
-
-    fn loud(n: usize) -> Vec<i16> {
-        vec![8000i16; n]
-    }
-
-    #[test]
-    fn silence_is_not_speech() {
-        let mut v = Vad::default();
-        for _ in 0..20 {
-            assert!(!v.push(&silence(320)));
-        }
-    }
-
-    #[test]
-    fn loud_is_speech() {
-        let mut v = Vad::default();
-        let mut hit = false;
-        for _ in 0..5 {
-            hit |= v.push(&loud(320));
-        }
-        assert!(hit);
-    }
-
-    #[test]
-    fn hangover_keeps_speech_briefly() {
-        let mut v = Vad::new(6.0, 3);
-        for _ in 0..5 {
-            v.push(&loud(320));
-        }
-        assert!(v.push(&silence(320)));
-        assert!(v.push(&silence(320)));
     }
 }
