@@ -1298,6 +1298,19 @@ withConfig({ _ in }) { c, _ in
     check(!c.handle(.char(" ", [.control])) && c.mode == .chinese, "没设切换键：Control+空格交给应用")
 }
 
+withConfig({ $0.shiftToggle = .off; $0.toggleKey = Shortcut(name: "Control+space") }) { c, _ in
+    // #87 的用法：Shift 没用、关掉，靠另设的键切换。换设置时不该被拉回中文
+    check(c.handle(.char(" ", [.control])) && c.mode == .english, "关了 Shift 也能用切换键切到英文")
+    var again = WowtypeConfig()
+    again.shiftToggle = .off
+    again.toggleKey = Shortcut(name: "Control+space")
+    c.apply(again)
+    check(c.mode == .english, "有切换键时换设置不拉回中文")
+    again.toggleKey = nil
+    c.apply(again)
+    check(c.mode == .chinese, "关了 Shift、也没切换键：拉回中文（不然切不回来）")
+}
+
 do {
     // 打的字攒成原文，不上屏；停 0.5 秒才发请求，译文边出边写在编辑区，回车上屏译文
     let r = translateRig()

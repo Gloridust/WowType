@@ -249,10 +249,12 @@ public final class Composer {
         refresh()
     }
 
-    /// 换设置。Shift 切换关掉时回到中文；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
+    /// 换设置。Shift 切换关掉、也没另设切换键 / 互译键时回到中文；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
     public func apply(_ config: WowtypeConfig) {
         self.config = config
-        if config.shiftToggle == .off || (mode == .translate && !translateAvailable) {
+        // 关了 Shift 切换、也没另设切换键 / 互译键：切不回中文了，回到中文
+        let noWayBack = config.shiftToggle == .off && config.toggleKey == nil && config.translateModeKey == nil
+        if noWayBack || (mode == .translate && !translateAvailable) {
             switchMode(to: .chinese)
         }
         if !config.clipboardHistory {

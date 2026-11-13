@@ -835,7 +835,10 @@ void WowtypeEngine::applyConfig() {
                        : name == "off" || name == "0" ? WowtypeShiftToggle::Off
                                                       : WowtypeShiftToggle::Both;
     }
-    if (shiftToggle_ == WowtypeShiftToggle::Off) {
+    // 关了 Shift 切换、也没另设切换键 / 互译键：切不回中文了，回到中文
+    const bool noModeKey = (*config_.toggleKey).sym() == FcitxKey_None &&
+                           (*config_.translateModeKey).sym() == FcitxKey_None;
+    if (shiftToggle_ == WowtypeShiftToggle::Off && noModeKey) {
         asciiMode_ = false;
         translateMode_ = false;
     }
@@ -1979,9 +1982,10 @@ void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *stat
     if (initialMode_ == WowtypeInitialMode::Last) {
         return;
     }
-    // 关了 Shift 切换时不进英文：切不回中文
+    // 关了 Shift 切换、也没另设切换键时不进英文：切不回中文
     const bool english =
-        initialMode_ == WowtypeInitialMode::English && shiftToggle_ != WowtypeShiftToggle::Off;
+        initialMode_ == WowtypeInitialMode::English &&
+        (shiftToggle_ != WowtypeShiftToggle::Off || toggleKey_.sym() != FcitxKey_None);
     if (english == asciiMode_ && !translateMode_) {
         return;
     }

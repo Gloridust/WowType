@@ -1868,6 +1868,22 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      type(ic, "nihao<sp>");
                  },
                  [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
+    s.push_back({"关了 Shift、靠切换键：切到英文，重新读设置也不拉回中文",
+                 [c, addon, reset, url, press, toggleKey](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nShiftToggle=Off\n"
+                            "ToggleKey=Control+Shift+space\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     press(ic, toggleKey);
+                     type(ic, "ab");
+                     addon->reloadConfig();
+                     type(ic, "c");
+                     press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
     s.push_back({"关掉互译时互译键交给应用，还在中文",
                  [c, addon, reset, press, translateKey, handledFlag](HarnessInputContext *ic) {
                      std::ofstream(c->configFile) << "TranslateModeKey=Control+Shift+Y\n";
