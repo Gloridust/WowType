@@ -95,7 +95,7 @@ jobs:
           WOWTYPE_EXPECT_FULL_CHARS=1 macos/test.sh dist/data/lexicon.tsv dist/data/english.txt
       - name: 核心静态库要链接的系统库（对照 build.sh 的链接参数）
         run: |
-          cargo rustc --release -q -p wowtype-core --no-default-features --lib --crate-type staticlib \
+          cargo rustc --release -q -p wowtype-core --lib --crate-type staticlib \
             --target-dir target/macos-libs -- --print native-static-libs 2>&1 | grep native-static-libs || true
       - name: 打包
         # 发版时版本号跟 tag 走（和 Linux 的包一样），一键安装脚本按 tag 找 WowType-<版本>-macos.pkg

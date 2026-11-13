@@ -92,6 +92,12 @@ public struct WowtypeConfig: Equatable {
     public var toolbar = true
     /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
     public var clipboardHistory = false
+    /// 语音输入：按住 voiceKey 说话，松开出字（模型在设置窗口里下载）
+    public var voice = true
+    /// 语音键，fcitx5 键名：Alt_R（右 Option）、Control_R、F8…；留空不用
+    public var voiceKey = "Alt_R"
+    /// 语音识别的结果同时复制到剪贴板
+    public var voiceCopy = false
     /// 打开表情面板的快捷键，nil 不用快捷键。Linux 默认 Super+period；macOS 上 Command 组合键
     /// 多半到不了输入法，默认 Control+period（Super 也当 Control，见 Shortcut）
     public var emojiKey: Shortcut? = .emojiDefault
@@ -206,7 +212,7 @@ public struct WowtypeConfig: Equatable {
         "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys", "ShiftToggle",
         "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
-        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
+        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "Voice", "VoiceKey", "VoiceCopy", "EmojiKey",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
         "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
@@ -223,7 +229,7 @@ public struct WowtypeConfig: Equatable {
         "Traditional": \.traditional, "PickChar": \.pickChar,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
-        "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
+        "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory, "Voice": \.voice, "VoiceCopy": \.voiceCopy,
         "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateLocal": \.translateLocal,
     ]
 
@@ -249,6 +255,7 @@ public struct WowtypeConfig: Equatable {
         case "Lexicon": lexicon = value
         case "CandidateFontSize":
             if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
+        case "VoiceKey": voiceKey = value
         case "EmojiKey":
             // 留空是不用快捷键；写错了保持默认
             if value.isEmpty {
@@ -283,6 +290,7 @@ public struct WowtypeConfig: Equatable {
         case "SelectKeys": return selectKeys.rawValue
         case "Lexicon": return lexicon
         case "CandidateFontSize": return String(candidateFontSize)
+        case "VoiceKey": return voiceKey
         case "EmojiKey": return emojiKey?.name ?? ""
         case "TranslateTarget": return translateTarget
         case "TranslateBaseUrl": return translateBaseUrl
@@ -448,6 +456,13 @@ public struct WowtypeConfig: Equatable {
         Toolbar=\(b(d.toolbar))
         # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
         ClipboardHistory=\(b(d.clipboardHistory))
+
+        # 语音输入：按住语音键说话，松开出字（点按一下也行，说完停一下自动结束）。模型在设置窗口「语音」页下载
+        Voice=\(b(d.voice))
+        # 语音键：Alt_R 右 Option、Control_R 右 Control、F8、F9、F10；留空不用
+        VoiceKey=\(d.voiceKey)
+        # 说的话上屏的同时复制到剪贴板
+        VoiceCopy=\(b(d.voiceCopy))
         # 打开表情面板的快捷键，键名同 fcitx5：Control+period、Control+semicolon、Control+Shift+E；留空不用。
         # Command 组合键多半到不了输入法，写 Super 的当 Control
         EmojiKey=\(d.emojiKey?.name ?? "")

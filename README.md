@@ -355,6 +355,10 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 
 换语音键（右 Ctrl、菜单键、F8–F10）或者关掉语音，在 [WowType 设置](#设置)的「语音」页里改。
 
+**macOS** 上一样用，语音键是右 `Option`（也能换成右 Control、F8–F10）：在设置窗口的「语音」页下载模型
+（和 Linux 同一个包，存在 `~/Library/Application Support/WowType/wtlocal/`），第一次说话时允许 WowType 使用麦克风。
+提示显示在候选框里（🎙 和字符画的波形）。
+
 <img src="docs/images/voice.png" width="560" alt="按住右 Alt 说话：光标变成声波，下面是正在听、离线和实时波形">
 
 ### 互译
