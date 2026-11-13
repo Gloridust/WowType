@@ -68,7 +68,7 @@ data_copyright() { # <数据目录>：copyright 里词库那几段
 
 check_data() { # <数据目录>
   for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
-    [[ -f "$1/$f" ]] || { echo "缺 $1/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
+    [[ -f "$1/$f" ]] || { echo "缺 $1/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
   done
 }
 
