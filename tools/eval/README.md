@@ -58,6 +58,8 @@ cargo run --bin wowtype-eval -- --lexicon lexicon.tsv --eval /tmp/test.tsv \
 - LM：`words.lm` + `--lm2`（Tatoeba 训练侧训的 0.5MB 小模型，权重 0.4）
 - 自适应 LM 权重默认开
 
+再叠加 NNLM 重排（`--nnlm nlrgpt2_nnlm.bin`）：500 句 top1 **69.2%**（比不加 NNLM 的 67.6% 再高 1.6）。
+
 ## 失败归因（500 句，三件套）
 
 - top1 67.6%，top50 74.2%，剩 129 句进不了前 50
