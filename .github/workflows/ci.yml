@@ -202,11 +202,18 @@ jobs:
       fail-fast: false
       matrix:
         arch: [amd64, arm64]
-        distro: [ubuntu24.04, ubuntu26.04, debian13]
+        distro: [ubuntu22.04, ubuntu24.04, ubuntu26.04, debian13, deepin23, deepin25]
         include:
+          - { distro: ubuntu22.04, image: "ubuntu:22.04" }
           - { distro: ubuntu24.04, image: "ubuntu:24.04" }
           - { distro: ubuntu26.04, image: "ubuntu:26.04" }
           - { distro: debian13, image: "debian:trixie" }
+          - { distro: deepin23, image: "linuxdeepin/deepin:23" }
+          - { distro: deepin25, image: "linuxdeepin/deepin:25" }
+        exclude:
+          # deepin 的容器镜像只有 amd64
+          - { distro: deepin23, arch: arm64 }
+          - { distro: deepin25, arch: arm64 }
     env:
       DEBIAN_FRONTEND: noninteractive
     steps:
@@ -218,7 +225,7 @@ jobs:
             libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
             fcitx5 fcitx5-modules \
             ca-certificates curl git dpkg-dev file python3 \
-            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+            python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 xvfb xauth dbus-x11
       - uses: actions/checkout@v4
       - name: Rust
         run: |
@@ -251,7 +258,7 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: 打包
-        run: scripts/package-deb.sh engine "$VERSION" dist/pkg
+        run: WOWTYPE_DISTRO=${{ matrix.distro }} scripts/package-deb.sh engine "$VERSION" dist/pkg
       - name: 用一键安装脚本装上试一下
         run: |
           mkdir -p /tmp/inst && cp dist/pkg/wowtype_*.deb /tmp/inst/
@@ -272,6 +279,10 @@ jobs:
           test -f /usr/share/icons/hicolor/scalable/apps/wowtype.svg
           test -f /usr/share/icons/hicolor/22x22/apps/wowtype.png
           grep -qx 'Icon=wowtype' /usr/share/fcitx5/inputmethod/wowtype.conf
+          # 插件清单要求编译时 fcitx5 的「主.次.0」（22.04 是 5.0.0），fcitx5 小版本落后一点的系统也能加载
+          grep -qx "0=core:$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0" /usr/share/fcitx5/addon/wowtype.conf
+      - name: 设置界面：每页、每个对话框点一遍（无头；22.04 的老 libadwaita 用替身控件）
+        run: timeout 300 dbus-run-session -- xvfb-run -a python3 scripts/test-settings-gui.py /usr/bin/wowtype-config
       - uses: actions/upload-artifact@v4
         with:
           name: pkg-${{ matrix.distro }}-${{ matrix.arch }}
@@ -467,54 +478,6 @@ jobs:
           grep -q '1\.你好' dist/show.txt
           wowtype-config --self-test
 
-  ubuntu2204:
-    # fcitx5 5.0 的底线：只编译、跑按键测试、装到系统里，不出安装包（不在 release 的 needs 里，和 openSUSE 一样）
-    name: 源码安装 · Ubuntu 22.04（fcitx5 5.0）
-    needs: data
-    runs-on: ubuntu-24.04
-    container: ubuntu:22.04
-    env:
-      DEBIAN_FRONTEND: noninteractive
-    steps:
-      - name: 系统依赖
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            build-essential pkg-config cmake extra-cmake-modules \
-            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev libasound2-dev \
-            fcitx5 fcitx5-modules ca-certificates curl git file python3
-      - uses: actions/checkout@v4
-      - name: Rust
-        run: |
-          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ubuntu22.04
-      - uses: actions/download-artifact@v4
-        with:
-          name: data
-          path: dist/data
-      - name: 按键测试（fcitx5 5.0 + 真实词库和语言模型）
-        run: WOWTYPE_LM="$PWD/dist/data/words.lm" scripts/addon-test.sh "$PWD/dist/data/lexicon.tsv" "$PWD/dist/data/english.txt"
-      - name: 编译并安装到系统 Fcitx 目录（22.04 的 libadwaita 太旧，不装设置界面）
-        run: |
-          cmake -S fcitx5-addon -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
-            -DWOWTYPE_INSTALL_SETTINGS=OFF
-          cmake --build build -j"$(nproc)"
-          cmake --install build
-      - name: 插件路径、依赖、插件清单要求的 fcitx5 版本
-        run: |
-          addon_dir="$(pkg-config --variable=libdir Fcitx5Core)/fcitx5"
-          test -f "$addon_dir/libwowtype.so"
-          ldd "$addon_dir/libwowtype.so" | tee ldd.txt
-          if grep -q 'not found' ldd.txt; then exit 1; fi
-          # 插件清单要求编译时 fcitx5 的「主.次.0」（这里是 5.0.0）
-          version="$(pkg-config --modversion Fcitx5Core | cut -d. -f1,2).0"
-          grep -n "core:" /usr/share/fcitx5/addon/wowtype.conf
-          grep -qx "0=core:$version" /usr/share/fcitx5/addon/wowtype.conf
-          test ! -e /usr/bin/wowtype-config
-
   nix:
     # flake.lock 固定的是 nixos-unstable；用户一般用 inputs.nixpkgs.follows 跟自己系统的 nixpkgs，
     # 所以稳定版也要能编。新稳定版出来（每年 5 月、11 月）时把 nixos-26.05 换成新的。
@@ -565,7 +528,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<EOF
-          ## 安装（Ubuntu / Debian、Arch Linux、Fedora、NixOS）
+          ## 安装（Ubuntu / Debian、deepin、Arch Linux、Fedora、NixOS）
 
           一行命令（下载对应发行版的安装包、装好、加进 fcitx5 输入法列表）：
 
@@ -574,9 +537,9 @@ jobs:
           \`\`\`
 
           或者手动下载和你系统对应的一个 \`wowtype_<版本>_<发行版>_<架构>.deb\`（词库已经在包里），然后 \`sudo apt install ./wowtype_*.deb\`。
-          deb 和 Fedora RPM 有 x86_64（amd64）和 arm64（aarch64）两种，一键脚本按本机架构选；Arch 包只有 x86_64。
+          Ubuntu / Debian 的 deb 和 Fedora RPM 有 x86_64（amd64）和 arm64（aarch64）两种，一键脚本按本机架构选；Arch 包和 deepin 包只有 x86_64。
           Arch Linux / EndeavourOS / Garuda / CachyOS：一键脚本用 pacman 安装对应包，不替你整机升级；依赖装不上时按提示先运行 \`sudo pacman -Syu\`。
-          Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 24.04 / 26.04 及明确声明兼容基线的衍生版使用对应 deb。
+          Fedora 43 / 44 / 45：自动选择与系统版本一致的 RPM。Debian 13、Ubuntu 22.04 / 24.04 / 26.04 及明确声明兼容基线的衍生版、deepin 23 / 25 使用对应 deb。
           Manjaro：按安装说明在本机用 makepkg 打包；openSUSE Tumbleweed：按安装说明从源码构建。
           NixOS（x86_64、aarch64）：flake 输入写 \`github:${GITHUB_REPOSITORY}/release\`（跟正式版）或 \`github:${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}\`（锁这一版），把 \`inputs.wowtype.packages.<system>.default\` 加进 \`i18n.inputMethod.fcitx5.addons\`，见[安装说明](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/INSTALL.md#nixos--nix)。
           完整步骤见 [README](https://github.com/${GITHUB_REPOSITORY}#安装)。

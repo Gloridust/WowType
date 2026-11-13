@@ -10,7 +10,8 @@
 #
 # 安装包和当前系统的 fcitx5 版本绑定，要在目标发行版上（或同版本容器里）打。
 # 包的版本号带发行版（0.1.0-1~ubuntu24.04）；文件名里不用 ~（GitHub Release 会把它改成 .）：
-# wowtype_0.1.0_ubuntu24.04_amd64.deb。
+# wowtype_0.1.0_ubuntu24.04_amd64.deb。发行版默认取 os-release 的 $ID$VERSION_ID，
+# WOWTYPE_DISTRO=<名字> 可以指定（CI 传矩阵里的名字，免得镜像的版本号变成 25.0.x 时和一键安装对不上）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -78,7 +79,7 @@ engine)
   data=${WOWTYPE_DATA_DIR:-dist/data}
   check_data "$data"
   . /etc/os-release
-  distro="${ID}${VERSION_ID:-}"
+  distro="${WOWTYPE_DISTRO:-${ID}${VERSION_ID:-}}"
   debver="${version}-1~${distro}"
 
   cargo build --release --locked -p wowtype-core

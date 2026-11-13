@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WowType 一键安装：Ubuntu / Debian、Fedora（x86_64、arm64），Arch Linux（x86_64），macOS 12 以上。
+# WowType 一键安装：Ubuntu / Debian、Fedora（x86_64、arm64），Arch Linux、deepin（x86_64），macOS 12 以上。
 #
 #   curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
 #
@@ -68,9 +68,9 @@ usage() {
 默认下载、校验并安装匹配当前发行版的 WowType 包。
 --print-plan  只显示发行版、包管理器和包名，不联网、不安装、不更改配置。
 
-支持 Ubuntu 24.04 / 26.04、Debian 13 及有明确兼容基线的衍生版，
+支持 Ubuntu 22.04 / 24.04 / 26.04、Debian 13 及有明确兼容基线的衍生版，deepin 23 / 25，
 Arch Linux / EndeavourOS / Garuda / CachyOS，Fedora；预编译包有 x86_64，
-deb 和 rpm 另有 arm64（aarch64）。macOS 12 以上（Apple 芯片和 Intel）装 pkg。
+Ubuntu、Debian 的 deb 和 rpm 另有 arm64（aarch64）。macOS 12 以上（Apple 芯片和 Intel）装 pkg。
 Manjaro 请在本机用 scripts/package-arch.sh 构建；NixOS 使用 flake。
 Fedora Atomic 桌面使用 rpm-ostree。其他发行版见 docs/INSTALL.md 的源码构建。
 
@@ -161,6 +161,18 @@ select_platform() {
     *) source_install "当前预编译包只有 x86_64 和 arm64；$machine 请从源码构建" ;;
   esac
   local family=" $ID $ID_LIKE " codename
+  # deepin 25 的磐石系统基于 OSTree，但 apt-get install 照常能用（系统转给 deepin-immutable-ctl），
+  # 所以要在下面「不可变系统」那条之前认出来。deepin 20 的 ID 是大写的 Deepin。
+  if [[ "$ID" == deepin || "$ID" == Deepin ]]; then
+    case "$VERSION_CODENAME:$VERSION_ID" in
+      crimson:*|*:25|*:25.*) distro=deepin25 ;;
+      beige:*|*:23|*:23.*) distro=deepin23 ;;
+      *) source_install "deepin ${VERSION_ID:-$VERSION_CODENAME} 没有匹配的预编译包（有 deepin 23 和 25 的；deepin 20 / UOS 20 没有 GTK 4，暂不支持）" ;;
+    esac
+    [[ "$deb_arch" == amd64 ]] || source_install "deepin 的预编译包只有 x86_64；$machine 请从源码构建"
+    manager=apt-get
+    return
+  fi
   if [[ -e /run/ostree-booted || "$VARIANT_ID" == *atomic* ]]; then
     source_install "不可变系统请按说明使用 rpm-ostree 或系统自身的包配置"
   fi
@@ -172,7 +184,7 @@ select_platform() {
     nixos) source_install "NixOS 请使用仓库 flake 和 i18n.inputMethod.fcitx5.addons" ;;
     ubuntu)
       case "$VERSION_ID" in
-        24.04|26.04) distro="ubuntu$VERSION_ID"; manager=apt-get ;;
+        22.04|24.04|26.04) distro="ubuntu$VERSION_ID"; manager=apt-get ;;
         *) source_install "Ubuntu $VERSION_ID 没有匹配的预编译包" ;;
       esac
       ;;
@@ -196,6 +208,7 @@ select_platform() {
       elif [[ -n "$UBUNTU_CODENAME" || "$family" == *" ubuntu "* ]]; then
         codename=${UBUNTU_CODENAME:-$VERSION_CODENAME}
         case "$codename" in
+          jammy) distro=ubuntu22.04; manager=apt-get ;;
           noble) distro=ubuntu24.04; manager=apt-get ;;
           resolute) distro=ubuntu26.04; manager=apt-get ;;
           *) source_install "$ID 的 Ubuntu 基线 ${codename:-未知} 没有匹配的预编译包" ;;
@@ -247,10 +260,17 @@ install_packages() {
   [[ -n "${WOWTYPE_YES:-}" ]] && yes=(--noconfirm)
   case "$manager" in
     apt-get)
+      local -a extra
+      case "$distro" in
+        # 22.04 没有 fcitx5-frontend-all
+        ubuntu22.04) extra=(fcitx5-config-qt fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5 im-config) ;;
+        # deepin 自带 fcitx5 和控制中心里的输入法设置，不装 im-config、fcitx5-config-qt
+        deepin*) extra=(fcitx5-frontend-all) ;;
+        *) extra=(fcitx5-config-qt fcitx5-frontend-all im-config) ;;
+      esac
       "${SUDO[@]}" apt-get update -qq || warn "apt-get update 失败，接着用现有的软件源列表安装"
       "${SUDO[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install -y "${paths[@]}" \
-        fcitx5-config-qt fcitx5-frontend-all im-config \
-        python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
+        "${extra[@]}" python3-gi gir1.2-gtk-4.0 gir1.2-adw-1
       ;;
     pacman)
       # 不替用户 -Syu（整机升级该由用户自己决定）；-S 不带 y 不会造成部分升级。
@@ -345,10 +365,12 @@ main() {
   say "安装（需要时会要求输入密码）"
   install_packages
 
-  # 输入法框架
+  # 输入法框架。deepin 默认就是 fcitx5（经 deepin-im），不去动它
   local relogin=""
   local -a mode=()
-  if [[ -z "${WOWTYPE_NO_IM_CONFIG:-}" ]] && command -v im-config >/dev/null &&
+  if [[ "$distro" == deepin* ]]; then
+    :
+  elif [[ -z "${WOWTYPE_NO_IM_CONFIG:-}" ]] && command -v im-config >/dev/null &&
      mapfile -t mode < <(im-config -m 2>/dev/null) && [[ ${#mode[@]} -gt 0 ]]; then
     # im-config -m：第 1 行系统设置，第 2 行当前用户的设置（没设过是 missing）
     local active=${mode[1]:-}
