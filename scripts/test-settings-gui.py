@@ -43,6 +43,14 @@ def pump(seconds=0.2):
         time.sleep(0.01)
 
 
+def pump_until(done, timeout=15):
+    """转主循环直到 done() 为真；慢机器上（CI 的 arm64）固定等一秒不够。"""
+    end = time.time() + timeout
+    while not done() and time.time() < end:
+        pump(0.1)
+    return done()
+
+
 def step(name, action):
     try:
         action()
@@ -156,10 +164,14 @@ def run(app):
         for w in new_windows(win, win.on_export_words):
             w.set_current_folder(Gio.File.new_for_path(folder))
             w.set_current_name("words.tsv")
-            pump(1)
+
+            def folder_ready(w=w):
+                # 文件对话框换目录是异步的，没换完就点「保存」会存到别处
+                current = w.get_current_folder()
+                return current is not None and current.get_path() == folder
+            check(pump_until(folder_ready), "文件对话框没切到目标目录")
             w.response(Gtk.ResponseType.ACCEPT)
-        pump(1)
-        check(os.path.exists(target), "导出自定义词没写出文件")
+        check(pump_until(lambda: os.path.exists(target)), "导出自定义词没写出文件")
     step("导出自定义词（保存）", export_words)
     step("打开网址", lambda: win.open_url("https://example.invalid/"))
     step("用编辑器打开自定义词", win.on_open_custom)
