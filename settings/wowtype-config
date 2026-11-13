@@ -3340,11 +3340,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         return page
 
     def show_shuangpin(self, on):
-        """双拼方案只在双拼时显示；计算器、工具栏双拼时灰掉，副标题说为什么。"""
+        """双拼方案只在双拼时显示；双拼时计算器换成大写 V，工具栏灰掉，副标题说为什么。"""
         self.scheme_row.set_visible(on)
         self.show_keys_row.set_visible(on)
-        self.calc_row.set_sensitive(not on)
-        self.calc_row.set_subtitle("双拼时不可用" if on else "v1+2*3 → 7")
+        self.calc_row.set_subtitle("双拼时打大写 V：V1+2*3 → 7" if on else "v1+2*3 → 7")
         self.toolbar_row.set_sensitive(not on)
         self.toolbar_row.set_subtitle("双拼时不可用" if on else "打 v 再按空格：剪贴板、常用语、符号、表情")
 
