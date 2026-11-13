@@ -1506,6 +1506,17 @@ void runCases(Instance &instance) {
         type(ic.get(), "V1+2*3=");
         check(ic->committed == "7", "五笔计算器用大写 V：" + ic->committed);
         fresh(ic.get());
+        // 开着联想：自动上屏、顶字是打字途中的，不弹联想（数字照常是数字，顶字的编辑区照常是下一个码）
+        std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\nPrediction=True\n";
+        addon->reloadConfig();
+        type(ic.get(), "ggll1");
+        check(ic->committed == "一" && ic->passed == "1" && page(ic.get()).empty(),
+              "五笔开着联想：四码唯一自动上屏不弹联想，接着的数字交给应用：" + ic->committed + " / " + ic->passed);
+        fresh(ic.get());
+        type(ic.get(), "wqvbg");
+        check(ic->committed == "你好" && preedit(ic.get()) == "g" && !page(ic.get()).empty(),
+              "五笔开着联想：顶字以后照常打下一个码：" + ic->committed + " / " + preedit(ic.get()));
+        fresh(ic.get());
         // 四码唯一自动上屏关掉：ggll 等空格
         std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\nWubiAutoCommit=False\nWubiHint=False\n";
         addon->reloadConfig();
