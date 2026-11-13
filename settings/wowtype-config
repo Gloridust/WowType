@@ -3807,9 +3807,14 @@ class SettingsWindow(Adw.ApplicationWindow):
         """另设的切换键也是 fcitx5 的全局快捷键时（Ctrl+空格默认就是）说一声：fcitx5 先拿走，WowType 收不到。"""
         key = self.values.get("ToggleKey", "")
         taken = fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None))
-        self.toggle_key_row.set_subtitle(
-            f"fcitx5 也用 {key_label(key)}「{FCITX_OPTION_NAMES[taken]}」，"
-            "WowType 收不到，先在 Fcitx 5 配置里删掉它" if taken else "")
+        row = self.toggle_key_row
+        if taken:
+            row.set_subtitle(f"fcitx5 也用 {key_label(key)}「{FCITX_OPTION_NAMES[taken]}」，"
+                             "WowType 收不到，先在 Fcitx 5 配置里删掉它")
+            row.add_css_class("wt-warning")
+        else:
+            row.set_subtitle("")
+            row.remove_css_class("wt-warning")
 
     def refresh_shift_conflict(self):
         """看 fcitx5 有没有用 WowType 要的 Shift 切输入法，更新「输入」「翻译」两页的提示。"""
