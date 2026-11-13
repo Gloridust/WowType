@@ -2419,6 +2419,51 @@ mod tests {
         assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
     }
 
+
+    #[test]
+    fn fuzzy_pair_groups() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "huang se	黄色	5000
+jun	军	5000
+zhong	中	5000
+dan	单	5000
+",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_typo_correction(false);
+        e.set_fuzzy(true);
+        let has =
+            |e: &Engine, input: &str, word: &str| e.input(input).iter().any(|c| c.text == word);
+
+        // 默认不开这几组
+        assert!(!has(&e, "wangse", "黄色"));
+        assert!(!has(&e, "jiong", "军"));
+        assert!(!has(&e, "zheng", "中"));
+        assert!(!has(&e, "dai", "单"));
+
+        e.set_fuzzy_groups(crate::syllable::fuzzy::HUANG_WANG);
+        assert!(has(&e, "wangse", "黄色"), "huang = wang");
+
+        e.set_fuzzy_groups(crate::syllable::fuzzy::UN_IONG);
+        assert!(has(&e, "jiong", "军"), "jun = jiong");
+
+        e.set_fuzzy_groups(crate::syllable::fuzzy::ENG_ONG);
+        assert!(has(&e, "zheng", "中"), "zheng = zhong");
+
+        e.set_fuzzy_groups(crate::syllable::fuzzy::AN_AI);
+        assert!(has(&e, "dai", "单"), "dan = dai");
+
+        // 成对分组和普通模糊音互不影响
+        e.set_fuzzy_groups(
+            crate::syllable::fuzzy::HUANG_WANG | crate::syllable::fuzzy::ZH,
+        );
+        assert!(has(&e, "zong", "中"), "平翘舌仍然有效");
+    }
+
     #[test]
     fn fuzzy_groups_filter() {
         let lexicon: Arc<dyn Lexicon> = Arc::new(
@@ -2587,7 +2632,13 @@ mod tests {
         assert_eq!(g("guang", "guan"), Some(fuzzy::UAN));
         assert_eq!(g("dong", "dun"), Some(fuzzy::UN));
         assert_eq!(g("chong", "cun"), Some(fuzzy::CH | fuzzy::UN));
-        assert_eq!(g("jiong", "jun"), None, "iong 和 un 不是一组");
+        // 成对归并的分组：声母、韵母都不同，靠 SYLLABLE_PAIRS 记
+        assert_eq!(g("jiong", "jun"), Some(fuzzy::UN_IONG));
+        assert_eq!(g("huang", "wang"), Some(fuzzy::HUANG_WANG));
+        assert_eq!(g("zheng", "zhong"), Some(fuzzy::ENG_ONG));
+        assert_eq!(g("dai", "dan"), Some(fuzzy::AN_AI));
+        assert_eq!(g("dai", "dang"), Some(fuzzy::AN_AI | fuzzy::AN));
+        assert_eq!(g("yong", "yun"), Some(fuzzy::UN_IONG));
         assert_eq!(g("huang", "fang"), None, "uang 和 ang 不是一组");
         assert_eq!(g("ren", "leng"), Some(fuzzy::RL | fuzzy::EN));
         assert_eq!(g("nu", "ru"), None);

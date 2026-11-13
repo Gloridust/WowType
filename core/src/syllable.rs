@@ -145,8 +145,16 @@ pub mod fuzzy {
     pub const UAN: u32 = 1 << 10;
     /// un = ong（dun = dong、hun = hong）
     pub const UN: u32 = 1 << 11;
+    /// an = ai（dan = dai）
+    pub const AN_AI: u32 = 1 << 12;
+    /// huang = wang
+    pub const HUANG_WANG: u32 = 1 << 13;
+    /// un = iong（jun = jiong、qun = qiong、xun = xiong、yun = yong）
+    pub const UN_IONG: u32 = 1 << 14;
+    /// eng = ong（geng = gong、zheng = zhong、cheng = chong…）
+    pub const ENG_ONG: u32 = 1 << 15;
     /// 全部分组。
-    pub const ALL: u32 = (1 << 12) - 1;
+    pub const ALL: u32 = (1 << 16) - 1;
     /// 默认打开的分组：平翘舌和前后鼻音（和只有一个总开关时一样）。
     pub const DEFAULT: u32 = ZH | CH | SH | AN | EN | IN | IAN | UAN;
 }
@@ -164,6 +172,7 @@ fn fuzzy_initial(initial: &str) -> &str {
 
 fn fuzzy_final(final_: &str) -> &str {
     match final_ {
+        "ai" => "an",
         "iang" => "ian",
         "uang" => "uan",
         "ang" => "an",
@@ -201,14 +210,77 @@ pub fn fuzzy_key(id: SyllableId) -> Option<u32> {
     table.get(id as usize).copied()
 }
 
+
+/// 声母、韵母都不同、只能成对归并的音节。
+///
+/// 声母/韵母替换表达不了「huang = wang」这类关系：两个音节的声母和韵母都不在
+/// 同一组里。这类分组靠查询时展开成对方的读音来找候选，见 [`fuzzy_partners`]。
+const SYLLABLE_PAIRS: &[(&str, &str, u32)] = &[
+    ("huang", "wang", fuzzy::HUANG_WANG),
+    ("jun", "jiong", fuzzy::UN_IONG),
+    ("qun", "qiong", fuzzy::UN_IONG),
+    ("xun", "xiong", fuzzy::UN_IONG),
+    ("yun", "yong", fuzzy::UN_IONG),
+    ("geng", "gong", fuzzy::ENG_ONG),
+    ("heng", "hong", fuzzy::ENG_ONG),
+    ("zheng", "zhong", fuzzy::ENG_ONG),
+    ("cheng", "chong", fuzzy::ENG_ONG),
+    ("reng", "rong", fuzzy::ENG_ONG),
+    ("zeng", "zong", fuzzy::ENG_ONG),
+    ("ceng", "cong", fuzzy::ENG_ONG),
+    ("seng", "song", fuzzy::ENG_ONG),
+    ("deng", "dong", fuzzy::ENG_ONG),
+    ("teng", "tong", fuzzy::ENG_ONG),
+    ("neng", "nong", fuzzy::ENG_ONG),
+    ("leng", "long", fuzzy::ENG_ONG),
+];
+
+/// 与 `text` 成对的音节及需要的分组。
+pub fn fuzzy_partners(text: &str) -> Vec<(&'static str, u32)> {
+    SYLLABLE_PAIRS
+        .iter()
+        .filter_map(|&(a, b, group)| {
+            if text == a {
+                Some((b, group))
+            } else if text == b {
+                Some((a, group))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// a、b 是否是一对只能成对归并的音节；是的话返回需要的分组。
+fn fuzzy_pair_group(a: &str, b: &str) -> Option<u32> {
+    SYLLABLE_PAIRS.iter().find_map(|&(x, y, group)| {
+        if (x == a && y == b) || (x == b && y == a) {
+            Some(group)
+        } else {
+            None
+        }
+    })
+}
+
+/// 按音节文本查归并键（成对音节的伙伴要用对方的键去查）。
+pub fn fuzzy_key_of_text(text: &str) -> Option<u32> {
+    fuzzy_key(Syllable::from_text(text)?.id)
+}
 /// a、b 两个音节要打开哪些模糊音分组才算相同；本来就相同返回 Some(0)，
 /// 怎么都不算相同（比如 n 和 r）返回 None。
 pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
     if a == b {
         return Some(0);
     }
-    let (ai, af) = split(SYLLABLES.get(a as usize)?)?;
-    let (bi, bf) = split(SYLLABLES.get(b as usize)?)?;
+    let (a_text, b_text) = (
+        *SYLLABLES.get(a as usize)?,
+        *SYLLABLES.get(b as usize)?,
+    );
+    if let Some(group) = fuzzy_pair_group(a_text, b_text) {
+        return Some(group);
+    }
+    let (ai, af) = split(a_text)?;
+    let (bi, bf) = split(b_text)?;
     let mut need = 0;
     if ai != bi {
         let pair = if ai < bi { (ai, bi) } else { (bi, ai) };
@@ -226,6 +298,9 @@ pub fn fuzzy_groups_between(a: SyllableId, b: SyllableId) -> Option<u32> {
         let pair = if af < bf { (af, bf) } else { (bf, af) };
         need |= match pair {
             ("an", "ang") => fuzzy::AN,
+            // ai 在「全部分组」里也归并到 an，所以 ai 和 an/ang 要一起算
+            ("ai", "an") => fuzzy::AN_AI,
+            ("ai", "ang") => fuzzy::AN_AI | fuzzy::AN,
             ("ian", "iang") => fuzzy::IAN,
             ("uan", "uang") => fuzzy::UAN,
             ("ong", "un") => fuzzy::UN,
