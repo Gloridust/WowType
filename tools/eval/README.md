@@ -56,7 +56,7 @@ cargo run --bin wowtype-eval -- --lexicon lexicon.tsv --eval /tmp/test.tsv \
 
 - 词库：雾凇 + jieba 合并 + Tatoeba 训练侧词频融合（权重 0.3）
 - LM：`words.lm` + `--lm2`（Tatoeba 训练侧训的 0.5MB 小模型，权重 0.4）
-- 自适应 LM 权重默认开（#200；后来分开调参集、留出集重测，按长度分段没有收益，没合，见下面的负结果）
+- 自适应 LM 权重默认开
 
 再叠加 NNLM 重排（`--nnlm nlrgpt2_nnlm.bin`）：500 句 top1 **69.2%**（比不加 NNLM 的 67.6% 再高 1.6）。
 
