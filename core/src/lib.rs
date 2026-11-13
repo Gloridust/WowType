@@ -114,6 +114,8 @@ pub struct EngineConfig {
     pub more_candidates: bool,
     /// 有神经语言模型时，按束搜索分数取前几条整句用它重排（0 表示不用）。
     pub nnlm_rerank: usize,
+    /// 按输入长度自适应调 LM 权重：短输入调低，长输入保持原值。
+    pub adaptive_lm_weight: bool,
 }
 
 /// 分几次选出来的词，多长以内用一次就学（人名、术语、成语大多在四个字以内）。
@@ -138,6 +140,7 @@ impl Default for EngineConfig {
             prefix_candidates: 16,
             more_candidates: true,
             nnlm_rerank: 8,
+            adaptive_lm_weight: true,
         }
     }
 }
@@ -645,6 +648,22 @@ impl Engine {
     pub fn try_input(&self, raw: &str) -> Result<Vec<Candidate>> {
         self.try_input_at(raw, now_ms())
     }
+
+/// 输入越短，LM 权重越低：短句 bigram 上下文少，权重过高容易压掉同音词。
+///
+/// 按字母数估音节（约 3 个字母一个音节）：33 个字母（约 11 个音节）以内 0.5，
+/// 36 个字母（约 12 个音节）以上 1.0，中间线性过渡。
+fn adaptive_lm_factor(letters: usize) -> f64 {
+    const SHORT: usize = 33;
+    const LONG: usize = 36;
+    if letters <= SHORT {
+        0.5
+    } else if letters >= LONG {
+        1.0
+    } else {
+        0.5 + 0.5 * (letters - SHORT) as f64 / (LONG - SHORT) as f64
+    }
+}
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
         let mut result = if self.config.shuangpin {
@@ -1157,6 +1176,7 @@ impl Engine {
         if parsed.is_empty() {
             return Ok(Vec::new());
         }
+        let beam = self.beam_for(parsed.len());
         let typo = self.config.typo_correction && !self.config.shuangpin;
         let full = SyllableGraph::build(
             &parsed,
@@ -1171,7 +1191,7 @@ impl Engine {
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
         if full.has_exact_path() {
-            let found = self.query_once(&full, at_ms, fuzzy)?;
+            let found = self.query_once(&full, at_ms, fuzzy, &beam)?;
             let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
             if !self.config.jianpin_fallback || any_known {
                 return Ok(found);
@@ -1181,7 +1201,7 @@ impl Engine {
         let mut merged: Vec<Candidate> = Vec::new();
         if self.config.jianpin_fallback {
             if let Some(jianpin) = abbrev_graph(&parsed, full.has_path_without_typo()) {
-                let mut found = self.query_once(&jianpin, at_ms, fuzzy)?;
+                let mut found = self.query_once(&jianpin, at_ms, fuzzy, &beam)?;
                 if jianpin.mode() == GraphMode::Mixed {
                     // 混简拼里拿声母、单个字母兜底凑出来的（h e l l o -> "hello"）没有意义
                     found.retain(|c| c.words.iter().all(|w| w.known));
@@ -1190,7 +1210,7 @@ impl Engine {
             }
         }
         if full.has_complete_path() {
-            merged.extend(self.query_once(&full, at_ms, fuzzy)?);
+            merged.extend(self.query_once(&full, at_ms, fuzzy, &beam)?);
         }
         let mut result = dedupe_by_text(merged);
         result.sort_by(|a, b| {
@@ -1202,7 +1222,22 @@ impl Engine {
         Ok(result)
     }
 
-    fn query_once(&self, graph: &SyllableGraph, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
+    /// 这次输入用的 beam 配置：短输入把 bigram 权重调低。
+    fn beam_for(&self, letters: usize) -> BeamConfig {
+        let mut beam = self.config.beam.clone();
+        if self.config.adaptive_lm_weight && !self.config.shuangpin {
+            beam.lm_weight *= Self::adaptive_lm_factor(letters);
+        }
+        beam
+    }
+
+    fn query_once(
+        &self,
+        graph: &SyllableGraph,
+        at_ms: u64,
+        fuzzy: bool,
+        beam: &BeamConfig,
+    ) -> Result<Vec<Candidate>> {
         // fuzzy 时用包装视图：精确读音之外再加上模糊音读音的词。
         let fuzzy_view;
         let lexicon: &dyn Lexicon = if fuzzy {
@@ -1226,7 +1261,7 @@ impl Engine {
             start: start.as_deref(),
             at_ms,
         };
-        let mut paths = beam_search(graph, lexicon, &lm, &self.config.beam);
+        let mut paths = beam_search(graph, lexicon, &lm, beam);
         drop(pairs);
         if paths.is_empty() {
             return Ok(Vec::new());
@@ -2417,6 +2452,18 @@ mod tests {
             "要整个编码对上"
         );
         assert_eq!(unescape_custom("a\\tb\\\\c\\x"), "a\tb\\c\\x");
+    }
+
+
+    #[test]
+    fn adaptive_lm_curve() {
+        use crate::Engine;
+        assert_eq!(Engine::adaptive_lm_factor(0), 0.5);
+        assert_eq!(Engine::adaptive_lm_factor(33), 0.5);
+        let mid = Engine::adaptive_lm_factor(34);
+        assert!(mid > 0.5 && mid < 1.0, "34 个字母应当过渡: {mid}");
+        assert_eq!(Engine::adaptive_lm_factor(36), 1.0);
+        assert_eq!(Engine::adaptive_lm_factor(200), 1.0);
     }
 
     #[test]

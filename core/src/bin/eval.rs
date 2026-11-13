@@ -36,6 +36,7 @@ fn main() {
     let mut tail_abbrev_cost: Option<f64> = None;
     let mut completion_cost: Option<f64> = None;
     let mut no_typo = false;
+    let mut no_adaptive = false;
     let mut english_path: Option<String> = None;
     let mut show_top1 = false;
     let mut nnlm_path: Option<String> = None;
@@ -129,6 +130,7 @@ fn main() {
                 learn = true;
             }
             "--fuzzy" => fuzzy = true,
+            "--no-adaptive-lm" => no_adaptive = true,
             "--shuangpin" => shuangpin = true,
             "-h" | "--help" => {
                 println!(
@@ -171,6 +173,7 @@ fn main() {
         max_candidates,
         fuzzy,
         shuangpin,
+        adaptive_lm_weight: !no_adaptive,
         ..EngineConfig::default()
     };
     if let Some(size) = beam {
