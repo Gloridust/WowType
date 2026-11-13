@@ -122,6 +122,8 @@
      "platforms": ["fcitx5", "settings", "macos"], "note": "分号选第 2 个、引号选第 3 个"},
     {"key": "PickChar", "type": "bool", "default": true,
      "platforms": ["fcitx5", "settings", "macos"], "note": "以词定字：[ ] 上屏候选的第一个、最后一个字"},
+    {"key": "ArrowCaret", "type": "bool", "default": false,
+     "platforms": ["fcitx5", "settings", "macos"], "note": "方向键移动拼音里的光标（#129）：字母插在光标处，退格删光标前一个，Home、End、Delete 也管光标；横排时光标到了两头左右键才移动候选，竖排时左右键只管光标。GNOME 的 Input Method Panel 画不出编辑区里的光标"},
     {"key": "DateTime", "type": "bool", "default": true,
      "platforms": ["fcitx5", "settings", "macos"], "note": "打 riqi、shijian、xingqi 时给出当前日期时间"},
     {"key": "Calculator", "type": "bool", "default": true,

@@ -40,6 +40,9 @@ fn type_keys(session: &mut Session, keys: &str) -> Frame {
                 "right" => keysym::RIGHT,
                 "pgdn" => keysym::PAGE_DOWN,
                 "tab" => keysym::TAB,
+                "home" => keysym::HOME,
+                "end" => keysym::END,
+                "del" => keysym::DELETE,
                 other => panic!("不认识的特殊键 <{other}>"),
             })
         } else {
@@ -1941,4 +1944,108 @@ fn emoji_panel_search_and_pick() {
     session.toggle_emoji_panel();
     session.key(&shift(keysym::SHIFT_L, false, 1000));
     assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+}
+
+#[test]
+fn arrow_caret_moves_inside_pinyin() {
+    // #129：方向键移动拼音里的光标，字母插在光标处，退格删光标前一个
+    let caret = Config {
+        arrow_caret: true,
+        ..Config::default()
+    };
+    let mut session = with(engine());
+    session.configure(caret);
+    let frame = type_keys(&mut session, "nihao");
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "一开始光标在末尾");
+    let first = frame.cand_cursor;
+
+    let frame = type_keys(&mut session, "<left><left><left>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni", "光标在 ni 后面：{}", frame.preedit);
+    assert_eq!(frame.cand_cursor, first, "光标不在两头时左键不动候选");
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nixhao", "字母插在光标处");
+    let frame = type_keys(&mut session, "<bs>");
+    assert_eq!(session.input(), "nihao", "退格删光标前一个");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni");
+
+    // Home 到最前：退格没东西删；横排时再按左键才移动候选
+    type_keys(&mut session, "<home>");
+    assert!(session.key(&Key::press(keysym::BACKSPACE)).handled);
+    assert_eq!(session.input(), "nihao", "光标在最前面时退格不删");
+    let frame = type_keys(&mut session, "<right>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "n");
+    // Delete 删光标后一个
+    type_keys(&mut session, "<del>");
+    assert_eq!(session.input(), "nhao");
+    type_keys(&mut session, "i");
+    assert_eq!(session.input(), "nihao");
+
+    // End 回到末尾；末尾再按右键移动候选
+    let frame = type_keys(&mut session, "<end>");
+    assert_eq!(frame.preedit_cursor, frame.preedit.len());
+    let frame = type_keys(&mut session, "<right>");
+    assert_ne!(frame.cand_cursor, first, "光标在最右边时右键移动候选");
+    // 清空重打：空格照常上屏首选
+    let frame = type_keys(&mut session, "<esc>nihao<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+}
+
+#[test]
+fn arrow_caret_vertical_and_off() {
+    // 竖排：左右键只管光标，到头了也吃掉，候选不动
+    let mut session = with(engine());
+    session.configure(Config {
+        arrow_caret: true,
+        horizontal: false,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "nihao");
+    let first = frame.cand_cursor;
+    let frame = type_keys(&mut session, "<right>");
+    assert!(frame.handled && frame.cand_cursor == first, "竖排时末尾的右键吃掉");
+    let frame = type_keys(&mut session, "<left>");
+    assert!(frame.preedit_cursor < frame.preedit.len(), "竖排左键移光标");
+    assert_eq!(frame.cand_cursor, first, "竖排左键不动候选");
+
+    // 关着（默认）：左右键照旧移动候选，光标总在末尾
+    let mut session = with(engine());
+    let frame = type_keys(&mut session, "nihao<right>");
+    assert_eq!(frame.preedit_cursor, frame.preedit.len());
+    assert_eq!(frame.cand_cursor, Some(1));
+}
+
+#[test]
+fn arrow_caret_resets_after_choosing_a_word() {
+    // 选了句首词：光标回到剩下的拼音末尾
+    let mut session = with(engine());
+    session.configure(Config {
+        arrow_caret: true,
+        ..Config::default()
+    });
+    type_keys(&mut session, "nihaoshijie<left><left>");
+    choose_text(&mut session, "你好");
+    let frame = session.frame(true);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "{}", frame.preedit);
+    type_keys(&mut session, "a");
+    assert_eq!(session.remaining(), "shijiea");
+}
+
+#[test]
+fn arrow_caret_shuangpin_shows_keys() {
+    // 双拼显示成全拼（zhong'guo）时换不回光标位置：光标在中间时显示打的键
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_shuangpin(true);
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = with(engine);
+    session.configure(Config {
+        arrow_caret: true,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "vsgo");
+    assert!(frame.preedit.contains("zhong"), "光标在末尾时照常显示全拼：{}", frame.preedit);
+    let frame = type_keys(&mut session, "<left>");
+    assert_eq!(frame.preedit, "vsgo");
+    assert_eq!(frame.preedit_cursor, 3);
+    assert_eq!(texts(&mut session)[0], "中国", "候选照旧按整个输入算");
 }

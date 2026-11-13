@@ -100,6 +100,7 @@ DEFAULTS = {
     "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
     "PickChar": "True",
+    "ArrowCaret": "False",
     "DateTime": "True",
     "Calculator": "True",
     "Toolbar": "True",
@@ -3606,6 +3607,12 @@ class SettingsWindow(Adw.ApplicationWindow):
             "SelectKeys", self.select_names[row.get_selected()]))
         extras.add(self.select_row)
         extras.add(self.make_switch("PickChar", "以词定字", "按 [ 取第一个字，按 ] 取最后一个字"))
+        caret = self.make_switch("ArrowCaret", "方向键移动拼音里的光标",
+                                 "改打了一半的拼音；光标到了两头，左右键再挑候选")
+        self.add_info(caret, "左右键在拼音里移动光标，打的字母插在光标处，退格删光标前一个；Home、End、Delete 也管用。"
+                             "横排时光标到了最左、最右，左右键才去挑候选；竖排时左右键只管光标。\n\n"
+                             "GNOME 的 Input Method Panel 扩展画不出编辑区里的光标，那里看不到光标在哪。")
+        extras.add(caret)
         auto_space = Adw.ExpanderRow(
             title="中英文之间自动加空格", subtitle="第5章 → 第 5 章", show_enable_switch=True)
         self.add_info(auto_space, "你好Linux → 你好 Linux。终端等少数程序里不起作用，"

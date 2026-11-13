@@ -82,6 +82,8 @@ public struct WowtypeConfig: Equatable {
     public var halfwidthPunct = false
     public var selectKeys = SelectKeys.off
     public var pickChar = true
+    /// 方向键移动拼音里的光标（#129），默认关
+    public var arrowCaret = false
     public var dateTime = true
     public var calculator = true
     public var emojiSuggest = true
@@ -206,7 +208,7 @@ public struct WowtypeConfig: Equatable {
     /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
     public static let keys = [
         "CandidateLayout", "PageSize", "CandidateFontSize",
-        "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
+        "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar", "ArrowCaret",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
         "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShuangpinShowKeys", "ShiftToggle",
@@ -226,7 +228,7 @@ public struct WowtypeConfig: Equatable {
         "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
         "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
         "Shuangpin": \.shuangpin, "ShuangpinShowKeys": \.shuangpinShowKeys,
-        "Traditional": \.traditional, "PickChar": \.pickChar,
+        "Traditional": \.traditional, "PickChar": \.pickChar, "ArrowCaret": \.arrowCaret,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory, "Voice": \.voice, "VoiceCopy": \.voiceCopy,
@@ -408,6 +410,8 @@ public struct WowtypeConfig: Equatable {
         SelectKeys=Off
         # 以词定字：打拼音时 [ 上屏候选的第一个字、] 最后一个字
         PickChar=\(b(d.pickChar))
+        # 方向键移动拼音里的光标：改打了一半的拼音；横排时光标到了两头左右键才移动候选
+        ArrowCaret=\(b(d.arrowCaret))
 
         # 模糊音总开关，打开后下面各组分别生效
         Fuzzy=\(b(d.fuzzy))

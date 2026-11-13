@@ -804,6 +804,7 @@ void WowtypeEngine::applyConfig() {
                                             : WowtypeSelectKeys::Off;
     }
     pickChar_ = envOr("WOWTYPE_PICK_CHAR", *config_.pickChar);
+    arrowCaret_ = *config_.arrowCaret;
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
@@ -1136,6 +1137,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                              ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
                              : WOWTYPE_SELECT_KEYS_OFF;
     config.pick_char = pickChar_ ? 1 : 0;
+    config.arrow_caret = arrowCaret_ ? 1 : 0;
     config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
     config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
     config.shift_toggle = shiftToggle_ == WowtypeShiftToggle::Left    ? WOWTYPE_SHIFT_TOGGLE_LEFT
@@ -1437,11 +1439,13 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         // 原文和拼音在候选框里，输入框里是译文
         fillTranslateView(ic, state, panel);
     } else {
-        // 编辑区：已选的词 + 还没选的拼音（带下划线）
+        // 编辑区：已选的词 + 还没选的拼音（带下划线）；光标位置会话给（方向键能移到拼音中间，#129）
         fcitx::Text preedit;
         preedit.append(state->selectedText());
         preedit.append(segmentedRemaining(state), fcitx::TextFormatFlag::Underline);
-        preedit.setCursor(static_cast<int>(preedit.textLength()));
+        const WowtypeFrame *frame = wowtype_session_frame(state->session_);
+        const std::size_t cursor = frame && frame->preedit ? frame->preedit_cursor : preedit.textLength();
+        preedit.setCursor(static_cast<int>(std::min(cursor, preedit.textLength())));
         sendPreedit(ic, preedit);
     }
 

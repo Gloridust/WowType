@@ -352,6 +352,9 @@ private struct InputPage: View {
             RowDivider()
             SwitchRow(title: "以词定字", subtitle: "按 [ 取第一个字，按 ] 取最后一个字", isOn: $model.config.pickChar)
             RowDivider()
+            SwitchRow(title: "方向键移动拼音里的光标", subtitle: "改打了一半的拼音；光标到了两头，左右键再挑候选",
+                      isOn: $model.config.arrowCaret)
+            RowDivider()
             ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
                         info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
                         enabled: $model.config.autoSpace) {

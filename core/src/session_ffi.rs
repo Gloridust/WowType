@@ -216,6 +216,8 @@ pub struct WowtypeSessionConfig {
     pub clipboard_history: c_int,
     /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
     pub shuangpin_keys: c_int,
+    /// 1.10 起：方向键移动拼音里的光标（#129），默认 0。
+    pub arrow_caret: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -248,6 +250,7 @@ impl Default for WowtypeSessionConfig {
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
             shuangpin_keys: c_int::from(config.shuangpin_keys),
+            arrow_caret: c_int::from(config.arrow_caret),
         }
     }
 }
@@ -293,6 +296,7 @@ impl WowtypeSessionConfig {
             toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
+            arrow_caret: self.arrow_caret != 0,
         }
     }
 }

@@ -128,6 +128,7 @@ InitialMode=Chinese
 Traditional=False
 SelectKeys=Off
 PickChar=True
+ArrowCaret=False
 DateTime=True
 Calculator=True
 Toolbar=True
@@ -162,6 +163,7 @@ Lexicon=
 | `FuzzyZh`、`FuzzyCh`、`FuzzySh`、`FuzzyNL`、`FuzzyFH`、`FuzzyRL`、`FuzzyAn`、`FuzzyEn`、`FuzzyIn`、`FuzzyIan`、`FuzzyUan`、`FuzzyUn` | 模糊音的各组（z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong），`Fuzzy` 打开时才生效 |
 | `SelectKeys` | 分号、引号选词：`Off`、`Semicolon`（`;` 选第 2 个）、`SemicolonQuote`（再加 `'` 选第 3 个，引号不再当隔音符） |
 | `RareExtChars` | 也出 CJK 扩展 B 区及以后的单字（比如 `hou` 的 𠯜），默认关：常见中文字体（Noto CJK、思源、苹方）都没有这些字，列出来是方块。打开前先装能显示它们的字体，比如 Ubuntu / Debian 的 `fonts-hanazono`。通用规范汉字表里的扩展区字（𬭩、𫚔，约 200 个，常见字体都有）和含这些字的词（𩽾𩾌）不受这个开关影响 |
+| `ArrowCaret` | 方向键移动拼音里的光标（#129），默认关：字母插在光标处，退格删光标前一个，`Home`、`End`、`Delete` 也管光标；横排时光标到了最左、最右，左右键才移动候选，竖排时左右键只管光标（上下键管候选）。双拼时光标在中间，编辑区显示打的键。GNOME 的 Input Method Panel 扩展画不出编辑区里的光标 |
 | `PickChar` | 以词定字：打拼音时 `[` 上屏光标处候选的第一个字、`]` 上屏最后一个字，默认开；翻页键设成 `[ ]` 时让给翻页 |
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
 | `ShuangpinShowKeys` | 双拼时编辑区显示打的键（`uivs`），不翻成全拼（`shi'zhong`），中英混打时看得出打了什么。默认 `False` |
@@ -226,7 +228,7 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 还没有文件时会写出一份全是默认值、带说明的。窗口开着时在别处改了文件，切回窗口会重新读，不会被窗口里的旧值盖掉。
 改完下一次按键时生效，不用重启；换了 `Lexicon` 会在后台重新载入词库，载完之前照旧用原来的。
 
-现在认的项：`CandidateLayout`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
+现在认的项：`CandidateLayout`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`ArrowCaret`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
 `Shuangpin`、`ShuangpinScheme`、`ShuangpinShowKeys`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
 `AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
 检查更新 macOS 还没做，对应的项写了也不起作用。

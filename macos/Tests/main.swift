@@ -1067,6 +1067,24 @@ withConfig({ _ in }) { c, client in
     check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
 }
 
+withConfig({ $0.arrowCaret = true }) { c, client in
+    // #129：方向键移动拼音里的光标，字母插在光标处（会话做，外壳把光标位置交给应用）
+    type(c, "nihao")
+    let end = client.markedCursor
+    for _ in 0..<3 { _ = c.handle(KeyInput(keysym: Keysym.left, modifiers: [])) }
+    check(client.markedCursor < end && client.marked.prefix(client.markedCursor) == "ni",
+          "左键把光标移到 ni 后面", "\(client.marked) \(client.markedCursor)")
+    type(c, "x")
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nixhao",
+          "字母插在光标处", client.marked)
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "nihao")
+    _ = c.handle(KeyInput(keysym: Keysym.left, modifiers: []))
+    check(client.markedCursor == client.marked.utf16.count, "没打开时光标一直在末尾", "\(client.markedCursor)")
+}
+
 withConfig({ $0.emojiKey = nil }) { c, _ in
     check(!c.handle(.char(".", [.control])) && c.openPanel == nil, "不用快捷键：Control+. 交给应用")
 }

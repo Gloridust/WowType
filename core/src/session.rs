@@ -465,6 +465,9 @@ pub struct Config {
     pub clipboard_history: bool,
     /// 双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong）；中英混打时看得出打了什么（#122）。
     pub shuangpin_keys: bool,
+    /// 方向键移动拼音里的光标（#129）：字母插在光标处，退格删光标前一个；横排时光标到了两头，
+    /// 左右键才移动候选，竖排时左右键只管光标。Home、End、Delete 也管光标。
+    pub arrow_caret: bool,
 }
 
 impl Default for Config {
@@ -486,6 +489,7 @@ impl Default for Config {
             toolbar: true,
             clipboard_history: false,
             shuangpin_keys: false,
+            arrow_caret: false,
         }
     }
 }
@@ -548,6 +552,9 @@ pub struct Session<'e> {
     /// 全部原始输入（包括已经选过词的部分）。
     input: String,
     selections: Vec<Selection>,
+    /// 编辑区光标在 input 里的字节位置；None 是在末尾（没移动过，或移回了末尾）。
+    /// 只在还没选词的那段里，读的时候用 [`Session::caret`] 夹进去。
+    caret: Option<usize>,
     engine: Option<&'e Engine>,
     config: Config,
     /// 光标前已经上屏的字（外壳记的）。
@@ -597,6 +604,7 @@ impl Default for Session<'_> {
         Self {
             input: String::new(),
             selections: Vec::new(),
+            caret: None,
             engine: None,
             config: Config::default(),
             context: String::new(),
@@ -1606,7 +1614,17 @@ impl<'e> Session<'e> {
             keysym::BACKSPACE => {
                 // 选过词先撤销最后一次选词，拼音回到编辑区（后面还没选的拼音不动），
                 // 和微信输入法一样；没有选词了才删字母
-                if self.selections.pop().is_none() {
+                let at = self.caret();
+                if at < self.input.len() {
+                    // 光标在拼音中间（#129）：删光标前一个；光标在最前面时撤销选词，没有就不动
+                    if at > self.selected_bytes() {
+                        let prev = self.input[..at].chars().next_back().map_or(1, char::len_utf8);
+                        self.input.replace_range(at - prev..at, "");
+                        self.caret = Some(at - prev);
+                    } else {
+                        self.selections.pop();
+                    }
+                } else if self.selections.pop().is_none() {
                     self.input.pop();
                 }
                 self.fresh = false;
@@ -1632,6 +1650,9 @@ impl<'e> Session<'e> {
                 return Some(true);
             }
             _ => {}
+        }
+        if let Some(handled) = self.caret_key(key) {
+            return Some(handled);
         }
         if self.config.calculator && !self.shuangpin() {
             // V 模式：v 后面的数字、运算符进编辑区（不选词、不翻页、不当标点）
@@ -2010,7 +2031,14 @@ impl<'e> Session<'e> {
     }
 
     fn push_input(&mut self, c: char) {
-        self.input.push(c);
+        let at = self.caret();
+        if at < self.input.len() {
+            // 光标在拼音中间（#129）：插在光标处，光标跟着往后
+            self.input.insert(at, c);
+            self.caret = Some(at + c.len_utf8());
+        } else {
+            self.input.push(c);
+        }
         self.fresh = false;
     }
 
@@ -2035,7 +2063,12 @@ impl<'e> Session<'e> {
     /// 现在的编辑区和候选框（不处理按键）。这次调用要上屏的字也在里面。
     pub fn frame(&mut self, handled: bool) -> Frame {
         let n = self.candidates().len();
-        let preedit = self.selected_text() + &self.segmented_remaining();
+        let selected = self.selected_text();
+        let shown = self.segmented_remaining();
+        let rest_caret = self.caret() - self.selected_bytes().min(self.input.len());
+        let preedit_cursor = selected.len()
+            + Self::shown_caret(self.remaining(), &shown, rest_caret).unwrap_or(shown.len());
+        let preedit = selected + &shown;
         let mut frame = Frame {
             handled,
             commit: self.pending.take(),
@@ -2046,7 +2079,7 @@ impl<'e> Session<'e> {
             translate: None,
             wake_after_ms: 0,
             aux: String::new(),
-            preedit_cursor: preedit.len(),
+            preedit_cursor,
             preedit,
             ..Frame::default()
         };
@@ -2121,7 +2154,65 @@ impl<'e> Session<'e> {
     fn clear(&mut self) {
         self.input.clear();
         self.selections.clear();
+        self.caret = None;
         self.fresh = false;
+    }
+
+    /// 编辑区光标在 input 里的字节位置：在还没选词的那段里，没移动过时在末尾。
+    fn caret(&self) -> usize {
+        let start = self.selected_bytes().min(self.input.len());
+        self.caret.map_or(self.input.len(), |at| at.clamp(start, self.input.len()))
+    }
+
+    /// 方向键移动拼音里的光标（[`Config::arrow_caret`]）。Some：处理完了；None：照常处理
+    /// （横排时光标在两头的左右键接着去移动候选）。带修饰键的不管（Shift+右键照旧移候选）。
+    fn caret_key(&mut self, key: &Key) -> Option<bool> {
+        if !self.config.arrow_caret
+            || key.modifiers & (modifier::SHIFT | modifier::CTRL | modifier::ALT | modifier::SUPER) != 0
+        {
+            return None;
+        }
+        let start = self.selected_bytes().min(self.input.len());
+        let at = self.caret();
+        let len = self.input.len();
+        let prev = self.input[..at].chars().next_back().map_or(0, char::len_utf8);
+        let next = self.input[at..].chars().next().map_or(0, char::len_utf8);
+        match key.keysym {
+            keysym::LEFT if at > start => self.caret = Some(at - prev),
+            keysym::RIGHT if at < len => self.caret = (at + next < len).then_some(at + next),
+            // 竖排时左右键只管光标，到头了也吃掉（上下键管候选）
+            keysym::LEFT | keysym::RIGHT if !self.config.horizontal => {}
+            keysym::HOME => self.caret = Some(start),
+            keysym::END => self.caret = None,
+            keysym::DELETE if at < len => {
+                self.input.replace_range(at..at + next, "");
+                self.caret = (at < self.input.len()).then_some(at);
+                self.fresh = false;
+                if self.input.is_empty() {
+                    self.clear();
+                }
+            }
+            _ => return None,
+        }
+        Some(true)
+    }
+
+    /// 光标在拼音里的位置换算到显示的样子（ni hao 这种分了音节的）里：显示的字是原始输入按顺序
+    /// 加上分隔符时才换得出来，换不出来（双拼显示成全拼）返回 None。
+    fn shown_caret(raw: &str, shown: &str, caret: usize) -> Option<usize> {
+        if caret >= raw.len() {
+            return Some(shown.len());
+        }
+        let mut consumed = 0;
+        for (i, ch) in shown.char_indices() {
+            if consumed == caret {
+                return Some(i);
+            }
+            if raw[consumed..].starts_with(ch) {
+                consumed += ch.len_utf8();
+            }
+        }
+        None
     }
 
     /// 还没选词那部分输入的候选（全部，不分页）。没有引擎、没在打字时为空。
@@ -2252,6 +2343,17 @@ impl<'e> Session<'e> {
     /// （vsgo → zhong'guo），和微信输入法一样；设置了 `shuangpin_keys` 时双拼显示打的键。
     /// 分不出来就原样。
     fn segmented_remaining(&mut self) -> String {
+        let shown = self.segmented_remaining_shown();
+        let input = self.remaining();
+        let rest_caret = self.caret() - self.selected_bytes().min(self.input.len());
+        if rest_caret < input.len() && Self::shown_caret(input, &shown, rest_caret).is_none() {
+            // 光标在拼音中间、显示的样子换不回光标位置（双拼显示成全拼）：显示打的键
+            return input.to_owned();
+        }
+        shown
+    }
+
+    fn segmented_remaining_shown(&mut self) -> String {
         let input = self.remaining().to_owned();
         if let Some(engine) = self.engine {
             if engine.config().shuangpin {
@@ -2443,6 +2545,7 @@ impl<'e> Session<'e> {
     /// 选了句首词，压进已选栈（测试里不带引擎时用）。
     pub fn push_selection(&mut self, selection: Selection) {
         self.selections.push(selection);
+        self.caret = None;
         self.fresh = false;
     }
 
