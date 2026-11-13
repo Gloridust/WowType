@@ -210,6 +210,9 @@ FCITX_CONFIGURATION(
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
     fcitx::Option<bool> pickChar{this, "PickChar",
                                  "以词定字：打拼音时 [ ] 上屏候选的第一个、最后一个字", true};
+    // 默认关：数字键要用来选联想，汉字后面直接打数字（第3章）会选成联想的词
+    fcitx::Option<bool> prediction{this, "Prediction",
+                                   "联想：上屏后给出接下来可能打的词，按数字键选", false};
     fcitx::Option<bool> dateTime{this, "DateTime",
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3，只在全拼下）",
@@ -534,6 +537,7 @@ private:
     bool rareExt_ = false;
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool pickChar_ = true;
+    bool prediction_ = false;
     bool dateTime_ = true;
     bool calculator_ = true;
     bool toolbar_ = true;

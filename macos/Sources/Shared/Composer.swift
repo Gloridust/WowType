@@ -318,6 +318,18 @@ public final class Composer {
         wowtype_session_remaining(session).map { String(cString: $0) } ?? ""
     }
 
+    /// 联想开着（设置里的「联想」）：选词上屏以后候选框里是接下来可能打的词，编辑区是空的。
+    public var isPredicting: Bool {
+        wowtype_session_frame(session)?.pointee.panel == WOWTYPE_PANEL_PREDICTION
+    }
+
+    /// 收起联想（语音输入开始、按了翻不出来的键）。
+    public func dismissPrediction() {
+        if isPredicting {
+            apply(wowtype_session_reset(session, 0))
+        }
+    }
+
     /// 输入法手里还有没上屏的字：正在打的拼音，或者互译攒着的原文。
     public var hasPendingText: Bool {
         isComposing || !translateSource.isEmpty
@@ -344,6 +356,15 @@ public final class Composer {
             // 另设的切换键：中 ↔ 英；在「译」里按回中文
             switchMode(to: mode == .chinese ? .english : .chinese)
             return true
+        }
+        if isPredicting {
+            // 联想开着：每个键都先交给会话（数字选、Esc 收起，别的键收起联想再照常处理）。
+            // 会话不管的（空格、回车、退格、方向键、快捷键）收起候选框，照常交给应用（和 Linux 一样）
+            let handled = sendToSession(key)
+            if !handled {
+                refresh()
+            }
+            return handled
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
         // 都由会话处理（「译」里攒着原文时输入框变成了不能翻译的，会话先把原文原样上屏）
@@ -438,7 +459,7 @@ public final class Composer {
     public func commitComposition() {
         closeTool()
         // 互译时拼音先进原文，攒着的原文再原样上屏（会话做）
-        if isComposing || !translateSource.isEmpty {
+        if isComposing || !translateSource.isEmpty || isPredicting {
             apply(wowtype_session_reset(session, 1))
         }
     }
@@ -475,6 +496,7 @@ public final class Composer {
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
+        config.prediction = settings.prediction ? 1 : 0
         config.punct_style = settings.halfwidthPunct ? 1 : 0
         config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
         switch settings.shiftToggle {
@@ -547,6 +569,10 @@ public final class Composer {
         if mode == .translate && client?.allowsTranslation != true {
             // 密码框（安全输入）：「译」里也照常上屏，不往外发
             raw.hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE
+        }
+        if client?.allowsTranslation == false {
+            // 密码框（安全输入）：不联想
+            raw.hints |= WOWTYPE_KEY_HINT_SENSITIVE
         }
         if translating {
             // 互译时上屏的字进原文：光标前的字是原文的最后一个字（3.14 的点、20:22 的冒号原样进原文），不补空格
@@ -630,8 +656,9 @@ public final class Composer {
             refreshTranslate(all)
             return
         }
-        let frame = isComposing ? wowtype_session_frame(session) : nil
-        guard let frame else {
+        // 打字时，或者联想时（编辑区是空的，候选框里是联想的词）
+        let frame = wowtype_session_frame(session)
+        guard let frame, isComposing || frame.pointee.panel == WOWTYPE_PANEL_PREDICTION else {
             client?.setMarkedText("", cursor: 0)
             client?.showCandidates(nil)
             return

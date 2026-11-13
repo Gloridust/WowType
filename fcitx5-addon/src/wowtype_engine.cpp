@@ -842,6 +842,7 @@ void WowtypeEngine::applyConfig() {
                                             : WowtypeSelectKeys::Off;
     }
     pickChar_ = envOr("WOWTYPE_PICK_CHAR", *config_.pickChar);
+    prediction_ = *config_.prediction;
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
@@ -1187,6 +1188,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                              ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
                              : WOWTYPE_SELECT_KEYS_OFF;
     config.pick_char = pickChar_ ? 1 : 0;
+    config.prediction = prediction_ ? 1 : 0;
     config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
     config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
     config.shift_toggle = shiftToggle_ == WowtypeShiftToggle::Left    ? WOWTYPE_SHIFT_TOGGLE_LEFT

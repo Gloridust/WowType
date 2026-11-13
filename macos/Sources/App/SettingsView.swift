@@ -373,6 +373,11 @@ private struct InputPage: View {
             RowDivider()
             SwitchRow(title: "以词定字", subtitle: "按 [ 取第一个字，按 ] 取最后一个字", isOn: $model.config.pickChar)
             RowDivider()
+            SwitchRow(title: "联想", subtitle: "上屏后给出接下来可能打的词，按数字键选",
+                      info: "选了接着联想，没把握时不给。空格、回车、退格照常输入，不会选中联想的词；"
+                          + "Esc 收起。汉字后面直接打数字（第3章）会选成联想的词，所以默认关。",
+                      isOn: $model.config.prediction)
+            RowDivider()
             ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
                         info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
                         enabled: $model.config.autoSpace) {

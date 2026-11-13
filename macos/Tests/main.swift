@@ -428,6 +428,7 @@ do {
     check(d.shiftToggle == .both && !d.traditional && !d.halfwidthPunct && d.selectKeys == .off, "默认 Shift 切换、简体、全角标点")
     check(d.pickChar && d.dateTime && d.calculator && d.emojiSuggest && d.autoSpaceFlags == 0 && d.lexicon.isEmpty,
           "默认以词定字、日期、计算器、emoji 推荐开，自动空格关，自带词库")
+    check(!d.prediction && WowtypeConfig.parse("Prediction=True").prediction, "联想默认关，Prediction=True 打开")
     check(WowtypeConfig.parse(WowtypeConfig.template()) == d, "写出来的设置模板读回来是默认值")
     check(WowtypeConfig.load(path: "/nonexistent/wowtype.conf") == d, "没有设置文件用默认值")
 
@@ -1835,6 +1836,93 @@ do {
     check(LexiconPack.installedVersion(folder: dir) == nil, "没有 lexicon.tsv 算没装")
     unlink(dir + "/VERSION")
     rmdir(dir)
+}
+
+// MARK: 联想（#89）
+
+/// 联想要语言模型：小词库 + 一份 bigram（你好 → 世界 / 朋友，世界 → 和平），和别的用例分开一个引擎。
+func predictionEngine() -> Engine? {
+    let dir = "/tmp/wowtype-macos-harness-\(getpid())-predict"
+    mkdir(dir, 0o755)
+    writeFile(dir + "/lexicon.tsv", "ni hao\t你好\t50000\nshi jie\t世界\t30000\nhe ping\t和平\t20000\n")
+    writeFile(dir + "/bigram.tsv", "你好\t世界\t6\n你好\t朋友\t3\n世界\t和平\t5\n")
+    let engine = Engine(lexicon: dir + "/lexicon.tsv", languageModel: dir + "/bigram.tsv")
+    for file in ["lexicon.tsv", "lexicon.tsv.wcache", "bigram.tsv"] {
+        unlink(dir + "/" + file)
+    }
+    rmdir(dir)
+    return engine
+}
+
+if let predictEngine = predictionEngine() {
+    func predicting(_ on: Bool = true) -> (Composer, FakeClient) {
+        let client = FakeClient()
+        let c = Composer(engine: predictEngine, client: client)
+        var config = WowtypeConfig()
+        config.prediction = on
+        c.apply(config)
+        return (c, client)
+    }
+    do {
+        let (c, client) = predicting()
+        type(c, "nihao ")
+        check(client.committed == "你好", "联想：空格上屏你好", client.committed)
+        check(c.isPredicting && !c.isComposing, "联想：上屏后开着联想，没在打字")
+        check(client.marked.isEmpty, "联想：编辑区是空的", client.marked)
+        check(client.page?.texts == ["世界", "朋友"] && client.page?.cursor == -1,
+              "联想：候选框里是联想的词，没有光标", "\(client.page?.texts ?? []) \(client.page?.cursor ?? 99)")
+        check(c.handle(.char("1")) && client.committed == "你好世界", "联想：数字 1 选第一个", client.committed)
+        check(client.page?.texts == ["和平"], "联想：选了接着联想", "\(client.page?.texts ?? [])")
+        check(!c.handle(.char("7")) && client.committed == "你好世界" && client.page == nil,
+              "联想：联想个数以外的数字交给应用，收起联想")
+    }
+    for (name, key) in [("空格", KeyInput.char(" ")), ("回车", .key(Keysym.returnKey)),
+                        ("退格", .key(Keysym.backspace)), ("左键", .key(Keysym.left)),
+                        ("Command+C", .char("c", .command))] {
+        let (c, client) = predicting()
+        type(c, "nihao ")
+        check(!c.handle(key) && client.committed == "你好" && client.page == nil && !c.isPredicting,
+              "联想：\(name)收起联想、交给应用，不上屏联想的词", client.committed)
+    }
+    do {
+        let (c, client) = predicting()
+        type(c, "nihao ")
+        check(c.handle(.key(Keysym.escape)) && client.page == nil && client.committed == "你好", "联想：Esc 收起")
+        type(c, "nihao ")
+        _ = c.handle(.char("s"))
+        check(c.isComposing && client.marked == "s" && client.committed == "你好你好", "联想：打字母换成打字", client.marked)
+        _ = c.handle(.key(Keysym.escape))
+        type(c, "nihao ")
+        _ = c.handle(.char(","))
+        check(client.committed.hasSuffix("你好，") && client.page == nil, "联想：标点照常上屏", client.committed)
+    }
+    do {
+        // 切走输入框、语音输入开始：收起，数字不会选到看不见的词
+        let (c, client) = predicting()
+        type(c, "nihao ")
+        c.commitComposition()
+        check(client.page == nil && !c.isPredicting, "联想：切走输入框收起")
+        type(c, "nihao ")
+        c.dismissPrediction()
+        check(client.page == nil && !c.handle(.char("1")) && client.committed == "你好你好", "联想：语音开始时收起")
+        // 切英文收起
+        type(c, "nihao ")
+        c.switchMode(to: .english)
+        check(client.page == nil && !c.isPredicting, "联想：切英文收起")
+    }
+    do {
+        // 密码框（安全输入）不联想；设置里关着（默认）不联想
+        let (c, client) = predicting()
+        client.allowsTranslation = false
+        type(c, "nihao ")
+        check(client.committed == "你好" && client.page == nil && !c.isPredicting, "联想：密码框里不联想")
+        let (off, offClient) = predicting(false)
+        type(off, "nihao ")
+        check(offClient.committed == "你好" && offClient.page == nil && !off.isPredicting, "联想：默认关")
+        check(!off.handle(.char("1")), "联想：关着时数字照常交给应用")
+    }
+} else {
+    check(false, "联想：载入测试引擎")
 }
 
 // MARK: 设置契约（spec/config.json、spec/lexicon-pack.json；Linux 两端在 scripts/test-config-contract.py 对照）
