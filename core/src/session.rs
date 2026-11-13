@@ -2468,12 +2468,13 @@ impl<'e> Session<'e> {
             comment,
             ..Candidate::default()
         };
-        // custom.tsv 里编码正好是这个码的，不管编码像不像拼音（dd → 地址）
+        // custom.tsv 里编码正好是这个码的，编码像不像拼音都算（dd → 地址）；分了音节的（li si → 李四）
+        // 是拼音的读法，不是要打的码，不算，免得占了码位
         let mut all: Vec<Candidate> = engine
             .lexicon()
             .custom_phrases()
             .into_iter()
-            .filter(|(custom, _)| custom.chars().filter(|c| !matches!(c, ' ' | '\'')).eq(code.chars()))
+            .filter(|(custom, _)| !custom.contains(' ') && custom.chars().filter(|&c| c != '\'').eq(code.chars()))
             .map(|(_, word)| candidate(crate::unescape_custom(&word), String::new()))
             .collect();
         let mut longer = Vec::new();

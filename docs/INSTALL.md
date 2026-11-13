@@ -138,10 +138,13 @@ Python 的实际版本包名会随 Tumbleweed 更新；上面的通用名字采�
 git clone https://github.com/Gloridust/WowType.git
 cd WowType
 scripts/make-data.sh "" dist/data
+scripts/make-wubi.sh "" dist/data
 ```
 
 词库脚本下载并转换 rime-ice，合并项目热词，下载经过固定 SHA256 校验的语言模型。
 输出包含 `lexicon.tsv`、`english.txt`、`words.lm` 和许可证、来源信息。
+五笔脚本按钉死的提交下载 rime-wubi（LGPL-3.0），核对 SHA256 后生成五笔码表 `wubi86.tsv`
+和 `WUBI-LICENSE`、`WUBI-AUTHORS`、`WUBI-SOURCE.txt`；各发行版的打包脚本都要这几个文件。
 已有 rime-ice checkout 时可传入其路径，避免重复下载。
 
 ### 3. Arch / Manjaro：制作原生安装包
@@ -171,7 +174,7 @@ cmake --build build -j"$(nproc)"
 sudo cmake --install build
 sudo install -m755 target/release/wowtype-check target/release/wowtype-show /usr/bin/
 install -Dm644 -t "${XDG_DATA_HOME:-$HOME/.local/share}/wowtype" \
-  dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm
+  dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm dist/data/wubi86.tsv
 ```
 
 CMake 使用 Fcitx 5 导出的安装路径：Debian / Ubuntu 通常为 `/usr/lib/<multiarch>/fcitx5`，

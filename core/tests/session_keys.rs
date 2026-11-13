@@ -2501,7 +2501,7 @@ fn wubi_extras_do_not_move_code_slots() {
 fn wubi_custom_codes_come_first() {
     let engine = wubi_engine();
     // 自定义编码排最前；和码表撞码时不唯一，不自动上屏
-    engine.lexicon().set_custom_tsv("ggll\t壹\nbj\t北京市\\n海淀区\n");
+    engine.lexicon().set_custom_tsv("ggll\t壹\nbj\t北京市\\n海淀区\nli si\t李四\n");
     let mut session = wubi_with(engine, wubi_config());
     assert_eq!(type_keys(&mut session, "ggll").commit, None);
     assert_eq!(texts(&mut session)[..2], ["壹", "一"]);
@@ -2510,6 +2510,10 @@ fn wubi_custom_codes_come_first() {
     type_keys(&mut session, "bj");
     assert_eq!(texts(&mut session)[0], "北京市\n海淀区");
     assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("北京市\n海淀区"));
+    // 分了音节的（li si）是拼音读法，不占五笔的码位
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "lisi");
+    assert!(!texts(&mut session).contains(&"李四".to_string()));
 }
 
 #[test]
@@ -2616,4 +2620,32 @@ fn wubi_real_table() {
     assert_eq!(type_keys(&mut session, "ggll").commit.as_deref(), Some("一"));
     let mut session = wubi_with(engine, wubi_config());
     assert_eq!(type_keys(&mut session, "wqvb<sp>").commit.as_deref(), Some("你好"));
+}
+
+#[test]
+fn wubi_with_translate_auto_space_and_grid() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::Mode;
+    // 「译」里顶字：上屏的进原文，新码留在编辑区
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = wubi_session();
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    let frame = type_keys(&mut session, "wqvbg");
+    assert_eq!(frame.commit, None);
+    assert_eq!(session.translate_source(), "你好");
+    assert_eq!(frame.preedit, "g");
+    // 自动空格：顶字上屏的汉字和后面的大写字母之间补空格
+    let mut session = wubi_with(wubi_engine(), Config { auto_space: LETTERS | DIGITS, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "wqA").commit.as_deref(), Some("你 A"));
+    // 横排下键展开面板，照常挪光标、选；接着打字母先收起再接上
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>");
+    assert_eq!(frame.panel, Panel::Expanded);
+    let second = texts(&mut session)[1].clone();
+    assert_eq!(type_keys(&mut session, "<right><sp>").commit, Some(second));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>q");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(frame.preedit, "wq");
 }

@@ -1192,6 +1192,10 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
         ++unsavedCommits_;
     }
     state->forgetCandidates();
+    if (state->composing()) {
+        // 上屏以后还在打字（五笔顶字时新打的字母开始下一个码，离开「译」时正在打的拼音留着）：抄新的候选
+        syncView(state);
+    }
     if (learned || !text.empty()) {
         rememberContext(text);
     }
@@ -1321,10 +1325,6 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
     if (frame && frame->commit) {
         // 学没学到词看 frame->learned；选了 emoji 由会话记进最近用过
         finishCommit(ic, state, frame);
-        if (state->composing()) {
-            // 上屏以后还在打字（五笔顶字：上屏首选，新打的字母开始下一个码）：抄新的候选
-            syncView(state);
-        }
         updateInputPanel(ic, state);
         return;
     }
