@@ -35,6 +35,7 @@
 #include <fcitx/instance.h>
 #include <cstdlib>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/matchrule.h>
 #include <fcitx-utils/dbus/message.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/eventdispatcher.h>
@@ -128,6 +129,9 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "up") sym = FcitxKey_Up;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
             else if (name == "tab") sym = FcitxKey_Tab;
+            else if (name == "home") sym = FcitxKey_Home;
+            else if (name == "end") sym = FcitxKey_End;
+            else if (name == "del") sym = FcitxKey_Delete;
             if (name == "stab") {
                 send(ic, Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
                 continue;
@@ -1108,6 +1112,41 @@ void runCases(Instance &instance) {
               join(page(ic.get())));
     fresh(ic.get());
 
+    // #129：「方向键」设成左右键移动光标：左键把光标移进拼音，字母插在光标处，退格删光标前一个；
+    // 右键到了末尾不去挑候选，上下键选词
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "ArrowKeys=Caret\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left><left><left>");
+    {
+        const fcitx::Text &shown = ic->inputPanel().preedit();
+        check(shown.cursor() >= 0 && shown.toString().substr(0, static_cast<std::size_t>(shown.cursor())) == "ni",
+              "左键三下光标在 ni 后面：" + shown.toString() + " @" + std::to_string(shown.cursor()));
+    }
+    type(ic.get(), "x");
+    check(preedit(ic.get()).find('x') != std::string::npos && ic->committed.empty(),
+          "字母插在光标处：" + preedit(ic.get()));
+    type(ic.get(), "<bs><end><right>");
+    {
+        auto *list = common();
+        check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()) && list &&
+                  list->cursorIndex() == 0,
+              "退格删掉插进去的 x，End 回末尾，末尾的右键不挑候选：" + preedit(ic.get()));
+    }
+    {
+        const std::string want = page(ic.get()).at(1);
+        type(ic.get(), "<down><sp>");
+        check(ic->committed == want, "下键选第 2 个，空格上屏它：" + ic->committed + " / " + want);
+    }
+    fresh(ic.get());
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left>");
+    check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()),
+          "默认（都用来选词）左键不动编辑区的光标：@" + std::to_string(ic->inputPanel().preedit().cursor()));
+    fresh(ic.get());
+
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
     const auto tapShift = [&](KeySym sym) {
         KeyEvent press(ic.get(), Key(sym), false);
@@ -1282,6 +1321,13 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "ni;");
     check(ic->committed.find("；") != std::string::npos, "成对之后的分号还是标点：" + ic->committed);
+    fresh(ic.get());
+    // #160：双拼时 v 是声母键，计算器用大写 V
+    type(ic.get(), "V1+2*3");
+    check(preedit(ic.get()) == "V1+2*3" && !page(ic.get()).empty() && page(ic.get())[0] == "7",
+          "双拼 V1+2*3 -> 7：" + preedit(ic.get()) + " | " + join(page(ic.get())));
+    type(ic.get(), "=");
+    check(ic->committed == "7", "双拼按 = 上屏结果：" + ic->committed);
     fresh(ic.get());
     // #122：设置里打开「双拼时编辑区显示打的键」
     {
@@ -1789,6 +1835,7 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                  }});
     s.push_back({"上面那种情况回车也上屏译文", [](HarnessInputContext *ic) { type(ic, "<cr>"); },
                  expectCommit("EN:你好")});
+#ifdef WOWTYPE_HAVE_PASSWORD_IM_OPTION
     s.push_back({"密码框里照常打中文，不翻译",
                  [reset, &instance](HarnessInputContext *ic) {
                      reset(ic);
@@ -1800,6 +1847,18 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      type(ic, "nihao<sp>");
                  },
                  expectCommit("你好")});
+#else
+    // fcitx5 5.0 没有「密码框也用输入法」：密码框里换成键盘布局，WowType 收不到按键，更不会翻译
+    s.push_back({"密码框里不用输入法（fcitx5 没有「密码框也用输入法」）：按键原样交给应用",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlags{CapabilityFlag::Password, CapabilityFlag::Preedit});
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && ic->passed == "nihao " && preedit(ic).empty();
+                 }});
+#endif
     s.push_back({"有原文时 Shift 切回中文：原文原样上屏",
                  [reset, &instance](HarnessInputContext *ic) {
                      reset(ic);
@@ -1815,6 +1874,68 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      return ic->committed.rfind("你好", 0) == 0 && ic->committed.size() > std::string("你好").size() &&
                             ic->committed.find("EN:") == std::string::npos;
                  }});
+    // 另设的切换键（#143）
+    auto press = [](HarnessInputContext *ic, Key key) {
+        KeyEvent e(ic, key, false);
+        const bool handled = ic->keyEvent(e);
+        KeyEvent up(ic, key, true);
+        ic->keyEvent(up);
+        return handled;
+    };
+    const Key toggleKey(FcitxKey_space, KeyStates{KeyState::Ctrl, KeyState::Shift});
+    auto handledFlag = std::make_shared<bool>(false);
+    s.push_back({"设了切换键，单按 Shift 照常切到「译」",
+                 [c, addon, reset, url](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nToggleKey=Control+Shift+space\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->committed.empty() && preedit(ic) == "你好"; }});
+    s.push_back({"在「译」里按切换键：原文原样上屏，回到中文",
+                 [press, toggleKey](HarnessInputContext *ic) {
+                     check(press(ic, toggleKey), "切换键被接住");
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好你好")});
+    s.push_back({"切换键：中 → 英，再按回中文",
+                 [reset, press, toggleKey](HarnessInputContext *ic) {
+                     reset(ic);
+                     press(ic, toggleKey);
+                     type(ic, "abc");
+                     press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
+    s.push_back({"关了 Shift、靠切换键：切到英文，重新读设置也不拉回中文",
+                 [c, addon, reset, url, press, toggleKey](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nShiftToggle=Off\n"
+                            "ToggleKey=Control+Shift+space\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     press(ic, toggleKey);
+                     type(ic, "ab");
+                     addon->reloadConfig();
+                     type(ic, "c");
+                     press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
+    s.push_back({"没设切换键：这个键交给应用，还在中文",
+                 [c, addon, reset, press, toggleKey, handledFlag](HarnessInputContext *ic) {
+                     std::filesystem::remove(c->configFile);
+                     addon->reloadConfig();
+                     reset(ic);
+                     *handledFlag = press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [handledFlag](HarnessInputContext *ic) { return !*handledFlag && ic->committed == "你好"; }});
     s.push_back({"关掉互译后 Shift 只在中英之间切",
                  [c, addon, reset](HarnessInputContext *ic) {
                      std::filesystem::remove(c->configFile);
@@ -2133,6 +2254,92 @@ void runVoiceNoModelCase(Instance &instance, std::function<void()> done) {
     runVoiceScript(instance, "语音·没有模型", steps, done);
 }
 
+/// 语音浮条的回执（#170）：在会话总线上假装是 GNOME 扩展，收插件发的 State。
+/// 先每个都回 Ack：提示交给浮条，候选框里没有字；再不回了：等 0.8 秒后插件改在候选框里提示。
+/// 走「没有模型」那条路（按语音键只提示去下载），不用真的录音。
+struct FakeOverlay {
+    std::unique_ptr<dbus::Bus> bus;
+    std::unique_ptr<dbus::Slot> match;
+    bool ack = true;
+    int states = 0;
+};
+
+void runVoiceOverlayCase(Instance &instance, std::function<void()> done) {
+    const char *address = std::getenv("DBUS_SESSION_BUS_ADDRESS");
+    const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
+    const char *dirEnv = std::getenv("WOWTYPE_VOICE_MODEL_DIR");
+    if (!address || !*address || (wav && *wav) || !dirEnv || !*dirEnv) {
+        std::printf("skip 语音浮条回执（没有会话总线，或有语音模型）\n");
+        done();
+        return;
+    }
+    static constexpr char kService[] = "io.github.gloridust.WowType.VoiceOverlay";
+    static constexpr char kPath[] = "/io/github/gloridust/WowType";
+    static constexpr char kInterface[] = "io.github.gloridust.WowType.Voice1";
+    auto overlay = std::make_shared<FakeOverlay>();
+    overlay->bus = std::make_unique<dbus::Bus>(dbus::BusType::Session);
+    overlay->bus->attachEventLoop(&instance.eventLoop());
+    FakeOverlay *o = overlay.get();
+    overlay->match = overlay->bus->addMatch(
+        dbus::MatchRule("", kPath, kInterface, "State"), [o](dbus::Message &msg) {
+            uint32_t state = 0;
+            msg >> state;
+            ++o->states;
+            if (o->ack) {
+                auto reply = o->bus->createSignal(kPath, kInterface, "Ack");
+                reply.setDestination(msg.sender());
+                reply << state;
+                reply.send();
+            }
+            return true;
+        });
+    check(overlay->bus->requestName(kService, Flags<dbus::RequestNameFlag>{}), "语音浮条：假扩展占上名字");
+
+    auto aux = [](VoiceScript &s) { return s.ic->inputPanel().auxUp().toString(); };
+    auto press = [](VoiceScript &s) {
+        KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R), false);
+        check(s.ic->keyEvent(e), s.name + "：按下右 Alt 被输入法接住");
+    };
+    auto release = [](VoiceScript &s) {
+        KeyEvent e(s.ic.get(), Key(FcitxKey_Alt_R, KeyState::Alt), true);
+        s.ic->keyEvent(e);
+    };
+    using Steps = std::vector<std::pair<int, std::function<void(VoiceScript &)>>>;
+    Steps steps{
+        // 等插件看到扩展上线
+        {3, press},
+        {4, [aux](VoiceScript &s) {
+             check(aux(s).empty(), s.name + "：有浮条时候选框里不写提示，实际 " + aux(s));
+         }},
+        {5, release},
+        {15, [aux, overlay](VoiceScript &s) {
+             check(overlay->states > 0, s.name + "：浮条收到了状态");
+             check(aux(s).empty(), s.name + "：浮条回了执，1 秒后候选框里还是没字，实际 " + aux(s));
+         }},
+        // 提示 4 秒后收起；扩展「坏了」：不再回执
+        {60, [overlay](VoiceScript &) { overlay->ack = false; }},
+        {62, press},
+        {63, [aux](VoiceScript &s) {
+             check(aux(s).empty(), s.name + "：刚按下时还在等浮条，实际 " + aux(s));
+         }},
+        {64, release},
+        {75, [aux](VoiceScript &s) {
+             check(aux(s).find("设置") != std::string::npos,
+                   s.name + "：等不到回执，改在候选框里提示，实际 " + aux(s));
+         }},
+        // 提示收起后扩展下线，后面的用例照常用候选框
+        {120, [overlay](VoiceScript &) {
+             overlay->match.reset();
+             overlay->bus.reset();
+         }},
+        {125, [](VoiceScript &s) {
+             check(s.ic->committed.empty(), s.name + "：什么也不上屏，实际 " + s.ic->committed);
+             std::printf("语音浮条：回执了就交给浮条，等不到回执就退回候选框\n");
+         }},
+    };
+    runVoiceScript(instance, "语音浮条回执", steps, done);
+}
+
 void runVoiceCancelCases(Instance &instance, std::function<void()> done) {
     const char *wav = std::getenv("WOWTYPE_VOICE_WAV");
     if (!wav || !*wav) {
@@ -2256,12 +2463,14 @@ int main(int argc, char **argv) {
         runModeCase(instance, [&instance]() {
         runTranslateCase(instance, [&instance]() {
             runVoiceNoModelCase(instance, [&instance]() {
+            runVoiceOverlayCase(instance, [&instance]() {
                 runVoiceCase(instance, [&instance]() {
                     runVoiceCancelCases(instance, [&instance]() {
                         std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
                         instance.exit();
                     });
                 });
+            });
             });
         });
         });

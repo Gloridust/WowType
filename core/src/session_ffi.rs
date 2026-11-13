@@ -14,8 +14,8 @@ use std::ptr;
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
 use crate::symbols::PunctStyle;
 use crate::session::{
-    Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys, Session,
-    ShiftToggle, Tool,
+    ArrowKeys, Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys,
+    Session, ShiftToggle, Tool,
 };
 
 /// 一次按键（C 布局）。`size` 是外壳编译时的 `sizeof(WowtypeKey)`：
@@ -182,6 +182,9 @@ pub const WOWTYPE_SELECT_KEYS_OFF: c_int = 0;
 pub const WOWTYPE_SELECT_KEYS_SEMICOLON: c_int = 1;
 pub const WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE: c_int = 2;
 
+pub const WOWTYPE_ARROW_KEYS_CANDIDATES: c_int = 0;
+pub const WOWTYPE_ARROW_KEYS_CARET: c_int = 1;
+
 /// 会话的设置（C 布局）。外壳没填的字段（size 比我们认识的短）用默认值。
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -216,6 +219,8 @@ pub struct WowtypeSessionConfig {
     pub clipboard_history: c_int,
     /// 1.10 起：双拼时编辑区显示打的键，不翻成全拼，默认 0。
     pub shuangpin_keys: c_int,
+    /// 1.10 起：打字途中方向键做什么，`WOWTYPE_ARROW_KEYS_*`（#129），默认挑候选。
+    pub arrow_keys: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -248,6 +253,10 @@ impl Default for WowtypeSessionConfig {
             toolbar: c_int::from(config.toolbar),
             clipboard_history: c_int::from(config.clipboard_history),
             shuangpin_keys: c_int::from(config.shuangpin_keys),
+            arrow_keys: match config.arrow_keys {
+                ArrowKeys::Candidates => WOWTYPE_ARROW_KEYS_CANDIDATES,
+                ArrowKeys::Caret => WOWTYPE_ARROW_KEYS_CARET,
+            },
         }
     }
 }
@@ -289,10 +298,14 @@ impl WowtypeSessionConfig {
                 self.shift_tap_ms
             },
             translate_mode: self.translate_mode != 0,
-            // 旧外壳没填这一项（size 短，读出来是 0）时按默认开着
-            toolbar: self.toolbar != 0 || (self.size as usize) <= std::mem::offset_of!(Self, toolbar),
+            // 旧外壳给的结构体短、没有这一项时，read_sized 留着 Default 的值（开着）
+            toolbar: self.toolbar != 0,
             clipboard_history: self.clipboard_history != 0,
             shuangpin_keys: self.shuangpin_keys != 0,
+            arrow_keys: match self.arrow_keys {
+                WOWTYPE_ARROW_KEYS_CARET => ArrowKeys::Caret,
+                _ => ArrowKeys::Candidates,
+            },
         }
     }
 }
@@ -467,7 +480,7 @@ unsafe fn arg(ptr: *const c_char) -> String {
         .into_owned()
 }
 
-/// 按 size 读一个带 size 字段的结构体：外壳给的比我们认识的短，缺的字段当 0。
+/// 按 size 读一个带 size 字段的结构体：外壳给的比我们认识的短时，缺的字段是 `T::default()` 的值。
 unsafe fn read_sized<T: Copy + Default>(ptr: *const T, size: u32) -> T {
     let mut value = T::default();
     let len = (size as usize).min(size_of::<T>());
@@ -1097,6 +1110,18 @@ mod tests {
         assert_eq!(frame.handled, 1);
         assert_eq!(c(frame.preedit), "a");
         unsafe { wowtype_session_free(session) };
+    }
+
+    #[test]
+    fn short_config_struct_keeps_defaults() {
+        // 旧外壳的 WowtypeSessionConfig 没有 toolbar 这一项：读出来照默认开着，不是 0
+        let mut config = WowtypeSessionConfig::default();
+        config.size = std::mem::offset_of!(WowtypeSessionConfig, toolbar) as u32;
+        config.toolbar = 0;
+        config.shuangpin_keys = 1;
+        let read = unsafe { read_sized(&config, config.size) }.to_config();
+        assert!(read.toolbar);
+        assert!(!read.shuangpin_keys, "size 之外的字段不该读进来");
     }
 
     #[test]

@@ -19,6 +19,7 @@
 #include <fcitx/inputcontextproperty.h>
 #include <fcitx/inputmethodengine.h>
 #include <fcitx-utils/dbus/bus.h>
+#include <fcitx-utils/dbus/matchrule.h>
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
@@ -52,6 +53,19 @@ struct WowtypeLayoutAnnotation {
     void dumpDescription(fcitx::RawConfig &config) const {
         config.setValueByPath("EnumI18n/0", "横排");
         config.setValueByPath("EnumI18n/1", "竖排");
+    }
+};
+
+/// 打字途中方向键做什么（#129）。
+enum class WowtypeArrowKeys { Candidates, Caret };
+FCITX_CONFIG_ENUM_NAME(WowtypeArrowKeys, "Candidates", "Caret");
+
+struct WowtypeArrowKeysAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "都用来选词");
+        config.setValueByPath("EnumI18n/1", "左右键移动光标");
     }
 };
 
@@ -151,6 +165,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypeLayout, fcitx::NoConstrain<WowtypeLayout>,
                   fcitx::DefaultMarshaller<WowtypeLayout>, WowtypeLayoutAnnotation>
         layout{this, "CandidateLayout", "候选排列", WowtypeLayout::Horizontal};
+    fcitx::Option<WowtypeArrowKeys, fcitx::NoConstrain<WowtypeArrowKeys>,
+                  fcitx::DefaultMarshaller<WowtypeArrowKeys>, WowtypeArrowKeysAnnotation>
+        arrowKeys{this, "ArrowKeys", "方向键", WowtypeArrowKeys::Candidates};
     fcitx::Option<int, fcitx::IntConstrain> pageSize{
         this, "PageSize", "每页候选个数", 9, fcitx::IntConstrain(3, 9)};
     fcitx::Option<bool> pageKeysMinus{this, "PageKeysMinusEqual", "翻页键：- =", true};
@@ -215,6 +232,11 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
+        fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
+    // 另设一个切换中 / 英文的快捷键（#143），默认不用；单按 Shift 照常。fcitx5 自己的热键（比如
+    // 切换输入法的 Ctrl+空格）先被 fcitx5 拿走，WowType 收不到，设置界面会提示
+    fcitx::Option<fcitx::Key, fcitx::KeyConstrain> toggleKey{
+        this, "ToggleKey", "切换中 / 英文的快捷键", fcitx::Key(),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
     fcitx::Option<bool> checkUpdate{this, "CheckUpdate", "自动检查更新（最多一小时一次）", true};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
@@ -377,6 +399,9 @@ private:
     std::string customWordsPath() const;
     bool isVoiceKey(const fcitx::Key &key) const;
     bool isEmojiKey(const fcitx::Key &key) const;
+    bool isToggleKey(const fcitx::Key &key) const;
+    /// 能自己切中 / 英：单按 Shift 没关，或者另设了切换键。都没有时一直是中文（切过去就切不回来）。
+    bool canToggleMode() const;
     /// 单按 Shift 切换中英文：处理了（切换了）返回 true。
     /// Shift 键交给会话判断单按（别的键只报一下，打断单按）。返回 true：这个键处理完了
     /// （Shift 键都是；单按切换了模式时吃掉，否则交给应用）。
@@ -445,8 +470,6 @@ private:
     void refreshCandidates(WowtypeState *state);
     /// 会话的候选重算过才重新抄；返回 true 表示重抄了。页码、光标每次都抄。
     bool syncView(WowtypeState *state);
-    /// 表情面板（和普通候选的展开面板一个样子）：处理了这个键返回 true。
-    bool handleGridKey(fcitx::InputContext *ic, WowtypeState *state, const fcitx::Key &key);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
     /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
@@ -476,9 +499,12 @@ private:
     void setupVoiceOverlay();
     /// 在会话总线上登记 org.wowtype.Input（外部命令切模式）。
     void setupControl();
-    bool voiceOverlay() const { return !overlayOwner_.empty(); }
+    /// 扩展在跑、而且没被认定画不出来（#170）：语音提示交给浮条。
+    bool voiceOverlay() const { return !overlayOwner_.empty() && !overlayBroken_; }
     void sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state, const std::string &label,
                           int level);
+    /// 发了状态一直等不到扩展的回执：认定浮条画不出来，这次和以后都在候选框里提示。
+    void checkOverlayAck(fcitx::InputContext *ic);
     void maybeCheckUpdate();
     bool voiceActive() const { return voiceShowing_; }
 
@@ -499,6 +525,7 @@ private:
     WowtypeConfig config_;
     // 生效中的设置（配置文件 + 环境变量覆盖）
     bool horizontal_ = true;
+    WowtypeArrowKeys arrowKeys_ = WowtypeArrowKeys::Candidates;
     std::size_t pageSize_ = 9;
     bool fuzzy_ = false;
     /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
@@ -537,6 +564,8 @@ private:
     bool emojiSuggest_ = true;
     /// 表情面板快捷键，FcitxKey_None 表示关掉。
     fcitx::Key emojiKey_;
+    /// 另设的切换中 / 英文快捷键，FcitxKey_None 表示不用。
+    fcitx::Key toggleKey_;
     /// 最近用过的 emoji（最近的在前），存在 ~/.local/share/wowtype/emoji-recent.txt。
 
     WowtypeVoice *voice_ = nullptr;
@@ -578,6 +607,12 @@ private:
     std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> overlayWatch_;
     /// 扩展在总线上的唯一名；空表示扩展没在跑，用候选框里的文字提示。
     std::string overlayOwner_;
+    /// 扩展画好一次状态回一个 Ack。这次说话发出第一个状态的时间、收到回执没有；
+    /// 等不到就把 overlayBroken_ 置上，直到扩展换了人（重新登录、扩展重载）。
+    std::unique_ptr<fcitx::dbus::Slot> overlayAckSlot_;
+    uint64_t overlaySentAt_ = 0;
+    bool overlayAcked_ = false;
+    bool overlayBroken_ = false;
 
     // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
     std::unique_ptr<fcitx::dbus::Bus> controlBus_;

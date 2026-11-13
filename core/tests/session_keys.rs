@@ -16,9 +16,10 @@ use std::sync::Arc;
 use wowtype_core::datetime::LocalTime;
 use wowtype_core::lm::BigramLm;
 use wowtype_core::session::{
-    keysym, modifier, CandidateKind, Config, Frame, Key, Panel, PunctStyle, Selection, Session,
+    keysym, modifier, ArrowKeys, CandidateKind, Config, Frame, Key, Panel, PunctStyle, Selection,
+    Session,
 };
-use wowtype_core::{Engine, Lexicon, MemoryLexicon};
+use wowtype_core::{Converter, Engine, Lexicon, MemoryLexicon};
 
 /// 按一串键，和 key_harness 的 type() 一样：<sp> <bs> <cr> <esc> 等是特殊键，其余按字符。
 fn type_keys(session: &mut Session, keys: &str) -> Frame {
@@ -40,6 +41,9 @@ fn type_keys(session: &mut Session, keys: &str) -> Frame {
                 "right" => keysym::RIGHT,
                 "pgdn" => keysym::PAGE_DOWN,
                 "tab" => keysym::TAB,
+                "home" => keysym::HOME,
+                "end" => keysym::END,
+                "del" => keysym::DELETE,
                 other => panic!("不认识的特殊键 <{other}>"),
             })
         } else {
@@ -72,6 +76,7 @@ fn select_prefix(session: &mut Session, text: &str, pinyin: &str, bytes: usize) 
         text: text.into(),
         pinyin: pinyin.into(),
         bytes,
+        ..Default::default()
     });
 }
 
@@ -464,11 +469,24 @@ fn shuangpin_display_and_date_key() {
     assert_eq!(all[0], "日期");
     assert_eq!(all[1], "2026年11月11日");
 
-    // 双拼不开计算器（v 是韵母键）
+    // 双拼时小写 v 是声母键：v1+2 不算
     let mut session = with(engine);
     type_keys(&mut session, "v");
     session.append("1+2");
     assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
+
+    // 双拼用大写 V 进计算器（#160）：按键进编辑区、算式原样显示、= 上屏结果
+    let mut session = with(engine);
+    let frame = type_keys(&mut session, "V1+2*3");
+    assert_eq!(frame.preedit, "V1+2*3", "算式不当双拼键换成全拼");
+    assert_eq!(texts(&mut session)[..2], ["7", "1+2*3=7"]);
+    let frame = type_keys(&mut session, "=");
+    assert_eq!(frame.commit.as_deref(), Some("7"));
+    assert!(!session.composing());
+    // 大写金额也一样
+    let mut session = with(engine);
+    type_keys(&mut session, "V12345.67");
+    assert_eq!(texts(&mut session)[0], "壹万贰仟叁佰肆拾伍元陆角柒分");
 }
 
 #[test]
@@ -496,6 +514,12 @@ fn calculator() {
         texts(&mut session),
         ["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
     );
+
+    // 全拼时只认小写 v
+    let mut session = with(engine());
+    type_keys(&mut session, "V");
+    session.append("1+2");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
 
     // 关掉计算器：v1+2 不算
     let mut session = with(engine());
@@ -541,6 +565,53 @@ fn choose_sentence_start_then_the_rest() {
     assert_eq!(frame.commit.as_deref(), Some("你好中国"));
     assert!(frame.preedit.is_empty());
     assert!(!session.composing());
+}
+
+#[test]
+fn traditional_learns_the_lexicon_form() {
+    // 开着繁体学到的词要按词库的写法（简体）收：关掉繁体照样能用，开着时只转一次。
+    // 「萬里」再转一次会变成「萬裏」（里 -> 裏），收成繁体的话就会显示错。
+    // 词库里 万、里 都不是首选，没学之前 wanli 出的是「晚理」
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("wan\t晚\t9000\nwan\t万\t100\nli\t理\t9000\nli\t里\t100\n")
+            .unwrap(),
+    );
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.install_converter(Converter::from_tsv_str("万\t萬\n里\t裏\n万里\t萬里\n").unwrap());
+    engine.set_traditional(true);
+    let shown = |engine: &Engine| {
+        let mut session = with_engine_ref(engine);
+        type_keys(&mut session, "wanli");
+        texts(&mut session)
+    };
+    assert_eq!(shown(&engine)[0], "晚理");
+    {
+        // 一个字一个字选出来（萬、裏），拼成的词马上收进用户词库
+        let mut session = with_engine_ref(&engine);
+        type_keys(&mut session, "wanli");
+        choose_text(&mut session, "萬");
+        let frame = choose_text(&mut session, "裏");
+        assert_eq!(frame.commit.as_deref(), Some("萬裏"), "上屏的是候选显示的字");
+    }
+    let learned: Vec<String> = engine.user_words().into_iter().map(|(_, w, _)| w).collect();
+    assert_eq!(learned, ["万里"], "学的是词库里的写法");
+
+    // 开着繁体：学到的词排第一，转一次显示（萬里），没有再转一次的「萬裏」
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "萬里", "{candidates:?}");
+    assert!(!candidates.contains(&"萬裏".to_string()), "{candidates:?}");
+
+    // 关掉繁体：学到的词照样排第一，是简体
+    engine.set_traditional(false);
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "万里", "{candidates:?}");
+    assert!(candidates.iter().all(|c| !c.contains('萬')), "{candidates:?}");
+}
+
+fn with_engine_ref(engine: &Engine) -> Session<'_> {
+    let mut session = Session::with_engine(engine);
+    session.set_clock(fixed_time);
+    session
 }
 
 #[test]
@@ -1750,6 +1821,34 @@ fn translate_collects_source_and_requests_after_pause() {
 }
 
 #[test]
+fn clearing_one_session_keeps_another_sessions_request() {
+    // 两个输入框共用一个翻译器：A 发了请求，B 后来发的顶掉了它；A 清空时不能把 B 的请求取消掉
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut a = translating(t);
+    let mut b = translating(t);
+    for (i, c) in "nihao ".chars().enumerate() {
+        a.key(&at(c, 1000 + i as u64));
+    }
+    a.tick(1600);
+    assert_eq!(*t.started.borrow(), ["你好"]);
+    for (i, c) in "shijie ".chars().enumerate() {
+        b.key(&at(c, 2000 + i as u64));
+    }
+    b.tick(2600);
+    let b_source = b.translate_source().to_owned();
+    assert_eq!(*t.started.borrow(), ["你好".to_owned(), b_source.clone()]);
+    a.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(a.translate_source(), "");
+    assert_eq!(t.cancels.get(), 0, "翻译器上跑的是 B 的请求，A 清空不取消");
+    assert_eq!(t.snap.borrow().source, b_source);
+    assert_eq!(t.snap.borrow().state, JobState::Running);
+    // B 自己清空时取消自己的请求
+    b.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(t.cancels.get(), 1);
+}
+
+#[test]
 fn translate_enter_before_done_commits_when_ready() {
     use wowtype_core::translate::JobState;
     let t: &'static FakeTranslator = Box::leak(Box::default());
@@ -1913,4 +2012,158 @@ fn emoji_panel_search_and_pick() {
     session.toggle_emoji_panel();
     session.key(&shift(keysym::SHIFT_L, false, 1000));
     assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+}
+
+/// 一页 5 个、翻到第 2 页（光标在第 6 个上）以后按一个方向键，看它做了什么。
+fn arrow_effect(horizontal: bool, arrow_keys: ArrowKeys, keys: &str) -> &'static str {
+    let (mut session, _) = paged(Config {
+        horizontal,
+        arrow_keys,
+        ..Config::default()
+    });
+    type_keys(&mut session, "<pgdn>");
+    let frame = type_keys(&mut session, keys);
+    assert!(frame.handled, "{keys} 吃掉");
+    if frame.panel == Panel::Expanded {
+        return "展开";
+    }
+    if frame.preedit_cursor != frame.preedit.len() {
+        return "移光标";
+    }
+    match frame.cand_start + frame.cand_cursor.unwrap_or(0) {
+        0 => "上一页",
+        4 => "上一个",
+        5 => "不动",
+        6 => "下一个",
+        10 => "下一页",
+        other => panic!("{keys}：光标到了第 {other} 个"),
+    }
+}
+
+#[test]
+fn arrow_keys_in_each_layout() {
+    // #129：「方向键」两种用法 × 横排竖排，四种组合下各个方向键做什么
+    use ArrowKeys::{Candidates, Caret};
+    let cases = [
+        (true, Candidates, ["上一个", "下一个", "上一页", "展开"]),
+        (false, Candidates, ["上一页", "下一页", "上一个", "下一个"]),
+        // 移光标：上下键选词（跨页），左右键只管拼音里的光标，右键在末尾不动、不去挑候选
+        (true, Caret, ["移光标", "不动", "上一个", "下一个"]),
+        (false, Caret, ["移光标", "不动", "上一个", "下一个"]),
+    ];
+    for (horizontal, arrow_keys, want) in cases {
+        let got = ["<left>", "<right>", "<up>", "<down>"].map(|k| arrow_effect(horizontal, arrow_keys, k));
+        assert_eq!(got, want, "横排 {horizontal}、{arrow_keys:?}");
+    }
+}
+
+fn caret_session() -> Session<'static> {
+    let mut session = with(engine());
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        ..Config::default()
+    });
+    session
+}
+
+#[test]
+fn caret_edits_pinyin() {
+    // #129：左右键在拼音里移动光标，字母插在光标处，退格删光标前一个；到了两头吃掉，不去挑候选
+    let mut session = caret_session();
+    let frame = type_keys(&mut session, "nihao");
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "一开始光标在末尾");
+    let first = frame.cand_cursor;
+    let frame = type_keys(&mut session, "<right>");
+    assert!(frame.handled && frame.cand_cursor == first, "末尾的右键吃掉，候选不动");
+
+    let frame = type_keys(&mut session, "<left><left><left>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni", "光标在 ni 后面：{}", frame.preedit);
+    assert_eq!(frame.cand_cursor, first, "左键不动候选");
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nixhao", "字母插在光标处");
+    let frame = type_keys(&mut session, "<bs>");
+    assert_eq!(session.input(), "nihao", "退格删光标前一个");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni");
+
+    // Home 到最前：退格没东西删，左键吃掉
+    type_keys(&mut session, "<home>");
+    assert!(session.key(&Key::press(keysym::BACKSPACE)).handled);
+    assert_eq!(session.input(), "nihao", "光标在最前面时退格不删");
+    let frame = type_keys(&mut session, "<left>");
+    assert!(frame.handled && frame.preedit_cursor == 0 && frame.cand_cursor == first, "最前面的左键吃掉");
+    let frame = type_keys(&mut session, "<right>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "n");
+    // Delete 删光标后一个；末尾的 Delete 吃掉
+    type_keys(&mut session, "<del>");
+    assert_eq!(session.input(), "nhao");
+    type_keys(&mut session, "i<end>");
+    assert_eq!(session.input(), "nihao");
+    assert!(session.key(&Key::press(keysym::DELETE)).handled);
+    assert_eq!(session.input(), "nihao");
+
+    // 下键选下一个，空格上屏它
+    let second = texts(&mut session)[1].clone();
+    let frame = type_keys(&mut session, "<down><sp>");
+    assert_eq!(frame.commit, Some(second));
+}
+
+#[test]
+fn caret_resets_after_choosing_a_word() {
+    // 选了句首词：光标回到剩下的拼音末尾
+    let mut session = caret_session();
+    type_keys(&mut session, "nihaoshijie<left><left>");
+    choose_text(&mut session, "你好");
+    let frame = session.frame(true);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "{}", frame.preedit);
+    type_keys(&mut session, "a");
+    assert_eq!(session.remaining(), "shijiea");
+}
+
+#[test]
+fn caret_resets_when_switching_back_to_candidates() {
+    let mut session = caret_session();
+    type_keys(&mut session, "nihao<left><left>");
+    session.configure(Config::default());
+    let frame = session.frame(true);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "换回挑候选：光标回到末尾");
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nihaox");
+}
+
+#[test]
+fn caret_stays_at_end_while_translating() {
+    // 「译」里拼音在候选框的原文框里，画不出光标：左右键吃掉、光标不动，上下键照样选词
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        translate_mode: true,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "nihao<left><home>");
+    assert!(frame.handled);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len());
+    assert_eq!(type_keys(&mut session, "<down>").cand_cursor, Some(1));
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nihaox");
+}
+
+#[test]
+fn caret_shuangpin_shows_keys() {
+    // 双拼显示成全拼（zhong'guo）时换不回光标位置：光标在中间时显示打的键
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_shuangpin(true);
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = with(engine);
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "vsgo");
+    assert!(frame.preedit.contains("zhong"), "光标在末尾时照常显示全拼：{}", frame.preedit);
+    let frame = type_keys(&mut session, "<left>");
+    assert_eq!(frame.preedit, "vsgo");
+    assert_eq!(frame.preedit_cursor, 3);
+    assert_eq!(texts(&mut session)[0], "中国", "候选照旧按整个输入算");
 }

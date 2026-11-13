@@ -50,6 +50,12 @@ test_system=Linux
 count=0
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 pass() { count=$((count + 1)); printf 'ok %s - %s\n' "$count" "$*"; }
+# macOS 自带的 bash 3.2 在 UTF-8 下把变量名后面紧跟的全角字符（比如全角括号）当成变量名的一部分（set -u 时直接报
+# unbound variable）。变量后面紧跟非 ASCII 字符的一律要写成 ${version}。CI 的 bash 5 复现不了，只能这样查。
+bad=$(cd "$root" && git ls-files -z '*.sh' macos/pkg/scripts | xargs -0 perl -ne 'print "$ARGV:$.: $_" if /\$[A-Za-z_]\w*[^\x00-\x7f]/; close ARGV if eof' || true)
+[[ -z "$bad" ]] || fail "变量后面紧跟中文要加花括号（macOS 的 bash 3.2 会报 unbound variable）：
+$bad"
+
 run() {
   env -u SUDO_USER PATH="$work/bin:$PATH" \
     FIXTURE_LOG="$work/commands" FIXTURE_FETCH_LOG="$work/fetches" \
@@ -93,7 +99,12 @@ assert_no_install() {
   if grep -Eq '^(apt-get|pacman|dnf|installer) ' "$work/commands"; then fail '校验失败仍运行包管理器'; fi
 }
 
+plan $'ID=ubuntu\nVERSION_ID="22.04"' wowtype_0.3.8_ubuntu22.04_amd64.deb apt-get 'Ubuntu 22.04'
+plan $'ID=linuxmint\nVERSION_ID="21.3"\nID_LIKE="ubuntu debian"\nUBUNTU_CODENAME=jammy' ubuntu22.04 apt-get 'Linux Mint 21 uses Ubuntu 22.04 base'
 plan $'ID=ubuntu\nVERSION_ID="24.04"' wowtype_0.3.8_ubuntu24.04_amd64.deb apt-get 'Ubuntu 24.04'
+plan $'ID=deepin\nVERSION_ID="25"\nVERSION_CODENAME=crimson' wowtype_0.3.8_deepin25_amd64.deb apt-get 'deepin 25'
+plan $'ID=deepin\nVERSION_ID="25.0.9"' wowtype_0.3.8_deepin25_amd64.deb apt-get 'deepin 25 point release'
+plan $'ID=deepin\nVERSION_ID="23"\nVERSION_CODENAME=beige' wowtype_0.3.8_deepin23_amd64.deb apt-get 'deepin 23'
 plan $'ID=ubuntu\nVERSION_ID="26.04"' wowtype_0.3.8_ubuntu26.04_amd64.deb apt-get 'Ubuntu 26.04'
 plan $'ID=debian\nVERSION_ID="13.1"' wowtype_0.3.8_debian13_amd64.deb apt-get 'Debian 13 point release'
 plan $'ID=linuxmint\nVERSION_ID="22.1"\nID_LIKE="ubuntu debian"\nUBUNTU_CODENAME=noble' ubuntu24.04 apt-get 'Linux Mint uses Ubuntu base'
@@ -104,7 +115,8 @@ plan $'ID=endeavouros\nID_LIKE=arch' pkg.tar.zst pacman 'EndeavourOS'
 plan $'ID=garuda\nID_LIKE=arch' pkg.tar.zst pacman 'Garuda'
 plan $'ID=cachyos\nID_LIKE=arch' pkg.tar.zst pacman 'CachyOS'
 plan $'ID=fedora\nVERSION_ID=43' wowtype-0.3.8-1.fc43.x86_64.rpm dnf 'Fedora version-specific RPM'
-rejected $'ID=ubuntu\nVERSION_ID=22.04' '源码' 'Ubuntu 22.04 is not silently upgraded to a newer binary'
+rejected $'ID=ubuntu\nVERSION_ID=20.04' '源码' 'Ubuntu 20.04 is not silently upgraded to a newer binary'
+rejected $'ID=Deepin\nVERSION_ID="20.8"\nVERSION_CODENAME="apricot"' 'GTK 4' 'deepin 20 rejected with reason'
 rejected $'ID=linuxmint\nVERSION_ID=22\nID_LIKE="ubuntu debian"' '基线' 'Unknown derivative base rejected'
 rejected $'ID=manjaro\nID_LIKE=arch' 'package-arch.sh' 'Manjaro uses native source package'
 rejected $'ID=example\nID_LIKE="arch manjaro"' 'package-arch.sh' 'Manjaro derivative rejected'
@@ -127,6 +139,13 @@ arm_plan() { # <os-release> <uname -m> <期望包名> <说明>
 arm_plan $'ID=ubuntu\nVERSION_ID="24.04"' aarch64 wowtype_0.3.8_ubuntu24.04_arm64.deb 'Ubuntu 24.04 arm64'
 arm_plan $'ID=debian\nVERSION_ID="13"' arm64 wowtype_0.3.8_debian13_arm64.deb 'Debian 13 arm64 (uname arm64)'
 arm_plan $'ID=fedora\nVERSION_ID=44' aarch64 wowtype-0.3.8-1.fc44.aarch64.rpm 'Fedora aarch64 RPM'
+arm_plan $'ID=ubuntu\nVERSION_ID="22.04"' aarch64 wowtype_0.3.8_ubuntu22.04_arm64.deb 'Ubuntu 22.04 arm64'
+
+reset $'ID=deepin\nVERSION_ID="25"'
+test_arch=aarch64
+if run --print-plan > "$work/output" 2>&1; then fail 'Unexpected aarch64 deepin binary'; fi
+grep -Fq 'x86_64' "$work/output" || fail 'Missing deepin arch guidance'
+pass 'deepin aarch64 builds from source'
 
 reset 'ID=arch'
 test_arch=aarch64
@@ -163,6 +182,23 @@ assert_log 'wowtype_0.3.8_ubuntu24.04_amd64.deb'
 assert_log 'wowtype-data-rime-ice_20260101_all.deb'
 assert_log 'wowtype-config --add-to-group'
 pass 'APT installs verified local packages and legacy data'
+
+reset $'ID=ubuntu\nVERSION_ID=22.04'
+asset wowtype_0.3.8_ubuntu22.04_amd64.deb
+run > "$work/output" 2>&1 || fail "apt install 22.04: $(cat "$work/output")"
+assert_log 'fcitx5-config-qt fcitx5-frontend-gtk3 fcitx5-frontend-gtk4 fcitx5-frontend-qt5 im-config'
+if grep -Fq 'fcitx5-frontend-all' "$work/commands"; then fail '22.04 没有 fcitx5-frontend-all'; fi
+assert_log 'wowtype_0.3.8_ubuntu22.04_amd64.deb'
+pass 'Ubuntu 22.04 installs the frontends it has'
+
+reset $'ID=deepin\nVERSION_ID=25\nVERSION_CODENAME=crimson'
+asset wowtype_0.3.8_deepin25_amd64.deb
+run > "$work/output" 2>&1 || fail "apt install deepin: $(cat "$work/output")"
+assert_log 'wowtype_0.3.8_deepin25_amd64.deb'
+assert_log 'fcitx5-frontend-all python3-gi'
+if grep -Eq 'im-config|fcitx5-config-qt' "$work/commands"; then fail 'deepin 不该装 im-config、fcitx5-config-qt'; fi
+assert_log 'wowtype-config --add-to-group'
+pass 'deepin keeps its own IM framework and config tool'
 
 reset 'ID=arch'
 asset wowtype-0.3.8-1-x86_64.pkg.tar.zst

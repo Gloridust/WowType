@@ -39,7 +39,7 @@ if [[ -f "$lexicon" && -r "$lexicon" && -s "$lexicon" ]]; then
   cargo run --release --locked -q -p wowtype-core --bin wowtype-check -- \
     --lexicon "$lexicon" --lm "$lm" --s2t "${WOWTYPE_S2T:-$PWD/core/data/s2t.tsv}"
 else
-  echo "跳过真实词库自检：没有 $lexicon；准备好词库后设置 WOWTYPE_LEXICON 再运行。"
+  echo "跳过真实词库自检：没有 ${lexicon}；准备好词库后设置 WOWTYPE_LEXICON 再运行。"
 fi
 
 if [[ "${1:-}" == "--addon" ]]; then

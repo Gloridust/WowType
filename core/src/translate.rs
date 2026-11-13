@@ -545,6 +545,14 @@ impl Translator {
     }
 
     /// 丢掉当前请求（清空原文、离开翻译模式）。
+    /// 现在的请求还是翻译 source 的才取消（别的输入框后来发的请求不动），见
+    /// [`crate::session::TranslateBackend::cancel_source`]。
+    pub fn cancel_source(&self, source: &str) {
+        if self.inner.lock().unwrap().job.source == source {
+            self.cancel();
+        }
+    }
+
     pub fn cancel(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.kill();
@@ -1260,6 +1268,18 @@ mod tests {
         let snap = wait_done(&t);
         assert_eq!(snap.state, JobState::Error);
         assert!(snap.error.contains("连不上"), "{}", snap.error);
+    }
+
+    #[test]
+    fn cancel_source_only_cancels_that_request() {
+        // 没配服务也会记下原文（状态是出错），够测「是不是这句话」了
+        let t = Translator::new();
+        t.start("甲");
+        t.cancel_source("乙");
+        assert_eq!(t.poll().source, "甲", "别的原文不取消");
+        t.cancel_source("甲");
+        assert_eq!(t.poll().state, JobState::Idle);
+        assert!(t.poll().source.is_empty());
     }
 
     #[test]

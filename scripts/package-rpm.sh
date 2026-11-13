@@ -19,7 +19,7 @@ command -v rpmbuild >/dev/null || { echo "需要 rpmbuild（dnf install rpm-buil
 OUT=$(realpath -m "${2:-dist}")
 DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
-  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/$f，先跑 scripts/make-data.sh" >&2; exit 1; }
+  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
 done
 mkdir -p "$OUT"
 
@@ -47,7 +47,8 @@ WowType — https://github.com/Gloridust/WowType
   MIT 或 Apache-2.0，二选一。
 
 /usr/share/wowtype/s2t.tsv：
-  由 OpenCC 的字符映射表生成（tools/opencc2tsv.py），Apache-2.0。
+  由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+  版本见文件头，Apache-2.0，https://github.com/BYVoid/OpenCC。
 
 插件里编进去的 emoji 关键词（core/src/emoji/cldr.tsv）：
   来自 Unicode CLDR 和 emoji-test.txt，Copyright 1991-2026 Unicode, Inc.，

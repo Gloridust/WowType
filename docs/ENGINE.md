@@ -69,8 +69,10 @@ z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan
 ASCII 标点会自动转成中文标点（`,` → ，`?` → ？），数字后面的符号不换，如 `3.14`、`20:22`、`3,000`（`symbols::punct`；标点样式选半角时一律原样）；`/` 等没收录的原样交给应用。
 
 支持**繁体输出**：`--traditional`（插件在设置界面打开，或 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
-`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
-字符级转换，暂不处理「发/髮」这类词组歧义。
+`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0，
+版本写在表头），收了 OpenCC 的字符表和整张词组表（STPhrases）：从左到右词组最长匹配优先，
+其余逐字转换，和 OpenCC 自己的切法一样，「头发 -> 頭髮」「干净 -> 乾淨」「皇后 -> 皇后」都能转对。
+表约 1 MB，开繁体时才载入（约 10 ms，峰值内存多 9 MB 左右）。
 
 英文/未登录串会把原始输入本身作为候选（保留大小写）：`hello` → `hello`，
 纯拼音输入被完整覆盖时不会插入原始串。加载英文词表（`--english`，插件放
@@ -363,7 +365,19 @@ cargo run --release -p wowtype-core --bin wowtype-train -- \
 | 18 | 带 | 2.95 ms | 6.37 ms | 7.21 ms |
 | 300 | 带 | 3.36 ms | 7.30 ms | 7.53 ms |
 
-有人在 M2（macOS，不带 words.lm）上测到 300 比 18 慢两倍多、长句单键 25–45 ms（#43），原因还在查。
+同样的用例在 Apple M3（macOS，release，pre-release 分支，雾凇 929,380 词，2026-11-13）上重测。两个外壳现在的上限是 1000：
+
+| `--max` | words.lm | 均值 | p95 | p99 | 最慢 |
+|---|---|---|---|---|---|
+| 18 | 不带 | 1.9–2.4 ms | 3.8–4.4 ms | 4.3–4.5 ms | 9 ms（第一个键，冷启动） |
+| 300 | 不带 | 2.09 ms | 4.22 ms | 4.53 ms | 5.00 ms |
+| 1000 | 不带 | 2.1–2.2 ms | 4.4–4.7 ms | 4.8–5.1 ms | 5.41 ms |
+| 18 | 带 | 2.07 ms | 4.46 ms | 4.83 ms | 5.24 ms |
+| 300 | 带 | 2.28 ms | 4.81 ms | 5.20 ms | 5.62 ms |
+| 1000 | 带 | 2.58 ms | 5.43 ms | 5.96 ms | 6.06 ms |
+
+最慢的都是 20 个字母的长句（xiangquzijieshangban）。上限从 18 加到 1000，p95 只多 1 ms 左右。
+#43 在 M2 上测到的「300 比 18 慢两倍多、长句单键 25–45 ms」在这里看不到，所以先不做「先算一页、翻页再补」。
 
 合成 10 万条词库压测（`cargo run --release -p wowtype-core --bin wowtype-bench`，M 系列 Mac）：
 

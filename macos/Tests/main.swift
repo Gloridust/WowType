@@ -624,7 +624,7 @@ do {
     }
     check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
           "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
-    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+    check(d.value(forKey: "CheckUpdate") == nil, "不认识的键没有写法")
 
     // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
     var all = WowtypeConfig()
@@ -633,6 +633,7 @@ do {
         if d.value(forKey: key) == "False" { all.setValue("True", forKey: key) }
     }
     all.horizontal = false
+    all.arrowKeys = .caret
     all.pageSize = 4
     all.candidateFontSize = 22
     all.shuangpinScheme = "PinyinJiajia"
@@ -641,6 +642,8 @@ do {
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.toggleKey = Shortcut(name: "Control+space")
+    all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
     all.translateModel = "qwen 2.5"
@@ -653,7 +656,7 @@ do {
         check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
         check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
     }
-    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nArrowKeys=Caret\nPageSize=4\n"),
           "文件里没有的键照模板顺序补在后面")
     check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
           "带空格、引号的值加引号转义", all.serialized(into: nil))
@@ -771,6 +774,7 @@ do {
     }
     check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
     check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你你好") == "ni ni hao" && guess("好好") == "hao hao", "叠字逐字猜", guess("你你好") ?? "nil")
     check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
     if !ownLexicon, let f = fopen(lexicon, "rb") {
         var bytes: [UInt8] = []
@@ -1065,6 +1069,30 @@ withConfig({ _ in }) { c, client in
     check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
 }
 
+withConfig({ $0.arrowKeys = .caret }) { c, client in
+    // #129：左右键移动拼音里的光标，字母插在光标处（会话做，外壳把光标位置交给应用）；上下键选词
+    type(c, "nihao")
+    let end = client.markedCursor
+    for _ in 0..<3 { _ = c.handle(.key(Keysym.left)) }
+    check(client.markedCursor < end && client.marked.prefix(client.markedCursor) == "ni",
+          "左键把光标移到 ni 后面", "\(client.marked) \(client.markedCursor)")
+    type(c, "x")
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nixhao",
+          "字母插在光标处", client.marked)
+    _ = c.handle(.key(Keysym.backspace))
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nihao", "退格删光标前一个", client.marked)
+    _ = c.handle(.key(Keysym.end))
+    check(c.handle(.key(Keysym.right)) && client.page?.cursor == 0, "末尾的右键吃掉，不挑候选")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 1 && client.page?.expanded == false, "下键选下一个，不展开面板")
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "nihao")
+    _ = c.handle(.key(Keysym.left))
+    check(client.markedCursor == client.marked.utf16.count, "默认（都用来选词）光标一直在末尾", "\(client.markedCursor)")
+}
+
 withConfig({ $0.emojiKey = nil }) { c, _ in
     check(!c.handle(.char(".", [.control])) && c.openPanel == nil, "不用快捷键：Control+. 交给应用")
 }
@@ -1252,6 +1280,41 @@ do {
     let (plain, _) = fresh()
     plain.switchMode(to: .translate)
     check(plain.mode == .chinese, "没有翻译器切不到译")
+}
+
+do {
+    // 另设的切换键（#143），和 Linux 一样
+    check(WowtypeConfig().toggleKey == nil, "默认不用另设的切换键")
+    check(WowtypeConfig.parse("ToggleKey=Control+space").toggleKey?.name == "Control+space", "读出切换键")
+    check(WowtypeConfig.parse("ToggleKey=Hyper+F12").toggleKey == nil, "认不出的键保持不用")
+
+    let r = translateRig { $0.toggleKey = Shortcut(name: "Control+space") }
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "在「译」里按切换键回中文")
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .english, "切换键：中 → 英")
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "切换键：英 → 中")
+}
+
+withConfig({ $0.toggleKey = Shortcut(name: "Control+space") }) { c, client in
+    type(c, "nihao")
+    check(c.handle(.char(" ", [.control])) && c.mode == .english && client.committed == "nihao",
+          "打到一半按切换键：打的字母原样上屏、切到英文", client.committed)
+}
+
+withConfig({ _ in }) { c, _ in
+    check(!c.handle(.char(" ", [.control])) && c.mode == .chinese, "没设切换键：Control+空格交给应用")
+}
+
+withConfig({ $0.shiftToggle = .off; $0.toggleKey = Shortcut(name: "Control+space") }) { c, _ in
+    // #87 的用法：Shift 没用、关掉，靠另设的键切换。换设置时不该被拉回中文
+    check(c.handle(.char(" ", [.control])) && c.mode == .english, "关了 Shift 也能用切换键切到英文")
+    var again = WowtypeConfig()
+    again.shiftToggle = .off
+    again.toggleKey = Shortcut(name: "Control+space")
+    c.apply(again)
+    check(c.mode == .english, "有切换键时换设置不拉回中文")
+    again.toggleKey = nil
+    c.apply(again)
+    check(c.mode == .chinese, "关了 Shift、也没切换键：拉回中文（不然切不回来）")
 }
 
 do {
@@ -1690,6 +1753,25 @@ do {
     check(LocalModel.safeLinkTarget("libllama.0.9.0.dylib"), "链接指向同目录的文件")
     check(!LocalModel.safeLinkTarget("../evil.dylib") && !LocalModel.safeLinkTarget("/usr/lib/libz.dylib")
           && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
+}
+
+// MARK: 语音键
+
+do {
+    let d = WowtypeConfig()
+    check(d.voice && d.voiceKey == "Alt_R" && !d.voiceCopy, "语音默认开、右 Option、不复制")
+    let option = VoiceKey(name: "Alt_R")
+    check(option?.keyCode == 0x3D && option?.isModifier == true, "Alt_R 是右 Option")
+    // 右 Option 按着时 modifierFlags 带 NX_DEVICERALTKEYMASK（0x40），左 Option 是 0x20
+    check(option?.isDown(rawFlags: 0x80000 | 0x40) == true && option?.isDown(rawFlags: 0x80000 | 0x20) == false,
+          "分得清左右 Option")
+    check(VoiceKey(name: "F8")?.keyCode == 0x64 && VoiceKey(name: "F8")?.isModifier == false, "F8 不是修饰键")
+    check(VoiceKey(name: "Menu") == nil && VoiceKey(name: "") == nil && VoiceKey(name: "none") == nil,
+          "Mac 上没有的键、留空：不用语音键")
+    let c = WowtypeConfig.parse("Voice=False\nVoiceKey=F9\nVoiceCopy=True")
+    check(!c.voice && c.voiceKey == "F9" && c.voiceCopy, "读语音设置")
+    check(voiceWave([]) == "▁▁▁▁▁▁" && voiceWave([100, 0]) == "▁▁▁▁█▁"
+          && voiceWave([0, 10, 20, 30, 40, 50, 60]).count == 6, "音量画成 6 个竖条（和 Linux 一样）")
 }
 
 // MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）

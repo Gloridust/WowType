@@ -61,7 +61,8 @@ pub fn remember(emoji: &str) {
         }
         let mut out = recent.items.join("\n");
         out.push('\n');
-        let _ = crate::fsutil::write_atomic(&path, out.as_bytes());
+        // 丢了也无所谓（最多 18 个），不等刷到盘上：这是在按键的线程上
+        let _ = crate::fsutil::write_replace(&path, out.as_bytes());
     }
 }
 
