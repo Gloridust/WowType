@@ -771,6 +771,7 @@ do {
     }
     check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
     check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你你好") == "ni ni hao" && guess("好好") == "hao hao", "叠字逐字猜", guess("你你好") ?? "nil")
     check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
     if !ownLexicon, let f = fopen(lexicon, "rb") {
         var bytes: [UInt8] = []

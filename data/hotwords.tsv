@@ -11,7 +11,7 @@ ti shi ci	提示词
 ti shi gong cheng	提示工程
 shang xia wen chuang kou	上下文窗口
 chang shang xia wen	长上下文
-wei diao	微调
+wei tiao	微调
 yu xun lian	预训练
 hou xun lian	后训练
 qiang hua xue xi	强化学习
@@ -126,7 +126,7 @@ ju jia ban gong	居家办公
 hun he ban gong	混合办公
 mo yu	摸鱼
 jia ban	加班
-diao xiu	调休
+tiao xiu	调休
 shuang xiu	双休
 da xiao zhou	大小周
 da ka	打卡
@@ -350,3 +350,10 @@ lao tie	老铁
 ji mei	集美
 xue gao ci ke	雪糕刺客
 ti gong qing xu jia zhi	提供情绪价值
+# 象棋里的「车」读 jū，很多人照 chē 打：两个读音都收（#172）
+qi ju bao shuai	弃车保帅	10000
+qi che bao shuai	弃车保帅	10000
+diu che bao shuai	丢车保帅	10000
+she che bao shuai	舍车保帅	10000
+diu zu bao che	丢卒保车	10000
+qi zu bao che	弃卒保车	10000
