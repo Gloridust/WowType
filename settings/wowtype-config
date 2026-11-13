@@ -2866,7 +2866,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         name_label = Gtk.Label(label="WowType", xalign=0)
         name_label.add_css_class("wt-brand-name")
         names.append(name_label)
-        version_label = Gtk.Label(label="设置", xalign=0)
+        version_label = Gtk.Label(
+            label="设置" if VERSION.startswith("@") else current_version(), xalign=0)
         version_label.add_css_class("dim-label")
         version_label.add_css_class("caption")
         names.append(version_label)

@@ -1201,6 +1201,16 @@ void runCases(Instance &instance) {
     }
     fresh(ic.get());
 
+    // #158 输入模式跨输入法滞留：Shift 切英文，切到别的输入法再切回来，应该回到中文
+    check(tapShift(FcitxKey_Shift_R), "滞留测试：先切到英文");
+    instance.setCurrentInputMethod(ic.get(), "testim", true);
+    instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+    fresh(ic.get());
+    type(ic.get(), "nihao<sp>");
+    check(ic->committed == "你好", "切回 WowType 应回到中文，实际上屏「" + ic->committed +
+                                    "」交给应用「" + ic->passed + "」");
+    fresh(ic.get());
+
     // fcitx5 全局翻页热键（#27）：设成 , . 后打字途中按它们翻页，不上屏标点
     {
         RawConfig raw;

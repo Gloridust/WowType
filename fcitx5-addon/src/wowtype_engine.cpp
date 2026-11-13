@@ -2257,6 +2257,9 @@ void WowtypeEngine::deactivate(const fcitx::InputMethodEntry &entry,
         if (!state->tsource_.empty()) {
             commitTranslateSource(ic, state);
         }
+        // 离开 WowType 输入法：中 / 英 / 译回到中文，切回来不滞留
+        asciiMode_ = false;
+        translateMode_ = false;
     }
     if (voiceActive() && voiceIc_.get() == event.inputContext()) {
         cancelVoice();
