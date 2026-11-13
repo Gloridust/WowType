@@ -255,10 +255,11 @@ public final class Composer {
         refresh()
     }
 
-    /// 换设置。Shift 切换关掉时回到中文；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
+    /// 换设置。Shift 切换关掉、也没另设切换键时回到中文（切不回来了）；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
     public func apply(_ config: WowtypeConfig) {
         self.config = config
-        if config.shiftToggle == .off || (mode == .translate && !translateAvailable) {
+        let noWayBack = config.shiftToggle == .off && config.toggleKey == nil
+        if noWayBack || (mode == .translate && !translateAvailable) {
             switchMode(to: .chinese)
         }
         if !config.clipboardHistory {
@@ -344,6 +345,11 @@ public final class Composer {
         }
         if openPanel != nil {
             return handleToolKey(key)
+        }
+        if let toggleKey = config.toggleKey, toggleKey.matches(key) {
+            // 另设的切换键：中 ↔ 英；在「译」里按回中文
+            switchMode(to: mode == .chinese ? .english : .chinese)
+            return true
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
         // 都由会话处理（「译」里攒着原文时输入框变成了不能翻译的，会话先把原文原样上屏）
@@ -471,6 +477,7 @@ public final class Composer {
         config.date_time = settings.dateTime ? 1 : 0
         config.emoji_suggest = settings.emojiSuggest ? 1 : 0
         config.horizontal = settings.horizontal ? 1 : 0
+        config.arrow_keys = settings.arrowKeysValue
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0

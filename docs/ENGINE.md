@@ -69,8 +69,10 @@ z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan
 ASCII 标点会自动转成中文标点（`,` → ，`?` → ？），数字后面的符号不换，如 `3.14`、`20:22`、`3,000`（`symbols::punct`；标点样式选半角时一律原样）；`/` 等没收录的原样交给应用。
 
 支持**繁体输出**：`--traditional`（插件在设置界面打开，或 `WOWTYPE_TRADITIONAL=1`），需要简繁映射表
-`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0），
-字符级转换，暂不处理「发/髮」这类词组歧义。
+`--s2t core/data/s2t.tsv`。仓库里的表由 `tools/opencc2tsv.py` 从 OpenCC 数据生成（Apache-2.0，
+版本写在表头），收了 OpenCC 的字符表和整张词组表（STPhrases）：从左到右词组最长匹配优先，
+其余逐字转换，和 OpenCC 自己的切法一样，「头发 -> 頭髮」「干净 -> 乾淨」「皇后 -> 皇后」都能转对。
+表约 1 MB，开繁体时才载入（约 10 ms，峰值内存多 9 MB 左右）。
 
 英文/未登录串会把原始输入本身作为候选（保留大小写）：`hello` → `hello`，
 纯拼音输入被完整覆盖时不会插入原始串。加载英文词表（`--english`，插件放

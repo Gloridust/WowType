@@ -129,6 +129,9 @@ void type(HarnessInputContext *ic, const std::string &keys) {
             else if (name == "up") sym = FcitxKey_Up;
             else if (name == "pgdn") sym = FcitxKey_Page_Down;
             else if (name == "tab") sym = FcitxKey_Tab;
+            else if (name == "home") sym = FcitxKey_Home;
+            else if (name == "end") sym = FcitxKey_End;
+            else if (name == "del") sym = FcitxKey_Delete;
             if (name == "stab") {
                 send(ic, Key(FcitxKey_ISO_Left_Tab, KeyState::Shift));
                 continue;
@@ -1109,6 +1112,41 @@ void runCases(Instance &instance) {
               join(page(ic.get())));
     fresh(ic.get());
 
+    // #129：「方向键」设成左右键移动光标：左键把光标移进拼音，字母插在光标处，退格删光标前一个；
+    // 右键到了末尾不去挑候选，上下键选词
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "ArrowKeys=Caret\n";
+    }
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left><left><left>");
+    {
+        const fcitx::Text &shown = ic->inputPanel().preedit();
+        check(shown.cursor() >= 0 && shown.toString().substr(0, static_cast<std::size_t>(shown.cursor())) == "ni",
+              "左键三下光标在 ni 后面：" + shown.toString() + " @" + std::to_string(shown.cursor()));
+    }
+    type(ic.get(), "x");
+    check(preedit(ic.get()).find('x') != std::string::npos && ic->committed.empty(),
+          "字母插在光标处：" + preedit(ic.get()));
+    type(ic.get(), "<bs><end><right>");
+    {
+        auto *list = common();
+        check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()) && list &&
+                  list->cursorIndex() == 0,
+              "退格删掉插进去的 x，End 回末尾，末尾的右键不挑候选：" + preedit(ic.get()));
+    }
+    {
+        const std::string want = page(ic.get()).at(1);
+        type(ic.get(), "<down><sp>");
+        check(ic->committed == want, "下键选第 2 个，空格上屏它：" + ic->committed + " / " + want);
+    }
+    fresh(ic.get());
+    std::filesystem::remove(configDir + "/wowtype.conf");
+    addon->reloadConfig();
+    type(ic.get(), "nihao<left>");
+    check(ic->inputPanel().preedit().cursor() == static_cast<int>(preedit(ic.get()).size()),
+          "默认（都用来选词）左键不动编辑区的光标：@" + std::to_string(ic->inputPanel().preedit().cursor()));
+    fresh(ic.get());
+
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
     const auto tapShift = [&](KeySym sym) {
         KeyEvent press(ic.get(), Key(sym), false);
@@ -1836,6 +1874,68 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      return ic->committed.rfind("你好", 0) == 0 && ic->committed.size() > std::string("你好").size() &&
                             ic->committed.find("EN:") == std::string::npos;
                  }});
+    // 另设的切换键（#143）
+    auto press = [](HarnessInputContext *ic, Key key) {
+        KeyEvent e(ic, key, false);
+        const bool handled = ic->keyEvent(e);
+        KeyEvent up(ic, key, true);
+        ic->keyEvent(up);
+        return handled;
+    };
+    const Key toggleKey(FcitxKey_space, KeyStates{KeyState::Ctrl, KeyState::Shift});
+    auto handledFlag = std::make_shared<bool>(false);
+    s.push_back({"设了切换键，单按 Shift 照常切到「译」",
+                 [c, addon, reset, url](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nToggleKey=Control+Shift+space\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->committed.empty() && preedit(ic) == "你好"; }});
+    s.push_back({"在「译」里按切换键：原文原样上屏，回到中文",
+                 [press, toggleKey](HarnessInputContext *ic) {
+                     check(press(ic, toggleKey), "切换键被接住");
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好你好")});
+    s.push_back({"切换键：中 → 英，再按回中文",
+                 [reset, press, toggleKey](HarnessInputContext *ic) {
+                     reset(ic);
+                     press(ic, toggleKey);
+                     type(ic, "abc");
+                     press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
+    s.push_back({"关了 Shift、靠切换键：切到英文，重新读设置也不拉回中文",
+                 [c, addon, reset, url, press, toggleKey](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nShiftToggle=Off\n"
+                            "ToggleKey=Control+Shift+space\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     press(ic, toggleKey);
+                     type(ic, "ab");
+                     addon->reloadConfig();
+                     type(ic, "c");
+                     press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed == "你好"; }});
+    s.push_back({"没设切换键：这个键交给应用，还在中文",
+                 [c, addon, reset, press, toggleKey, handledFlag](HarnessInputContext *ic) {
+                     std::filesystem::remove(c->configFile);
+                     addon->reloadConfig();
+                     reset(ic);
+                     *handledFlag = press(ic, toggleKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [handledFlag](HarnessInputContext *ic) { return !*handledFlag && ic->committed == "你好"; }});
     s.push_back({"关掉互译后 Shift 只在中英之间切",
                  [c, addon, reset](HarnessInputContext *ic) {
                      std::filesystem::remove(c->configFile);

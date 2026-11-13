@@ -395,7 +395,7 @@ typedef struct {
 #define WOWTYPE_SHIFT_TOGGLE_OFF 3
 
 /* 设置里能选的翻页键（WowtypeSessionConfig.page_keys 的位掩码）。PgUp PgDn 一直能用；
- * 横排时上下键翻页、竖排时左右键翻页。 */
+ * 方向键挑候选（WOWTYPE_ARROW_KEYS_CANDIDATES）时，横排上下键、竖排左右键也翻页。 */
 #define WOWTYPE_PAGE_KEYS_MINUS (1u << 0)   /* - = */
 #define WOWTYPE_PAGE_KEYS_BRACKET (1u << 1) /* [ ] */
 #define WOWTYPE_PAGE_KEYS_COMMA (1u << 2)   /* , . */
@@ -406,6 +406,12 @@ typedef struct {
 #define WOWTYPE_SELECT_KEYS_SEMICOLON 1       /* 分号选第 2 个 */
 #define WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE 2 /* 再加引号选第 3 个 */
 
+/* 打字途中方向键做什么（WowtypeSessionConfig.arrow_keys，1.10 起，#129）。 */
+#define WOWTYPE_ARROW_KEYS_CANDIDATES 0 /* 挑候选，跟着 horizontal：横排左右选词、上翻页、下展开面板；
+                                         * 竖排上下选词、左右翻页 */
+#define WOWTYPE_ARROW_KEYS_CARET 1      /* 上下键选词；左右键在拼音里移动光标（字母插在光标处、退格删
+                                         * 光标前一个，Home、End、Delete 也管光标），方向键不翻页 */
+
 /* 会话的设置。size 填 sizeof(WowtypeSessionConfig)；外壳没填的字段（size 短）用默认值。
  * 传 NULL 全用默认。双拼开不开看引擎（wowtype_engine_set_shuangpin）。 */
 typedef struct {
@@ -414,8 +420,7 @@ typedef struct {
     int calculator;     /* V 模式计算器，默认 1（双拼时不开） */
     int date_time;      /* 日期时间候选，默认 1 */
     int emoji_suggest;  /* 打字推荐 emoji，默认 1 */
-    int horizontal;     /* 1.6 起：候选横排（左右键移光标、上下键翻页、下键展开面板），默认 1；
-                         * 0 竖排（上下键移光标、左右键翻页） */
+    int horizontal;     /* 1.6 起：候选横排，默认 1；0 竖排。方向键怎么用见 WOWTYPE_ARROW_KEYS_* */
     uint32_t page_keys; /* 1.6 起：WOWTYPE_PAGE_KEYS_*，默认 WOWTYPE_PAGE_KEYS_MINUS */
     int select_keys;    /* 1.6 起：WOWTYPE_SELECT_KEYS_*，默认 OFF */
     int pick_char;      /* 1.8 起：以词定字，打拼音途中 [ 上屏光标处候选的第一个字、] 最后一个字，
@@ -429,6 +434,7 @@ typedef struct {
     int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、互译时不开），默认 1 */
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
     int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
+    int arrow_keys;      /* 1.10 起：WOWTYPE_ARROW_KEYS_*，默认 CANDIDATES */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。

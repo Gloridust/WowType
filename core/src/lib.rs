@@ -189,6 +189,7 @@ pub struct Engine {
     /// 最近一次选的词的最后一个词；光标前的文本以它结尾时，下一个词和它组成搭配。
     last_word: RwLock<String>,
     /// 上一次 input() 给出的候选：文本 -> 分词，选词时用它知道整句是哪几个词。
+    /// 分词是词库里的写法；开着繁体时显示的文本和转换前的文本都能查到。
     last_words: RwLock<HashMap<String, Vec<String>>>,
     /// 简繁字符映射表。
     converter: RwLock<Arc<Converter>>,
@@ -273,6 +274,7 @@ impl Engine {
     /// pinyin 是这次上屏时输入的拼音（用于生成用户词条）。词库里已有的词也会被
     /// 加成用户词——这等价于「记住用户的偏好」，不会覆盖原词条。
     pub fn record_selection_with_pinyin(&self, word: &str, pinyin: Option<&str>) {
+        let word = &self.lexicon_form(word);
         self.record_selection(word);
         if !self.config.auto_learn || word.is_empty() {
             return;
@@ -311,6 +313,7 @@ impl Engine {
     /// 一次就打出来的整句不走这里，还是按次数学，免得随手打的句子都进词库。
     /// 反馈见 https://x.com/so1v3/status/2120415675969896729
     pub fn record_composed_word(&self, word: &str, pinyin: &str) {
+        let word = &self.lexicon_form(word);
         // 超过四个字的多半是先选句首词、再选剩下的长句，不是要造的词：照常按次数学
         if word.chars().count() > COMPOSED_WORD_MAX_CHARS {
             self.record_selection_with_pinyin(word, Some(pinyin));
@@ -334,6 +337,7 @@ impl Engine {
         if word.is_empty() {
             return;
         }
+        let word = &self.lexicon_form(word);
         if let Ok(mut history) = self.history.write() {
             let entry = history.entry(word.to_string()).or_insert(HistoryEntry {
                 count: 0,
@@ -374,8 +378,32 @@ impl Engine {
         if last.is_empty() {
             return None;
         }
+        // 记的是词库里的写法，光标前是上屏的（开着繁体就是转换过的）字
+        let shown = self.shown_text(&last);
         let context = self.context.read().ok()?;
-        context.trim_end().ends_with(&last).then_some(last)
+        context.trim_end().ends_with(&shown).then_some(last)
+    }
+
+    /// 候选显示的字在词库里怎么写。开着繁体时候选是转换过的，学词、记热度和搭配、
+    /// 忘词都得用转换前的写法：词库、热度、搭配都按它查，关掉繁体后学过的词也照样能用。
+    /// 不是上一次 input() 的候选就原样返回。
+    pub fn lexicon_form(&self, shown: &str) -> String {
+        if self.config.traditional {
+            if let Some(words) = self.last_words.read().ok().and_then(|m| m.get(shown).cloned()) {
+                if !words.is_empty() {
+                    return words.concat();
+                }
+            }
+        }
+        shown.to_string()
+    }
+
+    /// 词库里的写法在候选里显示成什么：开着繁体就转一次。
+    fn shown_text(&self, text: &str) -> String {
+        match self.converter.read() {
+            Ok(conv) if self.config.traditional && !conv.is_empty() => conv.convert(text),
+            _ => text.to_string(),
+        }
     }
 
     /// 学到的搭配数。
@@ -559,7 +587,7 @@ impl Engine {
         self.converter.read().map(|c| c.len()).unwrap_or(0)
     }
 
-    /// 把候选（含分词）转成繁体，并合并转换后重复的候选。
+    /// 把候选转成繁体，并合并转换后重复的候选。分词不转，还是词库里的写法（学词用）。
     fn apply_traditional(&self, candidates: &mut Vec<Candidate>) {
         let conv = match self.converter.read() {
             Ok(slot) if !slot.is_empty() => slot.clone(),
@@ -568,9 +596,6 @@ impl Engine {
         let mut best: HashMap<String, Candidate> = HashMap::new();
         for mut candidate in std::mem::take(candidates) {
             candidate.text = conv.convert(&candidate.text);
-            for word in &mut candidate.words {
-                word.text = conv.convert(&word.text);
-            }
             match best.entry(candidate.text.clone()) {
                 Entry::Vacant(slot) => {
                     slot.insert(candidate);
@@ -618,6 +643,8 @@ impl Engine {
     /// 和它有关的搭配都去掉。词库里本来就有的词删不掉，去掉学到的加分后回到原来的位置。
     /// 设置里加的自定义词不动。返回是否真的忘掉了什么。
     pub fn forget_word(&self, word: &str) -> bool {
+        let word = self.lexicon_form(word);
+        let word = word.as_str();
         if word.is_empty() || self.lexicon.is_custom(word) {
             return false;
         }
@@ -695,10 +722,11 @@ impl Engine {
             last.clear();
             for c in &result {
                 if !is_raw_candidate(c) {
-                    last.insert(
-                        c.text.clone(),
-                        c.words.iter().map(|w| w.text.clone()).collect(),
-                    );
+                    let words: Vec<String> = c.words.iter().map(|w| w.text.clone()).collect();
+                    if self.config.traditional {
+                        last.insert(words.concat(), words.clone());
+                    }
+                    last.insert(c.text.clone(), words);
                 }
             }
         }
@@ -830,6 +858,7 @@ impl Engine {
             }
             if let Some(head) = sentence_head(&result, &normalized) {
                 let mut head = head;
+                head.text = self.shown_text(&head.text);
                 head.consumed = leading + letters_to_bytes(display, head.consumed);
                 prefix.insert(0, head);
             }
@@ -2099,9 +2128,10 @@ fn sentence_head(result: &[Candidate], normalized: &str) -> Option<Candidate> {
             break;
         }
     }
-    let chars: usize = head_words.iter().map(|w| w.text.chars().count()).sum();
+    // 用分词（词库里的写法）拼出前半截，不按字数切整句：繁体词组转换可能改变字数
+    // （计算机 -> 電腦）。开着繁体时由调用方再转一次
     Some(Candidate {
-        text: top.text.chars().take(chars).collect(),
+        text: head_words.iter().map(|w| w.text.as_str()).collect(),
         pinyin: syllables.join(" "),
         score: top.score,
         features: Feature::default(),
@@ -3370,8 +3400,32 @@ mod tests {
         assert_eq!(e.input("zhongguo")[0].text, "中国");
         e.set_traditional(true);
         assert_eq!(e.input("zhongguo")[0].text, "中國");
-        // 分词文本也要跟着转
-        assert_eq!(e.input("zhongguo")[0].words[0].text, "中國");
+        // 分词不转，还是词库里的写法（学词、记搭配用）
+        assert_eq!(e.input("zhongguo")[0].words[0].text, "中国");
+    }
+
+    #[test]
+    fn traditional_phrase_candidates() {
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(
+                "tou fa\t头发\t8000\ngan jing\t干净\t8000\nruan jian\t软件\t8000\n",
+            )
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.install_converter(
+            Converter::from_tsv_str(
+                "发\t發\n干\t幹\n头\t頭\n净\t淨\n软\t軟\n头发\t頭髮\n干净\t乾淨\n软件\t軟體\n",
+            )
+            .unwrap(),
+        );
+        e.set_traditional(true);
+        assert_eq!(e.input("toufa")[0].text, "頭髮");
+        assert_eq!(e.input("ganjing")[0].text, "乾淨");
+        // 词组可以换成台湾用语，字数也可以不同
+        assert_eq!(e.input("ruanjian")[0].text, "軟體");
+        assert_eq!(e.input("ruanjian")[0].words[0].text, "软件");
     }
 
     #[test]
