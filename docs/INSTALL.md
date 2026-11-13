@@ -143,9 +143,8 @@ scripts/make-data.sh "" dist/data
 词库脚本下载并转换 rime-ice，合并项目热词，下载经过固定 SHA256 校验的语言模型。
 输出包含 `lexicon.tsv`、`english.txt`、`words.lm` 和许可证、来源信息。
 已有 rime-ice checkout 时可传入其路径，避免重复下载。
-可选数据源（`WOWTYPE_DATA_EXTRAS`）默认不开；发布的词库开了 `corpus`，想和发布的一样要先装
-`tools/requirements-data.txt` 里的 Python 包，再 `WOWTYPE_DATA_EXTRAS=corpus scripts/make-data.sh "" dist/data`，
-见 [CONFIG.md](CONFIG.md) 的「自己构建词库时的可选数据源」。
+默认还会融进仓库里的语料词频表 `data/tatoeba-freq.tsv`（不联网），得到的词库和发布的一样；
+可选数据源（`WOWTYPE_DATA_EXTRAS`）默认不开，见 [CONFIG.md](CONFIG.md) 的「语料词频和自己构建词库时的可选数据源」。
 
 ### 3. Arch / Manjaro：制作原生安装包
 

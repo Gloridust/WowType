@@ -1,16 +1,17 @@
-# scripts/make-data.sh 的可选数据源（WOWTYPE_DATA_EXTRAS）要的 Python 包，版本和文件哈希都钉死：
+# 重新生成 data/tatoeba-freq.tsv（scripts/make-tatoeba-freq.sh）、本机语料（WOWTYPE_CORPUS）
+# 和可选数据源（WOWTYPE_DATA_EXTRAS）要的 Python 包，版本和文件哈希都钉死；默认构建不需要它们。
 # 分词结果、注音、繁简转换随版本变，换版本词库就不一样了。make-data.sh 会核对已装的版本。
 #
 #   python3 -m pip install --require-hashes -r tools/requirements-data.txt
 #
-# jieba：corpus 用它分词（jieba 数据源只读它的 dict.txt，按 sha256 另外下载，不需要装）
+# jieba：语料分词（jieba 数据源只读它的 dict.txt，按 sha256 另外下载，不需要装）
 jieba==0.42.1 \
     --hash=sha256:055ca12f62674fafed09427f176506079bc135638a14e23e25be909131928db2
 # pypinyin：jieba 数据源给新词注音
 pypinyin==0.55.0 \
     --hash=sha256:d53b1e8ad2cdb815fb2cb604ed3123372f5a28c6f447571244aca36fc62a286f \
     --hash=sha256:b5711b3a0c6f76e67408ec6b2e3c4987a3a806b7c528076e7c7b86fcf0eaa66b
-# opencc（纯 Python 实现）：corpus 语料繁转简（WOWTYPE_CORPUS_T2S=1 或下载的 Tatoeba）
+# opencc（纯 Python 实现）：语料繁转简（Tatoeba、WOWTYPE_CORPUS_T2S=1）
 opencc-python-reimplemented==0.1.7 \
     --hash=sha256:41b3b92943c7bed291f448e9c7fad4b577c8c2eae30fcfe5a74edf8818493aa6 \
     --hash=sha256:4f777ea3461a25257a7b876112cfa90bb6acabc6dfb843bf4d11266e43579dee

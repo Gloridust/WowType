@@ -12,6 +12,7 @@ tools/make_corpus_eval.py 生成的「拼音<TAB>句子」是第 2 列）。分�
 做评测时别把评测句子放进语料：先按固定种子切出训练/留出两份（比如 #196 的 tools/make_corpus_eval.py），
 只挖训练那份。docs/DATA.md 的评测就是这么做的。
 语料的许可证跟着语料走（Tatoeba 是 CC BY 2.0 FR），make-data.sh 会把署名写进 SOURCE.txt。
+仓库里的 data/tatoeba-freq.tsv 就是用它挖的，见 scripts/make-tatoeba-freq.sh。
 """
 
 import argparse
