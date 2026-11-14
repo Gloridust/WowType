@@ -21,6 +21,9 @@ class WowTypeInputController: IMKInputController {
     /// 互译：在等译文时每 50 毫秒取一次结果（主线程的 run loop 上，菜单打开时也走）
     private var translateTimer: Timer?
     static let translatePollInterval: TimeInterval = 0.05
+    /// 切中 / 英 / 译以后在光标下面亮一下的提示，到时间收起（和 Linux 上 fcitx5 的提示一样）
+    private var modeHintTimer: Timer?
+    static let modeHintDuration: TimeInterval = 1
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
@@ -73,6 +76,15 @@ class WowTypeInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event else { return false }
         syncComposer()
+        let mode = composer.mode
+        let handled = handleKey(event)
+        if composer.mode != mode {
+            showModeHint()
+        }
+        return handled
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
         switch event.type {
         case .flagsChanged:
             VoiceInput.shared.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
@@ -119,7 +131,7 @@ class WowTypeInputController: IMKInputController {
         let isShiftKey = event.keyCode == VirtualKey.shiftLeft || event.keyCode == VirtualKey.shiftRight
         if isShiftKey && changed & shiftMask != 0 {
             composer.shiftChanged(down: flags & shiftMask != 0, otherModifiers: flags & others != 0,
-                                  now: event.timestamp, right: event.keyCode == VirtualKey.shiftRight)
+                                  now: composer.clock(), right: event.keyCode == VirtualKey.shiftRight)
         } else {
             composer.otherModifierChanged()
         }
@@ -139,7 +151,7 @@ class WowTypeInputController: IMKInputController {
         VoiceInput.shared.cancel(for: self)
         composer.commitComposition()
         stopTranslatePolling()
-        AppState.shared.candidatePanel.hide()
+        showCandidates(nil)
         AppState.shared.save()
         super.deactivateServer(sender)
     }
@@ -221,6 +233,8 @@ extension WowTypeInputController: TextClient {
     }
 
     func showCandidates(_ page: CandidatePage?) {
+        modeHintTimer?.invalidate()
+        modeHintTimer = nil
         let panel = AppState.shared.candidatePanel
         guard let page, let client = textInput else {
             panel.hide()
@@ -229,6 +243,24 @@ extension WowTypeInputController: TextClient {
         var line = NSRect.zero
         client.attributes(forCharacterIndex: 0, lineHeightRectangle: &line)
         panel.show(page, below: line)
+    }
+
+    /// 切到中 / 英 / 译以后在光标下面亮一下「中」「英」「译 中→英」，过一会儿收起；还有没上屏的字时不画
+    /// （候选框正画着它们）。
+    private func showModeHint() {
+        guard !composer.hasPendingText else { return }
+        let label: String
+        switch composer.mode {
+        case .chinese: label = "中"
+        case .english: label = "英"
+        case .translate: label = ["译", AppState.shared.translator?.tag(for: "") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        showCandidates(CandidatePage(texts: [], cursor: -1, hasPrev: false, hasNext: false, expanded: false, aux: label))
+        let timer = Timer(timeInterval: Self.modeHintDuration, repeats: false) { [weak self] _ in
+            self?.showCandidates(nil)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        modeHintTimer = timer
     }
 
     /// 应用告诉的光标前一个字；读不到是 nil。打字途中光标在编辑区里，要看编辑区前面那个字。

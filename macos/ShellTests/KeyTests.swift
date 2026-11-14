@@ -73,15 +73,20 @@ func runKeyTests() {
         check(!press(c, .backspace), "没在打字时退格交给应用")
     }
 
-    // 单按 Shift：中 → 英 → 中
+    // 单按 Shift：中 → 英 → 中，光标下面亮一下「英」「中」，一会儿收起
     do {
         let (c, f) = session()
         tapShift(c)
+        check(panel?.aux == "英" && texts.isEmpty, "切到英文：光标下面提示「英」", "\(String(describing: panel?.aux))")
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: WowTypeInputController.modeHintDuration + 0.2))
+        check(panel == nil, "提示过一会儿收起")
         type(c, "abc")
         check(f.text == "abc" && f.inserted.isEmpty, "英文模式字母交给应用", "\(f.text) \(f.inserted)")
         tapShift(c)
+        check(panel?.aux == "中", "回到中文：提示「中」", "\(String(describing: panel?.aux))")
         type(c, "nihao")
         check(f.markedText == "ni'hao", "再按 Shift 回到中文", f.markedText)
+        check(texts.first == "你好" && panel?.aux == nil, "接着打字：候选框换成候选，不再是提示")
         tapShift(c)
         check(f.text == "abcnihao" && f.markedText.isEmpty, "打到一半按 Shift：字母原样上屏", "\(f.text) 「\(f.markedText)」")
         tapShift(c, right: true)
@@ -100,6 +105,7 @@ func runKeyTests() {
     do {
         let (c, f) = session(["ToggleKey": "Control+space"])
         check(press(c, .control(" ")), "Control+空格吃掉")
+        check(panel?.aux == "英", "Control+空格切到英文也提示「英」", "\(String(describing: panel?.aux))")
         type(c, "ab")
         check(f.text == "ab" && f.markedText.isEmpty, "Control+空格切到英文", f.text)
         press(c, .control(" "))
@@ -152,6 +158,7 @@ func runKeyTests() {
         check(f.caretInMarked == 3, "默认模式 ← 不动编辑区的光标", "\(String(describing: f.caretInMarked))")
         press(c, .down)
         check(panel?.cells.count ?? 0 > 9 && panel?.row != nil, "↓ 展开更多候选（网格）", "\(panel?.cells.count ?? 0)")
+        check(panel?.cells.allSatisfy(\.leading) == true, "展开面板的词靠左摆（同一列对齐）")
     }
     do {
         let (c, _) = session()
@@ -354,6 +361,7 @@ private func commitCompositionTests() {
     both("互译里打的拼音", translate, { c in
         tapShift(c)
         tapShift(c)
+        check(panel?.aux?.hasPrefix("译") == true, "两下 Shift 到「译」：提示「译 …」", "\(String(describing: panel?.aux))")
         type(c, "nihao")
         // 开着安全输入（别的程序的密码框在前台）时「译」里不翻译，候选框上面没有「互译」那一行
         if !IsSecureEventInputEnabled() {

@@ -190,6 +190,16 @@ public struct Shortcut: Equatable, Sendable {
         return parts.joined(separator: "+")
     }
 
+    /// 设置窗口里给人看的叫法（Mac 键盘上的名字）：Control + .、Option + X、Control + Shift + 空格。
+    public var label: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Control") }
+        if modifiers.contains(.option) { parts.append("Option") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        let key = keysym == 0x20 ? "空格" : UnicodeScalar(keysym).map { String($0).uppercased() } ?? "?"
+        return (parts + [key]).joined(separator: " + ")
+    }
+
     /// 这次按键是不是这个快捷键。CapsLock 不算；字母不分大小写（按着 Shift 时 macOS 给的是大写）。
     public func matches(_ key: KeyInput) -> Bool {
         key.modifiers.intersection([.shift, .control, .option, .command]) == modifiers

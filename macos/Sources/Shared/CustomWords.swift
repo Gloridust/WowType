@@ -123,6 +123,29 @@ public struct CustomWords: Equatable {
         }
     }
 
+    /// 界面上显示的词：文件里的 \\n（换行）画成 ⏎（列表、提示都这样，和 Linux 设置一样）。
+    public static func shown(_ word: String) -> String {
+        // 不用 Foundation（Linux 上的按键测试也编这个文件）
+        var out = ""
+        var backslash = false
+        for c in word {
+            if backslash {
+                backslash = false
+                if c == "n" {
+                    out += "⏎"
+                    continue
+                }
+                out += "\\"
+            }
+            if c == "\\" {
+                backslash = true
+            } else {
+                out.append(c)
+            }
+        }
+        return backslash ? out + "\\" : out
+    }
+
     /// 加词时检查词：不能空，不能有 TAB 和换行（换行写成 \\n）。
     public static func isValidWord(_ word: String) -> Bool {
         !word.isEmpty && !word.contains(where: { $0 == "\t" || $0 == "\n" || $0 == "\r" })

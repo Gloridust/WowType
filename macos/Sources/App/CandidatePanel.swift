@@ -53,7 +53,7 @@ struct CandidateLayout {
         /// 展开面板里只有光标所在行标序号，别的行留出序号的位置，各行的词才对得齐
         var showLabel: Bool
         var current: Bool
-        /// 靠左摆（竖排）；false 在高亮底里居中
+        /// 靠左摆（竖排、展开面板）；false 在高亮底里居中
         var leading = false
     }
 
@@ -264,8 +264,9 @@ struct CandidateLayout {
             let (r, column) = (i / columns, i % columns)
             let y = top + CGFloat(r) * (height + Self.spacing)
             let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
+            // 靠左摆：同一列各行的词（和五笔码）对齐
             cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, comment: page.comment(i),
-                              showLabel: r == cursorRow, current: i == page.cursor))
+                              showLabel: r == cursorRow, current: i == page.cursor, leading: true))
             if r == cursorRow {
                 row = NSRect(x: Self.inset.width, y: y, width: right - Self.inset.width, height: height)
             }
