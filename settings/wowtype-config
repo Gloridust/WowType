@@ -3638,7 +3638,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             "打到一半切英文，已经打的字母原样上屏。"))
         self.shift_names = [name for _, name in SHIFT_TOGGLES]
         self.shift_row = Adw.ComboRow(
-            title="切换键", model=Gtk.StringList.new([label for label, _ in SHIFT_TOGGLES]))
+            title="单按 Shift", model=Gtk.StringList.new([label for label, _ in SHIFT_TOGGLES]))
         current = self.values.get("ShiftToggle", "Both")
         self.shift_row.set_selected(
             self.shift_names.index(current) if current in self.shift_names else 0)

@@ -365,7 +365,8 @@ public final class Composer {
         }
         if let action = modeKeyAction(key) {
             // 另设的切换键（中 ↔ 英，在「译」里回中文）、进出「译」的键：会话切；
-            // 进不了「译」（没配好、密码框）时交给应用
+            // 进不了「译」（没配好、密码框）时交给应用。翻译器可能刚配好或者不能用了：先跟上（和单按 Shift 一样）
+            configure()
             return sendToSession(key, action: action)
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……

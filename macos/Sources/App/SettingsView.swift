@@ -183,6 +183,14 @@ private struct ToastView: View {
 // MARK: 常规
 
 private let issuesURL = URL(string: "https://github.com/Gloridust/WowType/issues/new")!
+/// 系统设置的「键盘」（只打开，不改系统设置）
+private let keyboardSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!
+
+/// 两个快捷键行的说明，和 Linux 设置的一样（settings/wowtype-config 的 TOGGLE_KEY_INFO、TRANSLATE_MODE_KEY_INFO）
+private let toggleKeyInfo = "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。"
+private let translateModeKeyInfo = "按它进「译」，在「译」里再按回到原来的模式。设了它，单按 Shift 就只在中文、英文之间切。\n\n"
+    + "要先在「翻译」页打开互译；没打开、密码框里这个键交给应用。"
+private let systemKeyNote = "\n\n系统的快捷键（比如 Control+空格）先处理，设成它们 WowType 收不到。"
 
 private struct GeneralPage: View {
     @ObservedObject var model: SettingsModel
@@ -338,14 +346,30 @@ private struct InputPage: View {
 
         PrefGroup("中英文切换", info: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
                   + "打到一半切英文，已经打的字母原样上屏。") {
-            PickerRow(title: "切换键", selection: $model.config.shiftToggle,
+            // macOS 自己的切换：不经过输入法，哪个应用里都管用
+            ActionRow(title: "中/英 键切换 WowType 和 ABC", subtitle: "系统自带，所有应用里都管用",
+                      info: "在「系统设置 → 键盘 → 文字输入 → 输入法」点「编辑…」，打开"
+                          + "「使用“中/英”键切换“ABC”输入法」（键盘上没有 中/英 键时叫「使用大写锁定键切换“ABC”输入法」）。"
+                          + "打开以后按一下这个键在 WowType 和 ABC 之间切。") {
+                Button("打开键盘设置") { NSWorkspace.shared.open(keyboardSettingsURL) }
+            }
+            RowDivider()
+            PickerRow(title: "单按 Shift",
+                      info: "个别应用（比如一些用 Electron 做的）里单按 Shift 有时不灵，可以用上面的 中/英 键，或者下面另设的快捷键。",
+                      selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
             RowDivider()
-            PickerRow(title: "另设一个切换键",
-                      info: "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
-                          + "Control+空格是 macOS 切换输入法的快捷键，系统先拿走，WowType 收不到："
-                          + "要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里把它关掉。",
-                      selection: toggleKey, options: toggleKeyOptions)
+            PickerRow(title: "另设一个切换键", info: toggleKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.toggleKey),
+                      options: shortcutOptions([("不用（单按 Shift 照常）", "")] + shortcuts(Array(Shortcut.toggleKeyPresets.dropFirst())),
+                                               current: model.config.toggleKey?.name ?? ""))
+            RowDivider()
+            PickerRow(title: "互译的快捷键",
+                      subtitle: model.config.translateModeKey != nil && !model.translateReady ? "先在「翻译」页打开互译" : nil,
+                      info: translateModeKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.translateModeKey),
+                      options: shortcutOptions([("不用", "")] + shortcuts(Array(Shortcut.translateModeKeyPresets.dropFirst())),
+                                               current: model.config.translateModeKey?.name ?? ""))
         }
 
         PrefGroup("拼音") {
@@ -402,15 +426,10 @@ private struct InputPage: View {
         }
     }
 
-    /// 键名同 wowtype.conf 的 ToggleKey；空串是不用
-    private var toggleKey: Binding<String> {
-        Binding(get: { model.config.toggleKey?.name ?? "" },
-                set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) })
-    }
-
-    private var toggleKeyOptions: [(String, String)] {
-        shortcutOptions([("不用（单按 Shift 照常）", "")] + shortcuts(["Control+space", "Control+Shift+space"]),
-                        current: toggleKey.wrappedValue)
+    /// 快捷键下拉框选的键名（同 wowtype.conf）；空串是不用
+    private func shortcutBinding(_ path: WritableKeyPath<WowtypeConfig, Shortcut?>) -> Binding<String> {
+        Binding(get: { model.config[keyPath: path]?.name ?? "" },
+                set: { model.config[keyPath: path] = $0.isEmpty ? nil : Shortcut(name: $0) })
     }
 
     /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
@@ -584,14 +603,14 @@ private struct TranslatePage: View {
 
     /// 「互译」那一行的状态（和 Linux 设置一样）：还差什么、Shift 关掉了切不到「译」、怎么切
     private var translateStatus: String {
-        let ready = model.config.translateLocal
-            ? model.localPlan.ready
-            : !model.config.translateBaseUrl.isEmpty && !model.config.translateModel.isEmpty
-        if !ready {
+        if !model.translateConfigured {
             return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
         }
+        if let key = model.config.translateModeKey {
+            return "按 \(key.label) 进出「译」"
+        }
         if model.config.shiftToggle == .off {
-            return "「输入」页关掉了 Shift 切换，切不到「译」"
+            return "「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键"
         }
         return "单按 Shift：中 → 英 → 译 → 中"
     }

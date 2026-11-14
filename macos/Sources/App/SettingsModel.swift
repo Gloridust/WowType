@@ -448,6 +448,14 @@ final class SettingsModel: ObservableObject {
                                  supportDir: supportDir)
     }
 
+    /// 翻译配好了：本地模型下载好了，或者填了翻译服务的地址和模型
+    var translateConfigured: Bool {
+        config.translateLocal ? localPlan.ready : !config.translateBaseUrl.isEmpty && !config.translateModel.isEmpty
+    }
+
+    /// 「译」进得去：互译打开了，翻译也配好了
+    var translateReady: Bool { config.translate && translateConfigured }
+
     /// 输入法会用的 llama-server，和它是哪来的
     var localServerSummary: String? {
         guard let server = LocalModelInstaller.findServer(custom: config.translateLlamaServer, supportDir: supportDir)
