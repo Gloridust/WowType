@@ -375,7 +375,7 @@ typedef struct {
     uint32_t release;   /* 0 按下，1 松开 */
     uint32_t prev_char; /* 应用里光标前一个字符（Unicode 码位），读不到给 0。1.10 起会话按它决定
                          * 数字后面的标点保持英文（读不到时看会话自己记的上一个字）、要不要自动补空格
-                         * （读不到就不补） */
+                         * （读不到就不补），带 WOWTYPE_KEY_HINT_SURROUNDING 时还拿它核对会话记的上文 */
     uint32_t action;    /* WOWTYPE_KEY_ACTION_*（1.6 起） */
     uint32_t hints;     /* 1.10 起：WOWTYPE_KEY_HINT_*，输入框的情况 */
     uint32_t code;      /* 1.10 起：按键码（硬件键码），不知道给 0。单按 Shift 时按下、松开按它对上 */
@@ -384,10 +384,10 @@ typedef struct {
 } WowtypeKey;
 
 /* WowtypeKey.hints（1.10 起）。 */
-#define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格 */
+#define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格、不联想 */
 #define WOWTYPE_KEY_HINT_PANEL_OPEN (1u << 1)    /* 外壳开着自己的面板（表情面板、工具栏）：按 Shift 不切中英文 */
 #define WOWTYPE_KEY_HINT_NO_TRANSLATE (1u << 2)  /* 不能翻译的输入框（密码框）：「译」里也照常上屏 */
-#define WOWTYPE_KEY_HINT_SENSITIVE (1u << 3)     /* 密码框这类敏感的输入框：不联想 */
+#define WOWTYPE_KEY_HINT_SURROUNDING (1u << 3)   /* 应用告诉了光标周围的文字：prev_char 为 0 是光标前确实没有字 */
 
 /* 输入模式（1.10 起）。单按 Shift（Shift_L 0xffe1 / Shift_R 0xffe2 的按下、松开都交给会话）
  * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1。
@@ -450,7 +450,7 @@ typedef struct {
     int wubi_auto_commit; /* 1.10 起：五笔打满四码、只有一个候选时直接上屏，默认 1 */
     int wubi_hint;       /* 1.10 起：五笔逐码提示的候选后面显示还要打的码（WowtypeCandidateInfo.comment），默认 1 */
     int prediction;      /* 1.10 起：联想，默认 0。选词上屏（空格、数字、点候选；五笔的自动上屏、顶字不算）以后，中文模式、光标前是汉字、
-                          * 不是密码框（WOWTYPE_KEY_HINT_SENSITIVE）时，接着给出可能的下一个词：
+                          * 不是密码框网址框邮箱框（WOWTYPE_KEY_HINT_NO_AUTO_SPACE）时，接着给出可能的下一个词：
                           * frame->panel 是 WOWTYPE_PANEL_PREDICTION，编辑区是空的，没有光标（cand_cursor = -1）。
                           * 数字键选（上屏、学这个搭配、接着联想），Esc 收起；别的键都收起联想再照常处理，
                           * 会话不管的（空格、回车、退格、方向键……）handled = 0，照常交给应用：空格不会选中联想的词，
@@ -505,7 +505,8 @@ const WowtypeFrame *wowtype_session_frame(WowtypeSession *session);
 /* 处理一次按键（按下和松开都给）。session 或 key 为 NULL 时返回 NULL。 */
 const WowtypeFrame *wowtype_session_key(WowtypeSession *session, const WowtypeKey *key);
 /* 清空编辑区；commit_pending 非 0 时，已选的词 + 原始输入放进 frame->commit（切换输入法、
- * 打字途中切英文时，和回车一样），原始输入也记一次选词。 */
+ * 打字途中切英文时，和回车一样），原始输入也记一次选词。commit_pending 为 0 是放弃（失去焦点、
+ * 应用重置了输入框）：打到一半的丢掉，会话记的上文也作废（1.10 起）。 */
 const WowtypeFrame *wowtype_session_reset(WowtypeSession *session, int commit_pending);
 /* 切换输入模式（1.10 起，WOWTYPE_MODE_*）：外部命令、设置里的默认模式、外壳全局的模式用。
  * 切到英文时打到一半的（已选的词 + 原始输入）放进 frame->commit。 */

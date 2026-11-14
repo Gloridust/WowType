@@ -272,7 +272,7 @@ private struct InputPage: View {
                   + "万象拼音词更多，比雾凇多占约 300 MB 内存；从 amzxyz/rime_wanxiang（CC BY 4.0）转换，只用了它的词条。"
                   + "装在 ~/Library/Application Support/WowType/dicts/wanxiang。",
                   links: [("万象拼音项目主页", URL(string: "https://github.com/amzxyz/rime_wanxiang")!)]) {
-            RadioRow(title: "雾凇拼音（默认）", subtitle: "约 89 万条", selected: model.lexiconKind == .rimeIce) {
+            RadioRow(title: "雾凇拼音（默认）", subtitle: "在安装包里，不用下载", selected: model.lexiconKind == .rimeIce) {
                 model.useRimeIce()
             }
             .disabled(model.lexiconBusy)
@@ -442,7 +442,7 @@ private struct InputPage: View {
         if let release = model.release, release.wanxiang == nil {
             return "暂时没有下载包，可以从文件安装"
         }
-        return "约 170 万条，要下载约 20 MB"
+        return "词更多，要下载约 20 MB"
     }
 
     /// 没选时不写（文件格式在选文件的对话框里说）
@@ -464,7 +464,7 @@ private struct EmojiPage: View {
 
     var body: some View {
         PrefGroup("表情") {
-            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」时，第 3 个候选是 emoji",
+            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」时，候选里有对应的 emoji",
                       isOn: $model.config.emojiSuggest)
             RowDivider()
             PickerRow(title: "表情面板快捷键",

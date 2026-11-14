@@ -24,7 +24,7 @@
 | 1.7 | 0.3.11 | 打字途中 `Ctrl+Delete`、`Ctrl+退格`、`Shift+Delete` 忘掉光标处学错的词（会话里处理，带 Ctrl 的这几个键外壳也要交给 `_key`），`WowtypeFrame` 末尾加 `forgot`：1 时外壳马上存用户词库和输入习惯；`wowtype_engine_save_user_dict` 用户词库空的时候也写（只有注释行）、返回 0，以前返回 -1 |
 | 1.8 | 0.3.11 | 以词定字：`WowtypeSessionConfig` 末尾加 `pick_char`（默认 1），打拼音途中 `[` `]` 上屏光标处候选的第一个、最后一个字（`page_keys` 带 `[ ]` 时让给翻页） |
 | 1.9 | 0.3.11 | 加 `wowtype_engine_set_rare_ext_chars`：是否出 CJK 扩展 B 区及以后的单字（通用规范汉字表里的除外），默认不出（以前总是出） |
-| 1.10 | 下一版 | 输入会话接管标点、自动空格、上文、中 / 英 / 译和单按 Shift、互译、工具栏和表情面板：`WowtypeKey` 加 `hints`、`code`、`repeat`、`time_ms`（`KEY_HINT_*`、`KEY_ACTION_OBSERVE`），`WowtypeSessionConfig` 加 `punct_style`、`auto_space`、`shift_toggle`、`shift_tap_ms`、`translate_mode`、`toolbar`、`clipboard_history`，`WowtypeFrame` 加 `learned`、`mode`、`mode_changed`、`translating`、`translate_*`（`aux`、`wake_after_ms` 开始用，`panel` 加 2 表情面板、3 工具栏）；加 `wowtype_session_set_mode`、`_mode`、`_set_translator`、`_set_translate_backend`、`_tick`、`_commit_text`、`_translate_clear`、`_translate_source`、`_toggle_emoji_panel`、`_open_tool`、`_open_panel`、`wowtype_recent_emoji_path`、`_list`、`wowtype_custom_code`、`wowtype_guess_pinyin`（自定义词的编码整理、猜拼音，macOS 设置不再自己抄音节表），`wowtype_engine_set_domain_lm`（混上用户自己训的领域词级模型），`WowtypeSessionConfig` 加 `shuangpin_keys`（双拼编辑区显示打的键）；五笔：加 `wowtype_engine_load_wubi`，`WowtypeSessionConfig` 加 `wubi`、`wubi_auto_commit`、`wubi_hint`，`WowtypeCandidateInfo` 加 `comment`、加 `wowtype_session_candidate_comment`（候选后面的小字）、`prediction`（联想，`panel` 加 4、`KEY_HINT_SENSITIVE`，`wowtype_engine_predict_next` 改成和会话同一套联想）；删掉会话的过渡函数 `_append`、`_set_context`、`_last_choice` |
+| 1.10 | 下一版 | 输入会话接管标点、自动空格、上文、中 / 英 / 译和单按 Shift、互译、工具栏和表情面板：`WowtypeKey` 加 `hints`、`code`、`repeat`、`time_ms`（`KEY_HINT_*`、`KEY_ACTION_OBSERVE`；`KEY_HINT_SURROUNDING`：读得到周围文字时拿 `prev_char` 核对会话记的上文），`WowtypeSessionConfig` 加 `punct_style`、`auto_space`、`shift_toggle`、`shift_tap_ms`、`translate_mode`、`toolbar`、`clipboard_history`，`WowtypeFrame` 加 `learned`、`mode`、`mode_changed`、`translating`、`translate_*`（`aux`、`wake_after_ms` 开始用，`panel` 加 2 表情面板、3 工具栏）；加 `wowtype_session_set_mode`、`_mode`、`_set_translator`、`_set_translate_backend`、`_tick`、`_commit_text`、`_translate_clear`、`_translate_source`、`_toggle_emoji_panel`、`_open_tool`、`_open_panel`、`wowtype_recent_emoji_path`、`_list`、`wowtype_custom_code`、`wowtype_guess_pinyin`（自定义词的编码整理、猜拼音，macOS 设置不再自己抄音节表），`wowtype_engine_set_domain_lm`（混上用户自己训的领域词级模型），`WowtypeSessionConfig` 加 `shuangpin_keys`（双拼编辑区显示打的键）、`prediction`（联想，`panel` 加 4，`wowtype_engine_predict_next` 改成和会话同一套联想）；五笔：加 `wowtype_engine_load_wubi`，`WowtypeSessionConfig` 加 `wubi`、`wubi_auto_commit`、`wubi_hint`，`WowtypeCandidateInfo` 加 `comment`、加 `wowtype_session_candidate_comment`（候选后面的小字）；删掉会话的过渡函数 `_append`、`_set_context`、`_last_choice` |
 
 ## 所有权和生命周期
 
@@ -75,7 +75,7 @@
 | `[` `]`（`pick_char`，1.8） | 以词定字：光标处的多字词只取第一个 / 最后一个字；句首词取的字进已选栈，剩下的接着选，否则连同已选的词上屏；不记选词。光标处是单字、emoji、计算结果这类时不管（外壳照常当标点）；`page_keys` 带 `[ ]` 时是翻页 |
 | `;` `'`（`select_keys`） | 选这一页第 2、3 个；微软、搜狗、紫光双拼里 `;` 是韵母键，不拿来选词，等第二个键时进编辑区 |
 | V 模式的数字、运算符 | 进编辑区；`=` 上屏计算结果 |
-| 方向键 | `arrow_keys` 是 `CANDIDATES`（默认）时，横排：左右移光标（整个列表首尾相接，跨页时跟着翻页），上下翻页，下键展开面板（两个以上候选）；竖排：上下移光标，左右翻页。`CARET`（1.10）时横排竖排都是上下移候选光标、不翻页、不展开面板；左右键、Home、End、Delete 管拼音里的光标（`frame->preedit_cursor`），到了两头也吃掉，「译」里光标不动 |
+| 方向键 | `arrow_keys` 是 `CANDIDATES`（默认）时，横排：左右移光标（跨页时跟着翻页，到了第一个、最后一个停住，不绕到另一头），上下翻页，下键展开面板（两个以上候选）；竖排：上下移光标，左右翻页。`CARET`（1.10）时横排竖排都是上下移候选光标、不翻页、不展开面板；左右键、Home、End、Delete 管拼音里的光标（`frame->preedit_cursor`），到了两头也吃掉，「译」里光标不动 |
 | PgUp / PgDn、`page_keys` 里的键 | 翻页；`- =`、`[ ]`、`, .`、`Tab` 翻不动时吃掉（不当标点上屏），只有一页时不管 |
 | `action` | 外壳认出来的全局翻页 / 移光标键，有候选时照做，翻不动也吃掉 |
 | 展开面板 | 6×6 一屏；方向键移光标，第一行再按上收起，PgUp / PgDn、`- =` 一次一屏，数字选光标那一行的第几个，空格选光标处，Esc 收起；别的键先收起再照常处理。收起后停在光标那一页 |
@@ -84,7 +84,7 @@
 | Shift（1.10） | 单按切换中 → 英 →（`translate_mode` 时）译 → 中：按下时带 Ctrl / Alt / Super、开着面板不算；自动重复不重新计时；松开时按键码认；中间按了别的键（外壳自己处理掉的用 `KEY_ACTION_OBSERVE` 报）不算；按住超过 `shift_tap_ms` 不算。切英文时打到一半的原样上屏，离开「译」时原文原样上屏 |
 | 英文模式（1.10） | 只管汉字后面打字母、数字时补空格，别的键交给应用 |
 | 互译（1.10） | 上屏的字攒成原文（`frame->translate_*`），0.5 秒没再打字（句末标点立刻）发请求，`frame->wake_after_ms` 时外壳调 `_tick`；没在打拼音时：回车上屏译文（没译完先记下，译好了在 `_tick` 的 commit 里）、Shift+回车上屏原文、空格上屏译文、Esc 清空、退格删原文、方向键吃掉、数字和符号进原文 |
-| 联想（1.10，`prediction`） | 选词上屏以后（中文模式、光标前是汉字、不是 `KEY_HINT_SENSITIVE` 的输入框）给出可能的下一个词，`frame->panel` 是 4，编辑区空、`cand_cursor` 是 -1；数字键选（上屏、学搭配、接着联想），Esc 收起；别的键收起联想后照常处理，会话不管的（空格、回车、退格、方向键）交给应用。没把握时不给 |
+| 联想（1.10，`prediction`） | 选词上屏以后（中文模式、光标前是汉字、不是 `KEY_HINT_NO_AUTO_SPACE` 的输入框）给出可能的下一个词，`frame->panel` 是 4，编辑区空、`cand_cursor` 是 -1；数字键选（上屏、学搭配、接着联想），Esc 收起；别的键收起联想后照常处理，会话不管的（空格、回车、退格、方向键）交给应用。没把握时不给 |
 | v + 空格、表情快捷键（1.10） | 工具栏（菜单、剪贴板、常用语，竖排一页 9 个）和表情 / 符号面板（6 列网格，字母搜索）；开着时按键都归面板，带 Ctrl / Alt / Super 的收起面板、交给应用；`frame->panel` 是 3 / 2，提示在 `frame->aux` |
 | 五笔（`wubi`，1.10） | 字母是五笔码（a–y，最多四码）：码对上的按码表顺序排在前，后面是逐码提示（更长的码的词，`comment` 是还要打的码，`wubi_hint` 关掉时为空）；四码只有一个候选时直接上屏（`wubi_auto_commit`）；四码再打字母、空码时打字母、按 z 或大写字母先顶字（空码丢掉）；空码时 `frame->aux` 是「空码」，空格清空，标点只上屏标点，回车上屏字母；打码时引号是标点；z 开头临时打全拼（编辑区 `z` + 分好音节的拼音，`comment` 是反查的五笔码）；计算器是大写 `V`，v + 空格不开工具栏；日期时间只在临时拼音里出；`arrow_keys` 是 `CARET` 时打五笔码的方向键照 `CANDIDATES` 用（临时拼音里照常挪光标，挪不到 z 前面）；五笔和临时拼音都不学习，Ctrl+Delete 在五笔码上什么也不忘。引擎没载入码表时照全拼打，`frame->aux` 说没有码表 |
 
@@ -94,6 +94,6 @@
 | 编辑区 | 已选的词 + 剩余部分分好音节（`nihao` → `ni'hao`，双拼显示成全拼）；没有引擎时是原始输入 |
 | 选词（`_select`、`_choose`） | 候选没用完输入：进已选栈，记一次选词，候选换成剩下的；用完了：已选的词 + 这个候选上屏，记选词（带拼音，选够次数收进用户词库），分几次选出来的整句也记一次；emoji 和日期时间、计算结果这类候选只上屏不记；序号不对 `handled` = 0；`_select` 的序号是候选框里显示的（一页，或展开面板的一屏），`_choose` 是整个列表的 |
 | 上屏输入（回车，`_reset` 带 commit_pending 也一样） | 已选的词 + 原始输入上屏（回车、切输入法、打到一半切英文），原始输入也记一次选词；什么也没打就不上屏。互译时拼音先进原文，原文再原样上屏 |
-| 上文（1.10） | 会话自己记上屏的最后 20 个字，排序和学搭配都看它；外壳不用再 `set_context` |
+| 上文（1.10） | 会话自己记上屏的最后 20 个字，排序和学搭配都看它；外壳不用再 `set_context`。记的上文要信得过：带 `KEY_HINT_SURROUNDING`（应用告诉了周围文字）的键，没在打字时上文的最后一个字要和 `prev_char` 对得上，对不上换成 `prev_char`（光标前没字就清空）；没在打字时交给应用的键（退格、Delete、方向键、回车、快捷键、英文和半角的字）和 `_reset(s, 0)`（失去焦点、应用重置）都让上文作废。所以没在打字时外壳也要把这些键交给 `_key`，包括带 Ctrl / Alt / Super 的 |
 | 外壳的上屏（`_commit_text`，1.10） | 工具栏、语音这类与拼音无关的字：互译时进原文，否则补好空格放进 commit |
 | 学习的上文 | 记选词前把引擎的上文设成算候选时那个（已上屏的字 + 已选的词的尾部） |

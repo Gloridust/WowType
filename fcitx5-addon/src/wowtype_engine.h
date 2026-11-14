@@ -389,7 +389,7 @@ public:
                     fcitx::InputContextEvent &event) override;
     void reset(const fcitx::InputMethodEntry &entry,
                fcitx::InputContextEvent &event) override;
-    /// 英文模式时状态栏、切换提示里显示「英」。
+    /// 状态栏、切换提示：「中文」「英文」「互译」，一个字的是「中」「英」「译」。
     std::string subMode(const fcitx::InputMethodEntry &entry,
                         fcitx::InputContext &ic) override;
     std::string subModeLabelImpl(const fcitx::InputMethodEntry &entry,
@@ -446,17 +446,13 @@ private:
                     bool notify);
 
     // 互译模式：打的字先攒成原文，模型译好后上屏译文
+    /// 现在的模式：「中文」「英文」「互译」；提示框和托盘上的一个字「中」「英」「译」。
+    const char *modeTitle() const;
+    const char *modeLabel() const;
     /// 现在是互译模式，而且这个输入框能用（密码框里不翻译、不往外发）。
     bool translating(fcitx::InputContext *ic) const;
     bool translateAvailable() const;
     std::string translateKeyFile() const;
-    /// 上屏一段文字：互译模式下攒进原文，否则直接交给应用。所有上屏都走这里。
-    /// autoSpace：要不要按光标前的字补空格（会话上屏的已经补过了，传 false）。
-    void emit(fcitx::InputContext *ic, const std::string &text, bool autoSpace = true);
-    /// 上屏 next 之前要不要先补一个空格（光标前是汉字、next 是字母数字，或反过来）。
-    bool needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const;
-    /// 直接交给应用的字母、数字（英文模式、不在打字时的数字）：要补空格就自己上屏。
-    bool autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key);
     /// 原文原样上屏（Shift+回车、离开互译模式）。
     void clearTranslation(WowtypeState *state);
     /// 单调时钟的毫秒数（会话的 time_ms、tick 用）。
@@ -490,8 +486,8 @@ private:
     const WowtypeFrame *sessionKey(fcitx::InputContext *ic, WowtypeState *state,
                                    const fcitx::Key &key,
                                    uint32_t action = WOWTYPE_KEY_ACTION_NONE);
-    /// 应用里光标前一个字（Unicode 码位）；应用不报告周围文字时 0。
-    uint32_t prevChar(fcitx::InputContext *ic) const;
+    /// 应用里光标前一个字（Unicode 码位）：光标前没有字是 0，应用不报告周围文字时没有值。
+    std::optional<uint32_t> prevChar(fcitx::InputContext *ic) const;
     /// 这个键对应的 fcitx5 全局翻页、移动候选热键（方向键不算，照横排竖排的规则走）。
     uint32_t keyAction(const fcitx::Key &key) const;
     /// 会话处理了一个键以后：上屏、记 emoji、照会话的候选框重画（或只挪页码和光标）。
@@ -503,15 +499,12 @@ private:
     bool syncView(WowtypeState *state);
     void fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state);
     std::string segmentedRemaining(WowtypeState *state);
-    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态、记上文；frame->learned 时攒着存用户词库。
+    /// 会话上屏以后：上屏 frame->commit、清空外壳的状态；frame->learned 时攒着存用户词库。
     void finishCommit(fcitx::InputContext *ic, WowtypeState *state, const WowtypeFrame *frame);
     /// 上屏已选的词 + 还没选的原始输入（切输入法、打到一半切英文），原始输入也记一次选词。
     void commitInput(fcitx::InputContext *ic, WowtypeState *state);
-    /// 上屏一段与拼音无关的文本（标点等），只更新上下文。
-    void commitPlain(fcitx::InputContext *ic, const std::string &text);
     /// 选中光标所在的候选；没有候选时上屏原始输入（交给会话按一次空格）。
     void commitCurrent(fcitx::InputContext *ic, WowtypeState *state);
-    void rememberContext(const std::string &text);
     void maybeSaveUserDict(bool force);
     std::string userDictPath() const;
 
@@ -548,8 +541,6 @@ private:
     /// lexicon_ 载入时的 (大小, 修改时间)：同一个路径的文件被换掉（更新了词库包）也要重载。
     std::pair<std::uintmax_t, long long> lexiconStamp_{0, 0};
     fcitx::FactoryFor<WowtypeState> factory_;
-    /// 最近上屏的文本，用于上下文 bigram 特征（只保留尾部若干字节，按字符边界截）。
-    std::string recent_;
     /// 距离上次保存用户词库的上屏次数。
     int unsavedCommits_ = 0;
 

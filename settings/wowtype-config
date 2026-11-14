@@ -1461,6 +1461,11 @@ def current_version():
     return VERSION if not VERSION.startswith("@") else "0"
 
 
+def development_build():
+    """开发版（CI 打的 0.3.12~git… 包、从源码直接跑的）：版本号说不清比正式版新还是旧。"""
+    return "~git" in VERSION or VERSION.startswith("@")
+
+
 def parse_version(text):
     """`v0.2.1`、`0.2.1-1~ubuntu26.04`、`2026.10.31` -> 数字元组。"""
     text = text.strip().lstrip("vV").split("-")[0].split("~")[0]
@@ -3340,9 +3345,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.add_info(self.arrow_row,
                       "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
                       "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
-                      "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。\n\n"
-                      "GNOME 的 Input Method Panel 扩展画不出编辑区里的光标，那里看不到光标在哪"
-                      "（打字、删除照常对）。")
+                      "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。")
         current = self.values.get("ArrowKeys", DEFAULTS["ArrowKeys"])
         self.arrow_row.set_selected(self.arrow_names.index(current) if current in self.arrow_names else 0)
         self.arrow_row.connect("notify::selected", self.on_arrow_keys_changed)
@@ -3371,7 +3374,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         look = Adw.PreferencesGroup(title="外观")
         self.theme_row = SwitchRow(
-            title="WowType 绿色主题", subtitle="圆角候选框，深色模式自动换深色版")
+            title="WowType 绿色主题", subtitle="选中的词是 WowType 绿，深色模式自动换深色版")
         self.theme_row.set_sensitive(False)  # 读到 fcitx5 的当前主题再打开
         self.theme_handler = self.theme_row.connect("notify::active", self.on_theme_toggled)
         look.add(self.theme_row)
@@ -3426,7 +3429,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.rime_check = Gtk.CheckButton(valign=Gtk.Align.CENTER)
         self.wanxiang_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.rime_check)
         self.custom_lexicon_check = Gtk.CheckButton(valign=Gtk.Align.CENTER, group=self.rime_check)
-        rime_row = Adw.ActionRow(title="雾凇拼音（默认）", subtitle="约 89 万条")
+        rime_row = Adw.ActionRow(title="雾凇拼音（默认）", subtitle="在安装包里，不用下载")
         rime_row.add_prefix(self.rime_check)
         rime_row.set_activatable_widget(self.rime_check)
         group.add(rime_row)
@@ -3481,7 +3484,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         elif getattr(self, "release", None) and not asset:
             subtitle = "暂时没有下载包，可以从文件安装"
         else:
-            subtitle = "约 170 万条，要下载约 20 MB"
+            subtitle = "词更多，要下载约 20 MB"
         self.wanxiang_row.set_subtitle(GLib.markup_escape_text(subtitle))
         self.lexicon_button.set_label("更新" if version else "下载")
         self.lexicon_button.set_visible(not self.lexicon_busy and (not version or newer)
@@ -3753,7 +3756,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         page = self.new_page()
         emoji = Adw.PreferencesGroup(title="表情")
         emoji.add(self.make_switch("EmojiSuggest", "打字时推荐 emoji",
-                                   "打「开心」「点赞」时，第 3 个候选是 emoji"))
+                                   "打「开心」「点赞」时，候选里有对应的 emoji"))
         current = self.values["EmojiKey"]
         labels = [label for label, _ in EMOJI_KEYS]
         self.emoji_keys = [name for _, name in EMOJI_KEYS]
@@ -4947,9 +4950,16 @@ class SettingsWindow(Adw.ApplicationWindow):
         state["checked"] = time.time()
         write_update_state(state)
         newer = is_newer(release)
-        self.latest_row.set_title(
-            f"有新版本 {release['version']}" if newer else "已经是最新版本")
-        self.latest_row.set_subtitle("" if newer else f"最新版本 {release['version']}")
+        if newer:
+            self.latest_row.set_title(f"有新版本 {release['version']}")
+            self.latest_row.set_subtitle("")
+        elif development_build():
+            # 开发版不说「已经是最新」：它可能在最新正式版之前，也可能之后
+            self.latest_row.set_title(f"最新正式版 {release['version']}")
+            self.latest_row.set_subtitle("现在装的是开发版")
+        else:
+            self.latest_row.set_title("已经是最新版本")
+            self.latest_row.set_subtitle(f"最新版本 {release['version']}")
         self.install_row.set_visible(newer)
         if newer:
             self.install_row.set_title("更新到 " + release["version"])

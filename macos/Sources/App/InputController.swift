@@ -143,7 +143,7 @@ final class WowTypeInputController: IMKInputController {
         super.deactivateServer(sender)
     }
 
-    /// 系统要求结束组字（换输入框、点了别处）：打到一半的原样上屏。
+    /// 系统要求结束组字（换输入框、点了别处、切走输入法）：打的字母原样上屏，见 Composer.commitComposition。
     override func commitComposition(_ sender: Any!) {
         composer.commitComposition()
     }

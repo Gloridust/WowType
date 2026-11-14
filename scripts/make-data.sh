@@ -4,7 +4,7 @@
 #   scripts/make-data.sh [rime-ice 目录] [输出目录]
 #
 # 不给 rime-ice 目录时自动 git clone 一份（--depth 1）。输出：
-#   lexicon.tsv   中文词库（约 55 万条）
+#   lexicon.tsv   中文词库（条数生成时打出来）
 #   english.txt   英文词表
 #   LICENSE       rime-ice 的许可证（GPL-3.0），随数据一起分发
 #   words.lm      词级语言模型（从 GitHub Release 下载，见下面 LM_URL）

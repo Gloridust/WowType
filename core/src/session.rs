@@ -102,8 +102,8 @@ pub struct Key {
     pub modifiers: u32,
     /// 松开（按下是 false）。
     pub release: bool,
-    /// 应用里光标前一个字符（外壳读周围文字得到），读不到是 None。
-    /// 数字后面的标点保持英文、自动空格都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
+    /// 应用里光标前一个字符（外壳读周围文字得到），读不到是 None（带 [`key_hints::SURROUNDING`] 时是光标前没有字）。
+    /// 数字后面的标点保持英文、自动空格、核对上文都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
     pub prev_char: Option<char>,
     /// 外壳认出来的全局热键（翻页、移光标），没有是 None。
     pub action: KeyAction,
@@ -120,14 +120,14 @@ pub struct Key {
 
 /// 外壳告诉会话的输入框情况（[`Key::hints`]）。
 pub mod key_hints {
-    /// 密码框、网址框、邮箱框：不自动补空格。
+    /// 密码框、网址框、邮箱框：不自动补空格、不联想。
     pub const NO_AUTO_SPACE: u32 = 1 << 0;
     /// 外壳开着自己的面板（表情面板、工具栏）：这时按 Shift 不切中英文。
     pub const PANEL_OPEN: u32 = 1 << 1;
     /// 不能翻译的输入框（密码框）：「译」里也照常上屏，不攒原文、不往外发。
     pub const NO_TRANSLATE: u32 = 1 << 2;
-    /// 密码框这类敏感的输入框：不联想。
-    pub const SENSITIVE: u32 = 1 << 3;
+    /// 应用告诉了光标周围的文字：[`Key::prev_char`] 是 None 时光标前确实没有字（不是读不到）。
+    pub const SURROUNDING: u32 = 1 << 3;
 }
 
 /// 互译用的翻译器（[`crate::translate::Translator`]，或外壳自己的实现）。都不阻塞。
@@ -730,11 +730,13 @@ impl<'e> Session<'e> {
     }
 
     /// 光标前已经上屏的字（选了开头的词以后，剩下的部分拿它和已选的词当上文排序）。
+    /// 上文换了（应用里删过、改过、点到别处，交给应用的键，放弃），联想是照旧上文给的，跟着作废。
     pub fn set_context(&mut self, text: &str) {
         if self.context != text {
             self.context.clear();
             self.context.push_str(text);
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
@@ -756,35 +758,46 @@ impl<'e> Session<'e> {
         if key.action == KeyAction::Observe {
             return self.frame(false);
         }
-        if !key.release {
-            if key.prev_char.is_some() && key.prev_char != self.last_char {
-                // 光标前已经不是刚上屏的字了（鼠标点到了别处）：联想作废
-                self.dismiss_prediction();
-            }
-            self.prev_char = key.prev_char;
-            self.hints = key.hints;
-            if key.prev_char.is_some() {
-                self.last_char = key.prev_char;
-            }
+        if key.release {
+            return self.frame(false);
+        }
+        self.prev_char = key.prev_char;
+        self.hints = key.hints;
+        let surrounding = key.hints & key_hints::SURROUNDING != 0;
+        if key.prev_char.is_some() || surrounding {
+            self.last_char = key.prev_char;
+        }
+        if surrounding {
+            self.check_context(key.prev_char);
         }
         let handled = self.handle_key(key);
-        // 交给应用的退格、方向键、Delete……之后光标前是什么就不知道了（3 退格以后的点是句号）；
-        // 交给应用的数字、标点上面已经记了，单按修饰键不算
-        if !key.release
-            && !handled
-            && key.prev_char.is_none()
-            && visible_symbol(key.keysym).is_none()
-            && !is_modifier_keysym(key.keysym)
-        {
-            self.last_char = None;
+        if !handled && key.keysym != 0 && !is_modifier_keysym(key.keysym) {
+            // 这个键交给了应用（退格、Delete、方向键、回车、快捷键、英文和半角的字……），
+            // 应用里的字或光标可能变了：会话记的光标前的字、上文都不算数了。
+            // 交给应用的数字、标点会话已经记了（3.14 的点），单按修饰键不算
+            if key.prev_char.is_none() && visible_symbol(key.keysym).is_none() {
+                self.last_char = None;
+            }
+            if !self.composing() {
+                self.set_context("");
+            }
         }
         self.frame(handled)
     }
 
-    fn handle_key(&mut self, key: &Key) -> bool {
-        if key.release {
-            return false;
+    /// 应用告诉了光标前的字（读得到周围文字）、没在打字：会话记的上文要和它对得上。
+    /// 对不上（在应用里删过、改过、点到别处）就换成应用里的那个字，光标前没有字就清空。
+    /// 「译」里上文是攒着的原文，应用里是译文，不核对。
+    fn check_context(&mut self, before: Option<char>) {
+        if self.composing() || self.tool.is_some() || self.translating() {
+            return;
         }
+        if self.context.chars().next_back() != before {
+            self.set_context(&before.map(String::from).unwrap_or_default());
+        }
+    }
+
+    fn handle_key(&mut self, key: &Key) -> bool {
         if self.tool.is_some() {
             return self.tool_key(key);
         }
@@ -1433,12 +1446,12 @@ impl<'e> Session<'e> {
     }
 
     /// 选词上屏以后接着联想（[`Config::prediction`]）：只在中文模式、光标前是汉字时；
-    /// 互译、密码框不联想。没把握时什么都不给（候选框照常收起）。
+    /// 互译、密码框网址框邮箱框（[`key_hints::NO_AUTO_SPACE`]）不联想。没把握时什么都不给（候选框照常收起）。
     fn predict(&mut self) {
         let Some(engine) = self.engine else {
             return;
         };
-        if !self.config.prediction || self.mode != Mode::Chinese || self.hints & key_hints::SENSITIVE != 0 {
+        if !self.config.prediction || self.mode != Mode::Chinese || self.hints & key_hints::NO_AUTO_SPACE != 0 {
             return;
         }
         self.predictions = engine
@@ -2007,8 +2020,9 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 移光标（和 fcitx5 的候选列表一样）：光标不在这一页上时落到这一页的头 / 尾；
-    /// 否则走一格，走过头绕到全部候选的另一头，翻到光标所在的页。
+    /// 移光标：光标不在这一页上时落到这一页的头 / 尾；否则走一格，跨页时翻到光标所在的页。
+    /// 到了全部候选的两头就停住，不绕到另一头：第一个往前一按就跳到末页的生僻字，
+    /// 再顺手按空格就上屏了它（展开面板、工具栏到头也是停住）。
     fn move_cursor(&mut self, prev: bool) {
         let n = self.candidates.len();
         if n == 0 {
@@ -2022,11 +2036,10 @@ impl<'e> Session<'e> {
             self.cursor = start + if prev { len - 1 } else { 0 };
             return;
         }
-        self.cursor = match (prev, self.cursor) {
-            (true, 0) => n - 1,
-            (true, c) => c - 1,
-            (false, c) if c + 1 >= n => 0,
-            (false, c) => c + 1,
+        self.cursor = if prev {
+            self.cursor.saturating_sub(1)
+        } else {
+            (self.cursor + 1).min(n - 1)
         };
         self.page = self.cursor / self.page_size();
     }
@@ -2243,10 +2256,10 @@ impl<'e> Session<'e> {
     }
 
     /// 清空编辑区。commit_pending：把已选的词和还没选的原始输入上屏（切换输入法时），
-    /// 和回车一样也记一次选词。
+    /// 和回车一样也记一次选词；互译时拼音先进原文，原文再原样上屏。
     ///
-    /// 互译时 commit_pending 的拼音先进原文，原文再原样上屏（切走输入法、换输入框）；
-    /// 不上屏时互译攒着的原文不动（外壳上屏以后清编辑区也调这个），要丢掉用 [`Session::clear_translation`]。
+    /// 不上屏是放弃（失去焦点、应用重置了输入框、换了词库）：打到一半的丢掉，会话记的光标前的字、
+    /// 上文也不算数了（回来时光标可能在别处）。互译攒着的原文不动，要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
         self.dismiss_prediction();
@@ -2254,6 +2267,11 @@ impl<'e> Session<'e> {
             self.commit_input_now();
         } else {
             self.clear();
+        }
+        if !commit_pending {
+            self.set_context("");
+            self.prev_char = None;
+            self.last_char = None;
         }
         if commit_pending && !self.translation.source.is_empty() {
             self.commit_source();

@@ -52,8 +52,6 @@ constexpr std::size_t kGridCols = 6;
 constexpr std::size_t kGridRows = 6;
 /// 候选总数上限（约 33 页 × 9 个）。
 constexpr unsigned int kMaxCandidates = 1000;
-/// 上下文只保留尾部这么多字节：bigram 特征只看紧邻的上文。
-constexpr std::size_t kContextBytes = 24;
 /// 每上屏这么多次保存一次用户词库（另外失去焦点和退出时也保存）。
 constexpr int kSaveEvery = 20;
 /// 打字推荐的 emoji 插在第几个候选（从 0 数）：不挤掉前两个词。
@@ -108,19 +106,6 @@ void popUtf8(std::string &text) {
     }
 }
 
-/// 只留尾部 maxBytes 字节，起点对齐到 UTF-8 字符边界。
-std::string utf8Tail(const std::string &text, std::size_t maxBytes) {
-    if (text.size() <= maxBytes) {
-        return text;
-    }
-    std::size_t start = text.size() - maxBytes;
-    while (start < text.size() &&
-           (static_cast<unsigned char>(text[start]) & 0xC0) == 0x80) {
-        ++start;
-    }
-    return text.substr(start);
-}
-
 constexpr uint64_t kVoicePollUsec = 50 * 1000;
 constexpr std::size_t kVoiceBars = 6;
 
@@ -141,6 +126,19 @@ constexpr uint64_t kVoiceErrorUsec = 1500 * 1000;
 constexpr uint64_t kVoiceHintUsec = 4000 * 1000;
 // 定时器精度。fcitx5 底下是 sd-event，传 0 等于默认的 250ms，50ms 的轮询实际一秒只有 4 次
 constexpr uint64_t kTimerAccuracyUsec = 1000;
+
+/// 把编辑区画进输入框。每一段都标上 DontCommit：失去焦点、应用重置输入框时，GTK / Qt 的输入模块
+/// （XIM 这类由 fcitx5 代劳）会把编辑区里没标 DontCommit 的字直接上屏，那样文档里会留下
+/// 「ni'hao」这种带分隔符的拼音、选了一半的「你好zhong'guo」、没译完的译文。打到一半的是放弃
+/// （和 IBus 的默认一样），外壳在 reset / deactivate 里清掉会话。
+void setClientPreedit(fcitx::InputPanel &panel, const fcitx::Text &text) {
+    fcitx::Text shown;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        shown.append(text.stringAt(i), text.formatAt(i) | fcitx::TextFormatFlag::DontCommit);
+    }
+    shown.setCursor(text.cursor());
+    panel.setClientPreedit(shown);
+}
 
 std::string userConfigDir() {
     if (const char *config = std::getenv("XDG_CONFIG_HOME"); config && *config) {
@@ -341,9 +339,9 @@ class WowtypeCandidateWord final : public fcitx::CandidateWord {
 public:
     /// shown 是 shownCandidate 画好的样子。
     WowtypeCandidateWord(WowtypeEngine *engine, WowtypeState *state,
-                         std::size_t index, const std::string &shown)
+                         std::size_t index, fcitx::Text shown)
         : engine_(engine), state_(state), index_(index) {
-        setText(fcitx::Text(shown));
+        setText(std::move(shown));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -359,10 +357,9 @@ private:
 /// 展开面板的一行（一行里有好几个词）。
 class WowtypeGridRow final : public fcitx::CandidateWord {
 public:
-    WowtypeGridRow(WowtypeEngine *engine, WowtypeState *state, std::size_t row,
-                   const std::string &text)
+    WowtypeGridRow(WowtypeEngine *engine, WowtypeState *state, std::size_t row, fcitx::Text text)
         : engine_(engine), state_(state), row_(row) {
-        setText(fcitx::Text(text));
+        setText(std::move(text));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -465,11 +462,13 @@ struct WowtypeCandidate {
 
 namespace {
 
-/// 候选框里一个候选的样子：字（换行画成 ⏎），后面空一格是编码提示。fcitx5 5.0 的候选没有注释位，画在字后面。
-std::string shownCandidate(const WowtypeCandidate &candidate) {
-    std::string out = shownText(candidate.text);
+/// 候选框里一个候选的样子：字（换行画成 ⏎），后面空一格是斜体的编码提示，和字分得开。
+/// fcitx5 5.1.9 以前候选没有注释位，经典界面也只认粗体、斜体、下划线、删除线，画不了浅色，
+/// 斜体是各个版本都一样的那个。
+fcitx::Text shownCandidate(const WowtypeCandidate &candidate) {
+    fcitx::Text out(shownText(candidate.text));
     if (!candidate.comment.empty()) {
-        out += " " + candidate.comment;
+        out.append(" " + candidate.comment, fcitx::TextFormatFlag::Italic);
     }
     return out;
 }
@@ -1138,9 +1137,6 @@ bool WowtypeEngine::coreReady() {
         }
         if (core_) {
             applyCoreSettings();
-            if (!recent_.empty()) {
-                wowtype_engine_set_context(core_, recent_.c_str());
-            }
         }
     }
     return core_ != nullptr;
@@ -1180,24 +1176,9 @@ void WowtypeEngine::maybeSaveUserDict(bool force) {
     }
 }
 
-void WowtypeEngine::rememberContext(const std::string &text) {
-    recent_ = utf8Tail(recent_ + text, kContextBytes);
-    if (core_) {
-        wowtype_engine_set_context(core_, recent_.c_str());
-    }
-}
-
-void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text) {
-    if (!ic || text.empty()) {
-        return;
-    }
-    emit(ic, text);
-    rememberContext(text);
-}
-
 void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
                                  const WowtypeFrame *frame) {
-    // 会话已经清空编辑区、记过选词、补好了空格；这里上屏、记上文、攒着存用户词库
+    // 会话已经清空编辑区、记过选词和上文、补好了空格；这里上屏、攒着存用户词库
     const std::string text = frame && frame->commit ? frame->commit : "";
     const bool learned = frame && frame->learned;
     if (ic && !text.empty()) {
@@ -1212,9 +1193,6 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     state->forgetCandidates();
     if (state->composing()) {
         syncView(state);
-    }
-    if (learned || !text.empty()) {
-        rememberContext(text);
     }
     if (learned) {
         maybeSaveUserDict(false);
@@ -1231,7 +1209,6 @@ void WowtypeEngine::commitInput(fcitx::InputContext *ic, WowtypeState *state) {
 void WowtypeEngine::syncSession(WowtypeState *state) {
     wowtype_session_set_engine(state->session_, core_);
     wowtype_session_set_translator(state->session_, translator_);
-    // 上文由会话自己记（每个输入框一份），这里不再用全局的 recent_ 覆盖
     WowtypeSessionConfig config{};
     config.size = sizeof(config);
     config.page_size = static_cast<uint32_t>(pageSize_);
@@ -1282,36 +1259,40 @@ const WowtypeFrame *WowtypeEngine::sessionKey(fcitx::InputContext *ic, WowtypeSt
     if (ic && !translating(ic)) {
         hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE;
     }
-    // 密码框不联想
-    if (!ic || ic->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive)) {
-        hints |= WOWTYPE_KEY_HINT_SENSITIVE;
+    // 读得到周围文字时会话拿光标前的字核对自己记的上文（在应用里删过、改过就作废）
+    const auto prev = prevChar(ic);
+    if (prev) {
+        hints |= WOWTYPE_KEY_HINT_SURROUNDING;
     }
     const WowtypeFrame *frame =
         state->sessionKey(static_cast<uint32_t>(key.sym()), static_cast<uint32_t>(key.states()),
-                          action, prevChar(ic), hints, nowMs());
+                          action, prev.value_or(0), hints, nowMs());
     if (frame && frame->wake_after_ms > 0) {
         scheduleTick(ic, frame->wake_after_ms);
     }
     return frame;
 }
 
-uint32_t WowtypeEngine::prevChar(fcitx::InputContext *ic) const {
+std::optional<uint32_t> WowtypeEngine::prevChar(fcitx::InputContext *ic) const {
     // 应用报告了周围文字才知道光标前是什么；选中了文字时看选区前面那个字
     if (!ic || !ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText)) {
-        return 0;
+        return std::nullopt;
     }
     const auto &surrounding = ic->surroundingText();
     if (!surrounding.isValid()) {
-        return 0;
+        return std::nullopt;
     }
     const unsigned pos = std::min(surrounding.cursor(), surrounding.anchor());
     const std::string &before = surrounding.text();
-    if (pos == 0 || pos > fcitx::utf8::length(before)) {
+    if (pos > fcitx::utf8::length(before)) {
+        return std::nullopt;
+    }
+    if (pos == 0) {
         return 0;
     }
     const auto offset = fcitx::utf8::ncharByteLength(before.begin(), pos - 1);
     const uint32_t prev = fcitx::utf8::getChar(before.begin() + offset, before.end());
-    return fcitx::utf8::isValidChar(prev) ? prev : 0;
+    return fcitx::utf8::isValidChar(prev) ? std::optional<uint32_t>(prev) : std::nullopt;
 }
 
 uint32_t WowtypeEngine::keyAction(const fcitx::Key &key) const {
@@ -1351,7 +1332,6 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         return;
     }
     if (!state->composing()) {
-        // 收起了联想（Esc）、清空了编辑区：会话已经清好了，这里只清抄的候选
         state->forgetCandidates();
         updateInputPanel(ic, state);
         return;
@@ -1523,7 +1503,7 @@ void WowtypeEngine::sendPreedit(fcitx::InputContext *ic,
                                 const fcitx::Text &preedit) {
     auto &panel = ic->inputPanel();
     if (inlinePreedit(ic)) {
-        panel.setClientPreedit(preedit);
+        setClientPreedit(panel, preedit);
     } else {
         panel.setPreedit(preedit);
     }
@@ -1629,7 +1609,7 @@ void WowtypeEngine::fillPredictionPanel(fcitx::InputPanel &panel, WowtypeState *
     list->setPageSize(static_cast<int>(n));
     list->setSelectionKey(fcitx::Key::keyListFromString("1 2 3 4 5 6 7 8 9"));
     for (std::size_t i = 0; i < n; ++i) {
-        list->append<WowtypeCandidateWord>(this, state, i, state->candidates_[i].text);
+        list->append<WowtypeCandidateWord>(this, state, i, shownCandidate(state->candidates_[i]));
     }
     panel.setCandidateList(std::move(list));
 }
@@ -1658,26 +1638,24 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
         std::size_t widths[kGridCols] = {};
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
-                widths[c] = std::max(widths[c], displayWidth(shownCandidate(all[r * kGridCols + c])));
+                widths[c] = std::max(widths[c], displayWidth(shownCandidate(all[r * kGridCols + c]).toString()));
             }
         }
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
-            std::string line;
+            fcitx::Text line;
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
                 const std::size_t index = r * kGridCols + c;
                 const bool here = index == state->gridCursor_;
-                line += r == cursorRow ? kLabels[c] : "\u3000";
-                line += here ? "\u3014" : "\u3000";
-                line += shownCandidate(all[index]);
-                if (here) {
-                    line += "\u3015";
-                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
-                } else {
-                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
-                    line += "\u3000";
+                const fcitx::Text shown = shownCandidate(all[index]);
+                std::string after = here ? "\u3015" : "";
+                padTo(after, displayWidth(shown.toString()), widths[c]);
+                line.append(std::string(r == cursorRow ? kLabels[c] : "\u3000") + (here ? "\u3014" : "\u3000"));
+                for (std::size_t i = 0; i < shown.size(); ++i) {
+                    line.append(shown.stringAt(i), shown.formatAt(i));
                 }
+                line.append(after + (here ? "" : "\u3000"));
             }
-            list->append<WowtypeGridRow>(this, state, r, line);
+            list->append<WowtypeGridRow>(this, state, r, std::move(line));
         }
     }
     // 先翻到光标所在的那一屏（setGlobalCursorIndex 不翻页），下键走到第 7 行以后才看得到
@@ -1817,18 +1795,6 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    if (state->predicting()) {
-        // 联想开着：每个键都先交给会话（数字选、Esc 收起，别的键收起联想再照常处理：字母开始打字、
-        // 标点上屏）。会话不管的（空格、回车、退格、方向键、快捷键）收起候选框，照常交给应用
-        const WowtypeFrame *frame = sessionKey(ic, state, key);
-        const bool handled = frame && frame->handled;
-        applySessionFrame(ic, state, frame);
-        if (handled) {
-            event.filterAndAccept();
-        }
-        return;
-    }
-
     // 互译模式、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
     // 都由会话处理
     if (translating(ic) && !state->composing() && !key.states().testAny(fcitx::KeyStates{
@@ -1851,20 +1817,16 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
 
-    // 带 Ctrl/Alt/Super 的组合键交给应用或 fcitx 的其他处理器。打字途中的先问会话：
-    // Ctrl+Delete、Ctrl+退格忘掉光标处学错的词（会话不管的照旧交给应用）
-    if (state->composing() && (key.states().test(fcitx::KeyState::Ctrl) ||
-                               key.states().test(fcitx::KeyState::Alt) ||
-                               key.states().test(fcitx::KeyState::Super))) {
-        if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
-            applySessionFrame(ic, state, frame);
+    // 带 Ctrl/Alt/Super 的组合键先问会话：打字途中 Ctrl+Delete、Ctrl+退格忘掉光标处学错的词；
+    // 别的交给应用或 fcitx 的其他处理器（没在打字时会话借这一下知道应用里的字可能变了，联想也收起）
+    if (key.states().testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
+                                              fcitx::KeyState::Super})) {
+        const WowtypeFrame *frame = sessionKey(ic, state, key);
+        const bool handled = frame && frame->handled;
+        applySessionFrame(ic, state, frame);
+        if (handled) {
             event.filterAndAccept();
-            return;
         }
-    }
-    if (key.states().test(fcitx::KeyState::Ctrl) ||
-        key.states().test(fcitx::KeyState::Alt) ||
-        key.states().test(fcitx::KeyState::Super)) {
         return;
     }
 
@@ -1902,13 +1864,15 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     // 标点换成中文标点（半角样式、数字后面的、没有中文写法的 / + 交给应用）；
     // 汉字后面打数字要补空格时会话自己上屏（第5章）
     // （打字途中的键上面已经交给过会话了，会话不管的交给应用）
+    // 交给应用的键也照会话的 frame 重画：联想开着时（数字选、Esc 收起）别的键收起了它
     if (state->composing()) {
         return;
     }
-    if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
-        applySessionFrame(ic, state, frame);
+    const WowtypeFrame *frame = sessionKey(ic, state, key);
+    const bool handled = frame && frame->handled;
+    applySessionFrame(ic, state, frame);
+    if (handled) {
         event.filterAndAccept();
-        return;
     }
 }
 
@@ -1963,7 +1927,8 @@ void WowtypeEngine::maybeCheckUpdate() {
 void WowtypeEngine::deactivate(const fcitx::InputMethodEntry &entry,
                                fcitx::InputContextEvent &event) {
     // 打到一半切换输入法（比如按 Shift 切英文）：已选的词 + 原始字母原样上屏，
-    // 不要把用户打的东西吞掉。失去焦点时不上屏，免得送进别的窗口。
+    // 不要把用户打的东西吞掉。失去焦点时放弃（reset）：这时再上屏，Qt 会送进新拿到焦点的控件，
+    // XIM 的应用收不到；编辑区标了 DontCommit，工具包自己也不上屏。
     if (auto *ic = event.inputContext();
         ic && event.type() == fcitx::EventType::InputContextSwitchInputMethod) {
         auto *state = ic->propertyFor(&factory_);
@@ -1983,8 +1948,8 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     if (!ic) {
         return;
     }
-    // 原文和拼音一样只在输入法里：应用重置输入框（点了别处、失去焦点）就丢掉。
-    // 有的应用重置时会自己把预编辑的字上屏，留着会重复。
+    // 原文和拼音一样只在输入法里：应用重置输入框（点了别处、失去焦点）就丢掉，
+    // 会话记的上文也作废（回来时光标可能在别处）。编辑区标了 DontCommit，工具包不会自己上屏。
     auto *state = ic->propertyFor(&factory_);
     state->clear();
     clearTranslation(state);
@@ -1993,14 +1958,23 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
+const char *WowtypeEngine::modeTitle() const {
+    return translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
+}
+
+const char *WowtypeEngine::modeLabel() const {
+    return translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+}
+
 std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
                                    fcitx::InputContext & /*ic*/) {
-    return translateMode_ ? "互译" : asciiMode_ ? "英文" : "";
+    return modeTitle();
 }
 
 std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
                                             fcitx::InputContext & /*ic*/) {
-    return translateMode_ ? "译" : asciiMode_ ? "英" : "";
+    // 中文也要给：给空的话切回中文时提示框、托盘写的是输入法的名字「WowType」，和「英」「译」对不上
+    return modeLabel();
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
@@ -2095,7 +2069,6 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
     if (ascii && !asciiMode_ && ic && state && state->composing()) {
         // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
         commitInput(ic, state);
-        state->clear();
         updateInputPanel(ic, state);
     }
     asciiMode_ = ascii;
@@ -2103,14 +2076,13 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
     if (state) {
         syncMode(ic, state);
     }
-    const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
-    WLOG_I() << "WowType: 切到" << name;
+    WLOG_I() << "WowType: 切到" << modeTitle();
     if (!ic) {
         return;
     }
     if (notify) {
 #ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
-        std::string label = translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+        std::string label = modeLabel();
         if (translateMode_ && translator_) {
             label += " ";
             label += wowtype_translate_tag(translator_, "");
@@ -2236,9 +2208,15 @@ bool WowtypeEngine::pollVoice() {
         showVoice(ic, std::string("🎙 ") + kDots[(voiceFrame_++ / 3) % 5] + " ", text);
         return true;
     }
-    case WOWTYPE_VOICE_RESULT:
+    case WOWTYPE_VOICE_RESULT: {
         clearVoice(true);
-        commitPlain(ic, text);
+        // 和工具栏、表情面板上屏的一样交给会话：补空格、记上文，互译时进原文
+        auto *state = ic->propertyFor(&factory_);
+        coreReady();
+        syncSession(state);
+        finishCommit(ic, state,
+                     wowtype_session_commit_text(state->session_, text.c_str(),
+                                                 prevChar(ic).value_or(0)));
         // 上屏以后再复制，复制不成也不影响上屏；密码框里说的话不进剪贴板
         if (voiceCopy_ && !ic->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive) &&
             !wowtype::copyToClipboard(text)) {
@@ -2246,9 +2224,10 @@ bool WowtypeEngine::pollVoice() {
         }
         if (translating(ic)) {
             // 互译模式：说的话进了原文
-            updateInputPanel(ic, ic->propertyFor(&factory_));
+            updateInputPanel(ic, state);
         }
         return false;
+    }
     case WOWTYPE_VOICE_ERROR:
         WLOG_I() << "WowType: 语音 " << text;
         voiceErrorText_ = text;
@@ -2296,7 +2275,7 @@ void WowtypeEngine::showVoice(fcitx::InputContext *ic, const std::string &status
             fcitx::Text shown;
             shown.append(translated, fcitx::TextFormatFlag::Underline);
             shown.setCursor(static_cast<int>(shown.textLength()));
-            panel.setClientPreedit(shown);
+            setClientPreedit(panel, shown);
         }
     } else if (!partial.empty()) {
         fcitx::Text preedit;
@@ -2367,74 +2346,6 @@ std::string WowtypeEngine::translateKeyFile() const {
     return dir.empty() ? std::string() : dir + "/translate.key";
 }
 
-void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text, bool autoSpace) {
-    if (!ic || text.empty()) {
-        return;
-    }
-    if (!translating(ic)) {
-        ic->commitString(autoSpace && needsAutoSpace(ic, text) ? " " + text : text);
-        return;
-    }
-    // 互译：交给会话攒进原文（过一会儿、句末标点立刻发请求）
-    auto *state = ic->propertyFor(&factory_);
-    coreReady();
-    syncSession(state);
-    wowtype_session_commit_text(state->session_, text.c_str(), 0);
-    updateInputPanel(ic, state);
-}
-
-bool WowtypeEngine::needsAutoSpace(fcitx::InputContext *ic, const std::string &next) const {
-    if (!autoSpaceFlags_ || !ic || next.empty()) {
-        return false;
-    }
-    // 读不到光标前的文字就不猜；密码框、网址、邮箱输入框不动
-    const auto caps = ic->capabilityFlags();
-    if (!caps.test(fcitx::CapabilityFlag::SurroundingText) ||
-        caps.testAny(fcitx::CapabilityFlags{fcitx::CapabilityFlag::PasswordOrSensitive,
-                                            fcitx::CapabilityFlag::Url,
-                                            fcitx::CapabilityFlag::Email})) {
-        return false;
-    }
-    const auto &surrounding = ic->surroundingText();
-    if (!surrounding.isValid()) {
-        return false;
-    }
-    // 光标位置按字算；选中了文字时看选区前面那个字
-    const unsigned pos = std::min(surrounding.cursor(), surrounding.anchor());
-    const std::string &before = surrounding.text();
-    if (pos == 0 || pos > fcitx::utf8::length(before)) {
-        return false;
-    }
-    const auto offset = fcitx::utf8::ncharByteLength(before.begin(), pos - 1);
-    const uint32_t prev = fcitx::utf8::getChar(before.begin() + offset, before.end());
-    const uint32_t first = fcitx::utf8::getChar(next.begin(), next.end());
-    if (!fcitx::utf8::isValidChar(prev) || !fcitx::utf8::isValidChar(first)) {
-        return false;
-    }
-    return wowtype_autospace(static_cast<int>(prev), static_cast<int>(first), autoSpaceFlags_) == 1;
-}
-
-bool WowtypeEngine::autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key) {
-    if (!autoSpaceFlags_ || key.states().testAny(fcitx::KeyStates{
-                                fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
-                                fcitx::KeyState::Super})) {
-        return false;
-    }
-    const auto sym = key.sym();
-    const bool letter = (sym >= FcitxKey_a && sym <= FcitxKey_z) ||
-                        (sym >= FcitxKey_A && sym <= FcitxKey_Z);
-    const bool digit = sym >= FcitxKey_0 && sym <= FcitxKey_9;
-    if (!letter && !digit) {
-        return false;
-    }
-    const std::string text(1, static_cast<char>(sym));
-    if (!needsAutoSpace(ic, text)) {
-        return false;
-    }
-    ic->commitString(" " + text);
-    return true;
-}
-
 void WowtypeEngine::clearTranslation(WowtypeState *state) {
     // 丢掉攒着的原文、取消这个输入框的请求（会话做）
     wowtype_session_translate_clear(state->session_);
@@ -2486,7 +2397,6 @@ uint32_t WowtypeEngine::tickTranslate() {
     if (frame->commit) {
         // 按过回车，译好了：上屏译文（正在打的拼音留着，不清编辑区）
         ic->commitString(frame->commit);
-        rememberContext(frame->commit);
         translateDrawn_.clear();
         updateInputPanel(ic, state);
         return frame->wake_after_ms;
@@ -2541,7 +2451,7 @@ void WowtypeEngine::fillTranslateView(fcitx::InputContext *ic, WowtypeState *sta
         fcitx::Text text;
         text.append(shown, fcitx::TextFormatFlag::Underline);
         text.setCursor(static_cast<int>(text.textLength()));
-        panel.setClientPreedit(text);
+        setClientPreedit(panel, text);
     } else if (!shown.empty()) {
         // 应用不让把编辑区画在输入框里：译文写在候选框底下
         status = shown + (frame->translate_done ? "" : "…");
