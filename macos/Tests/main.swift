@@ -891,6 +891,7 @@ do {
     check(CustomWords(text: fresh.text).entries == [.init(code: "gs", word: "公司")], "新文件加词读回来")
     check(CustomWords.isValidWord("四川省\\n宜宾市") && !CustomWords.isValidWord("a\tb")
           && !CustomWords.isValidWord("a\nb") && !CustomWords.isValidWord(""), "词里不能有 TAB、换行")
+    check(CustomWords.shown("四川省\\n宜宾市") == "四川省⏎宜宾市", "界面上 \\n 画成 ⏎")
 
     for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
                           ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
@@ -982,6 +983,9 @@ do {
     check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
     check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
     check(Shortcut.emojiDefault.matches(.char(".", [.control, .command])) == false, "多按了 Command 不算")
+    let labels = ["Control+period", "Control+Shift+space", "Alt+x", "Control+Shift+E"].compactMap { Shortcut(name: $0)?.label }
+    check(labels == ["Control + .", "Control + Shift + 空格", "Option + X", "Control + Shift + E"],
+          "设置窗口里快捷键用 Mac 键盘上的叫法", "\(labels)")
 }
 
 withConfig({ _ in }) { c, client in

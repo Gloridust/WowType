@@ -1,16 +1,18 @@
 // IMK 输入控制器：每个输入框一个。按键翻译成 KeyInput 交给 Composer，Composer 通过 TextClient 回来写字。
 //
 // 类名要和 Info.plist 里的 InputMethodServerControllerClass 一样（WowTypeInputController）。
+// 不是 final：外壳测试（macos/ShellTests）用子类换掉 client()，给它一个假的输入框。
 
 import AppKit
 import Carbon
 import InputMethodKit
 
 @objc(WowTypeInputController)
-final class WowTypeInputController: IMKInputController {
+class WowTypeInputController: IMKInputController {
     private var composer: Composer!
-    /// 上一次给应用的编辑区，一样就不再发（每次上屏后 Composer 都会清一次编辑区）。
-    private var lastMarked = ""
+    /// 上一次给应用的编辑区和光标，一样就不再发（每次上屏后 Composer 都会清一次编辑区）。
+    /// 光标也要比：方向键移光标时字没变、光标变了
+    private var lastMarked = (text: "", cursor: 0)
     /// 最近上屏或交给应用的最后一个字。很多应用读不到光标前的字（attributedSubstring 返回 nil），用它兜底。
     private var lastInserted: UInt32 = 0
     private var lastFlags: UInt = 0
@@ -19,6 +21,9 @@ final class WowTypeInputController: IMKInputController {
     /// 互译：在等译文时每 50 毫秒取一次结果（主线程的 run loop 上，菜单打开时也走）
     private var translateTimer: Timer?
     static let translatePollInterval: TimeInterval = 0.05
+    /// 切中 / 英 / 译以后在光标下面亮一下的提示，到时间收起（和 Linux 上 fcitx5 的提示一样）
+    private var modeHintTimer: Timer?
+    static let modeHintDuration: TimeInterval = 1
 
     override init!(server: IMKServer!, delegate: Any!, client inputClient: Any!) {
         super.init(server: server, delegate: delegate, client: inputClient)
@@ -71,6 +76,15 @@ final class WowTypeInputController: IMKInputController {
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
         guard let event else { return false }
         syncComposer()
+        let mode = composer.mode
+        let handled = handleKey(event)
+        if composer.mode != mode {
+            showModeHint()
+        }
+        return handled
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
         switch event.type {
         case .flagsChanged:
             VoiceInput.shared.flagsChanged(keyCode: event.keyCode, rawFlags: event.modifierFlags.rawValue,
@@ -117,7 +131,7 @@ final class WowTypeInputController: IMKInputController {
         let isShiftKey = event.keyCode == VirtualKey.shiftLeft || event.keyCode == VirtualKey.shiftRight
         if isShiftKey && changed & shiftMask != 0 {
             composer.shiftChanged(down: flags & shiftMask != 0, otherModifiers: flags & others != 0,
-                                  now: event.timestamp, right: event.keyCode == VirtualKey.shiftRight)
+                                  now: composer.clock(), right: event.keyCode == VirtualKey.shiftRight)
         } else {
             composer.otherModifierChanged()
         }
@@ -125,7 +139,7 @@ final class WowTypeInputController: IMKInputController {
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
-        lastMarked = ""
+        lastMarked = ("", 0)
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
         syncComposer(force: true)
@@ -137,7 +151,7 @@ final class WowTypeInputController: IMKInputController {
         VoiceInput.shared.cancel(for: self)
         composer.commitComposition()
         stopTranslatePolling()
-        AppState.shared.candidatePanel.hide()
+        showCandidates(nil)
         AppState.shared.save()
         super.deactivateServer(sender)
     }
@@ -199,15 +213,15 @@ extension WowTypeInputController: TextClient {
     func insertText(_ text: String) {
         guard let client = textInput else { return }
         client.insertText(text, replacementRange: noRange())
-        lastMarked = ""
+        lastMarked = ("", 0)
         if let last = text.unicodeScalars.last {
             lastInserted = last.value
         }
     }
 
     func setMarkedText(_ text: String, cursor: Int) {
-        guard let client = textInput, text != lastMarked else { return }
-        lastMarked = text
+        guard let client = textInput, (text, cursor) != lastMarked else { return }
+        lastMarked = (text, cursor)
         let attributed = NSMutableAttributedString(string: text)
         let whole = NSRange(location: 0, length: attributed.length)
         if attributed.length > 0,
@@ -219,6 +233,8 @@ extension WowTypeInputController: TextClient {
     }
 
     func showCandidates(_ page: CandidatePage?) {
+        modeHintTimer?.invalidate()
+        modeHintTimer = nil
         let panel = AppState.shared.candidatePanel
         guard let page, let client = textInput else {
             panel.hide()
@@ -227,6 +243,24 @@ extension WowTypeInputController: TextClient {
         var line = NSRect.zero
         client.attributes(forCharacterIndex: 0, lineHeightRectangle: &line)
         panel.show(page, below: line)
+    }
+
+    /// 切到中 / 英 / 译以后在光标下面亮一下「中」「英」「译 中→英」，过一会儿收起；还有没上屏的字时不画
+    /// （候选框正画着它们）。
+    private func showModeHint() {
+        guard !composer.hasPendingText else { return }
+        let label: String
+        switch composer.mode {
+        case .chinese: label = "中"
+        case .english: label = "英"
+        case .translate: label = ["译", AppState.shared.translator?.tag(for: "") ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        showCandidates(CandidatePage(texts: [], cursor: -1, hasPrev: false, hasNext: false, expanded: false, aux: label))
+        let timer = Timer(timeInterval: Self.modeHintDuration, repeats: false) { [weak self] _ in
+            self?.showCandidates(nil)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        modeHintTimer = timer
     }
 
     /// 应用告诉的光标前一个字；读不到是 nil。打字途中光标在编辑区里，要看编辑区前面那个字。

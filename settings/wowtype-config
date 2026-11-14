@@ -2083,9 +2083,8 @@ LOCAL_MODEL_SHA256 = os.environ.get("WOWTYPE_LOCAL_MODEL_SHA256") or (
 LOCAL_MODEL_SIZE = 1133080512
 LOCAL_MODEL_PAGE = "https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF"
 LOCAL_MODEL_LICENSE = LOCAL_MODEL_PAGE + "/blob/main/License.txt"
-LOCAL_MODEL_TERMS = ("HY-MT 用的是《腾讯混元社区许可协议》：不适用于欧盟、英国和韩国境内，"
-                     "月活超过 1 亿的产品要另外向腾讯申请。模型文件从 Hugging Face 下载，"
-                     "WowType 不分发它。")
+LOCAL_MODEL_TERMS = ("模型属于腾讯，用的是《腾讯混元社区许可协议》：不适用于欧盟、英国和韩国境内，"
+                     "月活超过 1 亿的产品要另外向腾讯申请。模型从 Hugging Face 下载，WowType 不分发它。")
 MODELS_DIR = os.path.join(DATA_DIR, "models")
 
 
@@ -2494,7 +2493,8 @@ VOICE_MODEL_DISK = 130 * 1000 * 1000
 # 语音包（.apk 其实是 zip）里套着的模型包，只要里面的 *.xnet 和词表
 VOICE_MODEL_INNER = "ime_asr_decoder_model.zip"
 VOICE_MODEL_DICT = "dict.decoder.utf8.txt"
-VOICE_MODEL_NOTE = "语音模型是微信输入法的离线语音包，属于腾讯，从腾讯的服务器下载，WowType 不分发它。"
+VOICE_MODEL_NOTE = ("语音模型是微信输入法的离线语音包，属于腾讯，从腾讯的服务器下载，WowType 不分发它；"
+                    "和这台电脑装没装微信输入法无关。")
 
 
 def voice_model_ready(folder=None):
@@ -3701,7 +3701,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.toolbar_row = self.make_switch("Toolbar", "工具栏", None)
         extras.add(self.toolbar_row)
         clipboard = self.make_switch("ClipboardHistory", "记录剪贴板历史", "复制的密码也可能被记下")
-        self.add_info(clipboard, "给工具栏里的「剪贴板」用，最多记 20 条，重启输入法就清空。"
+        self.add_info(clipboard, "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
                                  "复制过的密码也会被记下并显示出来。")
         extras.add(clipboard)
         self.select_names = [name for _, name in SELECT_KEYS]
@@ -3717,8 +3717,8 @@ class SettingsWindow(Adw.ApplicationWindow):
         extras.add(self.make_switch("PickChar", "以词定字", "按 [ 取第一个字，按 ] 取最后一个字"))
         auto_space = Adw.ExpanderRow(
             title="中英文之间自动加空格", subtitle="第5章 → 第 5 章", show_enable_switch=True)
-        self.add_info(auto_space, "你好Linux → 你好 Linux。终端等少数程序里不起作用，"
-                                  "密码、网址、邮箱输入框不加。")
+        self.add_info(auto_space, "你好Linux → 你好 Linux。只在程序告诉输入法光标前是什么字时加，"
+                                  "有些程序（比如终端）里不起作用；密码、网址、邮箱输入框不加。")
         auto_space.set_enable_expansion(self.values["AutoSpace"] == "True")
         auto_space.connect("notify::enable-expansion", lambda r, _p: self.set_value(
             "AutoSpace", "True" if r.get_enable_expansion() else "False"))
@@ -3739,6 +3739,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.calc_row.set_subtitle(f"{name}时打大写 V：V1+2*3 → 7" if name else "v1+2*3 → 7")
         self.toolbar_row.set_sensitive(not name)
         self.toolbar_row.set_subtitle(f"{name}时不可用" if name else "打 v 再按空格：剪贴板、常用语、符号、表情")
+        # 用不了时显示成关着（不改设置，换回全拼还是原来的），和语音开关没模型时一样
+        self.quiet_switch = True
+        self.toolbar_row.set_active(not name and self.values["Toolbar"] == "True")
+        self.quiet_switch = False
 
     def on_scheme_toggled(self, check, scheme):
         if check.get_active():
@@ -4144,7 +4148,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.voice_row.set_active(ready and self.values["Voice"] == "True")
         self.quiet_switch = False
         self.voice_row.set_sensitive(ready)
-        self.voice_row.set_subtitle("在本机识别，不联网" if ready else "先在下面下载语音模型")
+        self.voice_row.set_subtitle("" if ready else "先在下面下载语音模型")
 
     def on_voice_download(self, _button):
         if self.voice_cancel is not None:
@@ -4183,7 +4187,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.voice_cancel = None
         if error == "":
             log("语音模型下载暂停了")
-            self.toast("已取消，再点下载会接着下")
+            self.toast("已暂停，再点下载会接着下")
         elif error:
             log(f"语音模型没下载好：{error}")
             self.voice_error = error
@@ -4193,7 +4197,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             log("语音模型下载好了，打开语音输入")
             self.values["Voice"] = "True"
             self.save_config()
-            self.toast("语音模型下载好了，语音输入已打开")
+            key = self.values["VoiceKey"]
+            self.toast(f"语音模型下载好了，按住{dict((n, l) for l, n in VOICE_KEYS).get(key, key)} 说话")
         self.refresh_voice_model()
         return GLib.SOURCE_REMOVE
 
@@ -4214,7 +4219,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.values["Voice"] = "False"
             self.save_config()
             self.voice_error = None
-            self.toast(f"已删除，空出 {human_size(freed)}；语音输入已关闭")
+            self.toast(f"已删除语音模型，空出 {human_size(freed)}，语音输入已关闭")
             self.refresh_voice_model()
         dialog.connect("response", answered)
         dialog.present(self)
@@ -4309,7 +4314,8 @@ class SettingsWindow(Adw.ApplicationWindow):
     def build_local_translate(self):
         group = Adw.PreferencesGroup(title="离线翻译模型")
         group.set_header_suffix(self.info_button(
-            "腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。\n\n"
+            "腾讯混元的翻译模型 HY-MT。翻译时占 1.5 GB 左右内存，一会儿不用就自动释放。"
+            "找不到 llama-server 时一起下载 llama.cpp 官方的（MIT 许可）。\n\n"
             + LOCAL_MODEL_TERMS, [("许可协议全文", LOCAL_MODEL_LICENSE)]))
         self.local_model_row = Adw.ActionRow(title="翻译模型")
         self.local_download = Gtk.Button(label="下载", valign=Gtk.Align.CENTER)
@@ -4328,7 +4334,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         # 一般用不着的放进折叠项
         more = Adw.ExpanderRow(title="更多选项")
         idle = SpinRow.new_with_range(*RANGES["TranslateIdleMinutes"], 1)
-        idle.set_title("不用几分钟后释放内存")
+        idle.set_title("闲置几分钟后释放内存")
         idle.set_subtitle("0 表示一直留着")
         try:
             idle.set_value(int(self.values["TranslateIdleMinutes"]))
@@ -4771,13 +4777,15 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.pinyin_edited = False
         self.update_add_button()
         self.word_entry.grab_focus()
-        self.toast(f"已更新「{word}」" if replaced else f"已添加「{word}」，打 {pinyin.replace(' ', '')} 试试")
+        shown = word.replace("\\n", "⏎")
+        self.toast(f"已更新「{shown}」" if replaced else f"已添加「{shown}」，打 {pinyin.replace(' ', '')} 试试")
 
     def remove_word(self, word):
         removed = [(p, w) for p, w in self.words if w == word]
         self.words = [(p, w) for p, w in self.words if w != word]
         self.save_words()
-        toast = Adw.Toast(title=GLib.markup_escape_text(f"已删除「{word}」"), button_label="撤销")
+        shown = word.replace("\\n", "⏎")
+        toast = Adw.Toast(title=GLib.markup_escape_text(f"已删除「{shown}」"), button_label="撤销")
 
         def undo(_toast):
             self.words += removed

@@ -286,7 +286,7 @@ private struct InputPage: View {
                     if (model.wanxiangVersion == nil || model.wanxiangUpdate != nil) && !noAsset {
                         Button(model.wanxiangVersion == nil ? "下载" : "更新") { model.installWanxiang() }
                     }
-                    IconButton(symbol: "folder", help: "从文件安装") { model.chooseWanxiangFile() }
+                    IconButton(symbol: "folder", help: "从文件安装（wowtype-data-wanxiang-*.tar.gz）") { model.chooseWanxiangFile() }
                     if model.wanxiangVersion != nil && model.lexiconKind != .wanxiang {
                         IconButton(symbol: "trash", help: "删除万象拼音") { model.removeWanxiang() }
                     }
@@ -361,7 +361,7 @@ private struct InputPage: View {
             SwitchRow(title: "繁体字", isOn: $model.config.traditional)
             RowDivider()
             SwitchRow(title: "更多生僻字", subtitle: "要装能显示它们的字体，比如花园明朝",
-                      info: "候选里也列出极少用的生僻字。系统自带的字体有些显示不了，会是方块。",
+                      info: "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。",
                       isOn: $model.config.rareExtChars)
             RowDivider()
             PickerRow(title: "标点样式", info: "数字后面的符号总是半角的，比如 3.14。",
@@ -376,11 +376,13 @@ private struct InputPage: View {
             RowDivider()
             SwitchRow(title: "工具栏",
                       subtitle: schemeName.map { "\($0)时不可用" } ?? "打 v 再按空格：剪贴板、常用语、符号、表情",
-                      isOn: $model.config.toolbar)
+                      // 双拼、五笔时用不了：显示成关着（不改设置，换回全拼还是原来的）
+                      isOn: Binding(get: { schemeName == nil && model.config.toolbar },
+                                    set: { model.config.toolbar = $0 }))
                 .disabled(schemeName != nil)
             RowDivider()
             SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
-                      info: "给工具栏里的「剪贴板」用，最多记 20 条，切走输入法就清空。"
+                      info: "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
                           + "密码管理器标了「不要记」的不记，没标的密码会被记下并显示出来。",
                       isOn: $model.config.clipboardHistory)
             RowDivider()
@@ -391,7 +393,7 @@ private struct InputPage: View {
             SwitchRow(title: "以词定字", subtitle: "按 [ 取第一个字，按 ] 取最后一个字", isOn: $model.config.pickChar)
             RowDivider()
             ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
-                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
+                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序（比如终端）里不起作用。",
                         enabled: $model.config.autoSpace) {
                 SwitchRow(title: "汉字和英文字母之间", isOn: $model.config.autoSpaceLetters)
                 RowDivider()
@@ -407,10 +409,8 @@ private struct InputPage: View {
     }
 
     private var toggleKeyOptions: [(String, String)] {
-        let options = [("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
-                       ("Control + Shift + 空格", "Control+Shift+space")]
-        let current = toggleKey.wrappedValue
-        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+        shortcutOptions([("不用（单按 Shift 照常）", "")] + shortcuts(["Control+space", "Control+Shift+space"]),
+                        current: toggleKey.wrappedValue)
     }
 
     /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
@@ -477,11 +477,19 @@ private struct EmojiPage: View {
     }
 
     private var emojiKeyOptions: [(String, String)] {
-        let options = [("Control + .", "Control+period"), ("Control + ;", "Control+semicolon"),
-                       ("Control + Shift + E", "Control+Shift+E"), ("不用快捷键", "")]
-        let current = emojiKey.wrappedValue
-        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+        shortcutOptions(shortcuts(["Control+period", "Control+semicolon", "Control+Shift+E"]) + [("不用快捷键", "")],
+                        current: emojiKey.wrappedValue)
     }
+}
+
+/// 快捷键（键名同 wowtype.conf）配上 Mac 键盘上的叫法：Control + .、Option + X
+private func shortcuts(_ names: [String]) -> [(String, String)] {
+    names.map { (Shortcut(name: $0)?.label ?? $0, $0) }
+}
+
+/// 设置文件里写的不是预设的快捷键：加一项「其他（Option + X）」
+private func shortcutOptions(_ options: [(String, String)], current: String) -> [(String, String)] {
+    options.contains { $0.1 == current } ? options : options + [("其他（\(shortcuts([current])[0].0)）", current)]
 }
 
 // MARK: 语音
@@ -791,7 +799,7 @@ private struct WordRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.word.replacingOccurrences(of: "\\n", with: "⏎"))
+                Text(CustomWords.shown(entry.word))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(entry.code)
