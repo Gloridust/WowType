@@ -185,9 +185,9 @@ pub unsafe extern "C" fn wowtype_engine_input(
     }
 }
 
-/// 基于上一词的预测（预测词库）。
+/// 联想（[`Engine::predict`]）：光标前是 prev_word（刚上屏的字）时接下来可能打的词。
 ///
-/// 成功返回候选集合句柄（text 是预测词，score 是对数概率），
+/// 成功返回候选集合句柄（text 是联想的词，score 越大越可能），没把握时是空的；
 /// 失败返回 NULL；结果同样用 wowtype_candidates_free 释放。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_predict_next(
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn wowtype_engine_predict_next(
             set_last_error("prev_word is null or not utf8");
             return ptr::null_mut();
         };
-        let items = unsafe { &*engine }.engine.predict_next(prev, limit);
+        let items = unsafe { &*engine }.engine.predict(prev, limit);
         let mut texts = Vec::with_capacity(items.len());
         let mut scores = Vec::with_capacity(items.len());
         for (word, score) in items {

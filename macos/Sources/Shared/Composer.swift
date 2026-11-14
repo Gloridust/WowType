@@ -341,6 +341,18 @@ public final class Composer {
         wowtype_session_remaining(session).map { String(cString: $0) } ?? ""
     }
 
+    /// 联想开着（设置里的「联想」）：选词上屏以后候选框里是接下来可能打的词，编辑区是空的。
+    public var isPredicting: Bool {
+        wowtype_session_frame(session)?.pointee.panel == WOWTYPE_PANEL_PREDICTION
+    }
+
+    /// 收起联想（语音输入开始、按了翻不出来的键）。
+    public func dismissPrediction() {
+        if isPredicting {
+            apply(wowtype_session_reset(session, 0))
+        }
+    }
+
     /// 输入法手里还有没上屏的字：正在打的拼音，或者互译攒着的原文。
     public var hasPendingText: Bool {
         isComposing || !translateSource.isEmpty
@@ -503,6 +515,7 @@ public final class Composer {
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
+        config.prediction = settings.prediction ? 1 : 0
         config.punct_style = settings.halfwidthPunct ? 1 : 0
         config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
         switch settings.shiftToggle {
@@ -519,9 +532,10 @@ public final class Composer {
         config.wubi = settings.wubi ? 1 : 0
         config.wubi_auto_commit = settings.wubiAutoCommit ? 1 : 0
         config.wubi_hint = settings.wubiHint ? 1 : 0
+        let wasPredicting = isPredicting
         wowtype_session_configure(session, &config)
-        if isComposing {
-            refresh()
+        if isComposing || wasPredicting {
+            refresh() // 改了设置会话收起联想：候选框跟着收
         }
     }
 
@@ -549,9 +563,8 @@ public final class Composer {
         if sendToSession(key) {
             return true
         }
-        // 会话不管的键（标点、符号也是会话处理：先上屏候选再上屏标点）。展开面板里按了这种键，
-        // 会话已经把面板收起来了，先重画；其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
-        refresh()
+        // 会话不管的键（标点、符号也是会话处理：先上屏候选再上屏标点）：其他功能键（Tab、Home 等）
+        // 打字途中吃掉，免得光标跑到别处
         return true
     }
 
@@ -576,6 +589,10 @@ public final class Composer {
             // 密码框（安全输入）：「译」里也照常上屏、不往外发，进出「译」的键进不去
             raw.hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE
         }
+        if client?.allowsTranslation == false {
+            // 密码框（安全输入）：不补空格、不联想
+            raw.hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE
+        }
         if translating {
             // 互译时上屏的字进原文：光标前的字是原文的最后一个字（3.14 的点、20:22 的冒号原样进原文），不补空格
             raw.prev_char = previousCharacter
@@ -591,10 +608,10 @@ public final class Composer {
         guard let frame = wowtype_session_key(session, &raw) else {
             return false
         }
+        // 会话不管的键也照 frame 重画：展开面板里按了这种键面板已经收起，联想开着时别的键收起了它。
+        // 先读 handled：重画时再取 frame 会把它盖掉
         let handled = frame.pointee.handled != 0
-        if handled {
-            apply(frame)
-        }
+        apply(frame)
         return handled
     }
 
@@ -637,8 +654,9 @@ public final class Composer {
             refreshTranslate(all)
             return
         }
-        let frame = isComposing ? wowtype_session_frame(session) : nil
-        guard let frame else {
+        // 打字时，或者联想时（编辑区是空的，候选框里是联想的词）
+        let frame = wowtype_session_frame(session)
+        guard let frame, isComposing || frame.pointee.panel == WOWTYPE_PANEL_PREDICTION else {
             client?.setMarkedText("", cursor: 0)
             client?.showCandidates(nil)
             return

@@ -490,4 +490,13 @@ private func contextTests() {
         type(c, "ma")
         check(texts.first == "吗", "\(which)：退格以后上文作废，ma 第一个是吗", "\(texts.prefix(3))（上屏不以后是 \(after ?? "")）")
     }
+
+    do {
+        // 联想：上屏以后候选框里是联想的词、编辑区空；空格交给应用并收起，不上屏联想的词
+        let (c, f) = session(["Prediction": "True"])
+        type(c, "xiexie")
+        press(c, .space)
+        check(f.text == "谢谢" && f.markedText.isEmpty && !texts.isEmpty, "联想：谢谢后面给出联想的词", "\(texts)")
+        check(!press(c, .space) && f.text == "谢谢 " && panel == nil, "联想：空格交给应用、收起", "「\(f.text)」")
+    }
 }

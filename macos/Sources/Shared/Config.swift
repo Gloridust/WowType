@@ -110,6 +110,8 @@ public struct WowtypeConfig: Equatable {
     public var halfwidthPunct = false
     public var selectKeys = SelectKeys.off
     public var pickChar = true
+    /// 联想：选词上屏后给出接下来可能打的词（#89）。默认关：汉字后面直接打数字会选成联想的词
+    public var prediction = false
     public var dateTime = true
     public var calculator = true
     public var emojiSuggest = true
@@ -260,7 +262,7 @@ public struct WowtypeConfig: Equatable {
     /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
     public static let keys = [
         "CandidateLayout", "ArrowKeys", "PageSize", "CandidateFontSize",
-        "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
+        "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar", "Prediction",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
         "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong", "FuzzyEngOng",
@@ -285,7 +287,7 @@ public struct WowtypeConfig: Equatable {
         "FuzzyUnIong": \.fuzzyUnIong, "FuzzyEngOng": \.fuzzyEngOng,
         "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
         "ShuangpinShowKeys": \.shuangpinShowKeys, "WubiAutoCommit": \.wubiAutoCommit, "WubiHint": \.wubiHint,
-        "Traditional": \.traditional, "PickChar": \.pickChar,
+        "Traditional": \.traditional, "PickChar": \.pickChar, "Prediction": \.prediction,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
         "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory, "Voice": \.voice, "VoiceCopy": \.voiceCopy,
@@ -498,6 +500,8 @@ public struct WowtypeConfig: Equatable {
         SelectKeys=Off
         # 以词定字：打拼音时 [ 上屏候选的第一个字、] 最后一个字
         PickChar=\(b(d.pickChar))
+        # 联想：上屏后给出接下来可能打的词，按数字键选；空格、回车、退格照常输入
+        Prediction=\(b(d.prediction))
 
         # 模糊音总开关，打开后下面各组分别生效
         Fuzzy=\(b(d.fuzzy))

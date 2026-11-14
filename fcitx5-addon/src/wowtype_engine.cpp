@@ -506,6 +506,12 @@ public:
     std::string selectedText() const { return wowtype_session_selected_text(session_); }
     bool hasSelections() const { return !selectedText().empty(); }
     bool composing() const { return *wowtype_session_input(session_) != '\0'; }
+    /// 联想开着（设置里的「联想」）：选词上屏以后候选框里是接下来可能打的词，编辑区是空的。
+    /// 读的是会话现在的 frame：别在拿到一个 frame、还没用完它的时候调。
+    bool predicting() const {
+        const WowtypeFrame *frame = wowtype_session_frame(session_);
+        return frame && frame->panel == WOWTYPE_PANEL_PREDICTION;
+    }
     /// 交给会话处理一个按下的键（keysym 为 0 时只有动作）。先用 WowtypeEngine::sessionKey
     /// 同步引擎和设置。返回的 frame 归会话，下一次调会话前有效。
     /// prev_char：应用里光标前一个字（读不到给 0）；hints：WOWTYPE_KEY_HINT_*。
@@ -522,6 +528,7 @@ public:
         raw.hints = hints;
         return wowtype_session_key(session_, &raw);
     }
+    /// 清空编辑区（也收起联想）。
     void clear() {
         wowtype_session_reset(session_, 0);
         forgetCandidates();
@@ -877,6 +884,7 @@ void WowtypeEngine::applyConfig() {
                                             : WowtypeSelectKeys::Off;
     }
     pickChar_ = envOr("WOWTYPE_PICK_CHAR", *config_.pickChar);
+    prediction_ = *config_.prediction;
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
@@ -1186,8 +1194,8 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     if (learned && core_ && !text.empty()) {
         ++unsavedCommits_;
     }
-    // 会话上屏时已经清好了它上屏的那部分，这里从不 reset 会话（reset 会把还在打的丢掉）：只丢掉抄的候选，
-    // 会话还在打字就重新抄（五笔顶字：首选上屏，新打的字母开始下一个码；离开「译」：拼音留着接着打）
+    // 会话上屏时已经清好了它上屏的那部分，这里从不 reset 会话：选词上屏以后可能接着在联想，
+    // 五笔顶字（首选上屏，新打的字母开始下一个码）、离开「译」时留着的拼音还在打。只丢掉抄的候选，还在打字就重新抄
     state->forgetCandidates();
     if (state->composing()) {
         syncView(state);
@@ -1225,6 +1233,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                              ? WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE
                              : WOWTYPE_SELECT_KEYS_OFF;
     config.pick_char = pickChar_ ? 1 : 0;
+    config.prediction = prediction_ ? 1 : 0;
     config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
     config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
     config.shift_toggle = shiftToggle_ == WowtypeShiftToggle::Left    ? WOWTYPE_SHIFT_TOGGLE_LEFT
@@ -1385,10 +1394,10 @@ void WowtypeEngine::refreshCandidates(WowtypeState *state) {
     state->panelPage_ = 0;
     state->panelCursor_ = 0;
     const bool panelOpen = state->panel() != WOWTYPE_TOOL_NONE;
-    if (!panelOpen && (state->remaining().empty() || !coreReady())) {
+    if (!panelOpen && (state->remaining().empty() || !coreReady()) && !state->predicting()) {
         return;
     }
-    // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间，或者开着的工具栏 / 表情面板的条目）由会话算，
+    // 候选（引擎候选 + 计算器、emoji 推荐、数字按键 emoji、日期时间，或者开着的工具栏 / 表情面板的条目、联想的词）由会话算，
     // fcitx5 的候选框要整个列表，抄一份过来；点候选按这份拷贝的序号调会话
     syncSession(state);
     WowtypeSessionView view{};
@@ -1539,6 +1548,9 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
     if (!state->composing()) {
         if (translate) {
             fillTranslateView(ic, state, panel);
+        } else if (state->predicting()) {
+            syncView(state);
+            fillPredictionPanel(panel, state);
         }
         ic->updatePreedit();
         ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
@@ -1589,6 +1601,24 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
 
     ic->updatePreedit();
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+}
+
+/// 联想：上屏以后接着给的词，和普通候选一样横排或竖排、数字键选，但不画光标（空格不选它），
+/// 编辑区是空的，候选框跟着应用里的光标。
+void WowtypeEngine::fillPredictionPanel(fcitx::InputPanel &panel, WowtypeState *state) {
+    const std::size_t n = state->candidates_.size();
+    if (n == 0) {
+        return;
+    }
+    auto list = std::make_unique<fcitx::CommonCandidateList>();
+    list->setLayoutHint(horizontal_ ? fcitx::CandidateLayoutHint::Horizontal
+                                    : fcitx::CandidateLayoutHint::Vertical);
+    list->setPageSize(static_cast<int>(n));
+    list->setSelectionKey(fcitx::Key::keyListFromString("1 2 3 4 5 6 7 8 9"));
+    for (std::size_t i = 0; i < n; ++i) {
+        list->append<WowtypeCandidateWord>(this, state, i, shownCandidate(state->candidates_[i]));
+    }
+    panel.setCandidateList(std::move(list));
 }
 
 /// 展开的候选面板：竖排列表的每一项是一行（kGridCols 个词），一屏 kGridRows 行。
@@ -1796,11 +1826,13 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     }
 
     // 带 Ctrl/Alt/Super 的组合键先问会话：打字途中 Ctrl+Delete、Ctrl+退格忘掉光标处学错的词；
-    // 别的交给应用或 fcitx 的其他处理器（没在打字时会话借这一下知道应用里的字可能变了）
+    // 别的交给应用或 fcitx 的其他处理器（没在打字时会话借这一下知道应用里的字可能变了，联想也收起）
     if (key.states().testAny(fcitx::KeyStates{fcitx::KeyState::Ctrl, fcitx::KeyState::Alt,
                                               fcitx::KeyState::Super})) {
-        if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
-            applySessionFrame(ic, state, frame);
+        const WowtypeFrame *frame = sessionKey(ic, state, key);
+        const bool handled = frame && frame->handled;
+        applySessionFrame(ic, state, frame);
+        if (handled) {
             event.filterAndAccept();
         }
         return;
@@ -1840,13 +1872,15 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     // 标点换成中文标点（半角样式、数字后面的、没有中文写法的 / + 交给应用）；
     // 汉字后面打数字要补空格时会话自己上屏（第5章）
     // （打字途中的键上面已经交给过会话了，会话不管的交给应用）
+    // 交给应用的键也照会话的 frame 重画：联想开着时（数字选、Esc 收起）别的键收起了它
     if (state->composing()) {
         return;
     }
-    if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
-        applySessionFrame(ic, state, frame);
+    const WowtypeFrame *frame = sessionKey(ic, state, key);
+    const bool handled = frame && frame->handled;
+    applySessionFrame(ic, state, frame);
+    if (handled) {
         event.filterAndAccept();
-        return;
     }
 }
 
@@ -1997,11 +2031,15 @@ void WowtypeEngine::followSessionMode(fcitx::InputContext *ic, WowtypeState *sta
     // 打到一半切英文：已选的词 + 打的字母原样上屏；离开「译」：原文原样上屏、拼音留着（会话已经放进 frame）
     const int mode = frame->mode;
     const bool committed = frame->commit != nullptr;
+    // 没在打字时画着候选（联想）：切模式时会话收起了它，跟着重画
+    const bool hadCandidates = !state->candidates_.empty();
     if (committed) {
         finishCommit(ic, state, frame);
+    } else if (!state->composing()) {
+        state->forgetCandidates();
     }
     switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
-    if (committed || state->composing()) {
+    if (committed || state->composing() || hadCandidates) {
         // 换好模式再画：离开「译」以后留着的拼音照普通的编辑区画，不再画成互译的原文框；
         // 带进「译」的拼音画成原文框
         updateInputPanel(ic, state);
@@ -2104,6 +2142,11 @@ bool WowtypeEngine::handleVoiceKey(fcitx::InputContext *ic, WowtypeState *state,
         }
         voiceKeyDown_ = true;
         event.filterAndAccept();
+        if (state->predicting()) {
+            // 候选框要画语音的提示：联想收起，免得数字键选到看不见的词
+            state->clear();
+            updateInputPanel(ic, state);
+        }
         if (!voiceActive()) {
             voiceIc_ = ic->watch();
             voiceShowing_ = true;

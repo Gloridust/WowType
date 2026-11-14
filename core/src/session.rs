@@ -125,7 +125,7 @@ pub struct Key {
 
 /// 外壳告诉会话的输入框情况（[`Key::hints`]）。
 pub mod key_hints {
-    /// 密码框、网址框、邮箱框：不自动补空格。
+    /// 密码框、网址框、邮箱框：不自动补空格、不联想。
     pub const NO_AUTO_SPACE: u32 = 1 << 0;
     /// 外壳开着自己的面板（表情面板、工具栏）：这时按 Shift 不切中英文。
     pub const PANEL_OPEN: u32 = 1 << 1;
@@ -369,6 +369,9 @@ pub enum Panel {
     Emoji,
     /// v + 空格的工具栏（菜单、剪贴板、常用语）：竖排一列，一页 [`TOOL_PAGE`] 个。
     Tool,
+    /// 联想（[`Config::prediction`]）：上屏以后接着给的词，编辑区是空的，没有光标（空格不选它），
+    /// 数字键选。别的键收起联想、照常处理（会话不管的照常交给应用）。
+    Prediction,
 }
 
 /// 工具栏一页几个。
@@ -498,6 +501,8 @@ pub struct Config {
     pub wubi_auto_commit: bool,
     /// 五笔的逐码提示（以打的码开头的更长的码的词）后面显示还要打的码。
     pub wubi_hint: bool,
+    /// 联想（#89）：选词上屏以后接着给出可能的下一个词，数字键选，选了接着联想。
+    pub prediction: bool,
 }
 
 impl Default for Config {
@@ -524,6 +529,7 @@ impl Default for Config {
             wubi: false,
             wubi_auto_commit: true,
             wubi_hint: true,
+            prediction: false,
         }
     }
 }
@@ -635,6 +641,11 @@ pub struct Session<'e> {
     translation: Translation,
     /// 开着的工具栏 / 表情面板；None 是没开。
     tool: Option<ToolState>,
+    /// 联想给出的词（[`Panel::Prediction`]）；空的是没在联想。和候选框显示的一一对应：
+    /// 收起候选框的地方都要清掉，不然数字键会选到看不见的词。
+    predictions: Vec<Candidate>,
+    /// 这次调用选词上屏了，frame 里接着联想（之后又上屏了标点之类的就不联想了）。
+    predict_due: bool,
     /// 最近一次按键或 tick 的时刻（毫秒）。
     now_ms: u64,
 }
@@ -671,6 +682,8 @@ impl Default for Session<'_> {
             translator: None,
             translation: Translation::default(),
             tool: None,
+            predictions: Vec::new(),
+            predict_due: false,
             now_ms: 0,
         }
     }
@@ -710,6 +723,7 @@ impl<'e> Session<'e> {
         if !same {
             self.engine = engine;
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
@@ -724,15 +738,18 @@ impl<'e> Session<'e> {
             }
             self.config = config;
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
     /// 光标前已经上屏的字（选了开头的词以后，剩下的部分拿它和已选的词当上文排序）。
+    /// 上文换了（应用里删过、改过、点到别处，交给应用的键，放弃），联想是照旧上文给的，跟着作废。
     pub fn set_context(&mut self, text: &str) {
         if self.context != text {
             self.context.clear();
             self.context.push_str(text);
             self.fresh = false;
+            self.dismiss_prediction();
         }
     }
 
@@ -804,6 +821,11 @@ impl<'e> Session<'e> {
             }
             KeyAction::ToggleTranslate => return self.toggle_translate(),
             _ => {}
+        }
+        if !self.predictions.is_empty() {
+            if let Some(handled) = self.prediction_key(key) {
+                return handled;
+            }
         }
         if self.mode == Mode::English && !self.composing() {
             return self.english_key(key);
@@ -1125,6 +1147,7 @@ impl<'e> Session<'e> {
         if self.composing() {
             self.clear();
         }
+        self.dismiss_prediction();
         let mut state = ToolState {
             tool,
             items: Vec::new(),
@@ -1443,10 +1466,70 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，否则是候选（C 接口读这个）。
+    /// 选词上屏以后接着联想（[`Config::prediction`]）：只在中文模式、光标前是汉字时；
+    /// 互译、密码框网址框邮箱框（[`key_hints::NO_AUTO_SPACE`]）不联想。没把握时什么都不给（候选框照常收起）。
+    fn predict(&mut self) {
+        let Some(engine) = self.engine else {
+            return;
+        };
+        if !self.config.prediction || self.mode != Mode::Chinese || self.hints & key_hints::NO_AUTO_SPACE != 0 {
+            return;
+        }
+        self.predictions = engine
+            .predict(&self.context, self.page_size())
+            .into_iter()
+            .map(|(text, _)| Candidate {
+                commit: text.clone(),
+                text,
+                ..Candidate::default()
+            })
+            .collect();
+        if !self.predictions.is_empty() {
+            self.generation += 1;
+        }
+    }
+
+    /// 收起联想。
+    fn dismiss_prediction(&mut self) {
+        if !self.predictions.is_empty() {
+            self.predictions.clear();
+            self.generation += 1;
+        }
+    }
+
+    /// 联想开着时的键。只有数字（1 到联想的个数）选词、Esc 收起；别的键都收起联想以后
+    /// 照常处理（返回 None），和没开着一样：空格、回车照常交给应用（空格不会选中联想的词），
+    /// 退格照常删应用里的字，字母开始打字，标点照常上屏。
+    /// 单按的修饰键不动它（Shift 可能是要打大写、符号）；分号、引号选词也不选联想（它们多半是要打标点）。
+    fn prediction_key(&mut self, key: &Key) -> Option<bool> {
+        if is_modifier_keysym(key.keysym) {
+            return None;
+        }
+        if let Some(d) = key.digit().filter(|&d| (1..=self.predictions.len()).contains(&d)) {
+            return Some(self.choose_prediction(d - 1));
+        }
+        self.dismiss_prediction();
+        (key.keysym == keysym::ESCAPE).then_some(true)
+    }
+
+    /// 选第 index 个联想的词：上屏，学这个搭配（上一个词 → 它），接着联想。
+    fn choose_prediction(&mut self, index: usize) -> bool {
+        let Some(chosen) = self.predictions.get(index).cloned() else {
+            return false;
+        };
+        self.commit_with(&chosen.text, "");
+        self.predict_due = true;
+        self.last_choice = Some(chosen);
+        true
+    }
+
+    /// 候选框里能选的全部条目：开着工具栏 / 表情面板时是面板的，联想时是联想的词，否则是候选（C 接口读这个）。
     pub fn display_candidates(&mut self) -> &[Candidate] {
         if self.tool.is_some() {
             return self.tool.as_ref().map_or(&[], |t| t.items.as_slice());
+        }
+        if !self.predictions.is_empty() {
+            return &self.predictions;
         }
         self.candidates()
     }
@@ -1476,6 +1559,7 @@ impl<'e> Session<'e> {
         if mode == self.mode {
             return;
         }
+        self.dismiss_prediction();
         if self.mode == Mode::Translate {
             // 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打
             self.commit_source();
@@ -1654,6 +1738,9 @@ impl<'e> Session<'e> {
         let Some(first) = text.chars().next() else {
             return;
         };
+        // 上屏了别的（标点、表情、语音……）：联想作废，这次也不再联想
+        self.dismiss_prediction();
+        self.predict_due = false;
         if self.translating() {
             // 互译：上屏的字攒成原文，过一会儿（句末标点立刻）发请求
             self.translation.source.push_str(text);
@@ -2172,6 +2259,8 @@ impl<'e> Session<'e> {
             && self.candidates().iter().filter(|c| c.kind != CandidateKind::Emoji).count() == 1
         {
             self.choose_now(0);
+            // 四码唯一自动上屏是打字途中的：不弹联想，接着打的数字也照常是数字
+            self.predict_due = false;
         }
     }
 
@@ -2190,6 +2279,8 @@ impl<'e> Session<'e> {
     }
 
     fn push_input(&mut self, c: char) {
+        // 同一个键上屏了又接着打（五笔顶字）：不联想，免得这个键刚弹出联想又得收起
+        self.predict_due = false;
         let at = self.caret();
         if at < self.input.len() {
             // 光标在拼音中间（#129）：插在光标处，光标跟着往后
@@ -2208,6 +2299,7 @@ impl<'e> Session<'e> {
     /// 上文也不算数了（回来时光标可能在别处）。互译攒着的原文不动，要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
+        self.dismiss_prediction();
         if commit_pending && self.composing() {
             self.commit_input_now();
         } else {
@@ -2226,6 +2318,9 @@ impl<'e> Session<'e> {
 
     /// 现在的编辑区和候选框（不处理按键）。这次调用要上屏的字也在里面。
     pub fn frame(&mut self, handled: bool) -> Frame {
+        if std::mem::take(&mut self.predict_due) {
+            self.predict();
+        }
         let n = self.candidates().len();
         let selected = self.selected_text();
         let (shown, shown_caret) = self.segmented_remaining();
@@ -2247,6 +2342,11 @@ impl<'e> Session<'e> {
         };
         if self.tool.is_some() {
             self.tool_frame(&mut frame);
+            return frame;
+        }
+        if !self.predictions.is_empty() {
+            frame.panel = Panel::Prediction;
+            frame.cand_count = self.predictions.len();
             return frame;
         }
         if let Some((view, wake)) = self.translate_view() {
@@ -2697,6 +2797,10 @@ impl<'e> Session<'e> {
             }
             return self.frame(ok);
         }
+        if !self.predictions.is_empty() {
+            let handled = self.choose_prediction(index);
+            return self.frame(handled);
+        }
         let handled = self.choose_now(index);
         self.frame(handled)
     }
@@ -2704,7 +2808,7 @@ impl<'e> Session<'e> {
     /// 选候选框里显示的第 index 个（一页，或展开面板的一屏），见 [`Session::choose`]。
     pub fn select(&mut self, index: usize) -> Frame {
         self.last_choice = None;
-        if self.tool.is_some() {
+        if self.tool.is_some() || !self.predictions.is_empty() {
             let shown = self.frame(false);
             return self.choose(shown.cand_start + index);
         }
@@ -2747,6 +2851,7 @@ impl<'e> Session<'e> {
             }
             _ => {
                 self.commit_with(&chosen.text, &chosen.pinyin);
+                self.predict_due = chosen.kind == CandidateKind::Word;
                 self.last_choice = Some(chosen);
             }
         }

@@ -232,6 +232,9 @@ FCITX_CONFIGURATION(
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
     fcitx::Option<bool> pickChar{this, "PickChar",
                                  "以词定字：打拼音时 [ ] 上屏候选的第一个、最后一个字", true};
+    // 默认关：数字键要用来选联想，汉字后面直接打数字（第3章）会选成联想的词
+    fcitx::Option<bool> prediction{this, "Prediction",
+                                   "联想：上屏后给出接下来可能打的词，按数字键选", false};
     fcitx::Option<bool> dateTime{this, "DateTime",
                                  "打 riqi、shijian、xingqi 时给出当前日期时间", true};
     fcitx::Option<bool> calculator{this, "Calculator", "v 开头算算式（v1+2*3；双拼、五笔时是大写 V）",
@@ -475,6 +478,7 @@ private:
 
     // 表情面板（快捷键打开，打拼音或英文搜 emoji 和符号）
     void fillToolPanel(fcitx::InputPanel &panel, WowtypeState *state);
+    void fillPredictionPanel(fcitx::InputPanel &panel, WowtypeState *state);
     /// 剪贴板历史：从 fcitx5 的 clipboard 插件拿最新一条交给核心（没有这个插件就什么都不做）。
     void sampleClipboard(fcitx::InputContext *ic);
 
@@ -560,6 +564,7 @@ private:
     bool rareExt_ = false;
     WowtypeSelectKeys selectKeys_ = WowtypeSelectKeys::Off;
     bool pickChar_ = true;
+    bool prediction_ = false;
     bool dateTime_ = true;
     bool calculator_ = true;
     bool toolbar_ = true;

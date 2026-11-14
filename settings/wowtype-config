@@ -113,6 +113,7 @@ DEFAULTS = {
     "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
     "PickChar": "True",
+    "Prediction": "False",
     "DateTime": "True",
     "Calculator": "True",
     "Toolbar": "True",
@@ -3718,6 +3719,10 @@ class SettingsWindow(Adw.ApplicationWindow):
             "SelectKeys", self.select_names[row.get_selected()]))
         extras.add(self.select_row)
         extras.add(self.make_switch("PickChar", "以词定字", "按 [ 取第一个字，按 ] 取最后一个字"))
+        prediction = self.make_switch("Prediction", "联想", "上屏后给出接下来可能打的词，按数字键选")
+        self.add_info(prediction, "选了接着联想，没把握时不给。空格、回车、退格照常输入，不会选中联想的词；"
+                                  "Esc 收起。汉字后面直接打数字（第3章）会选成联想的词，所以默认关。")
+        extras.add(prediction)
         auto_space = Adw.ExpanderRow(
             title="中英文之间自动加空格", subtitle="第5章 → 第 5 章", show_enable_switch=True)
         self.add_info(auto_space, "你好Linux → 你好 Linux。只在程序告诉输入法光标前是什么字时加，"

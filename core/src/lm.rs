@@ -37,13 +37,18 @@ pub trait LanguageModel: Send + Sync {
         total
     }
 
-    /// 给定上一个词，返回最可能的后续词（按概率降序，最多 limit 个）。
+    /// 给定上一个词，返回最可能的后续词和 ln P(cur | prev)，按概率降序，最多 limit 个。
     ///
-    /// 这是「预测词库」的接口：默认实现不提供预测，接入了 bigram/神经网络
-    /// 的模型自行覆写。
+    /// 联想（[`crate::Engine::predict`]）用它。默认不提供；分数是相对一元的提升、自己不知道
+    /// 一元概率的模型（[`crate::wordlm::WordLm`]）要先 [`LanguageModel::prepare_prediction`]，
+    /// 没准备好时返回空。
     fn top_next(&self, _prev: &str, _limit: usize) -> Vec<(String, f64)> {
         Vec::new()
     }
+
+    /// 联想要用的准备：按词库里每个词的频次配好词本身有多常用（只做一次，以后再调什么都不做）。
+    /// 默认什么都不做。
+    fn prepare_prediction(&self, _lexicon: &dyn crate::lexicon::Lexicon) {}
 }
 
 /// 内存二元语言模型。
@@ -517,6 +522,10 @@ impl LanguageModel for MixedLm {
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
         self.general.top_next(prev, limit)
     }
+
+    fn prepare_prediction(&self, lexicon: &dyn crate::lexicon::Lexicon) {
+        self.general.prepare_prediction(lexicon);
+    }
 }
 
 #[cfg(test)]
@@ -539,5 +548,23 @@ mod mixed_lm_tests {
         assert!((m.score(None, "x") - (-2.5)).abs() < 1e-9);
         // 认不认识一个词按通用模型：混上领域模型以后上文特征照样有
         assert_eq!(m.knows_word("x"), Some(true));
+    }
+
+    #[test]
+    fn mixed_predicts_with_general_model() {
+        // 联想按通用模型：混上领域模型以后，词频表也要配到通用模型上
+        use crate::wordlm::{build, BuildConfig, Counts, WordLm};
+        let counts = Counts {
+            words: ["<s>", "明天", "见", "的"].iter().map(|w| w.to_string()).collect(),
+            unigram: vec![10, 10, 10, 100_000],
+            history: vec![0, 10, 0, 0],
+            bigram: vec![(1 << 32 | 2, 8)],
+        };
+        let general = WordLm::from_bytes(&build(&counts, BuildConfig::default()).unwrap().0).unwrap();
+        let m = MixedLm::new(Arc::new(general), Arc::new(Fixed(0.0, false)), 0.4);
+        let lexicon =
+            crate::MemoryLexicon::from_tsv_str("ming tian\t明天\t10\njian\t见\t10\nde\t的\t100000\n").unwrap();
+        m.prepare_prediction(&lexicon);
+        assert_eq!(m.top_next("明天", 3)[0].0, "见");
     }
 }

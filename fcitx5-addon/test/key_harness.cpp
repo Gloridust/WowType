@@ -1235,6 +1235,113 @@ void runCases(Instance &instance) {
           "默认（都用来选词）左键不动编辑区的光标：@" + std::to_string(ic->inputPanel().preedit().cursor()));
     fresh(ic.get());
 
+    // 联想（#89）：选词上屏以后候选框里是接下来可能打的词，编辑区空、不画光标；数字选、Esc 收起，
+    // 空格、回车、退格、方向键、快捷键收起联想照常交给应用。要真的语言模型（WOWTYPE_LM）
+    if (const char *lm = std::getenv("WOWTYPE_LM"); lm && *lm) {
+        {
+            std::ofstream(configDir + "/wowtype.conf") << "Prediction=True\n";
+        }
+        addon->reloadConfig();
+        // 先用两次「今天中午」「今天生日」：用过的搭配一定联想得出来，换了词库（万象）也一样
+        for (const char *seed : {"jintian<sp>zhongwu<sp>", "jintian<sp>shengri<sp>"}) {
+            for (int i = 0; i < 2; ++i) {
+                fresh(ic.get());
+                type(ic.get(), seed);
+            }
+        }
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>");
+        const auto predicted = page(ic.get());
+        auto *list = common();
+        check(ic->committed == "今天" && preedit(ic.get()).empty() && !predicted.empty() && list &&
+                  list->cursorIndex() == -1,
+              "联想：jintian 空格上屏今天，编辑区空、没有光标，联想 " + join(predicted));
+        type(ic.get(), "1");
+        const std::string first = predicted.empty() ? "" : predicted[0];
+        check(ic->committed == "今天" + first && ic->passed.empty(),
+              "联想：数字 1 上屏第一个联想的词：" + ic->committed + "，接着联想 " + join(page(ic.get())));
+
+        const std::pair<const char *, Key> passKeys[] = {
+            {"空格", Key(FcitxKey_space)},     {"回车", Key(FcitxKey_Return)},
+            {"退格", Key(FcitxKey_BackSpace)}, {"左键", Key(FcitxKey_Left)},
+            {"Ctrl+C", Key(FcitxKey_c, KeyState::Ctrl)},
+        };
+        for (const auto &[name, key] : passKeys) {
+            fresh(ic.get());
+            type(ic.get(), "jintian<sp>");
+            const bool took = send(ic.get(), key);
+            check(!took && ic->committed == "今天" && page(ic.get()).empty(),
+                  std::string("联想：") + name + " 收起联想、交给应用，不上屏联想的词：" + ic->committed);
+        }
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>");
+        check(send(ic.get(), Key(FcitxKey_Escape)) && page(ic.get()).empty() && ic->committed == "今天",
+              "联想：Esc 收起");
+        type(ic.get(), "1");
+        check(ic->committed == "今天" && ic->passed == "1", "联想：收起以后数字照常交给应用：" + ic->passed);
+
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>x");
+        check(preedit(ic.get()) == "x" && ic->committed == "今天", "联想：打字母换成打字：" + preedit(ic.get()));
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>,");
+        check(ic->committed == "今天，" && page(ic.get()).empty(), "联想：逗号照常上屏：" + ic->committed);
+
+        // 点联想的词（鼠标）
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>");
+        {
+            auto *shown = common();
+            const auto words = page(ic.get());
+            if (shown && words.size() > 1) {
+                shown->candidate(1).select(ic.get());
+            }
+            check(words.size() > 1 && ic->committed == "今天" + words[1],
+                  "联想：点第二个联想的词：" + ic->committed + "（联想 " + join(words) + "）");
+        }
+
+        // 单按右 Shift 切英文、失去焦点：收起，数字不会选到看不见的词
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>");
+        tapKey(ic.get(), FcitxKey_Shift_R);
+        check(page(ic.get()).empty(), "联想：单按 Shift 切英文收起联想");
+        tapKey(ic.get(), FcitxKey_Shift_R);
+        fresh(ic.get());
+        type(ic.get(), "jintian<sp>");
+        ic->focusOut();
+        ic->focusIn();
+        type(ic.get(), "1");
+        check(page(ic.get()).empty() && ic->committed == "今天" && ic->passed == "1",
+              "联想：失去焦点收起，回来数字照常交给应用：" + ic->committed + " / " + ic->passed);
+
+#ifdef WOWTYPE_HAVE_PASSWORD_IM_OPTION
+        // 密码框里不联想（fcitx5 默认在密码框里换成键盘布局，打开「密码框也用输入法」才轮得到输入法）
+        {
+            RawConfig raw;
+            raw.setValueByPath("Behavior/AllowInputMethodForPassword", "True");
+            instance.globalConfig().load(raw, true);
+        }
+        fresh(ic.get());
+        ic->setCapabilityFlags(CapabilityFlag::Password);
+        type(ic.get(), "jintian<sp>");
+        check(ic->committed == "今天" && page(ic.get()).empty(),
+              "联想：密码框里不联想：" + ic->committed + " / " + join(page(ic.get())));
+        ic->setCapabilityFlags(CapabilityFlags{});
+        {
+            RawConfig raw;
+            raw.setValueByPath("Behavior/AllowInputMethodForPassword", "False");
+            instance.globalConfig().load(raw, true);
+        }
+#endif
+
+        fresh(ic.get());
+        std::filesystem::remove(configDir + "/wowtype.conf");
+        addon->reloadConfig();
+        type(ic.get(), "jintian<sp>");
+        check(ic->committed == "今天" && page(ic.get()).empty(), "联想：默认关");
+        fresh(ic.get());
+    }
+
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
     const auto tapShift = [&](KeySym sym) {
         KeyEvent press(ic.get(), Key(sym), false);
@@ -1488,6 +1595,17 @@ void runCases(Instance &instance) {
         fresh(ic.get());
         type(ic.get(), "V1+2*3=");
         check(ic->committed == "7", "五笔计算器用大写 V：" + ic->committed);
+        fresh(ic.get());
+        // 开着联想：自动上屏、顶字是打字途中的，不弹联想（数字照常是数字，顶字的编辑区照常是下一个码）
+        std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\nPrediction=True\n";
+        addon->reloadConfig();
+        type(ic.get(), "ggll1");
+        check(ic->committed == "一" && ic->passed == "1" && page(ic.get()).empty(),
+              "五笔开着联想：四码唯一自动上屏不弹联想，接着的数字交给应用：" + ic->committed + " / " + ic->passed);
+        fresh(ic.get());
+        type(ic.get(), "wqvbg");
+        check(ic->committed == "你好" && preedit(ic.get()) == "g" && !page(ic.get()).empty(),
+              "五笔开着联想：顶字以后照常打下一个码：" + ic->committed + " / " + preedit(ic.get()));
         fresh(ic.get());
         // 四码唯一自动上屏关掉：ggll 等空格
         std::ofstream(configDir + "/wowtype.conf") << "InputScheme=Wubi86\nWubiAutoCommit=False\nWubiHint=False\n";

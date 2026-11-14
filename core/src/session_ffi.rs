@@ -128,6 +128,7 @@ pub const WOWTYPE_PANEL_NORMAL: c_int = 0;
 pub const WOWTYPE_PANEL_EXPANDED: c_int = 1;
 pub const WOWTYPE_PANEL_EMOJI: c_int = 2;
 pub const WOWTYPE_PANEL_TOOL: c_int = 3;
+pub const WOWTYPE_PANEL_PREDICTION: c_int = 4;
 
 pub const WOWTYPE_TOOL_NONE: c_int = 0;
 pub const WOWTYPE_TOOL_MENU: c_int = 1;
@@ -234,6 +235,8 @@ pub struct WowtypeSessionConfig {
     pub wubi_hint: c_int,
     /// 1.10 起：另设了进出「译」的快捷键，单按 Shift 只在中 ↔ 英之间切，默认 0。
     pub translate_key: c_int,
+    /// 1.10 起：联想（#89），默认 0。
+    pub prediction: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -274,6 +277,7 @@ impl Default for WowtypeSessionConfig {
             wubi_auto_commit: c_int::from(config.wubi_auto_commit),
             wubi_hint: c_int::from(config.wubi_hint),
             translate_key: c_int::from(config.translate_key),
+            prediction: c_int::from(config.prediction),
         }
     }
 }
@@ -327,6 +331,7 @@ impl WowtypeSessionConfig {
             wubi_auto_commit: self.wubi_auto_commit != 0,
             wubi_hint: self.wubi_hint != 0,
             translate_key: self.translate_key != 0,
+            prediction: self.prediction != 0,
         }
     }
 }
@@ -541,6 +546,7 @@ impl WowtypeSession {
                 Panel::Expanded => WOWTYPE_PANEL_EXPANDED,
                 Panel::Emoji => WOWTYPE_PANEL_EMOJI,
                 Panel::Tool => WOWTYPE_PANEL_TOOL,
+                Panel::Prediction => WOWTYPE_PANEL_PREDICTION,
             },
             cand_count: frame.cand_count,
             cand_cursor: frame

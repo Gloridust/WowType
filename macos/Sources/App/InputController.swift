@@ -116,6 +116,7 @@ class WowTypeInputController: IMKInputController {
                 // 翻不出来的键（F 键、别的键盘布局打出的非 ASCII 字符）：打字途中、互译攒着原文、
                 // 工具栏或表情面板开着时吃掉，免得应用里的光标跑到别处
                 composer.otherModifierChanged()
+                composer.dismissPrediction()
                 return composer.hasPendingText || composer.openPanel != nil
             }
             let handled = composer.handle(key)
@@ -183,6 +184,7 @@ class WowTypeInputController: IMKInputController {
     }
 
     override func hidePalettes() {
+        composer.dismissPrediction() // 候选框收起了：联想也收起，免得数字键选到看不见的词
         AppState.shared.candidatePanel.hide()
         super.hidePalettes()
     }
@@ -319,6 +321,7 @@ let appVersion = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersion
 
 extension WowTypeInputController: VoiceHost {
     func voiceShow(status: String?, partial: String) {
+        composer.dismissPrediction() // 候选框要画语音的提示：联想收起，免得数字键选到看不见的词
         setMarkedText(partial, cursor: partial.utf16.count)
         guard let status else {
             showCandidates(nil)

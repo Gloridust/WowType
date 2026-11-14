@@ -173,9 +173,11 @@ int wowtype_engine_load_history(WowtypeEngineHandle *engine, const char *path);
 WowtypeCandidates *wowtype_engine_input(WowtypeEngineHandle *engine, const char *input);
 
 /**
- * 基于上一词的预测（预测词库）。
- * 成功返回候选集合（text 为预测词，score 为对数概率），必须 wowtype_candidates_free；
- * 失败返回 NULL，用 wowtype_last_error 取原因。
+ * 联想：光标前是 prev_word（刚上屏的字）时接下来可能打的词，最多 limit 个。
+ * 上一个词优先用引擎记下的最后一次选词（prev_word 正好以它结尾时），否则取 prev_word 末尾的两到四个字；
+ * 词级语言模型的 ln P(词 | 上一个词) 加上学到的搭配，没把握时是空的（单字、太不可能的不给）。
+ * 成功返回候选集合（text 为联想的词，score 越大越可能），必须 wowtype_candidates_free；
+ * 失败返回 NULL，用 wowtype_last_error 取原因。会话的联想（WowtypeSessionConfig.prediction）用的是同一套。
  */
 WowtypeCandidates *wowtype_engine_predict_next(const WowtypeEngineHandle *engine,
                                                const char *prev_word,
@@ -389,7 +391,7 @@ typedef struct {
 } WowtypeKey;
 
 /* WowtypeKey.hints（1.10 起）。 */
-#define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格 */
+#define WOWTYPE_KEY_HINT_NO_AUTO_SPACE (1u << 0) /* 密码框、网址框、邮箱框：不自动补空格、不联想 */
 #define WOWTYPE_KEY_HINT_PANEL_OPEN (1u << 1)    /* 外壳开着自己的面板（表情面板、工具栏）：按 Shift 不切中英文 */
 #define WOWTYPE_KEY_HINT_NO_TRANSLATE (1u << 2)  /* 不能翻译的输入框（密码框）：「译」里也照常上屏 */
 #define WOWTYPE_KEY_HINT_SURROUNDING (1u << 3)   /* 应用告诉了光标周围的文字：prev_char 为 0 是光标前确实没有字 */
@@ -458,6 +460,13 @@ typedef struct {
     int wubi_hint;       /* 1.10 起：五笔逐码提示的候选后面显示还要打的码（WowtypeCandidateInfo.comment），默认 1 */
     int translate_key;   /* 1.10 起：另设了进出「译」的快捷键（WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE），
                           * 单按 Shift 只在中 ↔ 英之间切，默认 0 */
+    int prediction;      /* 1.10 起：联想，默认 0。选词上屏（空格、数字、点候选；五笔的自动上屏、顶字不算）以后，中文模式、光标前是汉字、
+                          * 不是密码框网址框邮箱框（WOWTYPE_KEY_HINT_NO_AUTO_SPACE）时，接着给出可能的下一个词：
+                          * frame->panel 是 WOWTYPE_PANEL_PREDICTION，编辑区是空的，没有光标（cand_cursor = -1）。
+                          * 数字键选（上屏、学这个搭配、接着联想），Esc 收起；别的键都收起联想再照常处理，
+                          * 会话不管的（空格、回车、退格、方向键……）handled = 0，照常交给应用：空格不会选中联想的词，
+                          * 退格照常删应用里的字。联想时外壳要把每个键都交给会话（和工具栏开着时一样），
+                          * 失去焦点、语音输入开始时 wowtype_session_reset 收起 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -473,7 +482,8 @@ typedef struct {
                             * 选了五笔却没有码表），没有为 NULL。可以没有候选只有提示 */
     int panel;             /* WOWTYPE_PANEL_*：0 普通一页、1 展开面板（横排按下键，6 列，一屏 6 行）、
                             * 2 表情面板（1.10 起，同样的网格，preedit 是搜索词）、
-                            * 3 工具栏（1.10 起，竖排一列，一页 9 个）；面板的提示在 aux */
+                            * 3 工具栏（1.10 起，竖排一列，一页 9 个）；面板的提示在 aux；
+                            * 4 联想（1.10 起，见 WowtypeSessionConfig.prediction，没在打字，候选框照普通的画、不画光标） */
     size_t cand_count;     /* 候选框里显示几个（一页，或展开面板的一屏）；用 wowtype_session_candidate 取 */
     int cand_cursor;       /* 光标在显示的这些里的位置；-1 不在这一页上（翻页按钮翻走以后） */
     int has_prev, has_next; /* 前面 / 后面还有一页（展开面板是一屏） */
@@ -545,6 +555,7 @@ const WowtypeFrame *wowtype_session_commit_text(WowtypeSession *session, const c
 #define WOWTYPE_PANEL_EXPANDED 1
 #define WOWTYPE_PANEL_EMOJI 2
 #define WOWTYPE_PANEL_TOOL 3
+#define WOWTYPE_PANEL_PREDICTION 4
 #define WOWTYPE_TOOL_NONE 0
 #define WOWTYPE_TOOL_MENU 1
 #define WOWTYPE_TOOL_CLIPBOARD 2
@@ -600,7 +611,7 @@ typedef struct {
     const char *comment; /* 1.10 起：画在候选后面的小字，不上屏（五笔还要打的码、z 临时拼音反查的五笔码），
                           * 没有为空串 */
 } WowtypeCandidateInfo;
-/* 候选个数。没有引擎、没在打字时为 0。 */
+/* 候选个数（工具栏、表情面板开着时是面板的条目，联想时是联想的词）。没有引擎、没在打字也没在联想时为 0。 */
 size_t wowtype_session_candidate_total(WowtypeSession *session);
 /* 第 index 个候选写进 out（按 out->size 写）。返回 0 成功，-1 越界或参数为 NULL。
  * 字符串在同一会话下一次改了编辑区、上文、引擎或设置的调用前有效。 */
