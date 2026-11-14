@@ -135,16 +135,17 @@ final class WowTypeInputController: IMKInputController {
 
     override func deactivateServer(_ sender: Any!) {
         VoiceInput.shared.cancel(for: self)
-        composer.commitComposition()
+        composer.cancel()
         stopTranslatePolling()
         AppState.shared.candidatePanel.hide()
         AppState.shared.save()
         super.deactivateServer(sender)
     }
 
-    /// 系统要求结束组字（换输入框、点了别处）：打到一半的原样上屏。
+    /// 系统要求结束组字（换输入框、点了别处）：打到一半的丢掉，和 Linux 失去焦点一样。
+    /// 系统不说是换了输入框还是切走了输入法（都走这里和 deactivateServer），一律当放弃。
     override func commitComposition(_ sender: Any!) {
-        composer.commitComposition()
+        composer.cancel()
     }
 
     override func hidePalettes() {

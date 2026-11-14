@@ -2662,3 +2662,147 @@ fn wubi_with_translate_auto_space_and_grid() {
     assert_eq!(frame.panel, Panel::Normal);
     assert_eq!(frame.preedit, "wq");
 }
+
+/// 上文能改排序的小引擎：「不」后面「骂」排第一，没有上文时「吗」排第一（真实词库里也是这样）。
+fn context_engine() -> &'static Engine {
+    let mut lm = BigramLm::new().with_backoff(0.001);
+    lm.add_unigram("不", 10.0);
+    lm.add_unigram("吗", 5.0);
+    lm.add_unigram("骂", 5.0);
+    lm.add_bigram("不", "骂", 8.0);
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("bu\t不\t9000\nma\t吗\t200\nma\t骂\t100\n").unwrap(),
+    );
+    Box::leak(Box::new(Engine::new(lexicon, Arc::new(lm))))
+}
+
+/// 打 ma 时排第一的候选（打完 Esc 掉，不上屏）。
+fn first_ma(session: &mut Session) -> String {
+    type_keys(session, "ma");
+    let first = texts(session)[0].clone();
+    type_keys(session, "<esc>");
+    first
+}
+
+/// 带着应用告诉的光标前的字按一个键（读得到周围文字的输入框）。
+fn key_with_surrounding(sym: u32, before: Option<char>) -> Key {
+    use wowtype_core::session::key_hints::SURROUNDING;
+    Key {
+        prev_char: before,
+        hints: SURROUNDING,
+        ..Key::press(sym)
+    }
+}
+
+#[test]
+fn context_follows_the_document() {
+    let mut session = with(context_engine());
+    assert_eq!(first_ma(&mut session), "吗", "没有上文");
+    type_keys(&mut session, "bu<sp>");
+    assert_eq!(first_ma(&mut session), "骂", "刚上屏了「不」，上文是它");
+
+    // 「不」删掉了（退格交给应用）：上文作废，再打 ma 是「吗」
+    type_keys(&mut session, "bu<sp><bs>");
+    assert_eq!(first_ma(&mut session), "吗", "退格删掉了「不」");
+    // 全选再 Delete、方向键挪了光标、Home、回车、Tab：都作废
+    for passed in [
+        Key { modifiers: modifier::CTRL, ..Key::char('a') },
+        Key::press(keysym::DELETE),
+        Key::press(keysym::LEFT),
+        Key::press(keysym::HOME),
+        Key::press(keysym::RETURN),
+        Key::press(keysym::TAB),
+    ] {
+        type_keys(&mut session, "bu<sp>");
+        assert!(!session.key(&passed).handled);
+        assert_eq!(first_ma(&mut session), "吗", "{passed:?} 交给了应用");
+    }
+    // 英文模式打的字母、交给应用的数字也改了光标前的字
+    type_keys(&mut session, "bu<sp>");
+    assert!(!session.key(&Key::char('3')).handled);
+    assert_eq!(first_ma(&mut session), "吗", "数字交给了应用");
+    // 单按的修饰键、松开不算
+    type_keys(&mut session, "bu<sp>");
+    session.key(&Key::press(keysym::SHIFT_R));
+    assert_eq!(first_ma(&mut session), "骂", "修饰键不改应用里的字");
+
+    // 点了别处、失去焦点（外壳调 reset(false)）：上文作废
+    type_keys(&mut session, "bu<sp>");
+    session.reset(false);
+    assert_eq!(first_ma(&mut session), "吗", "失去焦点再回来");
+    // 上屏（回车、切输入法时 reset(true)）不算放弃，上文照记
+    type_keys(&mut session, "bu<sp>");
+    session.reset(true);
+    assert_eq!(first_ma(&mut session), "骂");
+}
+
+#[test]
+fn context_is_checked_against_surrounding_text() {
+    // 应用告诉了光标前的字：开始打字时上文要和它对得上
+    let mut session = with(context_engine());
+    type_keys(&mut session, "bu<sp>");
+    session.key(&key_with_surrounding(u32::from(b'm'), Some('不')));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "骂", "光标前还是「不」，上文留着");
+    type_keys(&mut session, "<esc>");
+
+    // 在应用里用鼠标删掉了「不」（会话没看到键）：光标前是别的字，上文换成它
+    session.key(&key_with_surrounding(u32::from(b'm'), Some('好')));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "吗");
+    type_keys(&mut session, "<esc>");
+
+    // 光标前没有字了（文档清空了）
+    type_keys(&mut session, "bu<sp>");
+    session.key(&key_with_surrounding(u32::from(b'm'), None));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "吗", "光标前没字，上文清空");
+    type_keys(&mut session, "<esc>");
+
+    // 读不到周围文字（终端）：只能信会话自己记的
+    type_keys(&mut session, "bu<sp>");
+    session.key(&Key { prev_char: None, ..Key::char('m') });
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "骂");
+}
+
+#[test]
+fn abandoning_never_commits() {
+    use wowtype_core::session::Mode;
+    // 失去焦点、应用重置（外壳调 reset(false)）：拼音、五笔码、双拼、选了一半的句子都丢掉，
+    // 什么也不上屏（fcitx5 那边编辑区标了 DontCommit，工具包也不会自己把编辑区上屏）
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaozhongguo");
+    choose_text(&mut session, "你好");
+    assert_eq!(session.frame(false).preedit, "你好zhong'guo");
+    let frame = session.reset(false);
+    assert_eq!((frame.commit, frame.preedit.as_str()), (None, ""), "选了一半的句子");
+    assert!(!session.composing());
+
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqv");
+    assert_eq!(session.reset(false).commit, None, "五笔码");
+    type_keys(&mut session, "znihao");
+    assert_eq!(session.reset(false).commit, None, "五笔的临时拼音");
+
+    let mut shuangpin = Engine::new(
+        Arc::new(MemoryLexicon::from_tsv_str("zhong guo\t中国\t9000\n").unwrap()),
+        Arc::new(BigramLm::default()),
+    );
+    shuangpin.set_shuangpin(true);
+    let mut session = with(Box::leak(Box::new(shuangpin)));
+    assert_eq!(type_keys(&mut session, "vsgo").preedit, "zhong'guo");
+    assert_eq!(session.reset(false).commit, None, "双拼");
+
+    // 「译」：攒着的原文由外壳另外丢（clear_translation），拼音这里丢掉
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    type_keys(&mut session, "nihao<sp>hao");
+    assert_eq!(session.translate_source(), "你好");
+    assert_eq!(session.reset(false).commit, None, "「译」里打到一半");
+    session.clear_translation();
+    assert_eq!(session.translate_source(), "");
+    assert_eq!(session.reset(false).commit, None);
+}

@@ -787,6 +787,77 @@ void runCases(Instance &instance) {
     ic->focusIn();
     check(ic->committed.empty() && preedit(ic.get()).empty(), "失去焦点不上屏、编辑区清空，实际 " + ic->committed);
 
+    // 编辑区画在输入框里时（应用支持 preedit）：失去焦点、应用重置输入框，GTK / Qt 的输入模块会把
+    // 编辑区里没标 DontCommit 的字上屏，不支持的（XIM）由 fcitx5 代劳。WowType 的编辑区整段标了
+    // DontCommit：文档里不留「ni'hao」、选了一半的「你好zhong'guo」、五笔码
+    ic->setCapabilityFlags(CapabilityFlag::Preedit);
+    {
+        const auto client = [&]() { return ic->inputPanel().clientPreedit(); };
+        fresh(ic.get());
+        type(ic.get(), "nihao");
+        check(client().toString() == "ni'hao" && client().toStringForCommit().empty(),
+              "输入框里的编辑区是 ni'hao，失去焦点时没有要上屏的：[" + client().toStringForCommit() + "]");
+        ic->focusOut();
+        ic->focusIn();
+        check(ic->committed.empty() && client().toString().empty(),
+              "失去焦点：fcitx5 替应用上屏的也是空的，实际 " + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "nihaozhongguo");
+        const auto cands = page(ic.get());
+        const auto at = std::find(cands.begin(), cands.end(), "你好");
+        if (at != cands.end() && at - cands.begin() < 9) {
+            type(ic.get(), std::to_string(at - cands.begin() + 1));
+        }
+        check(client().toString() == "你好zhong'guo" && client().toStringForCommit().empty(),
+              "选了一半的句子也不会被应用上屏：" + client().toString());
+        ic->reset();
+        check(ic->committed.empty() && client().toString().empty() && preedit(ic.get()).empty(),
+              "应用重置输入框（点了别处）：丢掉，实际 " + ic->committed);
+        fresh(ic.get());
+    }
+    ic->setCapabilityFlags(CapabilityFlags{});
+
+    // 上文跟着文档走：「不」后面 ma 的首选是「骂」；「不」删掉了（退格、全选再删、点到别处）
+    // 再打 ma 要回到没有上文时的首选，不能还当「不」在前面
+    {
+        const auto firstMa = [&]() {
+            type(ic.get(), "ma");
+            const auto cands = page(ic.get());
+            type(ic.get(), "<esc>");
+            return cands.empty() ? std::string() : cands[0];
+        };
+        fresh(ic.get());
+        type(ic.get(), "<bs>");
+        const std::string alone = firstMa();
+        type(ic.get(), "bu<sp>");
+        const std::string afterBu = firstMa();
+        check(ic->committed == "不" && afterBu != alone,
+              "「不」后面 ma 的首选变了：" + alone + " / " + afterBu);
+        type(ic.get(), "<bs>");
+        check(firstMa() == alone, "退格删掉「不」以后回到 " + alone);
+        type(ic.get(), "bu<sp>");
+        send(ic.get(), Key(FcitxKey_a, KeyState::Ctrl));
+        type(ic.get(), "<del>");
+        check(firstMa() == alone, "全选再 Delete 以后回到 " + alone);
+        type(ic.get(), "bu<sp>");
+        ic->focusOut();
+        ic->focusIn();
+        check(firstMa() == alone, "失去焦点再回来以后回到 " + alone);
+        // 读得到周围文字：拿光标前的字核对（在应用里用鼠标改过，会话没看到键）
+        ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+        type(ic.get(), "bu<sp>");
+        ic->surroundingText().setText("不", 1, 1);
+        check(firstMa() == afterBu, "光标前还是「不」：照样用它");
+        ic->surroundingText().setText("你好", 2, 2);
+        check(firstMa() == alone, "光标前换成了别的字");
+        type(ic.get(), "bu<sp>");
+        ic->surroundingText().setText("", 0, 0);
+        check(firstMa() == alone, "文档清空了");
+        ic->surroundingText().invalidate();
+        ic->setCapabilityFlags(CapabilityFlags{});
+        fresh(ic.get());
+    }
+
     // 连续上屏很多字，上下文按 UTF-8 截断不出错
     fresh(ic.get());
     for (int i = 0; i < 30; ++i) {
