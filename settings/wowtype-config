@@ -221,6 +221,7 @@ ENUMS = {
 GREEN = "#0EAF76"
 STYLE_LIGHT = """
 .wt-sidebar { background-image: linear-gradient(180deg, #d9f3e6 0%, #e9f8f0 40%, #f5fbf8 100%); }
+.wt-sidebar label, .wt-sidebar image { color: #2a332f; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
@@ -233,12 +234,16 @@ STYLE_LIGHT = """
 .wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: white; box-shadow: 0 0 0 1px #e6eae8; }
 .wt-content preferencesgroup > box > box > label.heading { color: #6b7570; }
+.wt-stats-page { background-color: #f5f7f6; }
+.wt-stats-page .wt-page-title { color: #1f2724; }
+.wt-stats-page stackswitcher button { color: #59635e; }
+.wt-stats-page stackswitcher button:checked { color: #0EAF76; }
 .wt-stats-card { background: white; border-radius: 12px; box-shadow: 0 0 0 1px #e6eae8; padding: 18px 20px; }
 .wt-stat-label { font-size: 9pt; color: #6b7570; }
 .wt-stat-value { font-size: 21pt; font-weight: 800; color: #0EAF76; }
 .wt-stat-unit { font-size: 9pt; color: #6b7570; }
 .wt-stat-note { font-size: 8pt; color: #8a938f; }
-.wt-stats-heading { font-weight: 700; font-size: 11pt; }
+.wt-stats-heading { font-weight: 700; font-size: 11pt; color: #3a453f; }
 .wt-stats-note { font-size: 8pt; color: #6b7570; }
 .wt-stats-line { font-size: 9pt; }
 .wt-chip { border: 1px solid #dfe4e2; border-radius: 6px; padding: 3px 7px; }
@@ -256,6 +261,7 @@ STYLE_LIGHT = """
 """
 STYLE_DARK = """
 .wt-sidebar { background-image: linear-gradient(180deg, #17332a 0%, #1c2a25 45%, #202523 100%); }
+.wt-sidebar label, .wt-sidebar image { color: #e6ece9; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
@@ -268,12 +274,16 @@ STYLE_DARK = """
 .wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: #282c2a; box-shadow: 0 0 0 1px #3b4144; }
 .wt-content preferencesgroup > box > box > label.heading { color: #a3aca8; }
+.wt-stats-page { background-color: #1d201f; }
+.wt-stats-page .wt-page-title { color: #e6ece9; }
+.wt-stats-page stackswitcher button { color: #b8c1bd; }
+.wt-stats-page stackswitcher button:checked { color: #3CCB93; }
 .wt-stats-card { background: #282c2a; border-radius: 12px; box-shadow: 0 0 0 1px #3b4144; padding: 18px 20px; }
 .wt-stat-label { font-size: 9pt; color: #a3aca8; }
 .wt-stat-value { font-size: 21pt; font-weight: 800; color: #3CCB93; }
 .wt-stat-unit { font-size: 9pt; color: #a3aca8; }
 .wt-stat-note { font-size: 8pt; color: #8a938f; }
-.wt-stats-heading { font-weight: 700; font-size: 11pt; }
+.wt-stats-heading { font-weight: 700; font-size: 11pt; color: #e6ece9; }
 .wt-stats-note { font-size: 8pt; color: #a3aca8; }
 .wt-stats-line { font-size: 9pt; }
 .wt-chip { border: 1px solid #3b4144; border-radius: 6px; padding: 3px 7px; }
@@ -3288,6 +3298,9 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.stats_tab = "keys"
         self.stats_mtime = None
         outer = Gtk.ScrolledWindow(vexpand=True)
+        # 统计页不是 PreferencesPage，自己铺一层背景：niri 等合成器给普通窗口开 xray blur 时，
+        # 透明区域会透出模糊的桌面，文字对比度也会掉。
+        outer.add_css_class("wt-stats-page")
         clamp = Adw.Clamp(maximum_size=720)
         self.stats_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
                                  margin_top=30, margin_bottom=30,
