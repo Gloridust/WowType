@@ -146,8 +146,8 @@ scripts/make-wubi.sh "" dist/data
 五笔脚本按钉死的提交下载 rime-wubi（LGPL-3.0），核对 SHA256 后生成五笔码表 `wubi86.tsv`
 和 `WUBI-LICENSE`、`WUBI-AUTHORS`、`WUBI-SOURCE.txt`；各发行版的打包脚本都要这几个文件。
 已有 rime-ice checkout 时可传入其路径，避免重复下载。
-默认还会融进仓库里的语料词频表 `data/tatoeba-freq.tsv`（不联网），得到的词库和发布的一样；
-可选数据源（`WOWTYPE_DATA_EXTRAS`）默认不开，见 [CONFIG.md](CONFIG.md) 的「语料词频和自己构建词库时的可选数据源」。
+默认还会融进仓库里的语料词频表 `data/tatoeba-freq.tsv`（不联网），得到的词库和发布的一样，
+见 [CONFIG.md](CONFIG.md) 的「语料词频」。
 
 ### 3. Arch / Manjaro：制作原生安装包
 
