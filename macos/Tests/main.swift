@@ -1752,6 +1752,39 @@ do {
 
 // MARK: 设置契约（spec/config.json、spec/lexicon-pack.json；Linux 两端在 scripts/test-config-contract.py 对照）
 
+
+// MARK: 打字统计（core/src/stats.rs 的 JSON 与口径）
+
+func checkStats() {
+    let dir = "/tmp/wowtype-stats-test-\(getpid())"
+    mkdir(dir, 0o700)
+    let path = dir + "/stats.json"
+    let json = """
+    {"version":1,"enabled":true,"generation":0,"lastCommitMs":0,"days":{
+      "2026-11-13":{"chars":1982,"kinds":{"han":1800,"latin":82,"number":40,"punct":52,"emoji":8},"activeMs":2140000,"keys":{"KeyA":10},"sources":{"quanpin":1982},"schemes":{},"selections":[500,200,0,0,0,0,0,0,0],"beyond":0},
+      "2026-11-12":{"chars":1200,"kinds":{"han":1100,"latin":50,"number":20,"punct":30,"emoji":0},"activeMs":1200000,"keys":{},"sources":{},"schemes":{},"selections":[],"beyond":0}
+    }}
+    """
+    writeFile(path, json)
+    let document = StatsStore.load(path)
+    check(document.days.count == 2, "统计：读两天")
+    check(document.days["2026-11-13"]?.chars == 1982, "统计：字符数")
+    let metrics = StatsMath.metrics(document, today: "2026-11-14")
+    check(metrics.totalChars == 3182, "统计：累计字符")
+    check(metrics.bestDay == "2026-11-13", "统计：单日最多")
+    check(metrics.streak == 2, "统计：连续两天")
+    let speed = 3032.0 / (3340000.0 / 60000.0)
+    check(abs(metrics.averageSpeed - speed) < 0.001, "统计：平均速度", "\(metrics.averageSpeed)")
+    check(StatsStore.totals(document).kinds["han"] == 2900, "统计：分类合计")
+    check(StatsKeyboard.name("KeyA") == "A", "统计：键名")
+    check(StatsKeyboard.level(4, maximum: 4) == 4, "统计：色阶")
+    try? StatsStore.clear(path: path, enabled: true)
+    check(StatsStore.load(path).days.isEmpty, "统计：清空")
+    unlink(path)
+    rmdir(dir)
+}
+checkStats()
+
 checkConfigContract()
 checkLexiconPackContract()
 

@@ -30,8 +30,49 @@ final class AppState {
     /// 上一次看系统剪贴板时它的 changeCount（没变就不读）
     private var clipboardChangeCount = -1
 
+    /// 打字统计的句柄（core 的 Recorder）：按天聚合，只在本机。
+    private(set) var stats: OpaquePointer?
+
     private init() {
         RecentEmoji.shared.path = supportDir.appendingPathComponent("emoji-recent.txt").path
+        let statsPath = supportDir.appendingPathComponent("stats.json").path
+        stats = wowtype_stats_new(statsPath)
+        if stats == nil {
+            NSLog("WowType: 建不了打字统计 %@", statsPath)
+        }
+    }
+
+    deinit {
+        if let stats {
+            wowtype_stats_free(stats)
+        }
+    }
+
+    /// 记一次物理按键（按键热力图）。长按由 `isARepeat` 在外壳挡掉，这里每次按下都算。
+    func recordKey(_ keyCode: UInt16) {
+        guard let stats else { return }
+        _ = wowtype_stats_key(stats, 1, UInt32(keyCode), 1, wowtype_stats_now_ms())
+    }
+
+    /// 记一次上屏；只分类计数，不保存文字。
+    func recordCommit(_ text: String, source: String, scheme: String, candidateIndex: Int) {
+        guard let stats else { return }
+        text.withCString { textPointer in
+            source.withCString { sourcePointer in
+                scheme.withCString { schemePointer in
+                    _ = wowtype_stats_commit(stats, textPointer, sourcePointer, schemePointer,
+                                             Int32(candidateIndex), wowtype_stats_now_ms())
+                }
+            }
+        }
+    }
+
+    /// 把攒着的统计写进文件（失焦、退出前）。
+    func flushStats() {
+        guard let stats else { return }
+        if wowtype_stats_flush(stats, wowtype_stats_now_ms()) != 0 {
+            NSLog("WowType: 打字统计写入失败")
+        }
     }
 
     // 第一次要画候选框时才建窗口（自检时没有图形界面）

@@ -24,6 +24,10 @@ final class WowTypeInputController: IMKInputController {
         super.init(server: server, delegate: delegate, client: inputClient)
         composer = Composer(engine: AppState.shared.engine, client: self)
         composer.onCommit = { _ in AppState.shared.didCommit() }
+        composer.onCommitStats = { text, source, scheme, index in
+            AppState.shared.recordCommit(text, source: source, scheme: scheme,
+                                         candidateIndex: index)
+        }
         composer.onForget = { AppState.shared.didForget() }
         composer.sampleClipboard = { AppState.shared.sampleClipboard() }
         composer.onTranslatePoll = { [weak self] in self?.startTranslatePolling() }
@@ -71,10 +75,12 @@ final class WowTypeInputController: IMKInputController {
         syncComposer()
         switch event.type {
         case .flagsChanged:
+            recordModifierPress(event)
             handleFlags(event)
             // 修饰键永远交给应用
             return false
         case .keyDown:
+            recordKeyPress(event)
             guard let key = translateKeyDown(keyCode: event.keyCode, characters: event.characters,
                                              charactersIgnoringModifiers: event.charactersIgnoringModifiers,
                                              cocoaFlags: event.modifierFlags.rawValue)
@@ -94,6 +100,43 @@ final class WowTypeInputController: IMKInputController {
             return handled
         default:
             return false
+        }
+    }
+
+    /// 按键热力图：自动重复不算，密码框（安全输入）不计。功能键也在这一层记，
+    /// 因为 `translateKeyDown` 会把 F 键、别的键盘布局打出的字符丢掉。
+    private func recordKeyPress(_ event: NSEvent) {
+        guard !event.isARepeat, !IsSecureEventInputEnabled() else { return }
+        AppState.shared.recordKey(event.keyCode)
+    }
+
+    /// 修饰键只有 flagsChanged：按左右设备位判断是不是按下那一边。
+    private var modifierHeld: Set<UInt16> = []
+
+    private func recordModifierPress(_ event: NSEvent) {
+        let code = event.keyCode
+        if code == 0x39 {  // Caps Lock 只在切换时来一次，每次切换都算按了一下
+            if !IsSecureEventInputEnabled() {
+                AppState.shared.recordKey(code)
+            }
+            return
+        }
+        let bit: NSEvent.ModifierFlags?
+        switch code {
+        case 0x38, 0x3C: bit = .shift
+        case 0x3B, 0x3E: bit = .control
+        case 0x3A, 0x3D: bit = .option
+        case 0x37, 0x36: bit = .command
+        default: return
+        }
+        guard let bit else { return }
+        let down = event.modifierFlags.contains(bit)
+        if down {
+            if modifierHeld.insert(code).inserted, !IsSecureEventInputEnabled() {
+                AppState.shared.recordKey(code)
+            }
+        } else {
+            modifierHeld.remove(code)
         }
     }
 
@@ -127,6 +170,8 @@ final class WowTypeInputController: IMKInputController {
         stopTranslatePolling()
         AppState.shared.candidatePanel.hide()
         AppState.shared.save()
+        AppState.shared.flushStats()
+        modifierHeld.removeAll()
         super.deactivateServer(sender)
     }
 
