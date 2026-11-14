@@ -6,6 +6,11 @@
 import AppKit
 import Carbon
 import InputMethodKit
+import os
+
+/// 修饰键事件的调试记录（debug 级别，平时不记）。看某个应用里单按 Shift 收到了什么：
+/// log stream --level debug --predicate 'subsystem == "WowType" && category == "flags"'
+private let flagsLog = Logger(subsystem: "WowType", category: "flags")
 
 @objc(WowTypeInputController)
 class WowTypeInputController: IMKInputController {
@@ -130,6 +135,8 @@ class WowTypeInputController: IMKInputController {
     /// 应用会多报、重报 flagsChanged（同一个状态来两遍），以前一比就当成按了别的修饰键，单按 Shift 就没了。
     /// 多报的按下会话当成重新按下，多报的松开没有按下对着、不算。
     private func handleFlags(_ event: NSEvent) {
+        let app = textInput?.bundleIdentifier() ?? "?"
+        flagsLog.debug("\(app, privacy: .public) key=\(event.keyCode) flags=\(String(event.modifierFlags.rawValue, radix: 16), privacy: .public) t=\(event.timestamp)")
         let right = event.keyCode == VirtualKey.shiftRight
         guard right || event.keyCode == VirtualKey.shiftLeft else {
             // 别的修饰键（Command、Option、Control、Fn、CapsLock）：这次 Shift 不算单按
