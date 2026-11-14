@@ -136,12 +136,17 @@ private struct StatsMenuIcon: View {
                                width: 18 * scale, height: 18 * scale)
             context.stroke(Path(roundedRect: frame, cornerRadius: 2 * scale),
                            with: .color(color), lineWidth: line)
-            for (from, to, y) in [(9.0, 7.0, 17.0), (13.0, 7.0, 12.0), (11.0, 7.0, 7.0)] {
-                var path = Path()
-                path.move(to: CGPoint(x: from * scale, y: y * scale))
-                path.addLine(to: CGPoint(x: to * scale, y: y * scale))
-                context.stroke(path, with: .color(color), lineWidth: line,
-                               style: StrokeStyle(lineCap: .round))
+            // 三条线画成圆角细矩形：macOS 12 的 GraphicsContext.stroke 没有 style 参数，
+            // 用 fill 画也能得到圆头线段。
+            let cap = line / 2
+            let strokes: [(CGFloat, CGFloat, CGFloat)] = [(9, 7, 17), (13, 7, 12), (11, 7, 7)]
+            for (from, to, y) in strokes {
+                let start = min(from, to) * scale
+                let end = max(from, to) * scale
+                let rect = CGRect(x: start, y: y * scale - cap,
+                                  width: end - start, height: line)
+                context.fill(Path(roundedRect: rect, cornerRadius: cap),
+                             with: .color(color))
             }
         }
         .frame(width: 16, height: 16)
@@ -1296,7 +1301,7 @@ private struct StatsPage: View {
                                            count: counts[code] ?? 0, maximum: maximum)
                                 } else {
                                     Color.clear
-                                        .frame(width: max(1, key.weight * StatsKeyboard.unit - 4),
+                                        .frame(width: CGFloat(max(1, key.weight * StatsKeyboard.unit - 4)),
                                                height: 32)
                                 }
                             }
@@ -1373,7 +1378,7 @@ private struct StatsPage: View {
             .font(.system(size: 9))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .frame(width: max(1, weight * StatsKeyboard.unit - 4), height: 32)
+            .frame(width: CGFloat(max(1, weight * StatsKeyboard.unit - 4)), height: 32)
             .background(heatColor(level))
             .foregroundColor(level >= 3 ? .white : .primary)
             .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
