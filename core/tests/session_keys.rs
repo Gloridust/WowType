@@ -946,24 +946,34 @@ fn configured_page_keys() {
 }
 
 #[test]
-fn cursor_moves_across_pages_and_wraps() {
-    let (mut session, _) = default_paged();
+fn cursor_moves_across_pages_but_stops_at_both_ends() {
+    let (mut session, all) = default_paged();
     for _ in 0..5 {
         type_keys(&mut session, "<right>");
     }
     let frame = session.frame(false);
     assert_eq!(frame.cand_start, 5, "光标移出这一页，跟着翻页");
     assert_eq!(frame.cand_cursor, Some(0));
-
-    // 第一个往左：绕到最后一个
-    let (mut session, all2) = default_paged();
     let frame = type_keys(&mut session, "<left>");
-    assert_eq!(frame.cand_start, (all2.len() - 1) / 5 * 5);
-    assert_eq!(frame.cand_cursor, Some((all2.len() - 1) % 5));
-    assert!(!frame.has_next);
+    assert_eq!((frame.cand_start, frame.cand_cursor), (0, Some(4)), "往回也跨页");
+
+    // 第一个往左：停在第一个，不绕到末页的生僻字；吃掉，不交给应用
+    let (mut session, _) = default_paged();
+    let frame = type_keys(&mut session, "<left>");
+    assert!(frame.handled);
+    assert_eq!((frame.cand_start, frame.cand_cursor), (0, Some(0)));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some(all[0].as_str()));
+
+    // 最后一个往右：停在最后一个，不绕回第一个
+    let (mut session, _) = default_paged();
+    for _ in 0..all.len() + 3 {
+        type_keys(&mut session, "<right>");
+    }
+    let frame = session.frame(false);
+    assert_eq!(frame.cand_start + frame.cand_cursor.unwrap(), all.len() - 1);
     assert_eq!(
         type_keys(&mut session, "<sp>").commit.as_deref(),
-        Some(all2[all2.len() - 1].as_str())
+        Some(all[all.len() - 1].as_str())
     );
 }
 
@@ -1023,8 +1033,11 @@ fn vertical_list() {
     assert_eq!(type_keys(&mut session, "<right>").cand_start, 5);
     assert_eq!(type_keys(&mut session, "<left>").cand_start, 0);
     let frame = type_keys(&mut session, "<up>");
-    assert_eq!(frame.cand_cursor, Some((all.len() - 1) % 5), "绕到最后一个");
-    assert_eq!(type_keys(&mut session, "<down>").cand_start, 0);
+    assert_eq!(
+        (frame.cand_start, frame.cand_cursor),
+        (0, Some(0)),
+        "第一个再往上：停住，不绕到最后一个"
+    );
     assert_eq!(
         type_keys(&mut session, "<sp>").commit.as_deref(),
         Some(all[0].as_str())

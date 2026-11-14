@@ -525,15 +525,16 @@ void runCases(Instance &instance) {
         check(!p2.empty() && ic->committed == p2[0], "接着空格选下一页第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
-    type(ic.get(), "shi<left>");
+    type(ic.get(), "shi");
     {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<left>");
         auto *list = common();
-        const auto last = page(ic.get());
-        check(list && !list->hasNext() && list->hasPrev() &&
-                  list->cursorIndex() == list->size() - 1,
-              "第一个上按左键：绕到最后一页最后一个");
+        check(list && list->hasNext() && !list->hasPrev() && list->cursorIndex() == 0 &&
+                  page(ic.get()) == p1,
+              "第一个上按左键：停在第一个，不绕到最后一页");
         type(ic.get(), "<sp>");
-        check(!last.empty() && ic->committed == last.back(), "空格选最后一个，实际 " + ic->committed);
+        check(!p1.empty() && ic->committed == p1[0], "空格选第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");
@@ -666,15 +667,15 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "shi");
     {
+        const auto p1 = page(ic.get());
         if (auto *list = common()) {
             list->prevCandidate();
         }
         auto *list = common();
-        const auto last = page(ic.get());
-        check(list && !list->hasNext() && list->cursorIndex() == list->size() - 1,
-              "列表 prevCandidate 从第一个绕到最后一个");
+        check(list && list->cursorIndex() == 0 && page(ic.get()) == p1,
+              "列表 prevCandidate 在第一个上停住");
         type(ic.get(), "<sp>");
-        check(!last.empty() && ic->committed == last.back(), "接着空格选最后一个，实际 " + ic->committed);
+        check(!p1.empty() && ic->committed == p1[0], "接着空格选第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");
@@ -1000,10 +1001,8 @@ void runCases(Instance &instance) {
         check(page(ic.get()) == v1, "竖排左键翻回来");
         type(ic.get(), "<up>");
         auto list = ic->inputPanel().candidateList();
-        check(list && list->cursorIndex() == list->size() - 1 && page(ic.get()) != v1,
-              "竖排第一个上按上键：绕到最后一个");
-        type(ic.get(), "<down>");
-        check(page(ic.get()) == v1, "再按下键绕回第一个");
+        check(list && list->cursorIndex() == 0 && page(ic.get()) == v1,
+              "竖排第一个上按上键：停在第一个，不绕到最后一个");
         type(ic.get(), "<sp>");
         check(!v1.empty() && ic->committed == v1[0], "空格选第一个，实际 " + ic->committed);
     }

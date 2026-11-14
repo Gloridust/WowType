@@ -1916,8 +1916,9 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// 移光标（和 fcitx5 的候选列表一样）：光标不在这一页上时落到这一页的头 / 尾；
-    /// 否则走一格，走过头绕到全部候选的另一头，翻到光标所在的页。
+    /// 移光标：光标不在这一页上时落到这一页的头 / 尾；否则走一格，跨页时翻到光标所在的页。
+    /// 到了全部候选的两头就停住，不绕到另一头：第一个往前一按就跳到末页的生僻字，
+    /// 再顺手按空格就上屏了它（展开面板、工具栏到头也是停住）。
     fn move_cursor(&mut self, prev: bool) {
         let n = self.candidates.len();
         if n == 0 {
@@ -1931,11 +1932,10 @@ impl<'e> Session<'e> {
             self.cursor = start + if prev { len - 1 } else { 0 };
             return;
         }
-        self.cursor = match (prev, self.cursor) {
-            (true, 0) => n - 1,
-            (true, c) => c - 1,
-            (false, c) if c + 1 >= n => 0,
-            (false, c) => c + 1,
+        self.cursor = if prev {
+            self.cursor.saturating_sub(1)
+        } else {
+            (self.cursor + 1).min(n - 1)
         };
         self.page = self.cursor / self.page_size();
     }
