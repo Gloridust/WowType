@@ -5,7 +5,7 @@
 #   scripts/make-wanxiang.sh [rime_wanxiang 目录] [输出目录] [打包目录]
 #
 # 不给 rime_wanxiang 目录时自动 git clone 一份（--depth 1）。输出目录里：
-#   lexicon.tsv   中文词库（约 170 万条）
+#   lexicon.tsv   中文词库（条数生成时打出来）
 #   LICENSE       万象的许可证（CC BY 4.0），随数据一起分发
 #   SOURCE.txt    数据来源、版本和 WowType 做了哪些改动（CC BY 要求注明）
 #   VERSION       词库包版本

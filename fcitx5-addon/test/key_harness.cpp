@@ -1224,7 +1224,9 @@ void runCases(Instance &instance) {
         KeyEvent release(ic.get(), Key(sym, KeyState::Shift), true);
         return ic->keyEvent(release);
     };
+    check(instance.inputMethodLabel(ic.get()) == "中", "中文时提示「中」：" + instance.inputMethodLabel(ic.get()));
     check(tapShift(FcitxKey_Shift_R), "单按右 Shift 被接住");
+    check(instance.inputMethodLabel(ic.get()) == "英", "英文时提示「英」：" + instance.inputMethodLabel(ic.get()));
     type(ic.get(), "nihao,");
     check(ic->committed.empty() && ic->passed == "nihao," && preedit(ic.get()).empty(),
           "英文模式字母、标点原样交给应用，实际 passed=" + ic->passed);

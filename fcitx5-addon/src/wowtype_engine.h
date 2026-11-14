@@ -386,7 +386,7 @@ public:
                     fcitx::InputContextEvent &event) override;
     void reset(const fcitx::InputMethodEntry &entry,
                fcitx::InputContextEvent &event) override;
-    /// 英文模式时状态栏、切换提示里显示「英」。
+    /// 状态栏、切换提示：「中文」「英文」「互译」，一个字的是「中」「英」「译」。
     std::string subMode(const fcitx::InputMethodEntry &entry,
                         fcitx::InputContext &ic) override;
     std::string subModeLabelImpl(const fcitx::InputMethodEntry &entry,
@@ -443,6 +443,9 @@ private:
                     bool notify);
 
     // 互译模式：打的字先攒成原文，模型译好后上屏译文
+    /// 现在的模式：「中文」「英文」「互译」；提示框和托盘上的一个字「中」「英」「译」。
+    const char *modeTitle() const;
+    const char *modeLabel() const;
     /// 现在是互译模式，而且这个输入框能用（密码框里不翻译、不往外发）。
     bool translating(fcitx::InputContext *ic) const;
     bool translateAvailable() const;

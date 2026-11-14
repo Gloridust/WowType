@@ -21,7 +21,7 @@ source = SCRIPT.read_text(encoding="utf-8")
 compile(source, str(SCRIPT), "exec")
 tree = ast.parse(source, filename=str(SCRIPT))
 functions = {
-    "current_version", "dpkg_version", "read_os_release", "update_platform",
+    "current_version", "development_build", "dpkg_version", "read_os_release", "update_platform",
     "package_version", "install_commands", "plan_update", "download_updates", "http_open",
 }
 constants = {"VERSION", "HOMEPAGE", "INSTALL_GUIDE", "REPO", "ENGINE_PKG"}
@@ -224,6 +224,12 @@ class UpdateTests(unittest.TestCase):
                 updater["download_updates"]({"tag": "../elsewhere", "assets": {}}, [], lambda *_: None)
             with self.assertRaises(RuntimeError):
                 updater["download_updates"]({"tag": "v0.3.9", "assets": {}}, [("../escape", "x")], lambda *_: None)
+
+    def test_development_build(self):
+        # 开发版不能说「已经是最新版本」：0.3.12~git… 可能在 0.3.12 之前，也可能之后
+        for version, dev in [("0.3.12", False), ("0.3.12~git20261114.f99b1d4", True), ("@VERSION@", True)]:
+            with patch.dict(updater, VERSION=version):
+                self.assertEqual(updater["development_build"](), dev, version)
 
     def test_arch_installer_single_command(self):
         # Arch 只跑一条 pacman -U：成功就更新了，失败（依赖不满足、取消授权）就停

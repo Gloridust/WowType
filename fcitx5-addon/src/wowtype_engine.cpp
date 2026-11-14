@@ -339,9 +339,9 @@ class WowtypeCandidateWord final : public fcitx::CandidateWord {
 public:
     /// shown 是 shownCandidate 画好的样子。
     WowtypeCandidateWord(WowtypeEngine *engine, WowtypeState *state,
-                         std::size_t index, const std::string &shown)
+                         std::size_t index, fcitx::Text shown)
         : engine_(engine), state_(state), index_(index) {
-        setText(fcitx::Text(shown));
+        setText(std::move(shown));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -357,10 +357,9 @@ private:
 /// 展开面板的一行（一行里有好几个词）。
 class WowtypeGridRow final : public fcitx::CandidateWord {
 public:
-    WowtypeGridRow(WowtypeEngine *engine, WowtypeState *state, std::size_t row,
-                   const std::string &text)
+    WowtypeGridRow(WowtypeEngine *engine, WowtypeState *state, std::size_t row, fcitx::Text text)
         : engine_(engine), state_(state), row_(row) {
-        setText(fcitx::Text(text));
+        setText(std::move(text));
     }
 
     void select(fcitx::InputContext *inputContext) const override {
@@ -463,11 +462,13 @@ struct WowtypeCandidate {
 
 namespace {
 
-/// 候选框里一个候选的样子：字（换行画成 ⏎），后面空一格是编码提示。fcitx5 5.0 的候选没有注释位，画在字后面。
-std::string shownCandidate(const WowtypeCandidate &candidate) {
-    std::string out = shownText(candidate.text);
+/// 候选框里一个候选的样子：字（换行画成 ⏎），后面空一格是斜体的编码提示，和字分得开。
+/// fcitx5 5.1.9 以前候选没有注释位，经典界面也只认粗体、斜体、下划线、删除线，画不了浅色，
+/// 斜体是各个版本都一样的那个。
+fcitx::Text shownCandidate(const WowtypeCandidate &candidate) {
+    fcitx::Text out(shownText(candidate.text));
     if (!candidate.comment.empty()) {
-        out += " " + candidate.comment;
+        out.append(" " + candidate.comment, fcitx::TextFormatFlag::Italic);
     }
     return out;
 }
@@ -1607,26 +1608,24 @@ void WowtypeEngine::fillGridPanel(fcitx::InputPanel &panel, WowtypeState *state)
         std::size_t widths[kGridCols] = {};
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
-                widths[c] = std::max(widths[c], displayWidth(shownCandidate(all[r * kGridCols + c])));
+                widths[c] = std::max(widths[c], displayWidth(shownCandidate(all[r * kGridCols + c]).toString()));
             }
         }
         for (std::size_t r = pageStart; r < pageEnd; ++r) {
-            std::string line;
+            fcitx::Text line;
             for (std::size_t c = 0; c < kGridCols && r * kGridCols + c < n; ++c) {
                 const std::size_t index = r * kGridCols + c;
                 const bool here = index == state->gridCursor_;
-                line += r == cursorRow ? kLabels[c] : "\u3000";
-                line += here ? "\u3014" : "\u3000";
-                line += shownCandidate(all[index]);
-                if (here) {
-                    line += "\u3015";
-                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
-                } else {
-                    padTo(line, displayWidth(shownCandidate(all[index])), widths[c]);
-                    line += "\u3000";
+                const fcitx::Text shown = shownCandidate(all[index]);
+                std::string after = here ? "\u3015" : "";
+                padTo(after, displayWidth(shown.toString()), widths[c]);
+                line.append(std::string(r == cursorRow ? kLabels[c] : "\u3000") + (here ? "\u3014" : "\u3000"));
+                for (std::size_t i = 0; i < shown.size(); ++i) {
+                    line.append(shown.stringAt(i), shown.formatAt(i));
                 }
+                line.append(after + (here ? "" : "\u3000"));
             }
-            list->append<WowtypeGridRow>(this, state, r, line);
+            list->append<WowtypeGridRow>(this, state, r, std::move(line));
         }
     }
     // 先翻到光标所在的那一屏（setGlobalCursorIndex 不翻页），下键走到第 7 行以后才看得到
@@ -1925,14 +1924,23 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
 }
 
+const char *WowtypeEngine::modeTitle() const {
+    return translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
+}
+
+const char *WowtypeEngine::modeLabel() const {
+    return translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+}
+
 std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,
                                    fcitx::InputContext & /*ic*/) {
-    return translateMode_ ? "互译" : asciiMode_ ? "英文" : "";
+    return modeTitle();
 }
 
 std::string WowtypeEngine::subModeLabelImpl(const fcitx::InputMethodEntry & /*entry*/,
                                             fcitx::InputContext & /*ic*/) {
-    return translateMode_ ? "译" : asciiMode_ ? "英" : "";
+    // 中文也要给：给空的话切回中文时提示框、托盘写的是输入法的名字「WowType」，和「英」「译」对不上
+    return modeLabel();
 }
 
 /// 按下 Shift 记下来，松开时中间没按别的键（也没按太久）就切中英文。
@@ -2026,14 +2034,13 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
     if (state) {
         syncMode(ic, state);
     }
-    const char *name = translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
-    WLOG_I() << "WowType: 切到" << name;
+    WLOG_I() << "WowType: 切到" << modeTitle();
     if (!ic) {
         return;
     }
     if (notify) {
 #ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
-        std::string label = translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+        std::string label = modeLabel();
         if (translateMode_ && translator_) {
             label += " ";
             label += wowtype_translate_tag(translator_, "");

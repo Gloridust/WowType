@@ -351,8 +351,8 @@ cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
 
 ### 可选词库：万象拼音
 
-默认词库是[雾凇拼音](https://github.com/iDvel/rime-ice)（约 89 万词，随安装包一起装好）。
-另外可以换成从[万象拼音](https://github.com/amzxyz/rime_wanxiang)转换的词库（约 168 万词，CC BY 4.0），词更多。
+默认词库是[雾凇拼音](https://github.com/iDvel/rime-ice)（随安装包一起装好）。
+另外可以换成从[万象拼音](https://github.com/amzxyz/rime_wanxiang)转换的词库（CC BY 4.0），词更多。
 它不在安装包里，每次发版作为单独的 `wowtype-data-wanxiang-<版本>.tar.gz` 放在 Release 上。
 
 - **切换**：「WowType 设置 → 输入 → 词库」里选「万象拼音」，第一次会下载（约 20 MB，对照 `SHA256SUMS` 校验），装到 `~/.local/share/wowtype/dicts/wanxiang/`，几秒后生效，不用重启 fcitx5。选回「雾凇拼音」就切回去，万象的文件可以在同一个地方删掉。
