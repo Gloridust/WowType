@@ -456,9 +456,19 @@ public final class Composer {
         apply(wowtype_session_set_mode(session, raw))
     }
 
-    /// 放弃正在打的（系统要结束组字：换输入框、点了别处、切走输入法）：拼音、选了一半的句子、
-    /// 互译攒着的原文都丢掉，工具栏、表情面板收起来，会话记的上文也作废。和 Linux 失去焦点一样，
-    /// 文档里不会留下拼音或者转了一半的字。
+    /// 系统要结束组字（换输入框、点了别处、切走输入法）：已选的词 + 打的字母原样上屏（和回车一样，
+    /// 双拼是打的键、五笔是码，不带分音节的隔音符）；互译时拼音先进原文，原文再原样上屏。
+    /// 工具栏、表情面板收起来，会话记的上文作废（回来时光标可能在别处）。
+    /// Linux 上同样的时候是丢掉：那边工具包抢先上屏的是编辑区里显示的字，输入法没法换成原始字母。
+    public func commitComposition() {
+        closeTool()
+        if hasPendingText {
+            apply(wowtype_session_reset(session, 1))
+        }
+        apply(wowtype_session_reset(session, 0))
+    }
+
+    /// 放弃正在打的：拼音、选了一半的句子、互译攒着的原文都丢掉，工具栏、表情面板收起来，上文作废。
     public func cancel() {
         closeTool()
         translateDrawn = ""

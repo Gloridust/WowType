@@ -315,20 +315,30 @@ do {
 }
 
 do {
-    // 系统要结束组字（换输入框、点了别处、切走输入法）：打到一半的丢掉，编辑区清空，
-    // 文档里不留「ni'hao」，也不留选了一半的「你好hao」（和 Linux 失去焦点一样）
+    // 系统要结束组字（换输入框、点了别处、切走输入法）：打的字母原样上屏，编辑区清空，
+    // 不带分音节的隔音符（编辑区是「ni'hao」，上屏的是「nihao」）
     let (c, client) = fresh()
     type(c, "nihao")
-    c.cancel()
-    check(client.committed.isEmpty && client.marked.isEmpty && client.page == nil && !c.isComposing,
-          "结束组字时丢掉拼音", client.committed)
+    check(client.marked == "ni'hao", "编辑区分了音节", client.marked)
+    c.commitComposition()
+    check(client.committed == "nihao" && client.marked.isEmpty && client.page == nil && !c.isComposing,
+          "结束组字时原样上屏字母", client.committed)
+    client.committed = ""
     type(c, "nihaoshi")
     if let i = client.page?.texts.firstIndex(of: "你好") {
         c.select(i)
     }
     check(client.marked == "你好shi" && client.committed.isEmpty, "选了句首的词", client.marked)
-    c.cancel()
-    check(client.committed.isEmpty && client.marked.isEmpty, "结束组字时选了一半的句子也丢掉", client.committed)
+    c.commitComposition()
+    check(client.committed == "你好shi" && client.marked.isEmpty, "选了一半：已选的词 + 剩下的字母", client.committed)
+}
+
+withConfig({ $0.inputScheme = .shuangpin }) { c, client in
+    // 双拼：上屏打的键，不是编辑区里显示的全拼
+    type(c, "nihk")
+    check(client.marked == "ni'hao", "双拼编辑区显示全拼", client.marked)
+    c.commitComposition()
+    check(client.committed == "nihk" && client.marked.isEmpty, "结束组字时双拼上屏打的键", client.committed)
 }
 
 do {
@@ -601,8 +611,9 @@ do {
     }
     withWubi { c, client in
         type(c, "wqv")
-        c.cancel()
-        check(client.committed.isEmpty && client.marked.isEmpty, "结束组字时五笔码丢掉", client.committed)
+        c.commitComposition()
+        check(client.committed == "wqv" && client.marked.isEmpty, "结束组字时五笔码原样上屏", client.committed)
+        client.committed = ""
         type(c, "g")
         check(Array(client.page?.texts.prefix(2) ?? []) == ["一", "1️⃣"], "数字 emoji 跟在数字字后面",
               "\(client.page?.texts ?? [])")
@@ -1008,7 +1019,7 @@ withConfig({ _ in }) { c, client in
     check(!c.handle(.char("c", [.control])) && c.openPanel == nil && client.page == nil, "Control+C 收起工具栏、交给应用")
     type(c, "v")
     _ = c.handle(.char(" "))
-    c.cancel()
+    c.commitComposition()
     check(c.openPanel == nil && client.page == nil && client.committed.isEmpty, "切走输入法时收起工具栏，不上屏")
     type(c, "vim")
     _ = c.handle(.char(" "))
@@ -1557,14 +1568,14 @@ do {
           "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
     check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
 
-    // 切走输入法 / 换输入框：原文和拼音都丢掉，不上屏半截的原文
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏（原文是选好的字，后面是打的字母）
     let s = translateRig()
     type(s.c, "nihao")
     _ = s.c.handle(.char(" "))
     type(s.c, "hao")
-    s.c.cancel()
-    check(s.client.committed.isEmpty && !s.c.hasPendingText && s.client.page == nil && s.client.marked.isEmpty,
-          "切走时原文、拼音都丢掉", s.client.committed)
+    s.c.commitComposition()
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil && s.client.marked.isEmpty,
+          "切走时原文原样上屏", s.client.committed)
 
     // 设置里关掉互译：离开「译」
     let u = translateRig()
@@ -1995,7 +2006,7 @@ if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
         client.committed = "你好"  // 在应用里用鼠标改了，会话没看到键：拿光标前的字核对
         check(firstMa() != afterBu, "光标前不是「不」了")
         client.committed = "不"
-        c.cancel()  // 点到别处又回来
+        c.commitComposition()  // 点到别处又回来
         check(firstMa() == afterBu, "光标前还是「不」时照样用它", "\(afterBu)")
     }
 }
