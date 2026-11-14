@@ -305,13 +305,10 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 | `words.domain.lm` | 可选：自己训的领域词级模型，和 `words.lm` 混着用，见下 |
 
-**语料词频和自己构建词库时的可选数据源**：`scripts/make-data.sh` 用雾凇拼音和仓库里 `data/` 下的表，
+**语料词频**：`scripts/make-data.sh` 用雾凇拼音和仓库里 `data/` 下的表，
 其中 `data/tatoeba-freq.tsv` 是从 Tatoeba 中文句子（CC BY 2.0 FR）统计出的词频，默认融进已有词的词频
 （只有词频、不含句子，署名在 `SOURCE.txt`，装好后是 `DATA-SOURCE.txt`；`WOWTYPE_NO_CORPUS_FREQ=1` 不融）。
-`WOWTYPE_DATA_EXTRAS="jieba cedict"`（空格或逗号分隔，写哪个开哪个，默认不开）可以再加：
-`jieba` 用 jieba 词典（MIT）调词频、补一批读音可靠的词；`cedict` 用 CC-CEDICT（CC BY-SA 4.0）补人名地名等词。
-下载地址和 sha256 都钉死，需要的 Python 包按 `tools/requirements-data.txt` 装（版本和哈希也钉死）。
-各变量、实测效果和为什么只默认融了语料词频，见 [DATA.md §3.3](DATA.md#33-语料词频和构建词库的可选数据源)。
+换成本机语料、重新生成这张表和实测效果见 [DATA.md §3.3](DATA.md#33-语料词频)。
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），

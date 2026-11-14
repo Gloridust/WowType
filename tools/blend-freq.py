@@ -4,8 +4,7 @@
 用法：
     python3 tools/blend-freq.py lexicon.tsv counts.tsv out.tsv --weight 0.3
 
-counts.tsv 每行「词<TAB>次数」，不带读音：jieba 的词典（tools/jieba2tsv.py --counts）、
-语料挖出来的词频（tools/mine_corpus_freq.py）都是这个格式。
+counts.tsv 每行「词<TAB>次数」，不带读音，tools/mine_corpus_freq.py 挖出来的就是这个格式。
 
 按词融合，不按行：
     词的新总频次 = 词库里这个词各读音的频次之和 * (1 - w) + 外部次数 * 换算系数 * w
@@ -30,8 +29,6 @@ def main():
     ap.add_argument("output")
     ap.add_argument("--weight", type=float, default=0.3, help="外部词频的比重，0~1")
     ap.add_argument("--label", default="词频", help="日志里的名字")
-    ap.add_argument("--raise-only", action="store_true",
-                    help="只提不降（外部词频比词库低的词不动）：语料里出现少的词不会比语料里没出现的词更吃亏")
     ap.add_argument("--max-factor", type=float, default=0, help="每个词最多抬到 K * max(原频次, --floor)；0 不限")
     ap.add_argument("--floor", type=float, default=0, help="见 --max-factor")
     args = ap.parse_args()
@@ -57,8 +54,6 @@ def main():
             continue
         total = sum(r[3] for r in usable)
         factor = (total * (1.0 - w) + count * scale * w) / total
-        if args.raise_only:
-            factor = max(factor, 1.0)
         if args.max_factor > 0:
             capped = min(factor, args.max_factor * max(total, args.floor) / total)
             if capped < factor:
