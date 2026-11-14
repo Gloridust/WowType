@@ -3159,8 +3159,8 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         self.set_default_size(860, 680)
         self.toasts = Adw.ToastOverlay()
-        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
-                               transition_duration=120)
+        # 不要用淡入淡出：niri 等合成器下动画时钟可能停在中间，整页会一直半透明。
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE)
         pages = (
             ("general", "常规", "preferences-system-symbolic", self.build_general),
             ("input", "输入", "input-keyboard-symbolic", self.build_input),
@@ -3348,8 +3348,7 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         switcher = Gtk.StackSwitcher()
         switcher.set_halign(Gtk.Align.START)
-        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
-                          transition_duration=120)
+        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE)
         switcher.set_stack(stack)
         pages = (
             ("keys", "按键", self.stats_keys_page),
@@ -5530,7 +5529,11 @@ class SettingsApp(Adw.Application):
         self.font_css.load_from_string(f"window {{ font-family: {quoted}; }}")
 
     def update_style_css(self):
-        dark = Adw.StyleManager.get_default().get_dark()
+        # niri 等非 GNOME 桌面不一定把 color-scheme 报给 GTK，但用户可能选了深色 GTK 主题；
+        # 主题名里带 dark 也按深色走，否则深色主题的白色文字会画在浅色卡片上，整页发灰。
+        settings = Gtk.Settings.get_default()
+        theme_name = (settings.props.gtk_theme_name or "").lower() if settings else ""
+        dark = Adw.StyleManager.get_default().get_dark() or "dark" in theme_name
         accent_text = "#3CCB93" if dark else "#0a8a5c"
         css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT % accent_text
         if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):
