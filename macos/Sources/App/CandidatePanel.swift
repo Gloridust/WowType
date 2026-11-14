@@ -367,6 +367,10 @@ final class CandidatePanel {
     var fontSize: CGFloat = 17
     /// 输入框这一行和候选框之间
     private let gap: CGFloat = 4
+    /// 正在显示的这一页的排版；收起时 nil
+    private(set) var layout: CandidateLayout?
+    /// false：排好、摆好位置，但不把窗口放上屏幕（外壳测试 macos/ShellTests 用）
+    var onScreen = true
 
     init() {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
@@ -383,15 +387,18 @@ final class CandidatePanel {
     }
 
     func hide() {
+        layout = nil
         panel.orderOut(nil)
     }
 
     /// line 是输入框光标所在行的矩形（屏幕坐标，左下角为原点）；拿不到时是空矩形。
     func show(_ page: CandidatePage, below line: NSRect) {
         let layout = CandidateLayout(page: page, fontSize: fontSize)
+        self.layout = layout
         view.layout = layout
         panel.setContentSize(layout.size)
         panel.setFrameOrigin(origin(for: layout.size, line: line))
+        guard onScreen else { return }
         panel.orderFrontRegardless()
         // 投影是照窗口里画出来的形状算的，大小一变就得先画好再重算
         panel.displayIfNeeded()

@@ -1,16 +1,18 @@
 // IMK 输入控制器：每个输入框一个。按键翻译成 KeyInput 交给 Composer，Composer 通过 TextClient 回来写字。
 //
 // 类名要和 Info.plist 里的 InputMethodServerControllerClass 一样（WowTypeInputController）。
+// 不是 final：外壳测试（macos/ShellTests）用子类换掉 client()，给它一个假的输入框。
 
 import AppKit
 import Carbon
 import InputMethodKit
 
 @objc(WowTypeInputController)
-final class WowTypeInputController: IMKInputController {
+class WowTypeInputController: IMKInputController {
     private var composer: Composer!
-    /// 上一次给应用的编辑区，一样就不再发（每次上屏后 Composer 都会清一次编辑区）。
-    private var lastMarked = ""
+    /// 上一次给应用的编辑区和光标，一样就不再发（每次上屏后 Composer 都会清一次编辑区）。
+    /// 光标也要比：方向键移光标时字没变、光标变了
+    private var lastMarked = (text: "", cursor: 0)
     /// 最近上屏或交给应用的最后一个字。很多应用读不到光标前的字（attributedSubstring 返回 nil），用它兜底。
     private var lastInserted: UInt32 = 0
     private var lastFlags: UInt = 0
@@ -125,7 +127,7 @@ final class WowTypeInputController: IMKInputController {
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
-        lastMarked = ""
+        lastMarked = ("", 0)
         lastInserted = 0
         lastFlags = NSEvent.modifierFlags.rawValue
         syncComposer(force: true)
@@ -199,15 +201,15 @@ extension WowTypeInputController: TextClient {
     func insertText(_ text: String) {
         guard let client = textInput else { return }
         client.insertText(text, replacementRange: noRange())
-        lastMarked = ""
+        lastMarked = ("", 0)
         if let last = text.unicodeScalars.last {
             lastInserted = last.value
         }
     }
 
     func setMarkedText(_ text: String, cursor: Int) {
-        guard let client = textInput, text != lastMarked else { return }
-        lastMarked = text
+        guard let client = textInput, (text, cursor) != lastMarked else { return }
+        lastMarked = (text, cursor)
         let attributed = NSMutableAttributedString(string: text)
         let whole = NSRange(location: 0, length: attributed.length)
         if attributed.length > 0,
