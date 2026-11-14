@@ -7,6 +7,7 @@
 // 样子也照 Linux：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片。
 
 import AppKit
+import Combine
 import SwiftUI
 
 // MARK: 颜色
@@ -88,6 +89,7 @@ struct SettingsView: View {
         case .emoji: EmojiPage(model: model)
         case .translate: TranslatePage(model: model)
         case .words: WordsPage(model: model)
+        case .stats: StatsPage(model: model)
         }
     }
 }
@@ -121,6 +123,36 @@ private struct Sidebar: View {
     }
 }
 
+/// 设置侧栏「统计」的图标：Tabler layout（矩形 + 三条左对齐横线），
+/// 和 Linux 的 icons/hicolor/scalable/status/wowtype-stats-symbolic.svg 是同一份形状。
+private struct StatsMenuIcon: View {
+    var color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 24
+            let line = 2 * scale
+            let frame = CGRect(x: 3 * scale, y: 3 * scale,
+                               width: 18 * scale, height: 18 * scale)
+            context.stroke(Path(roundedRect: frame, cornerRadius: 2 * scale),
+                           with: .color(color), lineWidth: line)
+            // 三条线画成圆角细矩形：macOS 12 的 GraphicsContext.stroke 没有 style 参数，
+            // 用 fill 画也能得到圆头线段。
+            let cap = line / 2
+            let strokes: [(CGFloat, CGFloat, CGFloat)] = [(9, 7, 17), (13, 7, 12), (11, 7, 7)]
+            for (from, to, y) in strokes {
+                let start = min(from, to) * scale
+                let end = max(from, to) * scale
+                let rect = CGRect(x: start, y: y * scale - cap,
+                                  width: end - start, height: line)
+                context.fill(Path(roundedRect: rect, cornerRadius: cap),
+                             with: .color(color))
+            }
+        }
+        .frame(width: 16, height: 16)
+    }
+}
+
 private struct NavRow: View {
     let page: SettingsPage
     let selected: Bool
@@ -130,8 +162,13 @@ private struct NavRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: page.icon)
-                .frame(width: 18)
+            if page == .stats {
+                StatsMenuIcon(color: selected ? .white : .primary)
+                    .frame(width: 18)
+            } else {
+                Image(systemName: page.icon)
+                    .frame(width: 18)
+            }
             Text(page.title)
             Spacer()
         }
@@ -1067,5 +1104,532 @@ private struct EntryRow<Field: View>: View {
                 .textFieldStyle(.plain)
         }
         .rowPadding()
+    }
+}
+
+// MARK: 统计
+
+private struct StatsPage: View {
+    @ObservedObject var model: SettingsModel
+    @Environment(\.palette) private var palette
+    @State private var document = StatsDocument()
+    @State private var tab = "keys"
+    @State private var showClear = false
+    @State private var visible = false
+
+    private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    private let tabs: [(String, String)] = [
+        ("keys", "按键"), ("trend", "趋势"), ("kind", "类型"),
+        ("mode", "模式"), ("scheme", "方案"), ("ranks", "候选"),
+    ]
+
+    private var path: String {
+        model.supportDir.appendingPathComponent("stats.json").path
+    }
+
+    private var metrics: StatsMetrics { StatsMath.metrics(document) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            overview
+            Text("速度统计汉字与字母；两次上屏间隔超过 10 秒视为休息，不计入活跃时长。")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            tabBar
+            content
+            footer
+        }
+        .onAppear {
+            visible = true
+            reload()
+        }
+        .onDisappear { visible = false }
+        .onReceive(tick) { _ in
+            if visible { reload() }
+        }
+    }
+
+    // MARK: 概览
+
+    private var overview: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .topLeading),
+                                     count: 3),
+                      alignment: .leading, spacing: 16) {
+                metric("今日输入", "\(metrics.todayChars)", "字符", bestNote)
+                metric("累计输入", "\(metrics.totalChars)", "字符",
+                       "日均 \(Int(metrics.averagePerDay.rounded())) 字符 · \(metrics.recordedDays) 天有记录")
+                metric("今日活跃", StatsMath.formatActive(metrics.todayActive), "",
+                       metrics.totalActive > 0
+                           ? "累计 \(StatsMath.formatActive(metrics.totalActive))"
+                           : "还没有测量到活跃时长")
+                metric("今日速度", "\(Int(metrics.todaySpeed.rounded()))", "字 / 分钟", fastestNote)
+                metric("平均速度", "\(Int(metrics.averageSpeed.rounded()))", "字 / 分钟", "")
+                metric("连续天数", "\(metrics.streak)", "天", "最长 \(metrics.longestStreak) 天")
+            }
+            if !bestLine.isEmpty {
+                HStack {
+                    Spacer()
+                    Text(bestLine)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(18)
+        .background(palette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(palette.cardBorder, lineWidth: 1))
+    }
+
+    private var bestNote: String {
+        guard let day = metrics.bestDay else { return "" }
+        return "单日最多 \(metrics.bestChars) 字符 · \(StatsMath.dayLabel(day))"
+    }
+
+    private var fastestNote: String {
+        guard let day = metrics.fastestDay else { return "" }
+        return "单日最快 \(Int(metrics.fastestSpeed.rounded())) 字 / 分钟 · \(StatsMath.dayLabel(day))"
+    }
+
+    private var bestLine: String {
+        var parts: [String] = []
+        if let day = metrics.bestDay {
+            parts.append("最多 \(StatsMath.dayLabel(day))，\(metrics.bestChars) 字符")
+        }
+        if let day = metrics.fastestDay {
+            parts.append("最快 \(StatsMath.dayLabel(day))，\(Int(metrics.fastestSpeed.rounded())) 字 / 分钟")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func metric(_ label: String, _ value: String, _ unit: String,
+                        _ note: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(palette.heading)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(value)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(Palette.green)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                if !unit.isEmpty {
+                    Text(unit)
+                        .font(.system(size: 10))
+                        .foregroundColor(palette.heading)
+                }
+            }
+            if !note.isEmpty {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // MARK: 标签
+
+    private var tabBar: some View {
+        HStack(spacing: 2) {
+            ForEach(tabs.indices, id: \.self) { index in
+                let name = tabs[index].0
+                let label = tabs[index].1
+                Button {
+                    tab = name
+                } label: {
+                    Text(label)
+                        .font(.system(size: 12, weight: tab == name ? .semibold : .regular))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity)
+                        .background(tab == name ? palette.card : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(3)
+        .background(palette.nested)
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+    }
+
+    @ViewBuilder private var content: some View {
+        switch tab {
+        case "trend": trendPage
+        case "kind": kindPage
+        case "mode": modePage
+        case "scheme": schemePage
+        case "ranks": ranksPage
+        default: keysPage
+        }
+    }
+
+    // MARK: 按键
+
+    private var keyCounts: [String: Int] { StatsKeyboard.totals(document) }
+
+    private var keysPage: some View {
+        let counts = keyCounts
+        let total = counts.values.reduce(0, +)
+        let maximum = max(1, counts.values.max() ?? 0)
+        let drawn = StatsKeyboard.drawnCodes
+        let others = counts.filter { !drawn.contains($0.key) }
+            .map { KeyCount(code: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.code < $1.code }
+        let keyboardRows = StatsKeyboard.rows
+        let top = counts.map { KeyCount(code: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.code < $1.code }
+            .prefix(5)
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("按键热力图 · 累计",
+                         note: "共 \(total) 次按键，颜色越深按得越多")
+            if total == 0 {
+                empty("还没有按键记录。用 WowType 打几个字，再回来看。")
+            } else {
+                VStack(alignment: .center, spacing: 4) {
+                    ForEach(keyboardRows.indices, id: \.self) { rowIndex in
+                        let row = keyboardRows[rowIndex]
+                        HStack(spacing: 4) {
+                            ForEach(row) { key in
+                                if let code = key.code {
+                                    keyCap(code, label: key.label, weight: key.weight,
+                                           count: counts[code] ?? 0, maximum: maximum)
+                                } else {
+                                    Color.clear
+                                        .frame(width: CGFloat(max(1, key.weight * StatsKeyboard.unit - 4)),
+                                               height: 32)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                if !others.isEmpty {
+                    Text("其他键")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6, alignment: .leading)],
+                              alignment: .leading, spacing: 6) {
+                        ForEach(others) { item in
+                            HStack(spacing: 6) {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(heatColor(StatsKeyboard.level(item.count, maximum: maximum)))
+                                    .frame(width: 10, height: 10)
+                                Text(StatsKeyboard.name(item.code))
+                                    .font(.system(size: 11))
+                                Text("\(item.count)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(palette.cardBorder, lineWidth: 1))
+                        }
+                    }
+                }
+                HStack(spacing: 4) {
+                    Text("少")
+                    ForEach(0..<5) { level in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(heatColor(level))
+                            .frame(width: 10, height: 10)
+                    }
+                    Text("多")
+                }
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(top.indices, id: \.self) { index in
+                        let item = top[index]
+                        HStack(spacing: 8) {
+                            Text("\(index + 1)")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                                .frame(width: 16, alignment: .trailing)
+                            Text(StatsKeyboard.name(item.code))
+                                .font(.system(size: 11))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Text("\(item.count) 次")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(palette.card)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .stroke(palette.cardBorder, lineWidth: 1))
+    }
+
+    private func keyCap(_ code: String, label: String, weight: Double, count: Int,
+                        maximum: Int) -> some View {
+        let level = StatsKeyboard.level(count, maximum: maximum)
+        return Text(label)
+            .font(.system(size: 9))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(width: CGFloat(max(1, weight * StatsKeyboard.unit - 4)), height: 32)
+            .background(heatColor(level))
+            .foregroundColor(level >= 3 ? .white : .primary)
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .help("\(StatsKeyboard.name(code))，\(count) 次")
+    }
+
+    private func heatColor(_ level: Int) -> Color {
+        switch level {
+        case 0: return palette.dark ? Color.white.opacity(0.07) : Color.black.opacity(0.05)
+        case 1: return Palette.green.opacity(0.22)
+        case 2: return Palette.green.opacity(0.42)
+        case 3: return Palette.green.opacity(0.68)
+        default: return Palette.green
+        }
+    }
+
+    // MARK: 趋势
+
+    private var trendPage: some View {
+        let series = StatsMath.recentDays(document, length: 30)
+        let maxCount = max(1, series.map(\.count).max() ?? 0)
+        let total = series.map(\.count).reduce(0, +)
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("每日趋势 · 近 30 天",
+                         note: "共 \(total) 字符 · 最高一天 \(maxCount) 字符")
+            if total == 0 {
+                empty("这 30 天还没有输入记录。")
+            } else {
+                Canvas { context, size in
+                    let gap: CGFloat = 3
+                    let bar = max(1, (size.width - gap * CGFloat(series.count - 1))
+                        / CGFloat(series.count))
+                    for (index, item) in series.enumerated() {
+                        guard item.count > 0 else { continue }
+                        let height = (size.height - 6) * CGFloat(item.count) / CGFloat(maxCount)
+                        let rect = CGRect(x: CGFloat(index) * (bar + gap),
+                                          y: size.height - height,
+                                          width: bar, height: height)
+                        context.fill(Path(rect), with: .color(Palette.green))
+                    }
+                }
+                .frame(height: 150)
+                HStack {
+                    Text(series.first.map { StatsMath.dayLabel($0.key) } ?? "")
+                    Spacer()
+                    Text(series.last.map { StatsMath.dayLabel($0.key) } ?? "")
+                }
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    // MARK: 类型 / 模式
+
+    private var kindPage: some View {
+        let totals = StatsStore.totals(document)
+        let slices: [(String, Int, Color)] = [
+            ("汉字", totals.kinds["han"] ?? 0, Palette.green),
+            ("字母", totals.kinds["latin"] ?? 0, Color(hex: 0x4C9AFF)),
+            ("数字", totals.kinds["number"] ?? 0, Color(hex: 0xF5A623)),
+            ("标点", totals.kinds["punct"] ?? 0, Color(hex: 0x8A93A6)),
+            ("表情", totals.kinds["emoji"] ?? 0, Color(hex: 0xE86AA6)),
+            ("其他", totals.kinds["other"] ?? 0, Color(hex: 0xC4C9C7)),
+        ].filter { $0.1 > 0 }
+        return ratioPage(title: "字符类型", slices: slices, emptyText: "还没有字符记录。")
+    }
+
+    private var modePage: some View {
+        let totals = StatsStore.totals(document)
+        let names = [("quanpin", "拼音"), ("shuangpin", "双拼"),
+                     ("english", "英文"), ("translate", "互译")]
+        let colors: [Color] = [Palette.green, Color(hex: 0x4C9AFF),
+                               Color(hex: 0xF5A623), Color(hex: 0xE86AA6)]
+        var slices: [(String, Int, Color)] = []
+        for (index, item) in names.enumerated() {
+            let value = totals.sources[item.0] ?? 0
+            if value > 0 {
+                slices.append((item.1, value, colors[index]))
+            }
+        }
+        return ratioPage(title: "语言模式", slices: slices, emptyText: "还没有输入记录。")
+    }
+
+    private func ratioPage(title: String, slices: [(String, Int, Color)],
+                           emptyText: String) -> some View {
+        let total = max(1, slices.map(\.1).reduce(0, +))
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle(title, note: "")
+            if slices.isEmpty {
+                empty(emptyText)
+            } else {
+                GeometryReader { geometry in
+                    HStack(spacing: 0) {
+                        ForEach(slices.indices, id: \.self) { index in
+                            let slice = slices[index]
+                            Rectangle()
+                                .fill(slice.2)
+                                .frame(width: geometry.size.width * CGFloat(slice.1) / CGFloat(total))
+                        }
+                    }
+                }
+                .frame(height: 12)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                ForEach(slices.indices, id: \.self) { index in
+                    let slice = slices[index]
+                    HStack(spacing: 8) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(slice.2)
+                            .frame(width: 10, height: 10)
+                        Text(slice.0)
+                            .font(.system(size: 11))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("\(slice.1) · \(Int((Double(slice.1) / Double(total) * 100).rounded()))%")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: 方案 / 候选
+
+    private var schemePage: some View {
+        let totals = StatsStore.totals(document)
+        let names = ["ziranma": "自然码", "xiaohe": "小鹤双拼", "microsoft": "微软双拼",
+                     "sogou": "搜狗双拼", "abc": "智能 ABC", "ziguang": "紫光双拼",
+                     "pinyinjiajia": "拼音加加"]
+        let rows = totals.schemes.map { KeyCount(code: $0.key, count: $0.value) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.code < $1.code }
+        let maximum = max(1, rows.first?.count ?? 0)
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("输入方案", note: "")
+            if rows.isEmpty {
+                empty("还没有双拼输入记录。用双拼打几个字，这里会显示各方案的占比。")
+            } else {
+                ForEach(rows) { row in
+                    barRow(names[row.code] ?? row.code, value: row.count, maximum: maximum)
+                }
+            }
+        }
+    }
+
+    private var ranksPage: some View {
+        let totals = StatsStore.totals(document)
+        let total = totals.selections.reduce(0, +) + totals.beyond
+        let maximum = max(1, (totals.selections + [totals.beyond]).max() ?? 0)
+        return VStack(alignment: .leading, spacing: 12) {
+            sectionTitle("候选命中位置",
+                         note: total > 0
+                             ? "首选命中 \(Int((Double(totals.selections[0]) / Double(total) * 100).rounded()))% · 共 \(total) 次上屏"
+                             : "")
+            if total == 0 {
+                empty("还没有候选记录。选几次候选再回来看看。")
+            } else {
+                ForEach(totals.selections.indices, id: \.self) { index in
+                    barRow("第 \(index + 1) 个", value: totals.selections[index],
+                           maximum: maximum, suffix: "\(totals.selections[index]) 次")
+                }
+                if totals.beyond > 0 {
+                    barRow("第 10 个以后", value: totals.beyond, maximum: maximum,
+                           suffix: "\(totals.beyond) 次")
+                }
+            }
+        }
+    }
+
+    private func barRow(_ label: String, value: Int, maximum: Int,
+                        suffix: String? = nil) -> some View {
+        HStack(spacing: 10) {
+            Text(label)
+                .font(.system(size: 11))
+                .frame(width: 96, alignment: .leading)
+            ProgressView(value: Double(value), total: Double(maximum))
+                .progressViewStyle(.linear)
+            Text(suffix ?? "\(value) · \(Int((Double(value) / Double(maximum) * 100).rounded()))%")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .frame(width: 96, alignment: .trailing)
+        }
+    }
+
+    // MARK: 底部
+
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Toggle("记录打字统计", isOn: Binding(
+                    get: { document.enabled },
+                    set: { setEnabled($0) }))
+                    .toggleStyle(.switch)
+                Spacer()
+                Button("清空统计", role: .destructive) { showClear = true }
+                    .buttonStyle(.borderless)
+                    .confirmationDialog("清空打字统计？", isPresented: $showClear) {
+                        Button("清空", role: .destructive) { clear() }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("每天的字符数、按键次数和候选位置都会删掉，不能恢复。开关保持现在的位置。")
+                    }
+            }
+            Text("只在本机保存每天的字符类别、活跃时长、按键次数和候选位置，不保存输入内容、按键顺序或上下文。")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
+    }
+
+    private func setEnabled(_ enabled: Bool) {
+        do {
+            try StatsStore.setEnabled(enabled, path: path)
+        } catch {
+            model.showToast("保存失败：\(error.localizedDescription)")
+        }
+        reload()
+    }
+
+    private func clear() {
+        do {
+            try StatsStore.clear(path: path, enabled: document.enabled)
+            model.showToast("已清空打字统计")
+        } catch {
+            model.showToast("清空失败：\(error.localizedDescription)")
+        }
+        reload()
+    }
+
+    private func reload() {
+        document = StatsStore.load(path)
+    }
+
+    private func sectionTitle(_ title: String, note: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(palette.heading)
+            if !note.isEmpty {
+                Text(note)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func empty(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 18)
     }
 }

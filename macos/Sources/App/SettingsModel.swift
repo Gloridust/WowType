@@ -7,7 +7,7 @@
 import AppKit
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, input, emoji, translate, words
+    case general, input, emoji, translate, words, stats
 
     var id: String { rawValue }
 
@@ -18,6 +18,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .emoji: return "表情"
         case .translate: return "翻译"
         case .words: return "自定义词"
+        case .stats: return "统计"
         }
     }
 
@@ -29,6 +30,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .emoji: return "face.smiling"
         case .translate: return "character.bubble"
         case .words: return "book.closed"
+        case .stats: return "list.bullet.rectangle"
         }
     }
 }

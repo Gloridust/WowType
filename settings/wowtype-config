@@ -49,6 +49,8 @@ def _xdg(name, fallback):
 CONFIG_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "conf", "wowtype.conf")
 DATA_DIR = os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "wowtype")
 CUSTOM_FILE = os.environ.get("WOWTYPE_CUSTOM") or os.path.join(DATA_DIR, "custom.tsv")
+# 打字统计：插件按天聚合写这里，设置界面只读（改开关、清空除外）
+STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
 STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
 # 插件和设置界面共用的日志（插件那边见 fcitx5-addon/src/wowtype_log.h），不记打的字
@@ -219,6 +221,7 @@ ENUMS = {
 GREEN = "#0EAF76"
 STYLE_LIGHT = """
 .wt-sidebar { background-image: linear-gradient(180deg, #d9f3e6 0%, #e9f8f0 40%, #f5fbf8 100%); }
+.wt-sidebar label, .wt-sidebar image { color: #2a332f; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
@@ -231,9 +234,34 @@ STYLE_LIGHT = """
 .wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: white; box-shadow: 0 0 0 1px #e6eae8; }
 .wt-content preferencesgroup > box > box > label.heading { color: #6b7570; }
+.wt-stats-page { background-color: #f5f7f6; }
+.wt-stats-page .wt-page-title { color: #1f2724; }
+.wt-stats-page stackswitcher button { color: #59635e; }
+.wt-stats-page stackswitcher button:checked { color: #0EAF76; }
+.wt-stats-card { background: white; border-radius: 12px; box-shadow: 0 0 0 1px #e6eae8; padding: 18px 20px; }
+.wt-stat-label { font-size: 9pt; color: #6b7570; }
+.wt-stat-value { font-size: 21pt; font-weight: 800; color: #0EAF76; }
+.wt-stat-unit { font-size: 9pt; color: #6b7570; }
+.wt-stat-note { font-size: 8pt; color: #8a938f; }
+.wt-stats-heading { font-weight: 700; font-size: 11pt; color: #3a453f; }
+.wt-stats-note { font-size: 8pt; color: #6b7570; }
+.wt-stats-line { font-size: 9pt; }
+.wt-chip { border: 1px solid #dfe4e2; border-radius: 6px; padding: 3px 7px; }
+.wt-key { border-radius: 5px; font-size: 8pt; padding: 0 2px; }
+.wt-key-0 { background: #eef1f0; color: #6b7570; }
+.wt-key-1 { background: alpha(#0EAF76, 0.20); color: #0d6a4a; }
+.wt-key-2 { background: alpha(#0EAF76, 0.40); color: #0d6a4a; }
+.wt-key-3 { background: alpha(#0EAF76, 0.65); color: white; }
+.wt-key-4 { background: #0EAF76; color: white; }
+.wt-swatch-0 { background: #eef1f0; }
+.wt-swatch-1 { background: alpha(#0EAF76, 0.20); }
+.wt-swatch-2 { background: alpha(#0EAF76, 0.40); }
+.wt-swatch-3 { background: alpha(#0EAF76, 0.65); }
+.wt-swatch-4 { background: #0EAF76; }
 """
 STYLE_DARK = """
 .wt-sidebar { background-image: linear-gradient(180deg, #17332a 0%, #1c2a25 45%, #202523 100%); }
+.wt-sidebar label, .wt-sidebar image { color: #e6ece9; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
@@ -246,6 +274,30 @@ STYLE_DARK = """
 .wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
 .wt-content list.boxed-list { border-radius: 12px; background: #282c2a; box-shadow: 0 0 0 1px #3b4144; }
 .wt-content preferencesgroup > box > box > label.heading { color: #a3aca8; }
+.wt-stats-page { background-color: #1d201f; }
+.wt-stats-page .wt-page-title { color: #e6ece9; }
+.wt-stats-page stackswitcher button { color: #b8c1bd; }
+.wt-stats-page stackswitcher button:checked { color: #3CCB93; }
+.wt-stats-card { background: #282c2a; border-radius: 12px; box-shadow: 0 0 0 1px #3b4144; padding: 18px 20px; }
+.wt-stat-label { font-size: 9pt; color: #a3aca8; }
+.wt-stat-value { font-size: 21pt; font-weight: 800; color: #3CCB93; }
+.wt-stat-unit { font-size: 9pt; color: #a3aca8; }
+.wt-stat-note { font-size: 8pt; color: #8a938f; }
+.wt-stats-heading { font-weight: 700; font-size: 11pt; color: #e6ece9; }
+.wt-stats-note { font-size: 8pt; color: #a3aca8; }
+.wt-stats-line { font-size: 9pt; }
+.wt-chip { border: 1px solid #3b4144; border-radius: 6px; padding: 3px 7px; }
+.wt-key { border-radius: 5px; font-size: 8pt; padding: 0 2px; }
+.wt-key-0 { background: #343a37; color: #a3aca8; }
+.wt-key-1 { background: alpha(#3CCB93, 0.22); color: #bfe9d8; }
+.wt-key-2 { background: alpha(#3CCB93, 0.42); color: #e6f7ef; }
+.wt-key-3 { background: alpha(#3CCB93, 0.68); color: #10241c; }
+.wt-key-4 { background: #3CCB93; color: #10241c; }
+.wt-swatch-0 { background: #343a37; }
+.wt-swatch-1 { background: alpha(#3CCB93, 0.22); }
+.wt-swatch-2 { background: alpha(#3CCB93, 0.42); }
+.wt-swatch-3 { background: alpha(#3CCB93, 0.68); }
+.wt-swatch-4 { background: #3CCB93; }
 """
 # 开关、单选框、主按钮换成 WowType 绿（旧版 libadwaita 用命名颜色，1.6 起用 CSS 变量）
 STYLE_ACCENT = """
@@ -257,6 +309,284 @@ STYLE_ACCENT = """
 STYLE_ACCENT_VARS = """
 :root { --accent-bg-color: #0EAF76; --accent-fg-color: #ffffff; --accent-color: %s; }
 """
+
+
+# ---------------- 打字统计
+#
+# 插件把每天的聚合计数写进 DATA_DIR/stats.json（见 core/src/stats.rs），这里只读；
+# 开关和清空直接改同一个文件。速度只算汉字与字母，10 秒以上的间隔不算活跃时间。
+
+STATS_UNIT = 36
+STATS_SPECIAL_NAMES = {
+    "Escape": "Esc", "Backquote": "`", "Minus": "-", "Equal": "=",
+    "BracketLeft": "[", "BracketRight": "]", "Backslash": "\\",
+    "Semicolon": ";", "Quote": "'", "Comma": ",", "Period": ".", "Slash": "/",
+    "Backspace": "Backspace", "Tab": "Tab", "CapsLock": "Caps Lock", "Enter": "Enter",
+    "ShiftLeft": "Shift", "ShiftRight": "Shift",
+    "ControlLeft": "Ctrl", "ControlRight": "Ctrl",
+    "AltLeft": "Alt", "AltRight": "Alt",
+    "MetaLeft": "Super", "MetaRight": "Super",
+    "ContextMenu": "Menu", "Space": "Space",
+    "ArrowLeft": "左箭头", "ArrowRight": "右箭头", "ArrowUp": "上箭头", "ArrowDown": "下箭头",
+    "Home": "Home", "End": "End", "PageUp": "Page Up", "PageDown": "Page Down",
+    "Insert": "Insert", "Delete": "Delete", "NumLock": "Num Lock",
+    "NumpadEnter": "小键盘回车", "NumpadAdd": "小键盘 +", "NumpadSubtract": "小键盘 -",
+    "NumpadMultiply": "小键盘 *", "NumpadDivide": "小键盘 /", "NumpadDecimal": "小键盘 .",
+    "Fn": "Fn", "IntlBackslash": "ISO \\", "IntlRo": "ろ", "IntlYen": "¥",
+}
+
+
+def stats_key_name(code):
+    """键位 id（KeyboardEvent.code）→ 显示名。"""
+    if code in STATS_SPECIAL_NAMES:
+        return STATS_SPECIAL_NAMES[code]
+    if len(code) == 4 and code.startswith("Key"):
+        return code[3]
+    if code.startswith("Digit") and len(code) == 6:
+        return code[5]
+    if code.startswith("Numpad") and len(code) == 7 and code[6].isdigit():
+        return "小键盘 " + code[6]
+    if code.startswith("F") and code[1:].isdigit():
+        return code
+    return code
+
+
+def stats_rows():
+    """实体键盘的六行（照截图）：(id, 显示名, 宽度份数)，None 是占位。"""
+    rows = [
+        [("Escape", "Esc", 1.0), (None, None, 1.0)]
+        + [(f"F{i}", f"F{i}", 1.0) for i in range(1, 5)]
+        + [(None, None, 0.5)]
+        + [(f"F{i}", f"F{i}", 1.0) for i in range(5, 9)]
+        + [(None, None, 0.5)]
+        + [(f"F{i}", f"F{i}", 1.0) for i in range(9, 13)],
+        [("Backquote", "`", 1.0)]
+        + [(f"Digit{i}", str(i), 1.0) for i in range(1, 10)]
+        + [("Digit0", "0", 1.0), ("Minus", "-", 1.0), ("Equal", "=", 1.0),
+           ("Backspace", "Backspace", 2.0)],
+        [("Tab", "Tab", 1.5)]
+        + [(f"Key{c}", c, 1.0) for c in "QWERTYUIOP"]
+        + [("BracketLeft", "[", 1.0), ("BracketRight", "]", 1.0), ("Backslash", "\\", 1.5)],
+        [("CapsLock", "Caps Lock", 1.75)]
+        + [(f"Key{c}", c, 1.0) for c in "ASDFGHJKL"]
+        + [("Semicolon", ";", 1.0), ("Quote", "'", 1.0), ("Enter", "Enter", 2.25)],
+        [("ShiftLeft", "Shift", 2.25)]
+        + [(f"Key{c}", c, 1.0) for c in "ZXCVBNM"]
+        + [("Comma", ",", 1.0), ("Period", ".", 1.0), ("Slash", "/", 1.0),
+           ("ShiftRight", "Shift", 2.75)],
+        [("ControlLeft", "Ctrl", 1.25), ("MetaLeft", "Super", 1.25), ("AltLeft", "Alt", 1.25),
+         ("Space", "Space", 6.25), ("AltRight", "Alt", 1.25), ("MetaRight", "Super", 1.25),
+         ("ContextMenu", "Menu", 1.25), ("ControlRight", "Ctrl", 1.25)],
+    ]
+    return rows
+
+
+def stats_drawn_ids():
+    return {code for row in stats_rows() for code, _label, _weight in row if code}
+
+
+def read_stats():
+    """读统计文件；没有或坏了就当成空记录（开关默认开）。"""
+    try:
+        with open(STATS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    days = {}
+    raw = data.get("days")
+    if isinstance(raw, dict):
+        for day, value in raw.items():
+            if isinstance(day, str) and len(day) == 10 and isinstance(value, dict):
+                days[day] = value
+    return {
+        "enabled": data.get("enabled", True) is not False,
+        "generation": stats_number(data.get("generation")),
+        "lastCommitMs": stats_number(data.get("lastCommitMs")),
+        "days": days,
+    }
+
+
+def write_stats(data):
+    write_atomic(STATS_FILE, json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def stats_number(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def stats_day_chars(day):
+    if not isinstance(day, dict):
+        return 0
+    return stats_number(day.get("chars"))
+
+
+def stats_day_kinds(day):
+    if not isinstance(day, dict):
+        return {}
+    kinds = day.get("kinds")
+    return kinds if isinstance(kinds, dict) else {}
+
+
+def stats_day_active(day):
+    if not isinstance(day, dict):
+        return 0
+    return stats_number(day.get("activeMs"))
+
+
+def stats_day_readable(day):
+    kinds = stats_day_kinds(day)
+    return stats_number(kinds.get("han")) + stats_number(kinds.get("latin"))
+
+
+def stats_day_map(day, key):
+    if not isinstance(day, dict):
+        return {}
+    value = day.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def stats_cpm(characters, active_ms):
+    if characters <= 0 or active_ms <= 0:
+        return 0.0
+    return characters / (active_ms / 60000.0)
+
+
+def stats_format_active(milliseconds):
+    if milliseconds <= 0:
+        return "0分"
+    minutes = int(milliseconds // 60000)
+    if minutes == 0:
+        return f"{max(1, round(milliseconds / 1000))}秒"
+    hours, minutes = divmod(minutes, 60)
+    if hours == 0:
+        return f"{minutes}分"
+    return f"{hours}小时" if minutes == 0 else f"{hours}小时{minutes}分"
+
+
+def stats_day_label(key):
+    try:
+        _, month, day = key.split("-")
+        return f"{int(month)}月{int(day)}日"
+    except (ValueError, AttributeError):
+        return key
+
+
+def stats_metrics(data):
+    days = data["days"]
+    today = time.strftime("%Y-%m-%d")
+    recorded = sorted(days)
+    today_chars = stats_day_chars(days.get(today))
+    today_active = stats_day_active(days.get(today))
+    today_readable = stats_day_readable(days.get(today))
+    total_chars = sum(stats_day_chars(days[day]) for day in recorded)
+    total_active = 0
+    total_readable = 0
+    best_day = None
+    best_chars = 0
+    fastest_day = None
+    fastest_speed = 0.0
+    for day in recorded:
+        value = days[day]
+        active = stats_day_active(value)
+        readable = stats_day_readable(value)
+        if active > 0:
+            total_active += active
+            total_readable += readable
+        characters = stats_day_chars(value)
+        if characters > best_chars:
+            best_chars = characters
+            best_day = day
+        if active >= 60000:
+            speed = stats_cpm(readable, active)
+            if speed > fastest_speed:
+                fastest_speed = speed
+                fastest_day = day
+    # 连续天数：今天还没输入就从昨天算起，中断两天以上是 0。
+    present = set(recorded)
+    cursor = today if today in present else _stats_shift(today, -1)
+    streak = 0
+    while cursor in present:
+        streak += 1
+        cursor = _stats_shift(cursor, -1)
+    longest = 0
+    run = 0
+    previous = None
+    for day in recorded:
+        run = run + 1 if previous and _stats_shift(previous, 1) == day else 1
+        longest = max(longest, run)
+        previous = day
+    return {
+        "today": today,
+        "today_chars": today_chars,
+        "today_active": today_active,
+        "today_speed": stats_cpm(today_readable, today_active),
+        "total_chars": total_chars,
+        "total_active": total_active,
+        "average_speed": stats_cpm(total_readable, total_active),
+        "recorded_days": len(recorded),
+        "average_per_day": total_chars / len(recorded) if recorded else 0,
+        "best_day": best_day,
+        "best_chars": best_chars,
+        "fastest_day": fastest_day,
+        "fastest_speed": fastest_speed,
+        "streak": streak,
+        "longest_streak": longest,
+    }
+
+
+def _stats_shift(key, days):
+    try:
+        parsed = time.mktime(time.strptime(key, "%Y-%m-%d")) + days * 86400
+        return time.strftime("%Y-%m-%d", time.localtime(parsed))
+    except (ValueError, OverflowError):
+        return key
+
+
+def stats_scope_counts(data):
+    """按天合并键位、来源、方案、候选位置和字符分类。"""
+    keys = {}
+    sources = {}
+    schemes = {}
+    selections = [0] * 9
+    beyond = 0
+    kinds = {}
+    for day in data["days"].values():
+        for code, count in stats_day_map(day, "keys").items():
+            keys[code] = keys.get(code, 0) + stats_number(count)
+        for name, count in stats_day_map(day, "sources").items():
+            sources[name] = sources.get(name, 0) + stats_number(count)
+        for name, count in stats_day_map(day, "schemes").items():
+            schemes[name] = schemes.get(name, 0) + stats_number(count)
+        ranks = day.get("selections") if isinstance(day, dict) else None
+        if isinstance(ranks, list):
+            for index, count in enumerate(ranks[:9]):
+                selections[index] += stats_number(count)
+        if isinstance(day, dict):
+            beyond += stats_number(day.get("beyond"))
+        for name, count in stats_day_kinds(day).items():
+            kinds[name] = kinds.get(name, 0) + stats_number(count)
+    return {"keys": keys, "sources": sources, "schemes": schemes,
+            "selections": selections, "beyond": beyond, "kinds": kinds}
+
+
+def stats_recent_days(data, length=30):
+    today = time.strftime("%Y-%m-%d")
+    out = []
+    for offset in range(length - 1, -1, -1):
+        key = _stats_shift(today, -offset)
+        out.append((key, stats_day_chars(data["days"].get(key))))
+    return out
+
+
+def stats_heat_level(count, maximum):
+    if count <= 0 or maximum <= 0:
+        return 0
+    return max(1, min(4, (count * 4 + maximum - 1) // maximum))
 
 VOICE_KEYS = [
     ("右 Alt", "Alt_R"),
@@ -2829,8 +3159,8 @@ class SettingsWindow(Adw.ApplicationWindow):
 
         self.set_default_size(860, 680)
         self.toasts = Adw.ToastOverlay()
-        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE,
-                               transition_duration=120)
+        # 不要用淡入淡出：niri 等合成器下动画时钟可能停在中间，整页会一直半透明。
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE)
         pages = (
             ("general", "常规", "preferences-system-symbolic", self.build_general),
             ("input", "输入", "input-keyboard-symbolic", self.build_input),
@@ -2838,6 +3168,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("voice", "语音", "audio-input-microphone-symbolic", self.build_voice),
             ("translate", "翻译", "preferences-desktop-locale-symbolic", self.build_translate),
             ("words", "自定义词", "accessories-dictionary-symbolic", self.build_words),
+            ("stats", "统计", "wowtype-stats-symbolic", self.build_stats),
             ("update", "更新", "software-update-available-symbolic", self.build_update),
         )
         self.switches = {}
@@ -2954,6 +3285,479 @@ class SettingsWindow(Adw.ApplicationWindow):
         # fcitx5 的快捷键可能在别处改过，切到这两页时重新看一眼
         if name in ("input", "translate") and hasattr(self, "shift_free_row"):
             self.refresh_shift_conflict()
+        if name == "stats" and hasattr(self, "stats_box"):
+            self.stats_render()
+
+    # ---------------- 统计
+
+    def build_stats(self):
+        """统计页：概览、六个细分标签、开关和清空。
+
+        内容每次切到这一页或统计文件变了就重建（数据量小），标签位置保留。
+        """
+        self.stats_tab = "keys"
+        self.stats_mtime = None
+        outer = Gtk.ScrolledWindow(vexpand=True)
+        # 统计页不是 PreferencesPage，自己铺一层背景：niri 等合成器给普通窗口开 xray blur 时，
+        # 透明区域会透出模糊的桌面，文字对比度也会掉。
+        outer.add_css_class("wt-stats-page")
+        clamp = Adw.Clamp(maximum_size=720)
+        self.stats_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18,
+                                 margin_top=30, margin_bottom=30,
+                                 margin_start=30, margin_end=30)
+        clamp.set_child(self.stats_box)
+        outer.set_child(clamp)
+        self.stats_render()
+        GLib.timeout_add_seconds(2, self.stats_tick)
+        return outer
+
+    def stats_tick(self):
+        if self.stack.get_visible_child_name() != "stats":
+            return True
+        try:
+            mtime = os.stat(STATS_FILE).st_mtime_ns
+        except OSError:
+            mtime = 0
+        if mtime != self.stats_mtime:
+            self.stats_render()
+        return True
+
+    def stats_tab_changed(self, stack, _param):
+        self.stats_tab = stack.get_visible_child_name() or "keys"
+
+    def stats_render(self):
+        try:
+            self.stats_mtime = os.stat(STATS_FILE).st_mtime_ns
+        except OSError:
+            self.stats_mtime = 0
+        data = read_stats()
+        metrics = stats_metrics(data)
+        while (child := self.stats_box.get_first_child()) is not None:
+            self.stats_box.remove(child)
+
+        title = Gtk.Label(label="统计", xalign=0)
+        title.add_css_class("wt-page-title")
+        self.stats_box.append(title)
+        self.stats_box.append(self.stats_overview(metrics))
+
+        note = Gtk.Label(
+            label="速度统计汉字与字母；两次上屏间隔超过 10 秒视为休息，不计入活跃时长。",
+            xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR)
+        note.add_css_class("wt-stats-note")
+        self.stats_box.append(note)
+
+        switcher = Gtk.StackSwitcher()
+        switcher.set_halign(Gtk.Align.START)
+        stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE)
+        switcher.set_stack(stack)
+        pages = (
+            ("keys", "按键", self.stats_keys_page),
+            ("trend", "趋势", self.stats_trend_page),
+            ("kind", "类型", self.stats_kind_page),
+            ("mode", "模式", self.stats_mode_page),
+            ("scheme", "方案", self.stats_scheme_page),
+            ("ranks", "候选", self.stats_ranks_page),
+        )
+        for name, label, builder in pages:
+            page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+            builder(page, data)
+            stack.add_titled(page, name, label)
+        stack.set_visible_child_name(self.stats_tab)
+        stack.connect("notify::visible-child-name", self.stats_tab_changed)
+        self.stats_stack = stack
+        self.stats_box.append(switcher)
+        self.stats_box.append(stack)
+
+        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        footer.set_margin_top(10)
+        row = Gtk.Box(spacing=10)
+        label = Gtk.Label(label="记录打字统计", xalign=0, hexpand=True)
+        switch = Gtk.Switch(active=data["enabled"], valign=Gtk.Align.CENTER)
+        switch.connect("notify::active", self.stats_toggle)
+        self.stats_switch = switch
+        clear = Gtk.Button(label="清空统计", valign=Gtk.Align.CENTER)
+        clear.add_css_class("flat")
+        clear.connect("clicked", self.stats_clear)
+        row.append(label)
+        row.append(switch)
+        row.append(clear)
+        footer.append(row)
+        privacy = Gtk.Label(
+            label="只在本机保存每天的字符类别、活跃时长、按键次数和候选位置，"
+                  "不保存输入内容、按键顺序或上下文。",
+            xalign=0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR)
+        privacy.add_css_class("wt-stats-note")
+        footer.append(privacy)
+        self.stats_box.append(footer)
+
+    def stats_overview(self, metrics):
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        card.add_css_class("wt-stats-card")
+        grid = Gtk.Grid(column_spacing=24, row_spacing=16)
+        best_note = ""
+        if metrics["best_day"]:
+            best_note = (f"单日最多 {metrics['best_chars']:,} 字符 · "
+                         f"{stats_day_label(metrics['best_day'])}")
+        fastest_note = ""
+        if metrics["fastest_day"]:
+            fastest_note = (f"单日最快 {round(metrics['fastest_speed'])} 字 / 分钟 · "
+                            f"{stats_day_label(metrics['fastest_day'])}")
+        active_note = (f"累计 {stats_format_active(metrics['total_active'])}"
+                       if metrics["total_active"] > 0 else "还没有测量到活跃时长")
+        items = [
+            ("今日输入", f"{metrics['today_chars']:,}", "字符", best_note),
+            ("累计输入", f"{metrics['total_chars']:,}", "字符",
+             f"日均 {round(metrics['average_per_day']):,} 字符 · "
+             f"{metrics['recorded_days']} 天有记录"),
+            ("今日活跃", stats_format_active(metrics["today_active"]), "", active_note),
+            ("今日速度", f"{round(metrics['today_speed'])}", "字 / 分钟", fastest_note),
+            ("平均速度", f"{round(metrics['average_speed'])}", "字 / 分钟", ""),
+            ("连续天数", f"{metrics['streak']}", "天", f"最长 {metrics['longest_streak']} 天"),
+        ]
+        for index, item in enumerate(items):
+            grid.attach(self.stats_metric(*item), index % 3, index // 3, 1, 1)
+        card.append(grid)
+        best = ""
+        if metrics["best_day"] or metrics["fastest_day"]:
+            parts = []
+            if metrics["best_day"]:
+                parts.append(f"最多 {stats_day_label(metrics['best_day'])}，"
+                             f"{metrics['best_chars']:,} 字符")
+            if metrics["fastest_day"]:
+                parts.append(f"最快 {stats_day_label(metrics['fastest_day'])}，"
+                             f"{round(metrics['fastest_speed'])} 字 / 分钟")
+            best = " · ".join(parts)
+        summary = Gtk.Label(label=best, xalign=1)
+        summary.add_css_class("wt-stat-note")
+        card.append(summary)
+        return card
+
+    @staticmethod
+    def stats_metric(label, value, unit, note):
+        cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+        title = Gtk.Label(label=label, xalign=0)
+        title.add_css_class("wt-stat-label")
+        line = Gtk.Box(spacing=4)
+        number = Gtk.Label(label=value, xalign=0)
+        number.add_css_class("wt-stat-value")
+        line.append(number)
+        if unit:
+            suffix = Gtk.Label(label=unit, xalign=0, valign=Gtk.Align.END)
+            suffix.add_css_class("wt-stat-unit")
+            suffix.set_margin_bottom(4)
+            line.append(suffix)
+        detail = Gtk.Label(label=note, xalign=0, wrap=True,
+                           wrap_mode=Pango.WrapMode.WORD_CHAR)
+        detail.add_css_class("wt-stat-note")
+        cell.append(title)
+        cell.append(line)
+        cell.append(detail)
+        return cell
+
+    @staticmethod
+    def stats_empty(text):
+        label = Gtk.Label(label=text, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR)
+        label.add_css_class("dim-label")
+        label.set_margin_top(14)
+        label.set_margin_bottom(14)
+        return label
+
+    @staticmethod
+    def stats_heading(text):
+        label = Gtk.Label(label=text, xalign=0)
+        label.add_css_class("wt-stats-heading")
+        return label
+
+    # ---- 按键
+
+    def stats_keys_page(self, page, data):
+        scope = stats_scope_counts(data)
+        counts = scope["keys"]
+        total = sum(counts.values())
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        card.add_css_class("wt-stats-card")
+        card.append(self.stats_heading("按键热力图 · 累计"))
+        note = Gtk.Label(label=f"共 {total:,} 次按键，颜色越深按得越多", xalign=0)
+        note.add_css_class("wt-stats-note")
+        if total == 0:
+            card.append(note)
+            card.append(self.stats_empty("还没有按键记录。用 WowType 打几个字，再回来看。"))
+            page.append(card)
+            return
+        card.append(note)
+
+        maximum = max(counts.values())
+        keys = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        keys.set_halign(Gtk.Align.CENTER)
+        keys.set_margin_top(2)
+        for row in stats_rows():
+            line = Gtk.Box(spacing=4)
+            line.set_halign(Gtk.Align.CENTER)
+            for code, label, weight in row:
+                width = max(1, int(weight * STATS_UNIT) - 4)
+                if code is None:
+                    spacer = Gtk.Box()
+                    spacer.set_size_request(width, 32)
+                    line.append(spacer)
+                    continue
+                count = counts.get(code, 0)
+                cap = Gtk.Label(label=label, ellipsize=Pango.EllipsizeMode.END)
+                cap.add_css_class("wt-key")
+                cap.add_css_class(f"wt-key-{stats_heat_level(count, maximum)}")
+                cap.set_size_request(width, 32)
+                cap.set_tooltip_text(f"{stats_key_name(code)}，{count:,} 次")
+                line.append(cap)
+            keys.append(line)
+        card.append(keys)
+
+        drawn = stats_drawn_ids()
+        others = sorted(((code, count) for code, count in counts.items() if code not in drawn),
+                        key=lambda item: (-item[1], item[0]))
+        if others:
+            label = Gtk.Label(label="其他键", xalign=0)
+            label.add_css_class("wt-stats-note")
+            label.set_margin_top(4)
+            card.append(label)
+            flow = Gtk.FlowBox(max_children_per_line=5, column_spacing=6, row_spacing=6,
+                               selection_mode=Gtk.SelectionMode.NONE)
+            for code, count in others:
+                chip = Gtk.Box(spacing=6)
+                chip.add_css_class("wt-chip")
+                swatch = Gtk.Label()
+                swatch.add_css_class(f"wt-swatch-{stats_heat_level(count, maximum)}")
+                swatch.set_size_request(10, 10)
+                swatch.set_valign(Gtk.Align.CENTER)
+                chip.append(swatch)
+                chip.append(Gtk.Label(label=stats_key_name(code)))
+                number = Gtk.Label(label=f"{count:,}")
+                number.add_css_class("wt-stats-note")
+                chip.append(number)
+                flow.append(chip)
+            card.append(flow)
+
+        legend = Gtk.Box(spacing=4)
+        legend.set_halign(Gtk.Align.START)
+        legend.set_margin_top(2)
+        legend.append(Gtk.Label(label="少"))
+        for level in range(5):
+            swatch = Gtk.Label()
+            swatch.add_css_class(f"wt-swatch-{level}")
+            swatch.set_size_request(12, 12)
+            swatch.set_valign(Gtk.Align.CENTER)
+            legend.append(swatch)
+        legend.append(Gtk.Label(label="多"))
+        legend.get_first_child().add_css_class("wt-stats-note")
+        card.append(legend)
+
+        top = sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+        top_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        top_box.set_margin_top(4)
+        for index, (code, count) in enumerate(top, 1):
+            line = Gtk.Box(spacing=8)
+            rank = Gtk.Label(label=str(index), xalign=1)
+            rank.set_size_request(18, -1)
+            rank.add_css_class("wt-stats-note")
+            line.append(rank)
+            line.append(Gtk.Label(label=stats_key_name(code), xalign=0, hexpand=True))
+            line.append(Gtk.Label(label=f"{count:,} 次", xalign=1))
+            top_box.append(line)
+        card.append(top_box)
+        page.append(card)
+
+    # ---- 趋势
+
+    def stats_trend_page(self, page, data):
+        series = stats_recent_days(data, 30)
+        page.append(self.stats_heading("每日趋势 · 近 30 天"))
+        if not any(count for _key, count in series):
+            page.append(self.stats_empty("这 30 天还没有输入记录。"))
+            return
+        area = Gtk.DrawingArea()
+        area.set_content_height(150)
+        area.set_hexpand(True)
+        area.set_draw_func(lambda _area, cr, width, height:
+                           self.stats_draw_bars(cr, width, height, series))
+        page.append(area)
+        labels = Gtk.Box(spacing=6)
+        first = Gtk.Label(label=stats_day_label(series[0][0]), xalign=0, hexpand=True)
+        last = Gtk.Label(label=stats_day_label(series[-1][0]), xalign=1)
+        first.add_css_class("wt-stats-note")
+        last.add_css_class("wt-stats-note")
+        labels.append(first)
+        labels.append(last)
+        page.append(labels)
+        total = sum(count for _key, count in series)
+        note = Gtk.Label(label=f"共 {total:,} 字符 · 最高一天 {max(count for _key, count in series):,} 字符",
+                         xalign=0)
+        note.add_css_class("wt-stats-note")
+        page.append(note)
+
+    @staticmethod
+    def stats_draw_bars(cr, width, height, series):
+        maximum = max((count for _key, count in series), default=0) or 1
+        gap = 3
+        bar = max(1.0, (width - gap * (len(series) - 1)) / len(series))
+        cr.set_source_rgba(0.055, 0.686, 0.463, 0.9)
+        for index, (_key, count) in enumerate(series):
+            if count <= 0:
+                continue
+            bar_height = (height - 6) * count / maximum
+            cr.rectangle(index * (bar + gap), height - bar_height, bar, bar_height)
+            cr.fill()
+        cr.set_source_rgba(0.5, 0.55, 0.53, 0.25)
+        cr.rectangle(0, height - 1, width, 1)
+        cr.fill()
+
+    # ---- 类型
+
+    def stats_kind_page(self, page, data):
+        kinds = stats_scope_counts(data)["kinds"]
+        parts = [
+            ("汉字", stats_number(kinds.get("han")), (0.055, 0.686, 0.463)),
+            ("字母", stats_number(kinds.get("latin")), (0.298, 0.604, 1.0)),
+            ("数字", stats_number(kinds.get("number")), (0.960, 0.651, 0.137)),
+            ("标点", stats_number(kinds.get("punct")), (0.541, 0.576, 0.651)),
+            ("表情", stats_number(kinds.get("emoji")), (0.910, 0.416, 0.651)),
+            ("其他", stats_number(kinds.get("other")), (0.769, 0.788, 0.780)),
+        ]
+        self.stats_ratio_page(page, "字符类型", parts, "还没有字符记录。")
+
+    # ---- 模式
+
+    def stats_mode_page(self, page, data):
+        sources = stats_scope_counts(data)["sources"]
+        names = [("拼音", "quanpin"), ("双拼", "shuangpin"), ("英文", "english"),
+                 ("互译", "translate")]
+        parts = [(label, stats_number(sources.get(key)), color) for
+                 (label, key), color in zip(names, [
+                     (0.055, 0.686, 0.463), (0.298, 0.604, 1.0),
+                     (0.960, 0.651, 0.137), (0.910, 0.416, 0.651)])]
+        self.stats_ratio_page(page, "语言模式", parts, "还没有输入记录。")
+
+    # ---- 方案
+
+    def stats_scheme_page(self, page, data):
+        schemes = stats_scope_counts(data)["schemes"]
+        page.append(self.stats_heading("输入方案"))
+        if not schemes:
+            page.append(self.stats_empty("还没有双拼输入记录。用双拼打几个字，这里会显示各方案的占比。"))
+            return
+        total = sum(schemes.values()) or 1
+        names = {"ziranma": "自然码", "xiaohe": "小鹤双拼", "microsoft": "微软双拼",
+                 "sogou": "搜狗双拼", "abc": "智能 ABC", "ziguang": "紫光双拼",
+                 "pinyinjiajia": "拼音加加"}
+        for key, count in sorted(schemes.items(), key=lambda item: -item[1]):
+            page.append(self.stats_bar_row(names.get(key, key), count, total))
+
+    # ---- 候选
+
+    def stats_ranks_page(self, page, data):
+        scope = stats_scope_counts(data)
+        ranks = scope["selections"]
+        total = sum(ranks) + scope["beyond"]
+        page.append(self.stats_heading("候选命中位置"))
+        if total == 0:
+            page.append(self.stats_empty("还没有候选记录。选几次候选再回来看看。"))
+            return
+        hit = f"首选命中 {ranks[0] / total:.0%}" if total else ""
+        note = Gtk.Label(label=f"{hit} · 共 {total:,} 次上屏", xalign=0)
+        note.add_css_class("wt-stats-note")
+        page.append(note)
+        maximum = max(ranks + [scope["beyond"]]) or 1
+        for index, count in enumerate(ranks, 1):
+            page.append(self.stats_bar_row(f"第 {index} 个", count, maximum, f"{count:,} 次"))
+        if scope["beyond"]:
+            page.append(self.stats_bar_row("第 10 个以后", scope["beyond"], maximum,
+                                           f"{scope['beyond']:,} 次"))
+
+    def stats_ratio_page(self, page, title, parts, empty_text):
+        parts = [part for part in parts if part[1] > 0]
+        page.append(self.stats_heading(title))
+        if not parts:
+            page.append(self.stats_empty(empty_text))
+            return
+        total = sum(value for _label, value, _color in parts)
+        area = Gtk.DrawingArea()
+        area.set_content_height(14)
+        area.set_hexpand(True)
+        area.set_draw_func(lambda _area, cr, width, height:
+                           self.stats_draw_ratio(cr, width, height, parts, total))
+        page.append(area)
+        for label, value, color in parts:
+            row = Gtk.Box(spacing=8)
+            swatch = Gtk.Label()
+            swatch.set_size_request(10, 10)
+            swatch.set_valign(Gtk.Align.CENTER)
+            row.append(swatch)
+            rgb = tuple(round(channel * 255) for channel in color)
+            swatch.set_markup(f'<span foreground="#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}">■</span>')
+            row.append(Gtk.Label(label=label, xalign=0, hexpand=True))
+            row.append(Gtk.Label(label=f"{value:,} · {value / total:.0%}", xalign=1))
+            page.append(row)
+
+    @staticmethod
+    def stats_draw_ratio(cr, width, height, parts, total):
+        offset = 0.0
+        for _label, value, (red, green, blue) in parts:
+            share = width * value / total
+            cr.set_source_rgba(red, green, blue, 0.9)
+            cr.rectangle(offset, 0, share, height)
+            cr.fill()
+            offset += share
+
+    def stats_bar_row(self, label, count, maximum, suffix=None):
+        row = Gtk.Box(spacing=10)
+        name = Gtk.Label(label=label, xalign=0)
+        name.set_size_request(96, -1)
+        row.append(name)
+        bar = Gtk.ProgressBar()
+        bar.set_fraction(min(1.0, count / maximum) if maximum else 0)
+        bar.set_valign(Gtk.Align.CENTER)
+        bar.set_hexpand(True)
+        row.append(bar)
+        text = suffix if suffix is not None else f"{count:,} · {count / maximum:.0%}" if maximum else "0"
+        value = Gtk.Label(label=text, xalign=1)
+        value.set_size_request(72, -1)
+        value.add_css_class("wt-stats-note")
+        row.append(value)
+        return row
+
+    def stats_toggle(self, switch, _param):
+        data = read_stats()
+        if data["enabled"] == switch.get_active():
+            return
+        data["enabled"] = switch.get_active()
+        try:
+            write_stats(data)
+        except OSError as error:
+            self.toast(f"保存失败：{error}")
+            return
+        self.stats_render()
+
+    def stats_clear(self, _button):
+        dialog = Adw.AlertDialog(
+            heading="清空打字统计？",
+            body="每天的字符数、按键次数和候选位置都会删掉，不能恢复。开关保持现在的位置。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("clear", "清空")
+        dialog.set_response_appearance("clear", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", self.on_stats_clear)
+        dialog.present(self)
+
+    def on_stats_clear(self, _dialog, response):
+        if response != "clear":
+            return
+        data = read_stats()
+        data["generation"] = int.from_bytes(os.urandom(8), "little")
+        data["days"] = {}
+        data["lastCommitMs"] = 0
+        try:
+            write_stats(data)
+        except OSError as error:
+            self.toast(f"清空失败：{error}")
+            return
+        self.toast("已清空打字统计")
+        self.stats_render()
 
     # ---------------- 常规
 
@@ -4692,10 +5496,15 @@ class SettingsApp(Adw.Application):
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.page = None
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
-                             "打开时显示的页面：general、input、emoji、voice、translate、words、update", "页面")
+                             "打开时显示的页面：general、input、emoji、voice、translate、words、stats、update", "页面")
 
     def do_startup(self):
         Adw.Application.do_startup(self)
+        # 仓库里自带的图标（开发和未安装时也能显示；装好后系统图标主题里也有）
+        here = os.path.dirname(os.path.abspath(__file__))
+        local_icons = os.path.normpath(os.path.join(here, "..", "icons"))
+        if os.path.isdir(local_icons):
+            Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(local_icons)
         # 跟在英文后面的「、」「。」，Pango 会去找第一个有这个字的字体，常常找到蒙古文字体，
         # 标点画在格子正中间。在系统界面字体后面接上简体中文字体，让它先找到这些。
         self.font_css = Gtk.CssProvider()
@@ -4720,7 +5529,11 @@ class SettingsApp(Adw.Application):
         self.font_css.load_from_string(f"window {{ font-family: {quoted}; }}")
 
     def update_style_css(self):
-        dark = Adw.StyleManager.get_default().get_dark()
+        # niri 等非 GNOME 桌面不一定把 color-scheme 报给 GTK，但用户可能选了深色 GTK 主题；
+        # 主题名里带 dark 也按深色走，否则深色主题的白色文字会画在浅色卡片上，整页发灰。
+        settings = Gtk.Settings.get_default()
+        theme_name = (settings.props.gtk_theme_name or "").lower() if settings else ""
+        dark = Adw.StyleManager.get_default().get_dark() or "dark" in theme_name
         accent_text = "#3CCB93" if dark else "#0a8a5c"
         css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT % accent_text
         if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):

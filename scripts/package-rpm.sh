@@ -152,6 +152,7 @@ install -Dm644 dist/data/LICENSE $lic/LICENSE.rime-ice
 %{_datadir}/gnome-shell/extensions/wowtype-theme@gloridust.github.io/
 %{_datadir}/applications/io.github.Gloridust.WowType.Config.desktop
 %{_datadir}/icons/hicolor/*/apps/wowtype.*
+%{_datadir}/icons/hicolor/*/status/wowtype-stats-symbolic.svg
 %{_datadir}/wowtype/
 
 %post

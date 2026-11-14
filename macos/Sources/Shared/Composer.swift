@@ -190,6 +190,11 @@ public final class Composer {
     private var recent = ""
     /// 每次上屏后调用（外壳用来定时保存学习数据）。
     public var onCommit: ((String) -> Void)?
+    /// 每次真正上屏时调用（text, source, scheme, candidateIndex），给打字统计用；
+    /// 只分类计数，不保存文字。candidateIndex 是选中的候选位置（1 起），0 表示不是选候选。
+    public var onCommitStats: ((String, String, String, Int) -> Void)?
+    /// 这次上屏来自第几个候选（1 起），上屏后取走。
+    private var pendingCandidateIndex = 0
     /// Ctrl+Delete 忘掉了学错的词以后调用（外壳马上存学习数据，免得重启又回来）。
     public var onForget: (() -> Void)?
     /// 打开工具栏的剪贴板页时调用（设置里 ClipboardHistory 开着时）：外壳看一眼系统剪贴板，
@@ -552,9 +557,11 @@ public final class Composer {
             // 选的是打字推荐的 emoji：记进最近用过（表情面板里排最前）
             var info = WowtypeCandidateInfo()
             info.size = UInt32(MemoryLayout<WowtypeCandidateInfo>.size)
-            if wowtype_session_last_choice(session, &info) == 0, info.kind == WOWTYPE_CAND_EMOJI,
-               let emoji = info.emoji {
-                recentEmoji.remember(String(cString: emoji))
+            if wowtype_session_last_choice(session, &info) == 0 {
+                pendingCandidateIndex = Int(info.index)
+                if info.kind == WOWTYPE_CAND_EMOJI, let emoji = info.emoji {
+                    recentEmoji.remember(String(cString: emoji))
+                }
             }
         }
         if let frame, Int(frame.pointee.size) >= MemoryLayout<WowtypeFrame>.size, frame.pointee.forgot != 0 {
@@ -587,6 +594,7 @@ public final class Composer {
             return false
         }
         client?.insertText(" " + text)
+        onCommitStats?(text, statsSource, statsScheme, 0)
         return true
     }
 
@@ -599,10 +607,29 @@ public final class Composer {
             refresh()
         } else {
             client?.insertText(needsAutoSpace(before: text) ? " " + text : text)
+            onCommitStats?(text, statsSource, statsScheme, takeCandidateIndex())
         }
         recent = String((recent + text).suffix(20))
         wowtype_session_set_context(session, recent)
         onCommit?(text)
+    }
+
+    /// 统计用的输入模式：互译 / 英文 / 双拼 / 全拼。
+    private var statsSource: String {
+        if mode == .translate { return "translate" }
+        if mode == .english { return "english" }
+        return config.shuangpin ? "shuangpin" : "quanpin"
+    }
+
+    /// 双拼方案在统计里的名字（小写）；不是双拼时为空。
+    private var statsScheme: String {
+        config.shuangpin ? config.shuangpinScheme.lowercased() : ""
+    }
+
+    private func takeCandidateIndex() -> Int {
+        let index = pendingCandidateIndex
+        pendingCandidateIndex = 0
+        return index
     }
 
     func refresh() {
@@ -719,6 +746,7 @@ public final class Composer {
         let source = translateSource
         clearTranslation()
         client?.insertText(source)
+        onCommitStats?(source, "translate", statsScheme, 0)
     }
 
     /// 外壳每 50 毫秒调一次：到时间就发请求，结果变了就重画，按过回车的译好了就上屏。
@@ -780,6 +808,7 @@ public final class Composer {
             let text = snapshot.text
             clearTranslation()
             client?.insertText(text)
+            onCommitStats?(text, "translate", statsScheme, 0)
             refresh()
             return
         }
@@ -799,6 +828,7 @@ public final class Composer {
         let source = translateSource
         clearTranslation()
         client?.insertText(source)
+        onCommitStats?(source, "translate", statsScheme, 0)
         refresh()
     }
 

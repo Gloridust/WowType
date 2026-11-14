@@ -138,6 +138,8 @@ pub struct WowtypeCandidateInfo {
     pub kind: c_int,
     pub commit: *const c_char,
     pub emoji: *const c_char,
+    /// 1.10 起：候选在列表里的位置（1 起）；0 表示不知道。
+    pub index: usize,
 }
 
 pub const WOWTYPE_CAND_WORD: c_int = 0;
@@ -152,6 +154,7 @@ struct CCandidate {
     emoji: CString,
     consumed: usize,
     kind: c_int,
+    index: usize,
 }
 
 impl CCandidate {
@@ -164,16 +167,18 @@ impl CCandidate {
             kind: self.kind,
             commit: self.commit.as_ptr(),
             emoji: self.emoji.as_ptr(),
+            index: self.index,
         }
     }
 
-    fn new(c: &Candidate) -> Self {
+    fn new(c: &Candidate, index: usize) -> Self {
         Self {
             text: to_c(&c.text),
             pinyin: to_c(&c.pinyin),
             commit: to_c(&c.commit),
             emoji: to_c(&c.emoji),
             consumed: c.consumed,
+            index,
             kind: match c.kind {
                 CandidateKind::Word => WOWTYPE_CAND_WORD,
                 CandidateKind::Plain => WOWTYPE_CAND_PLAIN,
@@ -277,7 +282,10 @@ impl WowtypeSession {
         self.commit = frame.commit.as_deref().map(to_c);
         self.preedit = to_c(&frame.preedit);
         self.shown_start = frame.cand_start;
-        self.last_choice = self.session.last_choice().map(CCandidate::new);
+        self.last_choice = self
+            .session
+            .last_choice()
+            .map(|c| CCandidate::new(c, self.session.last_choice_index()));
         self.frame = WowtypeFrame {
             handled: c_int::from(frame.handled),
             commit: self.commit.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
@@ -355,7 +363,8 @@ impl WowtypeSession {
                 .session
                 .candidates()
                 .iter()
-                .map(CCandidate::new)
+                .enumerate()
+                .map(|(index, candidate)| CCandidate::new(candidate, index + 1))
                 .collect();
             self.c_generation = self.session.generation();
         }

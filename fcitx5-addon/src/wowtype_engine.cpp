@@ -72,6 +72,13 @@ bool envFlag(const char *name, bool fallback) {
 
 constexpr const char *kConfigFile = "conf/wowtype.conf";
 
+/// 统计用的墙上时间（Unix 毫秒）：日界和 10 秒间隔都按它算。
+int64_t statsNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
 std::string userDataDir() {
     std::string base;
     if (const char *data = std::getenv("XDG_DATA_HOME"); data && *data) {
@@ -502,6 +509,8 @@ public:
     bool afterDigit_ = false;
     /// emit 上屏次数，用来判断一次按键有没有自己上屏东西。
     unsigned emits_ = 0;
+    /// 这次上屏来自第几个候选（1 起，0 表示不是选候选）：统计用，commitOut 取走后清零。
+    std::size_t commitIndex_ = 0;
 
     /// 全部原始输入（包括已经选过词的部分）。
     std::string input() const { return wowtype_session_input(session_); }
@@ -621,6 +630,15 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
     applyConfig();
     setupVoiceOverlay();
     setupControl();
+    const std::string statsDir = userDataDir();
+    if (!statsDir.empty()) {
+        const std::string statsPath = statsDir + "/stats.json";
+        stats_ = wowtype_stats_new(statsPath.c_str());
+        if (!stats_) {
+            WLOG_W() << "WowType: 建不了打字统计 " << statsPath << "："
+                     << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+        }
+    }
 }
 
 namespace {
@@ -1030,6 +1048,11 @@ WowtypeEngine::~WowtypeEngine() {
         wowtype_engine_free(core_);
         core_ = nullptr;
     }
+    flushStats();
+    if (stats_) {
+        wowtype_stats_free(stats_);
+        stats_ = nullptr;
+    }
     voiceTimer_.reset();
     if (voice_) {
         wowtype_voice_free(voice_);
@@ -1205,6 +1228,7 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         WowtypeCandidateInfo info{};
         info.size = sizeof(info);
         const bool chosen = wowtype_session_last_choice(state->session_, &info) == 0;
+        state->commitIndex_ = chosen ? info.index : 0;
         const int kind = chosen ? info.kind : WOWTYPE_CAND_WORD;
         const std::string emoji = chosen && info.emoji ? info.emoji : "";
         finishCommit(ic, state, frame, kind == WOWTYPE_CAND_WORD);
@@ -2002,6 +2026,7 @@ void WowtypeEngine::commitCandidate(fcitx::InputContext *ic,
         return;
     }
     if (frame->commit) {
+        state->commitIndex_ = chosen.emoji ? 0 : index + 1;
         finishCommit(ic, state, frame, !chosen.emoji && !chosen.plain);
         if (chosen.emoji) {
             rememberEmoji(chosen.emojiText);
@@ -2030,6 +2055,10 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     auto *state = ic->propertyFor(&factory_);
     const fcitx::Key key = event.key();
     const auto sym = key.sym();
+
+    // 按键热力图：所有按键都经过这里（输入法消费掉的、还给应用的都算），松开也传，
+    // 长按和合成的自动重复由核心去重。密码框在 recordKey 里排除。
+    recordKey(ic, event.origKey(), !event.isRelease());
 
     if (voice_ && handleVoiceKey(ic, state, event)) {
         return;
@@ -2263,6 +2292,7 @@ void WowtypeEngine::deactivate(const fcitx::InputMethodEntry &entry,
     }
     reset(entry, event);
     maybeSaveUserDict(true);
+    flushStats();
 }
 
 void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
@@ -2389,7 +2419,7 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
         if (ic && state && !state->tsource_.empty()) {
             const std::string source = state->tsource_;
             clearTranslation(state);
-            ic->commitString(source);
+            commitOut(ic, source, "translate", false);
         }
         translateMode_ = false;
         if (ic && state) {
@@ -2657,6 +2687,71 @@ std::string WowtypeEngine::translateKeyFile() const {
     return dir.empty() ? std::string() : dir + "/translate.key";
 }
 
+void WowtypeEngine::commitOut(fcitx::InputContext *ic, const std::string &text,
+                              const char *source, bool autoSpace) {
+    if (!ic) {
+        return;
+    }
+    auto *state = ic->propertyFor(&factory_);
+    const std::size_t index = state ? state->commitIndex_ : 0;
+    if (state) {
+        state->commitIndex_ = 0;
+    }
+    if (text.empty()) {
+        return;
+    }
+    if (stats_) {
+        const std::string src = source ? std::string(source) : typingSource();
+        // 互译上屏的不是候选：别把上一次选词的位置算到译文头上。
+        const unsigned candidate = src == "translate" ? 0 : static_cast<unsigned>(index);
+        const std::string scheme = shuangpin_ ? typingScheme() : std::string();
+        wowtype_stats_commit(stats_, text.c_str(), src.c_str(),
+                             scheme.empty() ? nullptr : scheme.c_str(),
+                             static_cast<int>(candidate), statsNowMs());
+    }
+    ic->commitString(autoSpace && needsAutoSpace(ic, text) ? " " + text : text);
+}
+
+void WowtypeEngine::recordKey(fcitx::InputContext *ic, const fcitx::Key &key, bool down) {
+    if (!stats_ || !ic) {
+        return;
+    }
+    if (ic->capabilityFlags().test(fcitx::CapabilityFlag::PasswordOrSensitive)) {
+        return;
+    }
+    wowtype_stats_key(stats_, 0, static_cast<unsigned>(key.code()), down ? 1 : 0, statsNowMs());
+}
+
+void WowtypeEngine::flushStats() {
+    if (!stats_) {
+        return;
+    }
+    if (wowtype_stats_flush(stats_, statsNowMs()) != 0) {
+        WLOG_W() << "WowType: 打字统计写入失败："
+                 << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+    }
+}
+
+std::string WowtypeEngine::typingSource() const {
+    if (translateMode_) {
+        return "translate";
+    }
+    if (asciiMode_) {
+        return "english";
+    }
+    return shuangpin_ ? "shuangpin" : "quanpin";
+}
+
+std::string WowtypeEngine::typingScheme() const {
+    std::string id = shuangpinScheme_;
+    for (char &ch : id) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return id;
+}
+
 void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
     if (!ic || text.empty()) {
         return;
@@ -2665,7 +2760,7 @@ void WowtypeEngine::emit(fcitx::InputContext *ic, const std::string &text) {
     st->afterDigit_ = text.back() >= '0' && text.back() <= '9';
     ++st->emits_;
     if (!translating(ic)) {
-        ic->commitString(needsAutoSpace(ic, text) ? " " + text : text);
+        commitOut(ic, text);
         return;
     }
     auto *state = ic->propertyFor(&factory_);
@@ -2721,7 +2816,7 @@ bool WowtypeEngine::autoSpaceKey(fcitx::InputContext *ic, const fcitx::Key &key)
     if (!needsAutoSpace(ic, text)) {
         return false;
     }
-    ic->commitString(" " + text);
+    commitOut(ic, " " + text, nullptr, false);
     return true;
 }
 
@@ -2935,7 +3030,7 @@ void WowtypeEngine::commitTranslation(fcitx::InputContext *ic, WowtypeState *sta
     if (fresh && phase == WOWTYPE_TRANSLATE_DONE) {
         const std::string text = wowtype_translate_text(translator_);
         clearTranslation(state);
-        ic->commitString(text);
+        commitOut(ic, text, "translate", false);
         updateInputPanel(ic, state);
         return;
     }
@@ -2958,7 +3053,7 @@ void WowtypeEngine::commitTranslateSource(fcitx::InputContext *ic, WowtypeState 
     }
     const std::string source = state->tsource_;
     clearTranslation(state);
-    ic->commitString(source);
+    commitOut(ic, source, "translate", false);
     updateInputPanel(ic, state);
 }
 
