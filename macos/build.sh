@@ -3,12 +3,13 @@
 #
 #   macos/build.sh <数据目录> [输出目录]
 #
-# 数据目录是 scripts/make-data.sh 的输出（lexicon.tsv、english.txt、words.lm、LICENSE、SOURCE.txt、VERSION）。
+# 数据目录是 scripts/make-data.sh 的输出（lexicon.tsv、english.txt、words.lm、LICENSE、SOURCE.txt、VERSION），
+# 加上 scripts/make-wubi.sh 的输出（wubi86.tsv、WUBI-LICENSE、WUBI-AUTHORS、WUBI-SOURCE.txt）。
 # 产物：<输出目录>/WowType.app、WowType-<版本>-macos.pkg（给普通用户双击安装）和 WowType-<版本>-macos.zip
 # （给 macos/install.sh 用）。arm64 + x86_64 通用，ad-hoc 签名，没有 Apple 开发者签名和公证。
 #
 # 环境变量：WOWTYPE_VERSION（默认取 core/Cargo.toml），WOWTYPE_MACOS_ARCHS（默认 "arm64 x86_64"）。
-# 核心不带语音（--no-default-features）：语音用的是微信输入法的模型，不能随安装包分发。
+# 核心带语音（默认特性）：识别模型是微信输入法的，不随安装包分发，在设置窗口「语音」页从官方 CDN 下载。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,7 +21,7 @@ ARCHS=${WOWTYPE_MACOS_ARCHS:-arm64 x86_64}
 export MACOSX_DEPLOYMENT_TARGET=12.0
 TARGET_DIR=target/macos
 
-for f in lexicon.tsv english.txt; do
+for f in lexicon.tsv english.txt wubi86.tsv WUBI-LICENSE WUBI-AUTHORS WUBI-SOURCE.txt; do
   [[ -f "$DATA/$f" ]] || { echo "数据目录里没有 $f" >&2; exit 1; }
 done
 
@@ -33,11 +34,12 @@ for arch in $ARCHS; do
     x86_64) rust=x86_64-apple-darwin ;;
     *) echo "不认识的架构 $arch" >&2; exit 1 ;;
   esac
-  cargo build --release --locked -q -p wowtype-core --no-default-features --target "$rust" --target-dir "$TARGET_DIR"
+  cargo build --release --locked -q -p wowtype-core --target "$rust" --target-dir "$TARGET_DIR"
   swiftc -O -target "$arch-apple-macos$MACOSX_DEPLOYMENT_TARGET" -module-name WowType -I macos/CWowtype \
     macos/Sources/Shared/*.swift macos/Sources/App/*.swift \
     "$TARGET_DIR/$rust/release/libwowtype_core.a" \
     -framework Cocoa -framework InputMethodKit -framework Carbon \
+    -framework AVFoundation -framework AudioUnit -framework CoreAudio \
     -liconv -o "$work/WowType-$arch"
   bins+=("$work/WowType-$arch")
 done
@@ -69,12 +71,19 @@ cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$res/"
 [[ -f "$DATA/words.lm" ]] && cp "$DATA/words.lm" "$res/"
 # 简繁对照表（设置里 Traditional=True 时用），和 Linux 包里的 /usr/share/wowtype/s2t.tsv 是同一份
 cp "${WOWTYPE_S2T:-core/data/s2t.tsv}" "$res/s2t.tsv"
+# 简繁表由 OpenCC 数据生成（Apache-2.0），许可证随包带上
+cp core/data/OPENCC-LICENSE "$res/OPENCC-LICENSE"
 [[ -f "$DATA/LICENSE" ]] && cp "$DATA/LICENSE" "$res/DATA-LICENSE"
 [[ -f "$DATA/SOURCE.txt" ]] && cp "$DATA/SOURCE.txt" "$res/DATA-SOURCE.txt"
 [[ -f "$DATA/VERSION" ]] && cp "$DATA/VERSION" "$res/DATA-VERSION"
+# 五笔码表（rime-wubi，LGPL-3.0）：许可证、作者、来源随包带上，改名免得和词库的 LICENSE 混
+cp "$DATA/wubi86.tsv" "$res/"
+cp "$DATA/WUBI-LICENSE" "$res/DATA-WUBI-LICENSE"
+cp "$DATA/WUBI-AUTHORS" "$res/DATA-WUBI-AUTHORS"
+cp "$DATA/WUBI-SOURCE.txt" "$res/DATA-WUBI-SOURCE.txt"
 
 # 安装包里只能有这些文件（微信输入法的模型、HY-MT 翻译模型等都不许带）
-allowed='^(menu\.pdf|caret@2x\.pdf|AppIcon\.icns|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION)$'
+allowed='^(menu\.pdf|caret@2x\.pdf|AppIcon\.icns|[A-Za-z-]+\.lproj|[A-Za-z-]+\.lproj/InfoPlist\.strings|lexicon\.tsv|english\.txt|words\.lm|s2t\.tsv|OPENCC-LICENSE|DATA-LICENSE|DATA-SOURCE\.txt|DATA-VERSION|wubi86\.tsv|DATA-WUBI-LICENSE|DATA-WUBI-AUTHORS|DATA-WUBI-SOURCE\.txt)$'
 bad=$(cd "$res" && find . -mindepth 1 | sed 's#^\./##' | grep -Ev "$allowed" || true)
 if [[ -n "$bad" ]]; then
   echo "安装包里有不该带的文件：" >&2

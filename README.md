@@ -10,7 +10,7 @@
 
 [![CI](https://github.com/Gloridust/WowType/actions/workflows/ci.yml/badge.svg)](https://github.com/Gloridust/WowType/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Gloridust/WowType?include_prereleases&label=release)](https://github.com/Gloridust/WowType/releases)
-![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.1-blue)
+![fcitx5](https://img.shields.io/badge/fcitx5-%E2%89%A5%205.0-blue)
 ![License](https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-green)
 
 [安装](#安装) · [使用](#使用) · [设置](#设置) · [更多文档](#更多文档) · [常见问题](#常见问题) · [工作原理](#工作原理) · [参与开发](#参与开发)
@@ -44,12 +44,13 @@
 - **语音输入**：按住右 `Alt` 说话，松开就上屏；也可以点一下右 `Alt` 说，说完停一下自动结束。用微信输入法的离线识别模型，在本机识别，不上传录音。
 - **Emoji**：打「开心」「点赞」「生日快乐」时，第三个候选就是对应的 emoji；按 `Super` + `.` 打开表情面板，打拼音或英文搜 emoji 和符号（`xiao` → 😂、`pizza` → 🍕、`youjiantou` → →）。
 - **互译**：单按 `Shift` 切到「译」，照常打中文，停一下就翻成英文（或日、韩、法等 13 种语言），回车上屏；打外文就翻成中文。翻译服务用你自己填的 OpenAI 格式接口（DeepSeek、通义千问、Ollama……），也可以下载腾讯混元的 HY-MT 翻译模型离线翻。
-- **日期时间、计算器**：打 `riqi`（`rq`）、`shijian`（`sj`）、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`；只打一个数（`v12345.67`）出大写金额「壹万贰仟叁佰肆拾伍元陆角柒分」和「一万二千三百四十五点六七」。
+- **日期时间、计算器**：打 `riqi`（`rq`）、`shijian`（`sj`）、`xingqi`，首选后面就是今天的日期、现在的时间（`2026年11月10日`、`2026-11-10`、`15:52`……）；`v1+2*3` 直接出 `7`；只打一个数（`v12345.67`）出大写金额「壹万贰仟叁佰肆拾伍元陆角柒分」和「一万二千三百四十五点六七」。双拼时 `v` 是声母键，计算器用大写 `V`（`V1+2*3`）。
 - **v + 空格工具栏**：只打一个 `v` 再按空格，选剪贴板历史（默认关，最近 20 条，只在内存里）、常用语（自定义词）、符号、表情。
 - **中英文之间自动加空格**（默认关）：`你好Linux` → `你好 Linux`、`第5章` → `第 5 章`，字母和数字分别开关。
-- **繁体、模糊音、双拼**：可切繁体输出；模糊音分 12 组单独开（z=zh、n=l、f=h、r=l、an=ang、un=ong……）；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
+- **繁体、模糊音、双拼**：可切繁体输出；模糊音分 16 组单独开（z=zh、n=l、f=h、r=l、an=ang、un=ong、huang=wang……）；双拼支持自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加，双拼也有整句、句首词和分段选词，编辑区显示全拼。
+- **五笔 86**：设置里「输入方案」选「五笔输入」。四码唯一自动上屏、第五码顶字、标点顶字、空码提示，候选后面显示还要打的码；不会打的字按 `z` 临时打拼音，候选后面就是它的五笔码。码表来自 [rime-wubi](https://github.com/rime/rime-wubi)，码位固定、不调频，见[五笔](#五笔)。
 - **图形设置界面**：候选排列、模糊音、语音键都在「WowType 设置」里点一下就改，马上生效；还能加自定义词（人名、公司名、常用的长句、邮箱），加进去的词排第一，简拼也能打；编码可以是 `mail` 这类字母，词里能换行，可以导入导出。
-- **快、全在本地**：89 万词的词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型在设置里下载一次；互译要联网，只在切到「译」时把那句话发给你填的服务）。
+- **快、全在本地**：完整的雾凇拼音词库，按一个键一般几毫秒内出候选；不联网，输入内容不离开你的电脑（语音模型在设置里下载一次；互译要联网，只在切到「译」时把那句话发给你填的服务）。
 
 <table>
 <tr>
@@ -94,14 +95,15 @@
 
 ### 系统要求
 
-- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.1 或更新**。Arch 的安装包只有 x86_64
-- 有现成安装包的发行版：**Ubuntu 24.04 / 26.04、Debian 13**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
-- Ubuntu 22.04 自带的 fcitx5 是 5.0，不支持
+- Linux x86_64 或 arm64（aarch64），输入法框架 **fcitx5 5.0 或更新**。Arch 的安装包只有 x86_64
+- 有现成安装包的发行版：**Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25**（deb）、**Arch Linux** 及 EndeavourOS / Garuda / CachyOS（pkg.tar.zst）、**Fedora**（[rpm](#fedora)）、**NixOS**（[flake](#nixos--nix)）。其他发行版请[从源码构建](docs/INSTALL.md)
+- Ubuntu 22.04 的 GNOME 是 42：绿色候选框主题和语音浮条（GNOME 扩展，要 GNOME 45+）用不了，见[安装说明](docs/INSTALL.md#ubuntu-2204fcitx5-50)
+- deepin 的安装包只有 x86_64
 - **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
 
 ### 一行命令安装（推荐）
 
-Ubuntu 24.04 / 26.04、Debian 13、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
+Ubuntu 22.04 / 24.04 / 26.04、Debian 13、deepin 23 / 25、Arch Linux（及衍生版）、Fedora、macOS 上，在终端里运行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh | bash
@@ -111,7 +113,7 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 
 1. 下载和你系统对应的最新安装包（词库已经在包里，约 29 MB），按 `SHA256SUMS` 校验
 2. 用系统的包管理器（`apt-get`、`pacman`、`dnf`）装上，顺带装好 fcitx5 和设置界面要用的 GTK 4 / libadwaita。Arch 不会替你整机升级，提示依赖不满足时先 `sudo pacman -Syu`
-3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去
+3. 输入法框架还不是 fcitx5（Ubuntu 默认是 IBus）时，问你要不要用 `im-config` 切过去（deepin 默认就是 fcitx5，不动）
 4. 把 WowType 加进 fcitx5 的输入法列表；fcitx5 正在运行的话会先重启它一次
 
 装完按提示做：切换了输入法框架的话**注销并重新登录**，然后按 `Ctrl+Space` 切到 WowType，打 `nihao` 试试。
@@ -174,7 +176,7 @@ im-config -n fcitx5
 ##### 方式一：安装包
 
 到 [Releases](https://github.com/Gloridust/WowType/releases) 页面下载和你系统对应的那**一个**文件
-`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu24.04`、`ubuntu26.04`、`debian13`，架构是 `amd64` 或 `arm64`），词库已经包含在里面。
+`wowtype_<版本>_<发行版>_<架构>.deb`（发行版是 `ubuntu22.04`、`ubuntu24.04`、`ubuntu26.04`、`debian13`、`deepin23`、`deepin25`，架构是 `amd64` 或 `arm64`，deepin 只有 `amd64`），词库已经包含在里面。
 不知道自己是哪个发行版、哪种架构：
 
 ```bash
@@ -265,17 +267,19 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 |---|---|
 | 空格 | 上屏第一个（或光标所在的）候选 |
 | `1`–`9` | 上屏对应的候选 |
-| `←` `→` | 在候选之间移动光标 |
+| `←` `→` | 在候选之间移动光标（跨页时跟着翻页，到了第一个、最后一个就停住） |
 | `↓` | 展开候选面板（6 列，像微信输入法），在面板里用方向键挪、空格或 `1`–`6` 选；第一行按 `↑` 或 `Esc` 收起 |
 | `↑`、`-` `=`、`PgUp` `PgDn` | 翻页；设置「常规 → 候选词 → 翻页键」还能打开 `[` `]`、`,` `.`、`Shift+Tab` `Tab`（翻到头时这些键不当标点上屏）。fcitx5 全局设置里配的翻页、移动候选热键也认 |
+| 方向键的另一种用法 | 设置「常规 → 候选词 → 方向键」选「左右键移动光标」：`↑` `↓` 选词，`←` `→` 在打了一半的拼音里移动光标改字（打的字母插在光标处，退格删光标前一个，`Home` `End` `Delete` 也管用），翻页用 `PgUp` `PgDn` 和翻页键。竖排时上下键本来就选词，这一项只改左右键 |
 | 回车 | 把打的字母原样上屏 |
 | `Esc` | 清空正在打的内容 |
+| 点到别处、换窗口 | Linux 上和 `Esc` 一样丢掉打到一半的，文档里不会留下 `ni'hao` 这样的拼音（想留字母就先按回车）；macOS 上把打的字母原样上屏，和回车一样 |
 | 退格 | 选过词时先撤销最后一次选词（拼音回到编辑区）；没有选词时删一个字母 |
 | `Ctrl+Delete` | 忘掉光标所在的候选：学错的词（比如一段一段选出来、选一次就记住的词）从用户词库里删掉，选词记录也清掉；词库里本来就有的词回到原来的位置。正在打的拼音不动，候选马上刷新。`Ctrl+退格`、`Shift+Delete` 也行（Mac 上按 `Control+Delete`）。设置里加的自定义词不受影响 |
 | `'` | 分隔音节，比如 `xi'an` → 西安 |
 | `[` `]` | 以词定字：只上屏光标处候选的第一个、最后一个字（`nihao` `[` → 你）；设置里能关，翻页键设成 `[ ]` 时是翻页 |
 | `Super` + `.` | 表情面板：打拼音或英文搜 emoji 和符号，见下 |
-| 单按 `Shift` | 切到英文（字母、半角标点直接上屏），再按一下回中文；打了一半的字母原样上屏。左右 Shift 都行，设置里能改成只用一边或关掉。设置好[互译](#互译)后是 中 → 英 → 译 → 中。要是按 Shift 只在 WowType 和 en 之间来回，见[下面](#shift-被-fcitx5-占了) |
+| 单按 `Shift` | 切到英文（字母、半角标点直接上屏），再按一下回中文；打了一半的字母原样上屏。左右 Shift 都行，设置里能改成只用一边或关掉。设置好[互译](#互译)后是 中 → 英 → 译 → 中（设了互译的快捷键时只切中英）。两个平台各自还有别的切法，见[中英文切换](#中英文切换)。要是按 Shift 只在 WowType 和 en 之间来回，见[下面](#shift-被-fcitx5-占了) |
 | 右 `Alt` | 语音输入，见下 |
 | `v` + 空格 | 工具栏：剪贴板历史、常用语、符号、表情（数字键选，退格返回，`Esc` 关闭），见 [docs/CONFIG.md](docs/CONFIG.md#v--空格工具栏) |
 
@@ -284,6 +288,30 @@ wowtype-show  --lexicon /usr/share/wowtype/lexicon.tsv nihao
 
 **长句可以分段上屏**：打完一整句，候选里除了整句，还有它的前半截（比如「我今天晚上要」）。
 选了前半截就只上屏这一段，剩下的拼音留着继续选。
+
+### 五笔
+
+在「WowType 设置 → 输入 → 输入方案」里选「五笔输入」（86 版）。打的字母就是五笔码，最多四码：
+
+- **上屏**：空格上屏光标处的候选，数字键选第几个。打满四码只有一个字词时直接上屏（「四码唯一自动上屏」，可以关）。
+- **顶字**：四码打满了再打字母，先上屏首选，这个字母开始下一个字；打码时按标点也是先上屏首选再上屏标点。
+- **编码提示**：码对上的字词排在前面（码表的顺序，不调频，码位一直不变），后面是以它开头的更长的码，小字是还要打的码（打 `wq`：你、您 `in`、你好 `vb`……）。不想看可以在设置里关掉。
+- **空码**：打的码没有字时候选框上方显示「空码」，退格改；接着打字母就丢掉它重新开始，空格清空，回车上屏字母。
+- **`z` 临时拼音**：不会打的字先按 `z` 再打全拼（`znihao`），候选后面是它的五笔码（有简码时是「简码/全码」，`工 a/aaaa`），边打边学码。日期时间也在这里：`zriqi`、`zshijian`、`zxingqi`。
+- **和拼音不一样的地方**：计算器用大写 `V`（`V1+2*3`），`v` + 空格上屏「发」、不开工具栏；五笔选的词不进拼音的用户词库和输入习惯；方向键设成「左右键移动光标」时，打五笔码时左右键照样选词（`z` 临时拼音里照常移光标）。繁体输出、自定义词（编码正好是打的码时排最前）、表情推荐（排在码对上的字词后面）、以词定字照常能用。
+
+### 中英文切换
+
+两个平台的习惯不一样，默认跟着各自的习惯走，哪个应用里都至少有一种切法管用：
+
+| | Linux | macOS |
+|---|---|---|
+| 系统自己的 | `Ctrl` + `空格` 在 WowType 和英文键盘之间切（fcitx5 的「切换启用/禁用输入法」） | 按 `中/英` 键（大写锁定键）在 WowType 和 ABC 之间切：在「系统设置 → 键盘 → 文字输入 → 输入法 → 编辑…」里打开「使用“中/英”键切换“ABC”输入法」，设置「输入」页有按钮直接打开键盘设置。不经过输入法，所有应用里都管用 |
+| 单按 `Shift` | 默认开着：WowType 自己的英文（字母直接上屏，不用换输入法） | 默认开着，和搜狗、微信输入法一样。个别应用（比如一些用 Electron 做的）里有时不灵，用 `中/英` 键或下面的快捷键 |
+| 另设一个切换键 | 设置「输入」页选，比如 `Ctrl` + `Shift` + `空格`；默认不用 | 同左（`Control` + `Shift` + `空格`） |
+| 互译的快捷键 | 设置「输入」页选，比如 `Ctrl` + `Shift` + `Y`：进「译」，再按回到原来的模式；设了以后单按 Shift 只切中英 | 同左（`Control` + `Shift` + `Y`） |
+
+设置文件里的键名两端一样（`ShiftToggle`、`ToggleKey`、`TranslateModeKey`，见 [docs/CONFIG.md](docs/CONFIG.md)）。系统自己的快捷键（fcitx5 的、macOS 的）先处理，设成它们 WowType 收不到。
 
 #### Shift 被 fcitx5 占了
 
@@ -355,12 +383,16 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 
 换语音键（右 Ctrl、菜单键、F8–F10）或者关掉语音，在 [WowType 设置](#设置)的「语音」页里改。
 
+**macOS** 上一样用，语音键是右 `Option`（也能换成右 Control、F8–F10）：在设置窗口的「语音」页下载模型
+（和 Linux 同一个包，存在 `~/Library/Application Support/WowType/wtlocal/`），第一次说话时允许 WowType 使用麦克风。
+提示显示在候选框里（🎙 和字符画的波形）。
+
 <img src="docs/images/voice.png" width="560" alt="按住右 Alt 说话：光标变成声波，下面是正在听、离线和实时波形">
 
 ### 互译
 
 在 [WowType 设置](#设置)的「翻译」页里选个服务商（或者填任何 OpenAI 格式的接口）、填 Key 和模型，打开「互译」。
-之后单按 `Shift` 就在 **中 → 英 → 译** 之间切换：
+之后单按 `Shift` 就在 **中 → 英 → 译** 之间切换；也可以在「输入」页设一个**互译的快捷键**（比如 `Ctrl` + `Shift` + `Y`），按它进出「译」，单按 Shift 就只切中英：
 
 - 和微信输入法的「中英互译」一样：切到「译」照常打中文，打的字攒在候选框里，不上屏；停 0.5 秒（打了句号就立刻）开始翻译，译文边翻边写进输入框。
 - `回车` 或 `空格` 上屏译文，还没翻完就等翻好了自动上屏；`Shift+回车` 上屏原文；`Esc` 清空。
@@ -406,7 +438,7 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 | 页面 | 能改什么 |
 |---|---|
 | 常规 | 候选排列（横排 / 竖排）、每页个数（3–9）、WowType 绿色主题（见[主题](#主题)）、候选字号。还会检查 WowType 有没有加进 fcitx5 的输入法列表，没有的话一键添加；底下的「帮助」能[导出日志](#出问题时导出日志) |
-| 输入 | 词库（默认雾凇，可下载切换到[万象](docs/CONFIG.md#可选词库万象拼音)）、拼音输入还是双拼输入、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、模糊音（12 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、en=eng、in=ing、ian=iang、uan=uang、un=ong）、按错键自动纠正、繁体字、日期时间、计算器、v + 空格工具栏、剪贴板历史、中英文之间自动加空格、分号引号选第 2/3 个候选 |
+| 输入 | 词库（默认雾凇，可下载切换到[万象](docs/CONFIG.md#可选词库万象拼音)）、输入方案（拼音、双拼、五笔）、双拼方案（自然码、小鹤、微软、搜狗、智能 ABC、紫光、拼音加加）、五笔的四码唯一自动上屏和编码提示、单按哪个 Shift 切中英文（和 fcitx5 抢 Shift 时提示并能一键让出）、另设一个切换中英文的快捷键、互译的快捷键、模糊音（16 组分别开关：z=zh、c=ch、s=sh、n=l、f=h、r=l、an=ang、an=ai、ian=iang、uan=uang、huang=wang、en=eng、eng=ong、in=ing、un=ong、un=iong）、按错键自动纠正、繁体字、日期时间、计算器、v + 空格工具栏、剪贴板历史、中英文之间自动加空格、分号引号选第 2/3 个候选 |
 | 表情 | 打字时推荐 emoji、表情面板快捷键 |
 | 语音 | 下载 / 删除识别模型（有进度、能取消）；下载好模型后才能打开语音输入；语音键（右 Alt / 右 Ctrl / 菜单键 / F8–F10）、识别结果同时复制到剪贴板 |
 | 翻译 | [互译](#互译)开关、翻成哪种语言、正式语气；用什么翻译：本地模型（默认，下载、闲置释放）或自定义翻译服务（服务商、地址、Key、模型、测试连接） |
@@ -422,14 +454,14 @@ vim.api.nvim_create_autocmd("InsertEnter", { callback = function() wowtype("SetM
 
 #### 主题
 
-WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标里的那种绿，系统换深色模式时跟着换深色版。
+WowType 默认用自己的绿色主题：选中的词是图标里的那种绿，系统换深色模式时跟着换深色版。
 第一次切到 WowType 时自动打开（只这一次；你在用别的 fcitx5 主题时不动）。
 不喜欢的话在「WowType 设置 → 常规 → 外观」里关掉「WowType 绿色主题」，换回默认。
 候选框的字嫌小，在同一个地方调「候选字号」（8–32 磅），改了马上生效：GNOME 上改的是 Input Method Panel 扩展的字体，别的桌面改的是 fcitx5 经典界面的字体，两边一起改。
 
 <table>
 <tr>
-<td align="center" width="50%"><img src="docs/images/theme-light.png" alt="WowType 浅色主题：白底圆角候选框，第一个候选是绿底白字"><br><sub>浅色</sub></td>
+<td align="center" width="50%"><img src="docs/images/theme-light.png" alt="WowType 浅色主题：白底细边框的候选框，第一个候选是绿底白字"><br><sub>浅色</sub></td>
 <td align="center" width="50%"><img src="docs/images/theme-dark.png" alt="WowType 深色主题：下键展开的候选面板，当前行是绿底"><br><sub>深色（按下键展开）</sub></td>
 </tr>
 </table>
@@ -437,7 +469,9 @@ WowType 默认用自己的绿色主题：圆角候选框，选中的词是图标
 候选框由谁来画，决定了主题怎么生效：
 
 - **KDE、X11 等**：fcitx5 自己画（经典界面），用的是主题 `wowtype` / `wowtype-dark`，打开开关马上生效。
-  也可以在 Fcitx 5 配置 → 附加组件 → 经典用户界面里手动选。
+  也可以在 Fcitx 5 配置 → 附加组件 → 经典用户界面里手动选。候选框是不透明的方角加细边框：没开混成器的 X11
+  （openbox、i3、关了混成的 xfwm4）上 fcitx5 不处理透明，透明的阴影和圆角会画成一圈黑框，
+  所以这个主题不用它们（选中的词还是圆角的绿块）。
 - **GNOME（Wayland）**：候选框是 Input Method Panel 扩展画的，fcitx5 的主题管不到。WowType 另带一个只有样式表的小扩展
   `wowtype-theme@gloridust.github.io` 给它换色，打开开关会顺带启用它。**第一次启用要注销重新登录一次**（GNOME 只在登录时加载新装的扩展）。
   这个扩展同时画[语音浮条](#语音输入)，关掉绿色主题，语音提示也会回到候选框里的文字版。
@@ -532,6 +566,8 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 ## 致谢
 
 - [雾凇拼音 rime-ice](https://github.com/iDvel/rime-ice)：词库和英文词表（GPL-3.0，随安装包一起分发，许可证见 `/usr/share/doc/wowtype/copyright`）
+- [Rime 五笔字型 rime-wubi](https://github.com/rime/rime-wubi)：五笔 86 码表（LGPL-3.0，随安装包一起分发；作者见 `WUBI-AUTHORS`，来源和钉死的提交见 `WUBI-SOURCE.txt`）
+- [Tatoeba](https://tatoeba.org)：中文句子统计出的词频（`data/tatoeba-freq.tsv`，只有词频、不含句子），融进安装包的词库；句子许可证 CC BY 2.0 FR，Tatoeba contributors
 - [万象拼音 rime_wanxiang](https://github.com/amzxyz/rime_wanxiang)：可选词库（CC BY 4.0，不在安装包里，在设置里下载）
 - [OpenCC](https://github.com/BYVoid/OpenCC)：简繁对照表（Apache-2.0）
 - [Unicode CLDR](https://cldr.unicode.org/)：emoji 的中英文关键词（Unicode License v3）
@@ -541,4 +577,4 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 
 ## 许可证
 
-代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0，可选的万象词库包遵循 CC BY 4.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。
+代码按 MIT 或 Apache-2.0 双许可证发布，任选其一。安装包里的词库数据遵循 rime-ice 的 GPL-3.0（词频另融进了 Tatoeba 句子统计出的词频，Tatoeba 句子是 CC BY 2.0 FR，署名见 DATA-SOURCE.txt），五笔码表遵循 rime-wubi 的 LGPL-3.0，可选的万象词库包遵循 CC BY 4.0，词级语言模型 `words.lm` 是 CC BY-SA 4.0，编进程序里的 emoji 关键词来自 Unicode CLDR（Unicode License v3）。

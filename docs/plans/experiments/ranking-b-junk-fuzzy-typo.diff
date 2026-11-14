@@ -1,0 +1,485 @@
+diff --git a/core/src/beam.rs b/core/src/beam.rs
+index 10bf99c..2653b8d 100644
+--- a/core/src/beam.rs
++++ b/core/src/beam.rs
+@@ -39,6 +39,8 @@ pub struct BeamConfig {
+     pub max_typos: usize,
+     /// 一个词最多纠几处。
+     pub max_typos_per_word: usize,
++    /// 两键按反比换键便宜多少（实验）。
++    pub swap_discount: f64,
+     /// 全拼混简拼（k yi -> 可以，yong z wen -> 用中文）时，每个只打了声母的音节的惩罚。
+     ///
+     /// 错键的全拼常常也能读成混简拼（jifu 打成 jifk -> 积分卡），罚得太轻会把纠错挤下去，
+@@ -68,6 +70,7 @@ impl Default for BeamConfig {
+             completion_cost: 1.2,
+             max_typos: 2,
+             max_typos_per_word: 1,
++            swap_discount: std::env::var("WT_SWAP").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0),
+             abbrev_cost: 2.0,
+             tail_abbrev_cost: 4.0,
+             rare_ext_chars: false,
+@@ -90,6 +93,8 @@ pub struct BeamWord {
+     pub ends_abbrev: bool,
+     /// 这个词用了几处纠错。
+     pub typos: usize,
++    /// 其中几处是两键按反（实验）。
++    pub swaps: usize,
+     /// 补全多出的字母数（用户还没打的部分）。
+     pub completion: usize,
+     /// 在输入里的字母区间 [start, end)。
+@@ -216,7 +221,7 @@ pub fn beam_search(
+                 } else {
+                     (0.0, 0)
+                 };
+-                let typo_cost = config.typo_cost * word.typos as f64
++                let typo_cost = (config.typo_cost * word.typos as f64 - config.swap_discount * word.swaps as f64)
+                     + config.completion_cost * word.completion as f64
+                     + abbrev_penalty(graph, word, config);
+                 let next = Node {
+@@ -324,7 +329,7 @@ pub fn first_words(
+     .filter(|s| s.word.known && s.word.end < n)
+     .map(|s| {
+         let cost = s.lexical
+-            + config.typo_cost * s.word.typos as f64
++            + (config.typo_cost * s.word.typos as f64 - config.swap_discount * s.word.swaps as f64)
+             + abbrev_penalty(graph, &s.word, config);
+         (s.word, cost)
+     })
+@@ -376,7 +381,7 @@ pub fn all_first_words(
+     .filter(|s| s.word.known)
+     .map(|s| {
+         let cost = s.lexical
+-            + config.typo_cost * s.word.typos as f64
++            + (config.typo_cost * s.word.typos as f64 - config.swap_discount * s.word.swaps as f64)
+             + config.completion_cost * s.word.completion as f64
+             + abbrev_penalty(graph, &s.word, config);
+         (s.word, cost)
+@@ -411,6 +416,7 @@ fn collect_spans(
+         pos,
+         max_syllables,
+         0,
++        0,
+         &mut keys,
+         &mut found,
+         config,
+@@ -430,7 +436,7 @@ fn collect_spans(
+         let mut group = by_end.remove(&end).unwrap_or_default();
+         group.sort_by(|a, b| {
+             let extra = |s: &Span| {
+-                config.typo_cost * s.word.typos as f64
++                (config.typo_cost * s.word.typos as f64 - config.swap_discount * s.word.swaps as f64)
+                     + config.completion_cost * s.word.completion as f64
+             };
+             let ca = a.lexical + extra(a);
+@@ -466,6 +472,7 @@ fn collect_dfs(
+     pos: usize,
+     max_syllables: usize,
+     typos: usize,
++    swaps: usize,
+     keys: &mut Vec<SyllableQuery>,
+     out: &mut Vec<Span>,
+     config: &BeamConfig,
+@@ -473,6 +480,7 @@ fn collect_dfs(
+ ) {
+     for edge in graph.edges_from(pos) {
+         let edge_typos = typos + usize::from(edge.typo);
++        let edge_swaps = swaps + usize::from(edge.typo && edge.swap);
+         if edge_typos > config.max_typos_per_word {
+             continue;
+         }
+@@ -512,6 +520,7 @@ fn collect_dfs(
+                     abbrev,
+                     ends_abbrev: keys.last().is_some_and(|q| q.is_jianpin()),
+                     typos: edge_typos,
++                    swaps: edge_swaps,
+                     completion: usize::from(edge.completion),
+                     start,
+                     end: edge.end,
+@@ -527,6 +536,7 @@ fn collect_dfs(
+                 edge.end,
+                 max_syllables,
+                 edge_typos,
++                edge_swaps,
+                 keys,
+                 out,
+                 config,
+@@ -562,6 +572,7 @@ fn unknown_word(edge: &Edge) -> BeamWord {
+         abbrev: usize::from(query.is_jianpin()),
+         ends_abbrev: query.is_jianpin(),
+         typos: 0,
++        swaps: 0,
+         completion: 0,
+         start: edge.start,
+         end: edge.end,
+diff --git a/core/src/bin/show.rs b/core/src/bin/show.rs
+index 66eaa64..805d102 100644
+--- a/core/src/bin/show.rs
++++ b/core/src/bin/show.rs
+@@ -25,6 +25,8 @@ fn main() {
+     let mut context = String::new();
+     let mut max_candidates = 18usize;
+     let mut scores = false;
++    let mut fuzzy = false;
++    let mut groups: Option<u32> = None;
+     let mut inputs = Vec::new();
+     let mut i = 1;
+     while i < args.len() {
+@@ -39,6 +41,8 @@ fn main() {
+             "--context" => context = take(&mut i),
+             "--max" => max_candidates = take(&mut i).parse().unwrap_or(18),
+             "--scores" => scores = true,
++            "--fuzzy" => fuzzy = true,
++            "--groups" => groups = take(&mut i).parse().ok(),
+             "-h" | "--help" => {
+                 println!("wowtype-show --lexicon <tsv> [--lm <words.lm>] [--english <txt>] [--max n] [--context 文本] [--scores] 拼音...");
+                 return;
+@@ -55,6 +59,8 @@ fn main() {
+     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
+     let config = EngineConfig {
+         max_candidates,
++        fuzzy,
++        fuzzy_groups: groups.unwrap_or(wowtype_core::syllable::fuzzy::DEFAULT),
+         ..EngineConfig::default()
+     };
+     let lm: Arc<dyn wowtype_core::lm::LanguageModel> = if !lm_path.is_empty() {
+@@ -70,6 +76,14 @@ fn main() {
+             .unwrap_or_else(|e| fail(&format!("英文词表载入失败: {e:#}")));
+     }
+     engine.set_context(&context);
++    if let Ok(q) = std::env::var("WT_LM") {
++        for pair in q.split(';') {
++            let mut it = pair.split(',');
++            let (p, c) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
++            let prev = if p.is_empty() { None } else { Some(p) };
++            println!("LM({p:?},{c:?}) = {:.3} has_bigram={}", engine.lm().score(prev, c), engine.lm().has_bigram(if p.is_empty() {"<s>"} else {p}, c));
++        }
++    }
+     for input in &inputs {
+         let candidates = engine.input(input);
+         let line: Vec<String> = candidates
+diff --git a/core/src/graph.rs b/core/src/graph.rs
+index 5d44114..6c2e848 100644
+--- a/core/src/graph.rs
++++ b/core/src/graph.rs
+@@ -49,6 +49,8 @@ pub struct Edge {
+     pub kind: EdgeKind,
+     /// 这条边是纠错得来的（与实际按键差一处）。
+     pub typo: bool,
++    /// 纠错是「两键按反」（实验）。
++    pub swap: bool,
+     /// 补全边：音节比实际输入多出的字母数（0 表示不是补全）。
+     pub completion: u8,
+ }
+@@ -245,10 +247,14 @@ impl SyllableGraph {
+ fn add_edge(edges: &mut [Vec<Edge>], edge: Edge) {
+     let bucket = &mut edges[edge.start];
+     // 同一段、同一个音节只留一条：精确边先加，纠错边遇到同样的音节就不再加
+-    if !bucket
+-        .iter()
+-        .any(|e| e.end == edge.end && e.kind == edge.kind)
++    if let Some(e) = bucket
++        .iter_mut()
++        .find(|e| e.end == edge.end && e.kind == edge.kind)
+     {
++        if e.typo && edge.typo && edge.swap {
++            e.swap = true;
++        }
++    } else {
+         bucket.push(edge);
+     }
+ }
+@@ -259,6 +265,7 @@ fn full_edge(start: usize, end: usize, syllable: Syllable, erhua: bool) -> Edge
+         end,
+         kind: EdgeKind::Full { syllable, erhua },
+         typo: false,
++        swap: false,
+         completion: 0,
+     }
+ }
+@@ -376,7 +383,10 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
+                     buf.extend_from_slice(text);
+                     buf.swap(i, i + 1);
+                     if let Some(s) = syllable_of(&buf) {
+-                        add(edges, start, end, s);
++                        let mut edge = full_edge(start, end, s, false);
++                        edge.typo = true;
++                        edge.swap = true;
++                        add_edge(edges, edge);
+                     }
+                 }
+             }
+@@ -448,6 +458,7 @@ fn build_typo_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
+                             end: b,
+                             kind: EdgeKind::Pair { first, second },
+                             typo: true,
++                            swap: true,
+                             completion: 0,
+                         },
+                     );
+@@ -498,6 +509,7 @@ fn build_jianpin_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
+                             end: pos + 2,
+                             kind: EdgeKind::Jianpin { letter: digraph },
+                             typo: false,
++                            swap: false,
+                             completion: 0,
+                         },
+                     );
+@@ -512,6 +524,7 @@ fn build_jianpin_edges(input: &ParsedInput, edges: &mut [Vec<Edge>]) {
+                     end: pos + 1,
+                     kind: EdgeKind::Jianpin { letter },
+                     typo: false,
++                    swap: false,
+                     completion: 0,
+                 },
+             );
+diff --git a/core/src/lib.rs b/core/src/lib.rs
+index 1ccd029..e6dea74 100644
+--- a/core/src/lib.rs
++++ b/core/src/lib.rs
+@@ -127,7 +127,7 @@ impl Default for EngineConfig {
+             jianpin_fallback: true,
+             fuzzy: false,
+             fuzzy_groups: crate::syllable::fuzzy::DEFAULT,
+-            fuzzy_penalty: 2.5,
++            fuzzy_penalty: std::env::var("WT_FUZZY_PEN").ok().and_then(|v| v.parse().ok()).unwrap_or(2.5),
+             shuangpin: false,
+             shuangpin_scheme: crate::shuangpin::Scheme::Ziranma,
+             english_candidate: true,
+@@ -759,17 +759,37 @@ impl Engine {
+         let display = raw.trim();
+         let normalized = display.to_ascii_lowercase();
+         let mut result = self.query_plain(&normalized, at_ms)?;
++        if std::env::var("WT_DEBUG").is_ok() {
++            for c in &result {
++                let ws: Vec<String> = c.words.iter().map(|w| format!("{}[{}]f={:.0}{}", w.text, w.pinyin, w.freq, if w.known {""} else {"?"})).collect();
++                eprintln!("  RAW {:.2} lm={:.2} typo={} compl={} jp={} cov={} | {}", c.score, c.features.lm_score_with_previous_txt, c.features.typo_count, c.features.prefix_completion, c.features.full_jianpin, c.features.coverage_score, ws.join(" + "));
++            }
++        }
+ 
+         protect_exact_input(&mut result);
+         promote_picked(&mut result);
+         self.promote_custom(&mut result);
+         self.append_raw_candidate(raw_display.unwrap_or(display), &mut result);
++        let english_first = xp('B')
++            && result.first().is_some_and(|c| is_raw_candidate(c) && c.words[0].known)
++            && result.len() > 1;
++        if english_first {
++            result.retain(|c| {
++                is_raw_candidate(c)
++                    || !(c.features.typo_count >= 2.0
++                        || (is_mixed_jianpin(c) && abbrev_before_last(c)))
++            });
++        }
++        let english_only = english_first && result.len() == 1;
+         if self.config.traditional {
+             self.apply_traditional(&mut result);
+         }
+         for candidate in &mut result {
+             candidate.consumed = raw.len();
+         }
++        if english_only {
++            return Ok(result);
++        }
+         if self.config.prefix_candidates > 0 {
+             let leading = raw.len() - raw.trim_start().len();
+             let mut prefix = self.prefix_candidates(&normalized)?;
+@@ -1171,7 +1191,83 @@ impl Engine {
+         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
+         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
+         if full.has_exact_path() {
+-            let found = self.query_once(&full, at_ms, fuzzy)?;
++            let mut found = self.query_once(&full, at_ms, fuzzy)?;
++            if !fuzzy && xp('C') {
++                let weak = found.first().is_none_or(|c| {
++                    c.words.len() >= 2
++                        || c.features.typo_count > 0.0
++                        || c.features.prefix_completion > 0.0
++                        || c.words.iter().any(|w| !w.known)
++                });
++                let syllables = found
++                    .first()
++                    .map(|c| c.pinyin.split_whitespace().count())
++                    .unwrap_or(0);
++                if weak && (2..=4).contains(&syllables) {
++                    let top = found.first().map(|c| c.score).unwrap_or(f64::NEG_INFINITY);
++                    let lead = xnum("WT_FUZZY_LEAD", 2.0);
++                    let view = FuzzyLexicon::new(
++                        self.lexicon.as_ref(),
++                        self.config.fuzzy_groups,
++                        self.config.fuzzy_penalty,
++                    );
++                    let start = self.start_word();
++                    let mut extra: Vec<Candidate> = Vec::new();
++                    let mut segs = Vec::new();
++                    exact_segmentations(&full, 0, 4, &mut Vec::new(), &mut segs);
++                    for seg in segs {
++                        if !(2..=4).contains(&seg.len())
++                            || seg.iter().any(|e| {
++                                e.typo
++                                    || e.completion > 0
++                                    || !matches!(e.kind, crate::graph::EdgeKind::Full { erhua: false, .. })
++                            })
++                        {
++                            continue;
++                        }
++                        let query: Vec<crate::syllable::SyllableQuery> =
++                            seg.iter().map(|e| e.query()).collect();
++                        let exact = self.lexicon.lookup_common(&query);
++                        let pinyin = query.iter().map(|q| q.display()).collect::<Vec<_>>().join(" ");
++                        for entry in view.lookup_common(&query) {
++                            if exact.iter().any(|e| e.word == entry.word && e.freq >= entry.freq) {
++                                continue;
++                            }
++                            let lm = self.lm.score(start.as_deref(), &entry.word);
++                            let feature = Feature {
++                                coverage_score: 1.0,
++                                lm_score_with_previous_txt: lm as f32,
++                                ..Feature::default()
++                            };
++                            let score = -view.cost(&entry) + lm + self.ranker.score(&feature) as f64;
++                            if score < top + lead || found.iter().any(|f| f.text == entry.word) {
++                                continue;
++                            }
++                            extra.push(Candidate {
++                                text: entry.word.clone(),
++                                pinyin: pinyin.clone(),
++                                score,
++                                features: feature,
++                                words: vec![CandidateWord {
++                                    text: entry.word.clone(),
++                                    pinyin: pinyin.clone(),
++                                    freq: entry.freq,
++                                    known: true,
++                                }],
++                                consumed: 0,
++                            });
++                        }
++                    }
++                    extra.sort_by(|a, b| b.score.total_cmp(&a.score));
++                    extra.truncate(2);
++                    if !extra.is_empty() {
++                        found.extend(extra);
++                        found = dedupe_by_text(found);
++                        found.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
++                        found.truncate(self.config.max_candidates.max(1));
++                    }
++                }
++            }
+             let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
+             if !self.config.jianpin_fallback || any_known {
+                 return Ok(found);
+@@ -1870,8 +1966,24 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max:
+ 
+     let mut kept: Vec<Candidate> = Vec::new();
+     let mut sentences = 0usize;
++    let top_word_score = whole
++        .first()
++        .filter(|c| {
++            xp('A')
++                && c.words.len() == 1
++                && c.words[0].known
++                && c.features.typo_count == 0.0
++                && c.features.prefix_completion == 0.0
++        })
++        .map(|c| c.score);
++    let margin = xnum("WT_MARGIN", 3.0);
+     for c in whole {
+         if is_sentence(&c) {
++            if let Some(top) = top_word_score {
++                if top - c.score > margin && c.features.history_use_count == 0.0 {
++                    continue;
++                }
++            }
+             let first = kept.is_empty();
+             if !first
+                 && (sentences >= cap || kept.iter().any(|k| differs_only_at_tail(&k.text, &c.text)))
+@@ -1893,11 +2005,30 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max:
+     // 排第一的没纠错时，纠错出来的整句/整词放到句首词后面：`bujianyi` 打的就是
+     // 不建议，「古剑一」（b 当 g）不该排在「不见」前面
+     let exact_first = kept.first().is_some_and(|c| c.features.typo <= 0.0);
+-    let (kept, corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
++    let (mut kept, mut corrected): (Vec<Candidate>, Vec<Candidate>) = if exact_first {
+         kept.into_iter().partition(|c| c.features.typo <= 0.0)
+     } else {
+         (kept, Vec::new())
+     };
++    // 实验 D：第一名是几个单字硬凑的整句（天 | 去），而纠一处错就是一个常用词（天气）时，
++    // 这个词放第二位
++    if xp('D') {
++        let weak = kept.first().is_some_and(|c| {
++            is_sentence(c)
++                && c.features.history_use_count == 0.0
++                && c.words.iter().all(|w| w.pinyin.split_whitespace().count() == 1)
++        });
++        if weak {
++            let top = kept[0].score;
++            let gap = xnum("WT_TYPO_GAP", 6.5);
++            if let Some(i) = corrected.iter().position(|c| {
++                c.words.len() == 1 && c.features.typo_count == 1.0 && top - c.score <= gap
++            }) {
++                let c = corrected.remove(i);
++                kept.insert(1, c);
++            }
++        }
++    }
+     let long_sentence = syllables >= 4 && kept.first().map(is_sentence).unwrap_or(false);
+     let mut merged: Vec<Candidate> =
+         Vec::with_capacity(kept.len() + prefix.len() + corrected.len());
+@@ -1941,6 +2072,42 @@ fn dedupe_by_text(candidates: Vec<Candidate>) -> Vec<Candidate> {
+     best.into_values().collect()
+ }
+ 
++/// 只走精确全拼边、最多 depth 个音节的切法（实验 C）。
++fn exact_segmentations(
++    graph: &SyllableGraph,
++    pos: usize,
++    depth: usize,
++    path: &mut Vec<crate::graph::Edge>,
++    out: &mut Vec<Vec<crate::graph::Edge>>,
++) {
++    if pos == graph.len() {
++        out.push(path.clone());
++        return;
++    }
++    if depth == 0 || out.len() >= 8 {
++        return;
++    }
++    for edge in graph.edges_from(pos) {
++        if edge.typo
++            || edge.completion > 0
++            || !matches!(edge.kind, crate::graph::EdgeKind::Full { erhua: false, .. })
++        {
++            continue;
++        }
++        path.push(*edge);
++        exact_segmentations(graph, edge.end, depth - 1, path, out);
++        path.pop();
++    }
++}
++
++/// 实验开关：WT_X 里含某个字母就打开对应的实验。
++fn xp(flag: char) -> bool {
++    std::env::var("WT_X").map(|v| v.contains(flag)).unwrap_or(false)
++}
++fn xnum(name: &str, default: f64) -> f64 {
++    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/core/src/wordlm.rs b/core/src/wordlm.rs
+index 1912414..60d92d1 100644
+--- a/core/src/wordlm.rs
++++ b/core/src/wordlm.rs
+@@ -117,7 +117,8 @@ impl LanguageModel for WordLm {
+         // fenbenglixi 首选成了「分崩离兮」，pingwenguodu 成了「平稳过度」。
+         // 不再额外罚分：实测再罚会把这类词所在的整句挤出前几名（日常句 90.6% -> 87.7%）。
+         let Some(&c) = self.ids.get(cur) else {
+-            return self.backoff[p as usize] as f64;
++            let floor = std::env::var("WT_OOV").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(f64::NEG_INFINITY);
++            return (self.backoff[p as usize] as f64).max(floor);
+         };
+         match self.pair(p, c) {
+             Some(s) => s as f64,

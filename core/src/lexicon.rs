@@ -176,6 +176,9 @@ pub trait Lexicon: Send + Sync {
         Vec::new()
     }
 
+    /// 把模糊音查询要用的索引先建好（载入词库的后台线程里调，免得第一次按键时现建）。默认什么都不做。
+    fn prepare_fuzzy(&self) {}
+
     /// 是否存在比 query 更长、且以 query 开头的词。
     ///
     /// 束搜索靠它剪掉不可能成词的音节串；不确定时返回 true（只影响速度，不影响结果）。
@@ -335,11 +338,8 @@ impl MemoryLexicon {
         if let Some(parent) = cache.parent() {
             fs::create_dir_all(parent).ok();
         }
-        let tmp = cache.with_extension("wcache.tmp");
-        fs::write(&tmp, &buf).with_context(|| format!("写词库快照失败: {}", tmp.display()))?;
-        fs::rename(&tmp, cache)
-            .with_context(|| format!("替换词库快照失败: {}", cache.display()))?;
-        Ok(())
+        crate::fsutil::write_atomic(cache, &buf)
+            .with_context(|| format!("写词库快照失败: {}", cache.display()))
     }
 
     fn read_cache(data: &[u8], src_len: u64, src_mtime: u64) -> Option<MemoryLexicon> {
@@ -642,6 +642,11 @@ impl Lexicon for MemoryLexicon {
         self.full_prefixes.contains(&hash)
     }
 
+    fn prepare_fuzzy(&self) {
+        // 55 万条的词库约 0.2 秒
+        self.fuzzy_index.get_or_init(|| self.build_fuzzy_index());
+    }
+
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
         if query.is_empty() || groups == 0 {
             return Vec::new();
@@ -855,7 +860,8 @@ impl UserLexicon {
         for (pinyin, word, freq) in words {
             out.push_str(&format!("{}\t{}\t{}\n", pinyin, word, freq as i64));
         }
-        fs::write(path.as_ref(), out)
+        // 输入法进程随时可能被系统杀掉：写一半的用户词库会把学到的词全弄丢
+        crate::fsutil::write_atomic(path.as_ref(), out.as_bytes())
             .with_context(|| format!("写入用户词库失败: {}", path.as_ref().display()))
     }
 
@@ -1026,6 +1032,10 @@ impl Lexicon for UserLexicon {
                 .unwrap_or(true)
     }
 
+    fn prepare_fuzzy(&self) {
+        self.base.prepare_fuzzy();
+    }
+
     fn lookup_fuzzy(&self, query: &[SyllableQuery], groups: u32) -> Vec<LexEntry> {
         let mut result = self.base.lookup_fuzzy(query, groups);
         if let Ok(snapshot) = self.snapshot.read() {
@@ -1127,6 +1137,127 @@ pub fn split_syllables(text: &str) -> Option<String> {
         i += len;
     }
     Some(parts.join(" "))
+}
+
+/// 自定义词的编码（设置界面加词、导入用）：拼音整理成空格分开的音节（见 [`normalize_pinyin`]）；
+/// 不是拼音但全是字母的（mail）去掉隔音符、小写。都不是返回 None。
+pub fn normalize_code(text: &str) -> Option<String> {
+    if let Some(pinyin) = normalize_pinyin(text) {
+        return Some(pinyin);
+    }
+    let code: String = text
+        .trim()
+        .to_lowercase()
+        .chars()
+        .filter(|&c| c != '\'')
+        .collect();
+    (!code.is_empty() && code.bytes().all(|b| b.is_ascii_lowercase())).then_some(code)
+}
+
+/// 把打的拼音整理成空格分开的音节：Ni Hǎo、nihao、ni'hao、ni3hao3 -> ni hao。
+/// ü、u:、u 加分音符都写成 v；数字声调、单独的声调符号去掉；单独一个 r 跟在音节后面是儿化。
+/// 连着写的照 [`split_syllables`] 切。有一段切不开（不是拼音的字母、符号）返回 None。
+pub fn normalize_pinyin(text: &str) -> Option<String> {
+    let mut plain = String::new();
+    for c in text.trim().to_lowercase().chars() {
+        if let Some(base) = toneless(c) {
+            plain.push(base);
+        } else if (c == '\u{308}' || c == ':') && plain.ends_with('u') {
+            plain.pop();
+            plain.push('v');
+        } else if c.is_ascii_digit() || ('\u{300}'..='\u{36f}').contains(&c) {
+            continue;
+        } else {
+            plain.push(c);
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    let tokens = plain
+        .split(|c: char| c == '\'' || c == '\u{2019}' || c.is_whitespace())
+        .filter(|t| !t.is_empty());
+    for token in tokens {
+        if token.bytes().all(|b| b.is_ascii_lowercase()) && crate::syllable::is_valid(token) {
+            parts.push(token.to_string());
+        } else if token == "r" && !parts.is_empty() {
+            parts.push("r".to_string());
+        } else {
+            parts.push(split_syllables(token)?);
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+/// 在词库原文（拼音<TAB>词<TAB>频次，一行一条）里猜词的拼音（设置界面加词时自动填编码）：
+/// 整个词有就取频次最高的那条，没有就一个字一个字找。猜不出（有词库里没有的字、英文）返回 None。
+/// 结果照 [`normalize_pinyin`] 整理过。
+pub fn guess_pinyin(lexicon: &[u8], word: &str) -> Option<String> {
+    if word.is_empty() {
+        return None;
+    }
+    let chars: Vec<&str> = word
+        .char_indices()
+        .map(|(i, c)| &word[i..i + c.len_utf8()])
+        .collect();
+    // 词里出现过的不同的字：叠字（妈妈咪、试试看）共用一个槽位，按位置分槽的话第二个「妈」永远空着
+    let mut uniq: Vec<&str> = Vec::new();
+    for c in &chars {
+        if !uniq.contains(c) {
+            uniq.push(c);
+        }
+    }
+    // best[0] 是整个词，best[1..] 是每个不同的字：(频次, 拼音)
+    let mut best: Vec<Option<(f64, &[u8])>> = vec![None; uniq.len() + 1];
+    for line in lexicon.split(|&b| b == b'\n') {
+        if line.first() == Some(&b'#') {
+            continue;
+        }
+        let mut cols = line.splitn(3, |&b| b == b'\t');
+        let (Some(reading), Some(text), Some(freq)) = (cols.next(), cols.next(), cols.next())
+        else {
+            continue;
+        };
+        let slot = if text == word.as_bytes() {
+            0
+        } else if let Some(i) = uniq.iter().position(|c| c.as_bytes() == text) {
+            i + 1
+        } else {
+            continue;
+        };
+        let freq = std::str::from_utf8(freq)
+            .ok()
+            .and_then(|f| f.trim().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        if best[slot].map_or(true, |(old, _)| freq > old) {
+            best[slot] = Some((freq, reading));
+        }
+    }
+    let text = |reading: &[u8]| String::from_utf8_lossy(reading).into_owned();
+    if let Some((_, reading)) = best[0] {
+        return normalize_pinyin(&text(reading));
+    }
+    let readings: Option<Vec<String>> = chars
+        .iter()
+        .map(|c| {
+            let slot = uniq.iter().position(|u| u == c)? + 1;
+            best[slot].map(|(_, r)| text(r))
+        })
+        .collect();
+    normalize_pinyin(&readings?.join(" "))
+}
+
+/// 带声调的字母 -> 不带的（ü 是 v）
+fn toneless(c: char) -> Option<char> {
+    Some(match c {
+        'ā' | 'á' | 'ǎ' | 'à' => 'a',
+        'ē' | 'é' | 'ě' | 'è' | 'ê' => 'e',
+        'ī' | 'í' | 'ǐ' | 'ì' => 'i',
+        'ō' | 'ó' | 'ǒ' | 'ò' => 'o',
+        'ū' | 'ú' | 'ǔ' | 'ù' => 'u',
+        'ü' | 'ǖ' | 'ǘ' | 'ǚ' | 'ǜ' => 'v',
+        'ń' | 'ň' | 'ǹ' => 'n',
+        'ḿ' => 'm',
+        _ => return None,
+    })
 }
 
 pub fn parse_pinyin_keys(pinyin: &str) -> Result<Vec<SyllableKey>> {
@@ -1311,6 +1442,51 @@ mod tests {
         );
         assert_eq!(split_syllables("github"), None);
         assert_eq!(split_syllables("Ni"), None);
+    }
+
+    #[test]
+    fn normalize_custom_codes() {
+        for (input, want) in [
+            ("nihao", "ni hao"),
+            ("Ni Hǎo", "ni hao"),
+            ("ni3hao3", "ni hao"),
+            ("xi'an", "xi an"),
+            ("xi\u{2019}an", "xi an"),
+            ("xian", "xian"),
+            ("Lǜ shī", "lv shi"),
+            ("nu:", "nv"),
+            ("nu\u{308}3", "nv"),
+            ("hua r", "hua r"),
+            ("zhongguo", "zhong guo"),
+            ("  biang biang mian ", "biang biang mian"),
+        ] {
+            assert_eq!(normalize_pinyin(input).as_deref(), Some(want), "{input}");
+        }
+        assert_eq!(normalize_pinyin("mail"), None);
+        assert_eq!(normalize_pinyin("r"), None);
+        assert_eq!(normalize_pinyin(""), None);
+        assert_eq!(normalize_code("mail").as_deref(), Some("mail"));
+        assert_eq!(normalize_code("Addr").as_deref(), Some("addr"));
+        assert_eq!(normalize_code("o'k").as_deref(), Some("ok"));
+        assert_eq!(normalize_code("a b?"), None);
+        assert_eq!(normalize_code("  "), None);
+    }
+
+    #[test]
+    fn guess_pinyin_from_lexicon_text() {
+        let lexicon = "# 注释\tshi\t是\t1\nni hao\t你好\t500\nnihao\t你好\t10\nzhong\t重\t100\n\
+                       chong\t重\t300\nni\t你\t1\nhao\t好\t1\nshi\t是\t9\r\nlv\t绿\t5";
+        let guess = |word: &str| guess_pinyin(lexicon.as_bytes(), word);
+        assert_eq!(guess("你好").as_deref(), Some("ni hao"));
+        assert_eq!(guess("重").as_deref(), Some("chong"));
+        assert_eq!(guess("你是好").as_deref(), Some("ni shi hao"));
+        assert_eq!(guess("绿").as_deref(), Some("lv"));
+        assert_eq!(guess("你x"), None);
+        // 叠字：整词不在词库里，逐字找时两个相同的字都有读音
+        assert_eq!(guess("你你好").as_deref(), Some("ni ni hao"));
+        assert_eq!(guess("好好").as_deref(), Some("hao hao"));
+        assert_eq!(guess("你你x"), None);
+        assert_eq!(guess(""), None);
     }
 
     #[test]

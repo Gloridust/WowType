@@ -5,12 +5,13 @@
 //!     --lexicon lexicon.tsv --eval cases.tsv [--weights coverage_score=1.5,prob=0]
 //! ```
 //!
-//! 用例格式：输入<TAB>期望词（多个可接受答案用 | 分隔）。
+//! 用例格式：输入<TAB>期望词（多个可接受答案用 | 分隔）[<TAB>上文]。
+//! 第三列可选，是光标前已经上屏的文字（`tools/make_sentence_eval.py --context` 生成）。
 //! 这是调排序权重时唯一靠谱的依据——没有数据就是盲调。
 
 use std::sync::Arc;
 
-use wowtype_core::lm::{ArpaLm, BigramLm, LanguageModel};
+use wowtype_core::lm::{ArpaLm, BigramLm, LanguageModel, MixedLm};
 use wowtype_core::rank::{FeatureWeights, LinearRanker};
 use wowtype_core::{Engine, EngineConfig, Lexicon, MemoryLexicon};
 
@@ -24,6 +25,8 @@ fn main() {
     let mut lexicon_path = String::new();
     let mut eval_path = String::new();
     let mut lm_path: Option<String> = None;
+    let mut domain_lm_path: Option<String> = None;
+    let mut domain_lm_weight = wowtype_core::lm::DOMAIN_LM_WEIGHT;
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
     let mut max_candidates = 10usize;
@@ -64,6 +67,14 @@ fn main() {
             "--lm" => {
                 i += 1;
                 lm_path = args.get(i).cloned();
+            }
+            "--domain-lm" => {
+                i += 1;
+                domain_lm_path = args.get(i).cloned();
+            }
+            "--domain-lm-weight" => {
+                i += 1;
+                domain_lm_weight = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(domain_lm_weight);
             }
             "--arpa" => {
                 i += 1;
@@ -134,7 +145,7 @@ fn main() {
                 println!(
                     "wowtype-eval --lexicon <tsv> --eval <tsv> [--lm|--arpa <file>] [--beam n] [--k n]"
                 );
-                println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin]");
+                println!("            [--max n] [--weights name=v,...] [--fuzzy] [--shuangpin] [--domain-lm <file> [--domain-lm-weight w]]");
                 println!("            [--typo-cost x] [--completion-cost x] [--abbrev-cost x] [--tail-abbrev-cost x] [--no-typo] [--english <file>] [--show-top1]");
                 return;
             }
@@ -165,6 +176,14 @@ fn main() {
         Arc::new(BigramLm::default())
     };
 
+    // 领域模型：和插件里一样混在通用模型上（插件的权重固定是 DOMAIN_LM_WEIGHT）
+    let lm: Arc<dyn LanguageModel> = match &domain_lm_path {
+        Some(path) => {
+            let domain = wowtype_core::lm::load_lm(path).unwrap_or_else(|e| fail(&format!("{e:#}")));
+            Arc::new(MixedLm::new(lm, domain, domain_lm_weight))
+        }
+        None => lm,
+    };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let ranker = Arc::new(LinearRanker::new(weights));
     let mut config = EngineConfig {
@@ -284,6 +303,8 @@ fn main() {
             continue;
         };
         let accepted: Vec<&str> = expected.split('|').map(str::trim).collect();
+        // 第三列（可选）是光标前已经上屏的文字：测「接着前文打」时的排序
+        engine.set_context(cols.next().unwrap_or(""));
         let candidates = engine.input(input);
         total += 1;
         let texts: Vec<&str> = candidates.iter().map(|c| c.text.as_str()).collect();

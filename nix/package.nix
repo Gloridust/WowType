@@ -106,6 +106,13 @@ stdenv.mkDerivation {
     install -Dm644 data/SOURCE.txt "$out/share/doc/wowtype/DATA-SOURCE.txt"
     echo ${dataVersion} > "$out/share/doc/wowtype/DATA-VERSION"
     install -Dm644 data/LICENSE "$out/share/licenses/wowtype/LICENSE.rime-ice"
+    # 五笔码表（rime-wubi，LGPL-3.0）：make-data.sh 的 REV=5 起，词库包里才有它。上面钉的还是旧包时没有它，
+    # 设置里五笔灰掉；发版后 nix-data-pr.sh 换成新包，这个判断就总是成立
+    if [ -f data/wubi86.tsv ]; then
+      install -Dm644 -t "$out/share/wowtype" data/wubi86.tsv
+      install -Dm644 -t "$out/share/doc/wowtype" data/WUBI-SOURCE.txt data/WUBI-AUTHORS
+      install -Dm644 data/WUBI-LICENSE "$out/share/licenses/wowtype/LICENSE.rime-wubi"
+    fi
 
     # 设置界面：用带 PyGObject 的 Python，词库路径指到本包
     substituteInPlace "$out/bin/wowtype-config" \
@@ -133,6 +140,7 @@ stdenv.mkDerivation {
       unicode-30
       gpl3Only # 词库（rime-ice）
       cc-by-sa-40 # 词级语言模型 words.lm
+      lgpl3Only # 五笔码表 wubi86.tsv（rime-wubi）
     ];
     platforms = lib.platforms.linux;
     mainProgram = "wowtype-config";

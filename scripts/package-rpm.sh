@@ -21,6 +21,9 @@ DATA=$(realpath -m "${WOWTYPE_DATA_DIR:-dist/data}")
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt; do
   [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
 done
+for f in wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS; do
+  [[ -s "$DATA/$f" ]] || { echo "缺 $DATA/${f}，先跑 scripts/make-wubi.sh" >&2; exit 1; }
+done
 mkdir -p "$OUT"
 
 work=$(mktemp -d)
@@ -35,6 +38,7 @@ tar --exclude=target --exclude='build*' -cf - \
   Cargo.toml Cargo.lock core voice voice-daemon fcitx5-addon icons themes settings README.md |
   tar -xf - -C "$src"
 cp "$DATA"/{lexicon.tsv,english.txt,words.lm,LICENSE,SOURCE.txt} "$src/dist/data/"
+cp "$DATA"/{wubi86.tsv,WUBI-LICENSE,WUBI-SOURCE.txt,WUBI-AUTHORS} "$src/dist/data/"
 if [[ -f "$DATA/VERSION" ]]; then
   cp "$DATA/VERSION" "$src/dist/data/"
 fi
@@ -47,7 +51,8 @@ WowType — https://github.com/Gloridust/WowType
   MIT 或 Apache-2.0，二选一。
 
 /usr/share/wowtype/s2t.tsv：
-  由 OpenCC 的字符映射表生成（tools/opencc2tsv.py），Apache-2.0。
+  由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+  版本见文件头，Apache-2.0，https://github.com/BYVoid/OpenCC。
 
 插件里编进去的 emoji 关键词（core/src/emoji/cldr.tsv）：
   来自 Unicode CLDR 和 emoji-test.txt，Copyright 1991-2026 Unicode, Inc.，
@@ -63,6 +68,11 @@ WowType — https://github.com/Gloridust/WowType
   contributors，CC BY-SA 4.0，https://zh.wikipedia.org/）统计得到。
   按知识共享 署名-相同方式共享 4.0 国际许可协议授权：
   https://creativecommons.org/licenses/by-sa/4.0/legalcode
+
+/usr/share/wowtype/wubi86.tsv：
+  五笔 86 码表，转换自 Rime 五笔字型 rime-wubi（https://github.com/rime/rime-wubi），LGPL-3.0，
+  全文见同目录 LICENSE.rime-wubi（LGPL-3.0 是 GPL-3.0 的附加许可，GPL-3.0 全文见 LICENSE.rime-ice），
+  作者见 /usr/share/doc/wowtype/WUBI-AUTHORS，来源和钉死的提交见 /usr/share/doc/wowtype/WUBI-SOURCE.txt。
 EOF
 
 tar -czf "$work/SOURCES/wowtype-src.tar.gz" -C "$src" .
@@ -78,7 +88,7 @@ Name:           wowtype
 Version:        %{wt_version}
 Release:        1%{?dist}
 Summary:        WeChat-style pinyin input method for fcitx5
-License:        (MIT OR Apache-2.0) AND Apache-2.0 AND Unicode-3.0 AND GPL-3.0-only AND CC-BY-SA-4.0
+License:        (MIT OR Apache-2.0) AND Apache-2.0 AND Unicode-3.0 AND GPL-3.0-only AND CC-BY-SA-4.0 AND LGPL-3.0-only
 URL:            https://github.com/Gloridust/WowType
 Source0:        wowtype-src.tar.gz
 ExclusiveArch:  x86_64 aarch64
@@ -104,7 +114,7 @@ Recommends:     curl
 
 %description
 拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-自带雾凇拼音（rime-ice）词库和词级语言模型。
+自带雾凇拼音（rime-ice）词库、词级语言模型和五笔 86 码表（rime-wubi）。
 装完运行 wowtype-config --add-to-group（或在 fcitx5 配置里添加「WowType 拼音」），
 设置在应用菜单「WowType 设置」里。
 
@@ -124,22 +134,26 @@ rm -rf %{buildroot}%{_includedir}
 for bin in wowtype-check wowtype-show; do
   install -Dm755 target/release/$bin %{buildroot}%{_bindir}/$bin
 done
-install -m644 dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm \
+install -m644 dist/data/lexicon.tsv dist/data/english.txt dist/data/words.lm dist/data/wubi86.tsv \
   %{buildroot}%{_datadir}/wowtype/
 doc=%{buildroot}%{_docdir}/wowtype
 install -Dm644 README.md $doc/README.md
 install -Dm644 dist/data/SOURCE.txt $doc/DATA-SOURCE.txt
+install -Dm644 dist/data/WUBI-SOURCE.txt $doc/WUBI-SOURCE.txt
+install -Dm644 dist/data/WUBI-AUTHORS $doc/WUBI-AUTHORS
 if [ -f dist/data/VERSION ]; then
   install -Dm644 dist/data/VERSION $doc/DATA-VERSION
 fi
 lic=%{buildroot}%{_licensedir}/wowtype
 install -Dm644 packaging/COPYRIGHT $lic/COPYRIGHT
 install -Dm644 dist/data/LICENSE $lic/LICENSE.rime-ice
+install -Dm644 dist/data/WUBI-LICENSE $lic/LICENSE.rime-wubi
 
 %files
 %dir %{_licensedir}/wowtype
 %license %{_licensedir}/wowtype/COPYRIGHT
 %license %{_licensedir}/wowtype/LICENSE.rime-ice
+%license %{_licensedir}/wowtype/LICENSE.rime-wubi
 %{_docdir}/wowtype/
 %{_bindir}/wowtype-config
 %{_bindir}/wowtype-check

@@ -8,7 +8,7 @@ wowtype-config-dump 是 scripts/addon-test.sh 编出来的（fcitx5-addon/test/c
 WowtypeConfig 的键、类型、默认值、范围、可选值。macOS 那端在 macos/test.sh 里对照同一份规格。
 
 设置界面（settings/wowtype-config）没有 .py 后缀，用 importlib 按路径导入。不用装 GTK：导入前塞一个假的 gi，
-它在模块顶层只用到 gi.require_version 和 Adw 的两个基类。XDG 目录都指到临时目录，不碰自己的配置。
+它在模块顶层只用到 gi.require_version、几个当基类的控件和 GObject.Property。XDG 目录都指到临时目录，不碰自己的配置。
 """
 
 import hashlib
@@ -121,9 +121,12 @@ def check_spec(spec, pack):
             check(default_for(s, end) in presets, f"规格：{key} 在 {end} 的默认值不在 presets 里", presets)
         missing = s.get("whenMissing")
         if missing:
-            check(missing["ifNonEmpty"] in by_key, f"规格：{key} 的 whenMissing 用了没有的键 {missing['ifNonEmpty']}")
+            # ifTrue 可以是已经不是设置项的旧键（只读不写，见 legacy_key）
+            other = missing.get("ifNonEmpty") or missing.get("ifTrue")
+            check(other in by_key or other == legacy_key(s, by_key), f"规格：{key} 的 whenMissing 用了没有的键 {other}")
             for case in missing["cases"]:
-                check(set(case["file"]) <= set(by_key), f"规格：{key} 的例子用了没有的键", case["file"])
+                check(set(case["file"]) <= set(by_key) | {legacy_key(s, by_key)}, f"规格：{key} 的例子用了没有的键",
+                      case["file"])
     for case in spec["readRules"]["cases"]["items"]:
         for key in case["expect"]:
             check(key in by_key and set(by_key[key]["platforms"]) == set(ENDS),
@@ -145,11 +148,15 @@ def check_spec(spec, pack):
 
 
 def fake_gi():
-    """够设置界面在顶层用的假 gi：require_version 什么都不做，gi.repository 里随便取的名字都是空类。"""
+    """够设置界面在顶层用的假 gi：require_version 什么都不做，gi.repository 里随便取的名字都是空类，
+    调用它（比如类体里的 GObject.Property(...)）也只得到一个空类。"""
 
     class Stub(type):
         def __getattr__(cls, name):
             return Stub(name, (), {})
+
+        def __call__(cls, *_args, **_kwargs):
+            return Stub(cls.__name__, (), {})
 
     gi = types.ModuleType("gi")
     gi.require_version = lambda *_args: None
@@ -203,6 +210,13 @@ def read_settings_text(wc, home, text):
         wc.CONFIG_FILE = saved
 
 
+def legacy_key(setting, by_key):
+    """whenMissing 的 ifTrue 指着的、已经不是设置项的旧键（InputScheme 的 Shuangpin）：只在读文件时看，
+    存盘时不写，文件里有的那行下次存盘就没了。没有是 None。"""
+    other = (setting.get("whenMissing") or {}).get("ifTrue")
+    return other if other and other not in by_key else None
+
+
 def check_settings(spec, wc, home):
     mine = settings_for(spec, "settings")
     same_set(wc.DEFAULTS, [s["key"] for s in mine], "设置界面：DEFAULTS 的键")
@@ -216,12 +230,16 @@ def check_settings(spec, wc, home):
          {s["key"]: enum_values(s) for s in mine if s["type"] == "enum"}, "设置界面：ENUMS（读文件时认的枚举值）")
 
     # 选项列表：(界面上的名字, 存盘名)
-    lists = {"ShuangpinScheme": wc.SHUANGPIN_SCHEMES, "ShiftToggle": wc.SHIFT_TOGGLES,
+    lists = {"InputScheme": wc.INPUT_SCHEMES, "ShuangpinScheme": wc.SHUANGPIN_SCHEMES,
+             "ShiftToggle": wc.SHIFT_TOGGLES,
+             "InitialMode": wc.INITIAL_MODES, "ArrowKeys": wc.ARROW_KEYS,
              "SelectKeys": wc.SELECT_KEYS, "PunctuationStyle": wc.PUNCT_STYLES}
     for key, items in lists.items():
         same([value for _label, value in items], enum_values(by_key[key]), f"设置界面：{key} 的选项")
     same([(label, value) for label, value in wc.SHUANGPIN_SCHEMES],
          [(v["name"], v["value"]) for v in by_key["ShuangpinScheme"]["values"]], "设置界面：双拼方案的名字")
+    same([(label, value) for label, value in wc.INPUT_SCHEMES],
+         [(v["name"], v["value"]) for v in by_key["InputScheme"]["values"]], "设置界面：输入方案的名字")
     same([tuple(item) for item in wc.TRANSLATE_LANGUAGES],
          [(v["name"], v["value"], v["english"]) for v in by_key["TranslateTarget"]["values"]],
          "设置界面：TRANSLATE_LANGUAGES")
@@ -232,6 +250,10 @@ def check_settings(spec, wc, home):
          "设置界面：EMOJI_KEYS")
     same([value for _label, value in wc.VOICE_KEYS], by_key["VoiceKey"]["presets"]["settings"],
          "设置界面：VOICE_KEYS")
+    same([value for _label, value in wc.TOGGLE_KEYS], by_key["ToggleKey"]["presets"]["settings"],
+         "设置界面：TOGGLE_KEYS")
+    same([value for _label, value in wc.TRANSLATE_MODE_KEYS], by_key["TranslateModeKey"]["presets"]["settings"],
+         "设置界面：TRANSLATE_MODE_KEYS")
     same_set([key for key, _label in wc.FUZZY_GROUPS], [s["key"] for s in mine if s.get("group") == "fuzzy"],
              "设置界面：FUZZY_GROUPS 的键")
 
@@ -241,6 +263,26 @@ def check_settings(spec, wc, home):
         for case in missing["cases"] if missing else ():
             same(read_settings_config(wc, home, case["file"])[s["key"]], file_text(case["expect"]),
                  f"设置界面：文件是 {case['file']} 时 {s['key']}")
+    # 旧键：从只有旧键的文件读进来，改成每一个可选值（包括默认值）存盘，读回来是改的值，文件里没有旧键了
+    for s in mine:
+        old = legacy_key(s, by_key)
+        if not old:
+            continue
+        for value in enum_values(s):
+            path = os.path.join(home, "wowtype.conf")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"{old}=True\n")
+            saved, wc.CONFIG_FILE = wc.CONFIG_FILE, path
+            try:
+                values, extra = wc.read_config()
+                wc.write_config({**values, s["key"]: value}, extra)
+                again = wc.read_config()[0]
+            finally:
+                wc.CONFIG_FILE = saved
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            same(again[s["key"]], value, f"设置界面：{old}=True 的文件改成 {s['key']}={value} 存盘再读")
+            check(f"\n{old}=" not in "\n" + text, f"设置界面：存盘以后文件里还有旧键 {old}", text)
     policy = spec["readRules"]["outOfRange"]["settings"]
     for s in mine:
         if s["type"] == "int":
@@ -369,8 +411,11 @@ def check_fcitx5(spec, exe):
     external = [o["key"] for o in options if o["type"] == "External"]
     same(external, spec["fcitx5External"]["keys"], "fcitx5：ExternalOption")
     options = {o["key"]: o for o in options if o["type"] != "External"}
+    by_key = {s["key"]: s for s in spec["settings"]}
     mine = settings_for(spec, "fcitx5")
-    same_set(options, [s["key"] for s in mine], "fcitx5：WowtypeConfig 的键")
+    same_set(options, [s["key"] for s in mine], "fcitx5：配置工具里列出的键")
+    saved = run_dump(exe, "--load")["values"]
+    same_set(saved, [s["key"] for s in mine], "fcitx5：WowtypeConfig 存盘的键")
     for s in mine:
         key = s["key"]
         option = options.get(key)
@@ -391,6 +436,8 @@ def check_fcitx5(spec, exe):
         for case in missing["cases"] if missing else ():
             values = run_dump(exe, "--load", *(f"{k}={v}" for k, v in case["file"].items()))["values"]
             same(values.get(s["key"]), file_text(case["expect"]), f"fcitx5：文件是 {case['file']} 时 {s['key']}")
+            # 存盘的值（插件存盘只写 WowtypeConfig 里有的项）里没有旧键
+            check(legacy_key(s, by_key) not in values, f"fcitx5：文件是 {case['file']} 时存盘还写了旧键 {legacy_key(s, by_key)}")
     policy = spec["readRules"]["outOfRange"]["fcitx5"]
     for s in mine:
         if s["type"] == "int":

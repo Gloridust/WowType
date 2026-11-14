@@ -1,0 +1,201 @@
+diff --git a/core/src/bin/show.rs b/core/src/bin/show.rs
+index 66eaa64..c3bbaca 100644
+--- a/core/src/bin/show.rs
++++ b/core/src/bin/show.rs
+@@ -25,6 +25,10 @@ fn main() {
+     let mut context = String::new();
+     let mut max_candidates = 18usize;
+     let mut scores = false;
++    let mut feat = false;
++    let mut pairs = String::new();
++    let mut fuzzy = false;
++    let mut groups: Option<u32> = None;
+     let mut inputs = Vec::new();
+     let mut i = 1;
+     while i < args.len() {
+@@ -39,6 +43,10 @@ fn main() {
+             "--context" => context = take(&mut i),
+             "--max" => max_candidates = take(&mut i).parse().unwrap_or(18),
+             "--scores" => scores = true,
++            "--feat" => feat = true,
++            "--pairs" => pairs = take(&mut i),
++            "--fuzzy" => fuzzy = true,
++            "--groups" => groups = take(&mut i).parse().ok(),
+             "-h" | "--help" => {
+                 println!("wowtype-show --lexicon <tsv> [--lm <words.lm>] [--english <txt>] [--max n] [--context 文本] [--scores] 拼音...");
+                 return;
+@@ -55,6 +63,8 @@ fn main() {
+     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
+     let config = EngineConfig {
+         max_candidates,
++        fuzzy,
++        fuzzy_groups: groups.unwrap_or(wowtype_core::syllable::fuzzy::DEFAULT),
+         ..EngineConfig::default()
+     };
+     let lm: Arc<dyn wowtype_core::lm::LanguageModel> = if !lm_path.is_empty() {
+@@ -70,7 +80,16 @@ fn main() {
+             .unwrap_or_else(|e| fail(&format!("英文词表载入失败: {e:#}")));
+     }
+     engine.set_context(&context);
++    for pc in pairs.split(',').filter(|s| !s.is_empty()) {
++        let (p, c) = pc.split_once(':').unwrap();
++        let prev = if p == "BOS" { None } else { Some(p) };
++        println!("LM({p},{c}) = {:.3}  seen={}  unk_cur={:.3}", engine.lm().score(prev, c), engine.lm().has_bigram(if p=="BOS" {"<s>"} else {p}, c), engine.lm().score(prev, "\u{e000}zzz"));
++    }
+     for input in &inputs {
++        if let Some(ctx) = input.strip_prefix("ctx=") {
++            engine.set_context(ctx);
++            continue;
++        }
+         let candidates = engine.input(input);
+         let line: Vec<String> = candidates
+             .iter()
+@@ -85,7 +104,10 @@ fn main() {
+                 } else {
+                     "词"
+                 };
+-                if scores {
++                if feat {
++                    let f = &c.features;
++                    format!("\n  {}.{}{} score={:.2} lm_in_path={:.2} ctx_bigram={:.2} cov={:.1} typo={} compl={} freq={:?} py={}", i + 1, c.text, kind, c.score, f.lm_score_with_previous_txt, f.context_bigram_score, f.coverage_score, f.typo_count, f.prefix_completion, c.words.iter().map(|w| w.freq).collect::<Vec<_>>(), c.pinyin)
++                } else if scores {
+                     format!("{}.{}{}({:.1})", i + 1, c.text, kind, c.score)
+                 } else {
+                     format!("{}.{}{}", i + 1, c.text, kind)
+diff --git a/core/src/lib.rs b/core/src/lib.rs
+index 1ccd029..36ccec0 100644
+--- a/core/src/lib.rs
++++ b/core/src/lib.rs
+@@ -1258,6 +1258,25 @@ impl Engine {
+                 .total_cmp(&a.score)
+                 .then_with(|| a.text.cmp(&b.text))
+         });
++        // EXPERIMENT C: 输入正好是一个完整音节时，补全/纠错出来的候选排到所有精确候选后面
++        if std::env::var("WT_NO_C").is_err() {
++            let exact = |c: &Candidate| {
++                c.features.typo_count == 0.0 && c.features.prefix_completion == 0.0
++            };
++            let one_syllable = deduped.iter().any(|c| {
++                exact(c) && c.words.len() == 1 && c.words[0].known && !c.pinyin.contains(' ')
++            });
++            if one_syllable {
++                let (mut a, b): (Vec<Candidate>, Vec<Candidate>) =
++                    deduped.into_iter().partition(|c| exact(c));
++                let floor = a.last().map(|c| c.score).unwrap_or(0.0);
++                a.extend(b.into_iter().enumerate().map(|(i, mut c)| {
++                    c.score = c.score.min(floor - 1e-3 * (i + 1) as f64);
++                    c
++                }));
++                deduped = a;
++            }
++        }
+         deduped.truncate(self.config.max_candidates.max(1));
+         Ok(deduped)
+     }
+@@ -1299,7 +1318,14 @@ impl Engine {
+         let mut feature = self.make_feature(&path, best_score, at_ms);
+         feature.head_word_nnlm = nnlm;
+         let rank_score = self.ranker.score(&feature) as f64;
+-        let score = path.score + rank_score;
++        // 单个音节打全时只有一个字：句首 LM 分反映的是语料里谁常出现在句首，
++        // 没有上下文时不该压过字频（否则 he 会先出「何」）。
++        let single_word = path.words.len() == 1 && path.words[0].syllable_count == 1;
++        let score = if single_word && std::env::var("WT_NO_137").is_err() {
++            path.score - path.lm_score + rank_score
++        } else {
++            path.score + rank_score
++        };
+         Candidate {
+             text: path.text,
+             pinyin: path.pinyin,
+@@ -1398,6 +1424,26 @@ impl Engine {
+                     let score = self.lm.score(Some(prev), &candidate.text) as f32;
+                     best = Some(best.map_or(score, |b: f32| b.max(score)));
+                 };
++                if self.lm.knows_word("\u{0}").is_some() && std::env::var("WT_OLD_CTX").is_err() {
++                    // EXPERIMENT: 词级 LM：取上下文末尾 1..=4 个字里模型认识的词当 prev；
++                    // prev+候选 本身是模型词表里的词（语料分词时被并成一个词，二元组从没计过数）
++                    // 时按「见过的搭配」给一个固定正分。
++                    let bonus: f32 = std::env::var("WT_MERGED_BONUS").ok().and_then(|v| v.parse().ok()).unwrap_or(1.0);
++                    let chars: Vec<char> = context.chars().collect();
++                    let mut best: Option<f32> = None;
++                    for n in 1..=chars.len().min(4) {
++                        let prev: String = chars[chars.len() - n..].iter().collect();
++                        if self.lm.knows_word(&prev) == Some(true) {
++                            let s = self.lm.score(Some(&prev), &candidate.text) as f32;
++                            best = Some(best.map_or(s, |b| b.max(s)));
++                        }
++                        let merged = format!("{prev}{}", candidate.text);
++                        if self.lm.knows_word(&merged) == Some(true) {
++                            best = Some(best.map_or(bonus, |b| b.max(bonus)));
++                        }
++                    }
++                    return (1.0, best.unwrap_or(0.0));
++                }
+                 if let Some(word) = context.split_whitespace().last() {
+                     consider(word);
+                 }
+@@ -2253,6 +2299,32 @@ mod tests {
+         assert_eq!(head.consumed, "wojintianwanshangyao".len());
+     }
+ 
++    /// 模拟词级 LM 的句首（`<s>`）分：只给「何」一个很大的提升。
++    struct SentenceStartBoost;
++
++    impl LanguageModel for SentenceStartBoost {
++        fn score(&self, prev: Option<&str>, cur: &str) -> f64 {
++            if prev.is_none() && cur == "何" {
++                5.0
++            } else {
++                0.0
++            }
++        }
++    }
++
++    #[test]
++    fn single_syllable_candidates_follow_word_frequency() {
++        // 打 he 时「和」比「何」常用，句首 LM 分不该把「何」抬上来。
++        let lexicon: Arc<dyn Lexicon> = Arc::new(
++            MemoryLexicon::from_tsv_str("he\t和\t100000\nhe\t何\t10000\nhe\t合\t1000\n").unwrap(),
++        );
++        let e = Engine::new(lexicon, Arc::new(SentenceStartBoost));
++        let texts: Vec<String> = e.input("he").into_iter().map(|c| c.text).collect();
++        let at = |word: &str| texts.iter().position(|t| t == word);
++        assert_eq!(texts.first().map(String::as_str), Some("和"), "{texts:?}");
++        assert!(at("何") < at("合"), "{texts:?}");
++    }
++
+     #[test]
+     fn context_bigram_boosts_first_word() {
+         let mut lm = BigramLm::new().with_backoff(0.001);
+diff --git a/core/src/lm.rs b/core/src/lm.rs
+index 41466a5..f13b967 100644
+--- a/core/src/lm.rs
++++ b/core/src/lm.rs
+@@ -21,6 +21,11 @@ pub trait LanguageModel: Send + Sync {
+         false
+     }
+ 
++    /// 词表里有没有这个词；None 表示这个模型没有词表可查。
++    fn knows_word(&self, _word: &str) -> Option<bool> {
++        None
++    }
++
+     /// 一句话的累计对数概率。
+     fn sequence_score(&self, words: &[&str]) -> f64 {
+         let mut total = 0.0;
+diff --git a/core/src/wordlm.rs b/core/src/wordlm.rs
+index 1912414..b97d98d 100644
+--- a/core/src/wordlm.rs
++++ b/core/src/wordlm.rs
+@@ -125,6 +125,10 @@ impl LanguageModel for WordLm {
+         }
+     }
+ 
++    fn knows_word(&self, word: &str) -> Option<bool> {
++        Some(self.ids.contains_key(word))
++    }
++
+     fn has_bigram(&self, prev: &str, cur: &str) -> bool {
+         match (self.ids.get(prev), self.ids.get(cur)) {
+             (Some(&p), Some(&c)) => self.pair(p, c).is_some(),

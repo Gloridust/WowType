@@ -26,6 +26,10 @@ final class AppState {
     private var configStamp: FileStamp?
     private var customStamp: FileStamp?
     private var lastCheck: TimeInterval = 0
+    /// 互译本地模型现在用的 llama-server（空的是没找到）
+    private var llamaServerInUse = ""
+    /// 上次找 llama-server 的时间（没找到时最多 5 秒找一次，不在按键路径上每秒查文件）
+    private var llamaProbe: TimeInterval = 0
     private var missingLexiconLogged: String?
     /// 上一次看系统剪贴板时它的 changeCount（没变就不读）
     private var clipboardChangeCount = -1
@@ -78,6 +82,9 @@ final class AppState {
     }
 
     /// 本地翻译模型，设置里 TranslateLocalModel 留空时用（同 Linux 的 ~/.local/share/wowtype/models/）
+    /// 语音识别模型（设置窗口「语音」页下载），同 Linux 的 ~/.local/share/wowtype/wtlocal
+    var voiceModelDir: String { VoiceModelInstaller.folder(in: supportDir).path }
+
     var localModelPath: String {
         supportDir.appendingPathComponent("models/HY-MT1.5-1.8B-Q4_K_M.gguf").path
     }
@@ -139,9 +146,9 @@ final class AppState {
             config = loaded
             configGeneration += 1
             applyTranslateSettings()
-            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 工具栏=%d 剪贴板历史=%d 表情键=%@ 互译=%@",
+            NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) 五笔=%d Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 工具栏=%d 剪贴板历史=%d 表情键=%@ 互译=%@",
                   config.horizontal ? "横排" : "竖排", config.pageSize, config.fuzzy ? 1 : 0, config.fuzzyGroups,
-                  config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme,
+                  config.typoCorrection ? 1 : 0, config.shuangpin ? 1 : 0, config.shuangpinScheme, config.wubi ? 1 : 0,
                   config.shiftToggle.rawValue, config.traditional ? 1 : 0, config.halfwidthPunct ? 1 : 0,
                   config.candidateFontSize, config.lexicon.isEmpty ? "自带" : config.lexicon,
                   config.toolbar ? 1 : 0, config.clipboardHistory ? 1 : 0, config.emojiKey?.name ?? "不用",
@@ -159,8 +166,9 @@ final class AppState {
         guard let translator else { return }
         // 手动建的 Key 文件权限可能太宽，收紧到只有自己能读
         TranslateKeyFile.tighten(translateKeyPath)
+        llamaServerInUse = config.translateLocal ? findLlamaServer() : ""
         translator.configure(config, keyFile: translateKeyPath, defaultLocalModel: localModelPath,
-                             llamaServer: config.translateLocal ? findLlamaServer() : "")
+                             llamaServer: llamaServerInUse)
     }
 
     private func translateSummary() -> String {
@@ -184,7 +192,7 @@ final class AppState {
 
     /// 设置里管引擎的部分 + 自定义词。
     private func applyEngineSettings(_ engine: Engine) {
-        for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+        for problem in engine.apply(config, conversion: resource("s2t.tsv"), wubi: resource("wubi86.tsv")) {
             NSLog("WowType: %@", problem)
         }
         customStamp = FileStamp(customWordsPath)
@@ -207,6 +215,15 @@ final class AppState {
         }
         if let english = resource("english.txt") {
             engine.loadEnglish(english)
+        }
+        // 用户自己训的领域词级模型（可选），和 words.lm 混着用
+        let domain = supportDir.appendingPathComponent("words.domain.lm").path
+        if FileManager.default.fileExists(atPath: domain) {
+            if engine.setDomainLM(domain) {
+                NSLog("WowType: 载入领域词级模型 %@", domain)
+            } else {
+                NSLog("WowType: 领域词级模型载入失败 %@", domain)
+            }
         }
         engine.loadUserDict(userDictPath)
         engine.loadHistory(historyPath)
@@ -264,21 +281,32 @@ final class AppState {
         }
     }
 
+    /// 用本地模型互译、之前没找到 llama-server 时，最多 5 秒看一次现在有没有了。
+    private func llamaServerAppeared(now: TimeInterval) -> Bool {
+        guard config.translate, config.translateLocal, llamaServerInUse.isEmpty, now - llamaProbe >= 5 else {
+            return false
+        }
+        llamaProbe = now
+        return !findLlamaServer().isEmpty
+    }
+
     /// 看看设置、自定义词、词库文件改了没有（按键时调，一秒最多看一次；切换输入框时 force）。
     /// 设置改了马上生效；换了词库在后台载入，载完之前照旧用旧的。
     func checkForChanges(force: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
         guard force || now - lastCheck >= 1 else { return }
         lastCheck = now
-        if force && translator != nil {
-            // 切换输入框时再找一次 llama-server（设置以后才 brew install 的）、收紧 Key 文件的权限
+        if translator != nil && (force || llamaServerAppeared(now: now)) {
+            // 切换输入框时再配一次（顺带收紧 Key 文件的权限）；本地模型的 llama-server 之前没找到、现在有了
+            // （设置窗口里刚下好，或者后来才 brew install 的）也重配，不用切输入框。
+            // 模型文件不用这样盯：核心判断「就绪」时每次都现看模型在不在
             applyTranslateSettings()
         }
         if FileStamp(configPath) != configStamp {
             let generation = configGeneration
             loadConfig()
             if configGeneration != generation, let engine {
-                for problem in engine.apply(config, conversion: resource("s2t.tsv")) {
+                for problem in engine.apply(config, conversion: resource("s2t.tsv"), wubi: resource("wubi86.tsv")) {
                     NSLog("WowType: %@", problem)
                 }
             }
@@ -358,6 +386,7 @@ final class AppState {
         ClipboardHistory.remember(text)
     }
 
+    /// 上屏里有学到的选词（Composer.onCommit 只在 frame->learned 时调）。
     func didCommit() {
         commitsSinceSave += 1
         if commitsSinceSave >= saveEvery {
@@ -373,13 +402,18 @@ final class AppState {
 
     func save(force: Bool = false) {
         guard let engine, force || commitsSinceSave > 0 else { return }
-        commitsSinceSave = 0
         try? FileManager.default.createDirectory(at: supportDir, withIntermediateDirectories: true)
-        if !engine.saveUserDict(userDictPath) {
+        let dictSaved = engine.saveUserDict(userDictPath)
+        if !dictSaved {
             NSLog("WowType: 保存用户词库失败")
         }
-        if !engine.saveHistory(historyPath) {
+        let historySaved = engine.saveHistory(historyPath)
+        if !historySaved {
             NSLog("WowType: 保存输入习惯失败")
+        }
+        // 两样都存上了才清零：存失败的那批下次接着存（和 Linux 一样）
+        if dictSaved && historySaved {
+            commitsSinceSave = 0
         }
     }
 }

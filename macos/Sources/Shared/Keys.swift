@@ -140,31 +140,6 @@ public func translateKeyDown(keyCode: UInt16, characters: String?, charactersIgn
     return KeyInput(keysym: scalar.value, modifiers: modifiers)
 }
 
-/// 单按 Shift 切中英文：按下 Shift 到松开之间没有按别的键，并且不超过 0.5 秒。
-/// macOS 上 Shift 只有 flagsChanged 事件，没有 keyDown / keyUp。
-public struct ShiftTap {
-    private var downAt: Double?
-    public var limit: Double = 0.5
-
-    public init() {}
-
-    /// Shift 的 flagsChanged：down 是按下（flags 里有 shift）。返回 true 表示这一次是单按。
-    public mutating func shift(down: Bool, otherModifiers: Bool, now: Double) -> Bool {
-        if down {
-            downAt = otherModifiers ? nil : now
-            return false
-        }
-        defer { downAt = nil }
-        guard let at = downAt else { return false }
-        return now - at <= limit
-    }
-
-    /// 别的键按下、别的修饰键变化：这一次就不算单按了。
-    public mutating func interrupt() {
-        downAt = nil
-    }
-}
-
 /// 快捷键（设置里的 EmojiKey）。键名和 fcitx5 一样：修饰键 + 键，用 + 连起来，比如 Control+period、
 /// Control+Shift+E、Alt+semicolon。键只能是可见的 ASCII 字符（X keysym 名字，或者字符本身）。
 ///
@@ -178,6 +153,11 @@ public struct Shortcut: Equatable, Sendable {
 
     /// 表情面板的默认快捷键（macOS）：Control+.
     public static let emojiDefault = Shortcut(keysym: 0x2e, modifiers: .control)
+
+    /// 设置窗口里切换键、进出「译」的键能选的（键名，空串是不用），和 spec/config.json 的
+    /// presets.macos 一样（测试对照）。只放 macOS 默认没被占的键：Control+空格是系统选上一个输入法的键
+    public static let toggleKeyPresets = ["", "Control+Shift+space"]
+    public static let translateModeKeyPresets = ["", "Control+Shift+Y"]
 
     public init(keysym: UInt32, modifiers: Modifiers) {
         self.keysym = Shortcut.fold(keysym)
@@ -213,6 +193,16 @@ public struct Shortcut: Equatable, Sendable {
         let names = Shortcut.asciiNames
         parts.append(index >= 0 && index < names.count ? names[index] : "?")
         return parts.joined(separator: "+")
+    }
+
+    /// 设置窗口里给人看的叫法（Mac 键盘上的名字）：Control + .、Option + X、Control + Shift + 空格。
+    public var label: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Control") }
+        if modifiers.contains(.option) { parts.append("Option") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        let key = keysym == 0x20 ? "空格" : UnicodeScalar(keysym).map { String($0).uppercased() } ?? "?"
+        return (parts + [key]).joined(separator: " + ")
     }
 
     /// 这次按键是不是这个快捷键。CapsLock 不算；字母不分大小写（按着 Shift 时 macOS 给的是大写）。

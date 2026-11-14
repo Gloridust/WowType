@@ -16,9 +16,10 @@ use std::sync::Arc;
 use wowtype_core::datetime::LocalTime;
 use wowtype_core::lm::BigramLm;
 use wowtype_core::session::{
-    keysym, modifier, CandidateKind, Config, Frame, Key, Panel, Selection, Session,
+    keysym, modifier, ArrowKeys, CandidateKind, Config, Frame, Key, Panel, PunctStyle, Selection,
+    Session,
 };
-use wowtype_core::{Engine, Lexicon, MemoryLexicon};
+use wowtype_core::{Converter, Engine, Lexicon, MemoryLexicon};
 
 /// 按一串键，和 key_harness 的 type() 一样：<sp> <bs> <cr> <esc> 等是特殊键，其余按字符。
 fn type_keys(session: &mut Session, keys: &str) -> Frame {
@@ -40,6 +41,9 @@ fn type_keys(session: &mut Session, keys: &str) -> Frame {
                 "right" => keysym::RIGHT,
                 "pgdn" => keysym::PAGE_DOWN,
                 "tab" => keysym::TAB,
+                "home" => keysym::HOME,
+                "end" => keysym::END,
+                "del" => keysym::DELETE,
                 other => panic!("不认识的特殊键 <{other}>"),
             })
         } else {
@@ -72,6 +76,7 @@ fn select_prefix(session: &mut Session, text: &str, pinyin: &str, bytes: usize) 
         text: text.into(),
         pinyin: pinyin.into(),
         bytes,
+        ..Default::default()
     });
 }
 
@@ -160,18 +165,22 @@ fn uppercase_kept_and_apostrophe() {
     assert_eq!(type_keys(&mut session, "Hello").preedit, "Hello");
     let mut session = fresh();
     assert_eq!(type_keys(&mut session, "xi'an").preedit, "xi'an");
+    // 开头的 ' 不是隔音符：没在打字，它是单引号，换成中文引号上屏
     let mut session = fresh();
-    assert!(!type_keys(&mut session, "'").handled);
+    assert_eq!(type_keys(&mut session, "'").commit.as_deref(), Some("‘"));
     assert!(!session.composing());
 }
 
 #[test]
 fn keys_without_candidates() {
     // 不带引擎（词库还没载入）：没有候选。空格、回车上屏原始输入，数字吃掉；
-    // 标点、翻页键、方向键还交给外壳（外壳先上屏再出标点，或者吃掉）
+    // 标点上屏原始输入再上屏标点；翻页键、方向键还交给外壳（外壳吃掉）
     let mut session = fresh();
     type_keys(&mut session, "shi");
-    for keys in [",", "<down>", "<pgdn>", "<tab>", "-"] {
+    assert_eq!(type_keys(&mut session, ",").commit.as_deref(), Some("shi，"));
+    let mut session = fresh();
+    type_keys(&mut session, "shi");
+    for keys in ["<down>", "<pgdn>", "<tab>"] {
         let frame = type_keys(&mut session, keys);
         assert!(!frame.handled, "{keys} 没有候选时归外壳");
         assert_eq!(frame.preedit, "shi");
@@ -397,6 +406,21 @@ fn date_time_after_first() {
 }
 
 #[test]
+fn date_time_follows_trigger_word_even_when_it_is_not_first() {
+    // 接着前文打（刚上屏一个日期）时，「事件」可能排在「时间」前面；时间的写法是给「时间」的，
+    // 「时间」挪到第一，写法跟在它后面
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("shi jian\t事件\t900000\nshi jian\t时间\t500000\n").unwrap(),
+    );
+    let engine: &'static Engine =
+        Box::leak(Box::new(Engine::new(lexicon, Arc::new(BigramLm::default()))));
+    let mut session = with(engine);
+    type_keys(&mut session, "shijian");
+    assert_eq!(texts(&mut session)[..3], ["时间", "10:20", "10:20:30"]);
+    assert!(texts(&mut session).contains(&"事件".to_string()));
+}
+
+#[test]
 fn insertion_order_emoji_keycap_date_time() {
     // 外壳的顺序：emoji 推荐插第 3 个，然后在第一页里找数字字跟按键 emoji，
     // 最后日期时间插在首选后面（把前面插的往后挤）
@@ -429,17 +453,40 @@ fn shuangpin_display_and_date_key() {
     assert!(frame.preedit.contains("zhong"), "{}", frame.preedit);
     assert_eq!(texts(&mut session)[0], "中国");
 
+    // #122：设置了显示双拼键时编辑区是打的键，候选照旧
+    let mut session = with(engine);
+    session.configure(Config {
+        shuangpin_keys: true,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "vsgo");
+    assert_eq!(frame.preedit, "vsgo");
+    assert_eq!(texts(&mut session)[0], "中国");
+
     let mut session = with(engine);
     type_keys(&mut session, "riqi");
     let all = texts(&mut session);
     assert_eq!(all[0], "日期");
     assert_eq!(all[1], "2026年11月11日");
 
-    // 双拼不开计算器（v 是韵母键）
+    // 双拼时小写 v 是声母键：v1+2 不算
     let mut session = with(engine);
     type_keys(&mut session, "v");
     session.append("1+2");
     assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
+
+    // 双拼用大写 V 进计算器（#160）：按键进编辑区、算式原样显示、= 上屏结果
+    let mut session = with(engine);
+    let frame = type_keys(&mut session, "V1+2*3");
+    assert_eq!(frame.preedit, "V1+2*3", "算式不当双拼键换成全拼");
+    assert_eq!(texts(&mut session)[..2], ["7", "1+2*3=7"]);
+    let frame = type_keys(&mut session, "=");
+    assert_eq!(frame.commit.as_deref(), Some("7"));
+    assert!(!session.composing());
+    // 大写金额也一样
+    let mut session = with(engine);
+    type_keys(&mut session, "V12345.67");
+    assert_eq!(texts(&mut session)[0], "壹万贰仟叁佰肆拾伍元陆角柒分");
 }
 
 #[test]
@@ -467,6 +514,12 @@ fn calculator() {
         texts(&mut session),
         ["壹万贰仟叁佰肆拾伍元陆角柒分", "一万二千三百四十五点六七", "12345.67"]
     );
+
+    // 全拼时只认小写 v
+    let mut session = with(engine());
+    type_keys(&mut session, "V");
+    session.append("1+2");
+    assert_ne!(texts(&mut session).first().map(String::as_str), Some("3"));
 
     // 关掉计算器：v1+2 不算
     let mut session = with(engine());
@@ -512,6 +565,53 @@ fn choose_sentence_start_then_the_rest() {
     assert_eq!(frame.commit.as_deref(), Some("你好中国"));
     assert!(frame.preedit.is_empty());
     assert!(!session.composing());
+}
+
+#[test]
+fn traditional_learns_the_lexicon_form() {
+    // 开着繁体学到的词要按词库的写法（简体）收：关掉繁体照样能用，开着时只转一次。
+    // 「萬里」再转一次会变成「萬裏」（里 -> 裏），收成繁体的话就会显示错。
+    // 词库里 万、里 都不是首选，没学之前 wanli 出的是「晚理」
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("wan\t晚\t9000\nwan\t万\t100\nli\t理\t9000\nli\t里\t100\n")
+            .unwrap(),
+    );
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.install_converter(Converter::from_tsv_str("万\t萬\n里\t裏\n万里\t萬里\n").unwrap());
+    engine.set_traditional(true);
+    let shown = |engine: &Engine| {
+        let mut session = with_engine_ref(engine);
+        type_keys(&mut session, "wanli");
+        texts(&mut session)
+    };
+    assert_eq!(shown(&engine)[0], "晚理");
+    {
+        // 一个字一个字选出来（萬、裏），拼成的词马上收进用户词库
+        let mut session = with_engine_ref(&engine);
+        type_keys(&mut session, "wanli");
+        choose_text(&mut session, "萬");
+        let frame = choose_text(&mut session, "裏");
+        assert_eq!(frame.commit.as_deref(), Some("萬裏"), "上屏的是候选显示的字");
+    }
+    let learned: Vec<String> = engine.user_words().into_iter().map(|(_, w, _)| w).collect();
+    assert_eq!(learned, ["万里"], "学的是词库里的写法");
+
+    // 开着繁体：学到的词排第一，转一次显示（萬里），没有再转一次的「萬裏」
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "萬里", "{candidates:?}");
+    assert!(!candidates.contains(&"萬裏".to_string()), "{candidates:?}");
+
+    // 关掉繁体：学到的词照样排第一，是简体
+    engine.set_traditional(false);
+    let candidates = shown(&engine);
+    assert_eq!(candidates[0], "万里", "{candidates:?}");
+    assert!(candidates.iter().all(|c| !c.contains('萬')), "{candidates:?}");
+}
+
+fn with_engine_ref(engine: &Engine) -> Session<'_> {
+    let mut session = Session::with_engine(engine);
+    session.set_clock(fixed_time);
+    session
 }
 
 #[test]
@@ -755,12 +855,13 @@ fn digits_choose_on_the_page() {
     let (mut session, all) = default_paged();
     let frame = session.key(&Key::press(keysym::KP_0 + 2));
     assert_eq!(frame.commit.as_deref(), Some(all[1].as_str()));
-    let (mut session, _) = default_paged();
+    // 带 Shift 的数字（法语键盘打数字要按 Shift）不选词：先上屏光标处的候选，再上屏这个数字
+    let (mut session, all) = default_paged();
     let frame = session.key(&Key {
         modifiers: wowtype_core::session::modifier::SHIFT,
         ..Key::char('2')
     });
-    assert!(!frame.handled);
+    assert_eq!(frame.commit, Some(format!("{}2", all[0])));
 
     // 翻到第二页，数字按第二页选
     let (mut session, all) = default_paged();
@@ -807,17 +908,17 @@ fn paging_keys() {
         "最后一页再按 = 也吃掉"
     );
 
-    // 没打开的翻页键交给外壳（, . [ ] Tab 默认不翻页）
-    let (mut session, _) = default_paged();
-    for keys in [",", "[", "<tab>"] {
-        assert!(!type_keys(&mut session, keys).handled, "{keys}");
-    }
+    // 没打开的翻页键（, . [ ] Tab 默认不翻页）：标点先上屏候选再上屏标点，Tab 交给外壳
+    let (mut session, all) = default_paged();
+    assert!(!type_keys(&mut session, "<tab>").handled);
+    assert_eq!(type_keys(&mut session, ",").commit, Some(format!("{}，", all[0])));
 
-    // 只有一页：- 交给外壳（当标点）
+    // 只有一页：- 没页可翻，当符号：先上屏候选再上屏 -
     let mut session = with(many_engine());
     type_keys(&mut session, "nihao");
     assert!(session.frame(false).cand_count < 9 && !session.frame(false).has_next);
-    assert!(!type_keys(&mut session, "-").handled);
+    let frame = type_keys(&mut session, "-");
+    assert!(frame.commit.is_some_and(|c| c.ends_with('-')));
 }
 
 #[test]
@@ -838,29 +939,41 @@ fn configured_page_keys() {
     assert_eq!(session.key(&Key::press(keysym::ISO_LEFT_TAB)).cand_start, 5);
     assert_eq!(type_keys(&mut session, ",").cand_start, 0);
     assert_eq!(type_keys(&mut session, "[").cand_start, 0);
-    // - = 没打开：交给外壳
-    assert!(!type_keys(&mut session, "-").handled);
+    // - = 没打开：当符号，先上屏候选
+    let frame = type_keys(&mut session, "-");
+    assert!(frame.handled);
+    assert!(frame.commit.is_some_and(|c| c.ends_with('-')));
 }
 
 #[test]
-fn cursor_moves_across_pages_and_wraps() {
-    let (mut session, _) = default_paged();
+fn cursor_moves_across_pages_but_stops_at_both_ends() {
+    let (mut session, all) = default_paged();
     for _ in 0..5 {
         type_keys(&mut session, "<right>");
     }
     let frame = session.frame(false);
     assert_eq!(frame.cand_start, 5, "光标移出这一页，跟着翻页");
     assert_eq!(frame.cand_cursor, Some(0));
-
-    // 第一个往左：绕到最后一个
-    let (mut session, all2) = default_paged();
     let frame = type_keys(&mut session, "<left>");
-    assert_eq!(frame.cand_start, (all2.len() - 1) / 5 * 5);
-    assert_eq!(frame.cand_cursor, Some((all2.len() - 1) % 5));
-    assert!(!frame.has_next);
+    assert_eq!((frame.cand_start, frame.cand_cursor), (0, Some(4)), "往回也跨页");
+
+    // 第一个往左：停在第一个，不绕到末页的生僻字；吃掉，不交给应用
+    let (mut session, _) = default_paged();
+    let frame = type_keys(&mut session, "<left>");
+    assert!(frame.handled);
+    assert_eq!((frame.cand_start, frame.cand_cursor), (0, Some(0)));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some(all[0].as_str()));
+
+    // 最后一个往右：停在最后一个，不绕回第一个
+    let (mut session, _) = default_paged();
+    for _ in 0..all.len() + 3 {
+        type_keys(&mut session, "<right>");
+    }
+    let frame = session.frame(false);
+    assert_eq!(frame.cand_start + frame.cand_cursor.unwrap(), all.len() - 1);
     assert_eq!(
         type_keys(&mut session, "<sp>").commit.as_deref(),
-        Some(all2[all2.len() - 1].as_str())
+        Some(all[all.len() - 1].as_str())
     );
 }
 
@@ -920,8 +1033,11 @@ fn vertical_list() {
     assert_eq!(type_keys(&mut session, "<right>").cand_start, 5);
     assert_eq!(type_keys(&mut session, "<left>").cand_start, 0);
     let frame = type_keys(&mut session, "<up>");
-    assert_eq!(frame.cand_cursor, Some((all.len() - 1) % 5), "绕到最后一个");
-    assert_eq!(type_keys(&mut session, "<down>").cand_start, 0);
+    assert_eq!(
+        (frame.cand_start, frame.cand_cursor),
+        (0, Some(0)),
+        "第一个再往上：停住，不绕到最后一个"
+    );
     assert_eq!(
         type_keys(&mut session, "<sp>").commit.as_deref(),
         Some(all[0].as_str())
@@ -1100,9 +1216,9 @@ fn semicolon_and_quote_select() {
     });
     assert_eq!(type_keys(&mut session, "'").preedit, "shi'");
 
-    // 不开：分号交给外壳（当标点）
-    let (mut session, _) = default_paged();
-    assert!(!type_keys(&mut session, ";").handled);
+    // 不开：分号是标点，先上屏候选
+    let (mut session, all) = default_paged();
+    assert_eq!(type_keys(&mut session, ";").commit, Some(format!("{}；", all[0])));
 
     // 第 2 个以后是第二页的：按这一页数
     let (mut session, all) = paged(Config {
@@ -1136,8 +1252,13 @@ fn shuangpin_semicolon_is_a_key_on_odd_count() {
     assert!(frame.handled);
     assert_eq!(session.input(), "x;");
     let frame = type_keys(&mut session, ";");
-    assert!(!frame.handled, "成对了：分号交给外壳");
-    assert_eq!(session.input(), "x;");
+    assert!(frame.handled);
+    assert!(
+        frame.commit.as_deref().is_some_and(|c| c.ends_with('；')),
+        "成对了：分号是标点，先上屏候选：{:?}",
+        frame.commit
+    );
+    assert!(!session.composing());
 }
 
 /// 分几次选出来的词，用一次就记住（https://x.com/so1v3/status/2120415675969896729）。
@@ -1385,11 +1506,11 @@ fn brackets_pick_first_or_last_char() {
 
 #[test]
 fn brackets_fall_through_when_nothing_to_pick() {
-    // 单字候选：交给外壳（外壳先上屏再出【】）
+    // 单字候选：没有字可取，[ 是标点：先上屏候选再上屏【
     let mut session = with(engine());
     type_keys(&mut session, "ba");
     assert_eq!(texts(&mut session)[0], "吧");
-    assert!(!type_keys(&mut session, "[").handled);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("吧【"));
 
     // 关掉以词定字，或者 [ ] 是翻页键：不取字
     let mut session = with(engine());
@@ -1398,13 +1519,1364 @@ fn brackets_fall_through_when_nothing_to_pick() {
         ..Config::default()
     });
     type_keys(&mut session, "nihao");
-    assert!(!type_keys(&mut session, "[").handled);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("你好【"));
 
     let mut session = with(engine());
     session.configure(Config {
         page_keys: wowtype_core::session::page_keys::BRACKET,
         ..Config::default()
     });
+    // [ ] 是翻页键时不取字；第一页上按 [ 没页可翻，当标点（和只有一页时按 - 一样）
     type_keys(&mut session, "nihao");
-    assert_eq!(type_keys(&mut session, "[").commit, None);
+    assert_eq!(type_keys(&mut session, "[").commit.as_deref(), Some("你好【"));
+}
+
+fn key_after(c: char, prev: Option<char>, hints: u32) -> Key {
+    Key {
+        prev_char: prev,
+        hints,
+        ..Key::char(c)
+    }
+}
+
+#[test]
+fn punctuation_when_not_composing() {
+    // 没在打字：有中文标点的换成中文标点上屏；没有的（/ + @）交给应用
+    let mut session = with(engine());
+    let frame = type_keys(&mut session, ",");
+    assert_eq!(frame.commit.as_deref(), Some("，"));
+    assert!(!frame.learned, "只上屏标点不算学到了词");
+    for keys in ["/", "+", "@"] {
+        assert!(!type_keys(&mut session, keys).handled, "{keys}");
+    }
+    // 半角样式：都交给应用
+    let mut session = with(engine());
+    session.configure(Config {
+        punct_style: PunctStyle::Halfwidth,
+        ..Config::default()
+    });
+    assert!(!type_keys(&mut session, ",").handled);
+}
+
+#[test]
+fn punctuation_after_digit_stays_ascii() {
+    // 应用给了光标前的字：数字后面的 . : , 保持英文（3.14、20:22、3,000）
+    let mut session = with(engine());
+    assert!(!session.key(&key_after('.', Some('3'), 0)).handled);
+    assert_eq!(session.key(&key_after('.', Some('好'), 0)).commit.as_deref(), Some("。"));
+    // 读不到周围文字：看会话自己记的上一个字（交给应用的数字也记）
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    assert!(!type_keys(&mut session, ".").handled, "3 后面的点保持英文");
+    assert!(!type_keys(&mut session, "1").handled);
+    assert!(!type_keys(&mut session, "4").handled);
+    assert_eq!(type_keys(&mut session, "nihao<sp>").commit.as_deref(), Some("你好"));
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+    // 数字交给应用以后又按了退格（也交给应用）：光标前是什么不知道了，点是句号
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    assert!(!type_keys(&mut session, "<bs>").handled);
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+}
+
+#[test]
+fn quotes_alternate_per_session() {
+    let mut a = with(engine());
+    let mut b = with(engine());
+    assert_eq!(type_keys(&mut a, "\"").commit.as_deref(), Some("“"));
+    // 另一个输入框里不受 a 的影响
+    assert_eq!(type_keys(&mut b, "\"").commit.as_deref(), Some("“"));
+    assert_eq!(type_keys(&mut a, "\"").commit.as_deref(), Some("”"));
+    assert_eq!(type_keys(&mut a, "'").commit.as_deref(), Some("‘"));
+    assert_eq!(type_keys(&mut a, "'").commit.as_deref(), Some("’"));
+}
+
+#[test]
+fn punctuation_while_composing_commits_candidate_first() {
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    let frame = type_keys(&mut session, ",");
+    assert_eq!(frame.commit.as_deref(), Some("你好，"));
+    assert!(frame.learned, "上屏的有引擎的候选");
+    assert!(!session.composing());
+    // 没有中文标点的符号原样跟在后面
+    type_keys(&mut session, "nihao");
+    assert_eq!(type_keys(&mut session, "/").commit.as_deref(), Some("你好/"));
+    // 数字后面的标点：候选上屏以后光标前是汉字，照样换成中文标点
+    type_keys(&mut session, "nihao");
+    assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("你好。"));
+}
+
+#[test]
+fn auto_space_between_han_and_ascii() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::key_hints::NO_AUTO_SPACE;
+    let config = Config {
+        auto_space: LETTERS | DIGITS,
+        ..Config::default()
+    };
+    // 汉字后面打数字：会话自己上屏，补一个空格
+    let mut session = with(engine());
+    session.configure(config);
+    assert_eq!(session.key(&key_after('5', Some('第'), 0)).commit.as_deref(), Some(" 5"));
+    // 光标前是字母、读不到光标前的字、密码框：不补，数字交给应用
+    assert!(!session.key(&key_after('5', Some('a'), 0)).handled);
+    assert!(!session.key(&key_after('5', None, 0)).handled);
+    assert!(!session.key(&key_after('5', Some('第'), NO_AUTO_SPACE)).handled);
+    // 英文后面上屏汉字：前面补空格
+    let mut session = with(engine());
+    session.configure(config);
+    type_keys(&mut session, "niha");
+    session.key(&key_after('o', Some('x'), 0));
+    let frame = session.key(&key_after(' ', Some('x'), 0));
+    assert_eq!(frame.commit.as_deref(), Some(" 你好"));
+    // 关着（默认）不补
+    let mut session = with(engine());
+    type_keys(&mut session, "niha");
+    session.key(&key_after('o', Some('x'), 0));
+    assert_eq!(session.key(&key_after(' ', Some('x'), 0)).commit.as_deref(), Some("你好"));
+}
+
+fn shift(sym: u32, release: bool, time_ms: u64) -> Key {
+    Key {
+        keysym: sym,
+        release,
+        time_ms,
+        code: if sym == keysym::SHIFT_L { 50 } else { 62 },
+        ..Key::default()
+    }
+}
+
+#[test]
+fn shift_tap_toggles_mode() {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    assert!(!session.key(&shift(keysym::SHIFT_L, false, 1000)).handled);
+    let frame = session.key(&shift(keysym::SHIFT_L, true, 1100));
+    assert!(frame.handled && frame.mode_changed);
+    assert_eq!(frame.mode, Mode::English);
+    // 英文模式：字母交给应用
+    assert!(!type_keys(&mut session, "a").handled);
+    assert!(!type_keys(&mut session, ",").handled);
+    // 再按一下回到中文（没有「译」）
+    session.key(&shift(keysym::SHIFT_L, false, 2000));
+    assert_eq!(session.key(&shift(keysym::SHIFT_L, true, 2100)).mode, Mode::Chinese);
+    assert!(type_keys(&mut session, "a").handled);
+}
+
+#[test]
+fn shift_tap_rules() {
+    use wowtype_core::session::{Mode, ShiftToggle};
+    // 按住太久不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1600)).mode_changed);
+    // 按住时按了别的键（Shift+A 打大写）不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    type_keys(&mut session, "A");
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    // 外壳自己处理掉的键也报给会话（OBSERVE）：按住 Shift 时按了它就不算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let observed = Key {
+        keysym: u32::from(b'1'),
+        action: wowtype_core::session::KeyAction::Observe,
+        ..Key::default()
+    };
+    assert!(!session.key(&observed).handled, "OBSERVE 不处理");
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    // 自动重复不重新计时：按住 0.6 秒，中间来了几次重复
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    session.key(&Key { repeat: true, ..shift(keysym::SHIFT_L, false, 1400) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1600)).mode_changed);
+    // 松开时按键码认：同一个键松开时翻成了别的符号也算
+    let mut session = with(engine());
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let other = Key { keysym: 0xfe08, code: 50, release: true, time_ms: 1100, ..Key::default() };
+    assert!(session.key(&other).mode_changed, "ISO_Next_Group 松开");
+    // 只用右 Shift：左边的不算
+    let mut session = with(engine());
+    session.configure(Config { shift_toggle: ShiftToggle::Right, ..Config::default() });
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    session.key(&shift(keysym::SHIFT_R, false, 2000));
+    assert!(session.key(&shift(keysym::SHIFT_R, true, 2100)).mode_changed);
+    // 带 Ctrl 按下（Ctrl+Shift 切输入法）、开着面板不算
+    let mut session = with(engine());
+    session.key(&Key { modifiers: modifier::CTRL, ..shift(keysym::SHIFT_L, false, 1000) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+    use wowtype_core::session::key_hints::PANEL_OPEN;
+    session.key(&Key { hints: PANEL_OPEN, ..shift(keysym::SHIFT_L, false, 2000) });
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 2100)).mode_changed);
+    // 有「译」：中 → 英 → 译 → 中
+    let mut session = with(engine());
+    session.configure(Config { translate_mode: true, ..Config::default() });
+    let mut modes = Vec::new();
+    for i in 0..3u64 {
+        session.key(&shift(keysym::SHIFT_L, false, 1000 * (i + 1)));
+        modes.push(session.key(&shift(keysym::SHIFT_L, true, 1000 * (i + 1) + 50)).mode);
+    }
+    assert_eq!(modes, [Mode::English, Mode::Translate, Mode::Chinese]);
+}
+
+#[test]
+fn switching_to_english_commits_composition() {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    type_keys(&mut session, "nihao");
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    let frame = session.key(&shift(keysym::SHIFT_L, true, 1100));
+    assert_eq!(frame.commit.as_deref(), Some("nihao"));
+    assert!(!session.composing());
+    // set_mode 一样；切回中文不上屏
+    let mut session = with(engine());
+    type_keys(&mut session, "ni");
+    assert_eq!(session.set_mode(Mode::English).commit.as_deref(), Some("ni"));
+    let frame = session.set_mode(Mode::Chinese);
+    assert!(frame.mode_changed && frame.commit.is_none());
+    assert!(!session.set_mode(Mode::Chinese).mode_changed, "已经是中文");
+}
+
+#[test]
+fn english_mode_auto_space() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    session.configure(Config { auto_space: LETTERS | DIGITS, ..Config::default() });
+    session.set_mode(Mode::English);
+    assert_eq!(session.key(&key_after('L', Some('用'), 0)).commit.as_deref(), Some(" L"));
+    assert!(!session.key(&key_after('i', Some('L'), 0)).handled);
+}
+
+/// 假翻译器：记下发了哪些请求、取消了几次，结果由测试写。
+#[derive(Default)]
+struct FakeTranslator {
+    started: std::cell::RefCell<Vec<String>>,
+    cancels: std::cell::Cell<usize>,
+    snap: std::cell::RefCell<wowtype_core::translate::Snapshot>,
+}
+
+impl FakeTranslator {
+    fn set(&self, state: wowtype_core::translate::JobState, text: &str) {
+        let mut snap = self.snap.borrow_mut();
+        snap.state = state;
+        snap.text = text.to_owned();
+    }
+}
+
+impl wowtype_core::session::TranslateBackend for FakeTranslator {
+    fn start(&self, text: &str) {
+        use wowtype_core::translate::JobState;
+        let snap = self.snap.borrow().clone();
+        if snap.source == text && matches!(snap.state, JobState::Running | JobState::Done) {
+            return;
+        }
+        self.started.borrow_mut().push(text.to_owned());
+        *self.snap.borrow_mut() = wowtype_core::translate::Snapshot {
+            state: JobState::Running,
+            source: text.to_owned(),
+            text: String::new(),
+            error: String::new(),
+        };
+    }
+    fn cancel(&self) {
+        self.cancels.set(self.cancels.get() + 1);
+        *self.snap.borrow_mut() = Default::default();
+    }
+    fn poll(&self) -> wowtype_core::translate::Snapshot {
+        self.snap.borrow().clone()
+    }
+    fn tag(&self, _text: &str) -> String {
+        "中→英".to_owned()
+    }
+}
+
+fn translating(t: &'static FakeTranslator) -> Session<'static> {
+    use wowtype_core::session::Mode;
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    session
+}
+
+fn at(c: char, time_ms: u64) -> Key {
+    Key { time_ms, ..Key::char(c) }
+}
+
+#[test]
+fn translate_collects_source_and_requests_after_pause() {
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    for (i, c) in "nihao".chars().enumerate() {
+        session.key(&at(c, 1000 + i as u64));
+    }
+    let frame = session.key(&at(' ', 1010));
+    assert_eq!(frame.commit, None, "互译时上屏的字攒成原文");
+    let view = frame.translate.clone().expect("互译中");
+    assert_eq!(view.source, "你好");
+    assert_eq!(view.title, "中→英 互译：");
+    assert!(frame.wake_after_ms > 0, "要叫会话发请求");
+    // 0.5 秒以内不发，之后发
+    session.tick(1300);
+    assert!(t.started.borrow().is_empty());
+    session.tick(1520);
+    assert_eq!(*t.started.borrow(), ["你好"]);
+    // 流式译文；译完了回车上屏
+    t.set(JobState::Running, "Hel");
+    assert_eq!(session.tick(1570).translate.unwrap().text, "Hel");
+    t.set(JobState::Done, "Hello");
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit.as_deref(), Some("Hello"));
+    assert_eq!(session.translate_source(), "");
+}
+
+#[test]
+fn clearing_one_session_keeps_another_sessions_request() {
+    // 两个输入框共用一个翻译器：A 发了请求，B 后来发的顶掉了它；A 清空时不能把 B 的请求取消掉
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut a = translating(t);
+    let mut b = translating(t);
+    for (i, c) in "nihao ".chars().enumerate() {
+        a.key(&at(c, 1000 + i as u64));
+    }
+    a.tick(1600);
+    assert_eq!(*t.started.borrow(), ["你好"]);
+    for (i, c) in "shijie ".chars().enumerate() {
+        b.key(&at(c, 2000 + i as u64));
+    }
+    b.tick(2600);
+    let b_source = b.translate_source().to_owned();
+    assert_eq!(*t.started.borrow(), ["你好".to_owned(), b_source.clone()]);
+    a.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(a.translate_source(), "");
+    assert_eq!(t.cancels.get(), 0, "翻译器上跑的是 B 的请求，A 清空不取消");
+    assert_eq!(t.snap.borrow().source, b_source);
+    assert_eq!(t.snap.borrow().state, JobState::Running);
+    // B 自己清空时取消自己的请求
+    b.key(&Key::press(keysym::ESCAPE));
+    assert_eq!(t.cancels.get(), 1);
+}
+
+#[test]
+fn translate_enter_before_done_commits_when_ready() {
+    use wowtype_core::translate::JobState;
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = session.key(&Key::press(keysym::RETURN));
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.translate.unwrap().status, "翻译中…好了就上屏");
+    assert_eq!(*t.started.borrow(), ["你好"], "回车立刻发请求");
+    t.set(JobState::Done, "Hello");
+    assert_eq!(session.tick(5000).commit.as_deref(), Some("Hello"));
+}
+
+#[test]
+fn translate_keys() {
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    // Shift+回车上屏原文
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let shift_enter = Key { modifiers: modifier::SHIFT, ..Key::press(keysym::RETURN) };
+    assert_eq!(session.key(&shift_enter).commit.as_deref(), Some("你好"));
+    // 退格删原文，Esc 清空，方向键吃掉
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.translate_source(), "你");
+    assert!(type_keys(&mut session, "<left>").handled);
+    type_keys(&mut session, "<esc>");
+    assert_eq!(session.translate_source(), "");
+    // 数字、点、斜杠进原文（3.14 的点原样）；句末标点立刻发请求
+    let mut session = translating(t);
+    type_keys(&mut session, "3.14/2");
+    assert_eq!(session.translate_source(), "3.14/2");
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao.");
+    assert_eq!(session.translate_source(), "你好。");
+    let before = t.started.borrow().len();
+    session.tick(0);
+    assert_eq!(t.started.borrow().len(), before + 1, "句末立刻发");
+}
+
+#[test]
+fn leaving_translate_commits_source() {
+    use wowtype_core::session::{key_hints::NO_TRANSLATE, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    type_keys(&mut session, "ma");
+    let frame = session.set_mode(Mode::Chinese);
+    assert_eq!(frame.commit.as_deref(), Some("你好"), "原文原样上屏");
+    assert!(session.composing(), "正在打的拼音留着");
+    // 密码框：「译」里也照常上屏
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao");
+    let frame = session.key(&Key { hints: NO_TRANSLATE, ..Key::press(keysym::SPACE) });
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert!(frame.translate.is_none());
+}
+
+/// 外壳认出设置里的快捷键后交给会话的键（ToggleKey、TranslateModeKey）。
+fn hotkey(action: wowtype_core::session::KeyAction, hints: u32) -> Key {
+    Key { keysym: keysym::SPACE, modifiers: modifier::CTRL | modifier::SHIFT, action, hints, ..Key::default() }
+}
+
+fn tap(session: &mut Session<'_>, at: u64) -> wowtype_core::session::Mode {
+    session.key(&shift(keysym::SHIFT_L, false, at));
+    session.key(&shift(keysym::SHIFT_L, true, at + 50)).mode
+}
+
+#[test]
+fn toggle_key_switches_chinese_english() {
+    use wowtype_core::session::{KeyAction::ToggleMode, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = session.key(&hotkey(ToggleMode, 0));
+    assert!(frame.handled && frame.mode_changed);
+    assert_eq!((frame.mode, frame.commit.as_deref()), (Mode::Chinese, Some("你好")), "在「译」里回中文，原文原样上屏");
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).mode, Mode::English);
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).mode, Mode::Chinese);
+    // 打到一半切英文：和单按 Shift 一样原样上屏
+    type_keys(&mut session, "ni");
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).commit.as_deref(), Some("ni"));
+}
+
+#[test]
+fn translate_key_enters_and_leaves_translate() {
+    use wowtype_core::session::{key_hints::NO_TRANSLATE, KeyAction::ToggleTranslate, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, translate_key: true, ..Config::default() });
+    // 中 → 译 → 中；打到一半的拼音带进「译」接着打
+    type_keys(&mut session, "ni");
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert!(frame.handled && frame.mode_changed && frame.commit.is_none());
+    assert_eq!(frame.mode, Mode::Translate);
+    type_keys(&mut session, "hao<sp>");
+    assert_eq!(session.translate_source(), "你好");
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert_eq!((frame.mode, frame.commit.as_deref()), (Mode::Chinese, Some("你好")), "回中文，原文原样上屏");
+    // 英 → 译 → 英：回到进来前的模式
+    session.set_mode(Mode::English);
+    assert_eq!(session.key(&hotkey(ToggleTranslate, 0)).mode, Mode::Translate);
+    assert_eq!(session.key(&hotkey(ToggleTranslate, 0)).mode, Mode::English);
+    // 密码框里进不了：键交给应用，模式不变
+    let frame = session.key(&hotkey(ToggleTranslate, NO_TRANSLATE));
+    assert!(!frame.handled && !frame.mode_changed);
+    assert_eq!(frame.mode, Mode::English);
+    // 在「译」里翻译不能用了（设置里关掉、密码框）也回得去
+    session.key(&hotkey(ToggleTranslate, 0));
+    session.configure(Config { translate_key: true, ..Config::default() });
+    let frame = session.key(&hotkey(ToggleTranslate, NO_TRANSLATE));
+    assert!(frame.handled);
+    assert_eq!(frame.mode, Mode::English);
+    // 没有「译」：键交给应用
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert!(!frame.handled && !frame.mode_changed);
+}
+
+#[test]
+fn translate_key_takes_translate_out_of_shift_cycle() {
+    use wowtype_core::session::{KeyAction::ToggleTranslate, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, translate_key: true, ..Config::default() });
+    let modes: Vec<Mode> = (1..=3).map(|i| tap(&mut session, 1000 * i)).collect();
+    assert_eq!(modes, [Mode::English, Mode::Chinese, Mode::English], "单按 Shift 只在中 ↔ 英之间切");
+    session.key(&hotkey(ToggleTranslate, 0));
+    assert_eq!(tap(&mut session, 5000), Mode::Chinese, "在「译」里单按 Shift 回中文");
+}
+
+#[test]
+fn clearing_one_session_keeps_others_request() {
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut a = translating(t);
+    let mut b = translating(t);
+    type_keys(&mut a, "nihao.");
+    a.tick(0);
+    assert_eq!(t.cancels.get(), 0);
+    b.clear_translation();
+    assert_eq!(t.cancels.get(), 0, "b 没发过请求，不取消 a 的");
+    a.clear_translation();
+    assert_eq!(t.cancels.get(), 1);
+}
+
+#[test]
+fn v_space_opens_toolbar() {
+    use wowtype_core::session::{Panel, Tool};
+    let mut session = with(engine());
+    let frame = type_keys(&mut session, "v<sp>");
+    assert_eq!(frame.panel, Panel::Tool);
+    assert_eq!(frame.aux, "工具栏：数字键选择，Esc 关闭");
+    assert_eq!(shown_texts(&mut session), ["剪贴板", "常用语", "符号", "表情"]);
+    // 菜单第 3 项「符号」：符号面板（网格），不搜索时列全部符号
+    let frame = type_keys(&mut session, "3");
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(session.open_panel(), Some(Tool::Emoji { symbols: true }));
+    assert!(frame.cand_count > 0);
+    // Esc 关上
+    let frame = type_keys(&mut session, "<esc>");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(session.open_panel(), None);
+    // vim 照常打字；v1+2 照常算
+    let mut session = with(engine());
+    type_keys(&mut session, "vim<sp>");
+    assert_eq!(session.open_panel(), None);
+    // 关掉工具栏：v 空格就是 v
+    let mut session = with(engine());
+    session.configure(Config { toolbar: false, ..Config::default() });
+    type_keys(&mut session, "v<sp>");
+    assert_eq!(session.open_panel(), None);
+}
+
+#[test]
+fn toolbar_clipboard_and_back() {
+    use wowtype_core::session::Tool;
+    wowtype_core::clipboard::clear();
+    // 没打开剪贴板历史：提示去设置里打开
+    let mut session = with(engine());
+    type_keys(&mut session, "v<sp>1");
+    assert_eq!(session.open_panel(), Some(Tool::Clipboard));
+    assert_eq!(session.frame(false).aux, "剪贴板：没打开，在设置里打开「记录剪贴板历史」");
+    // 退格回菜单，菜单里退格关上
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), Some(Tool::Menu));
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), None);
+    // 打开了：选一条上屏（多行的显示成 ⏎）
+    wowtype_core::clipboard::remember("第一行\n第二行");
+    let mut session = with(engine());
+    session.configure(Config { clipboard_history: true, ..Config::default() });
+    type_keys(&mut session, "v<sp>1");
+    assert_eq!(shown_texts(&mut session), ["第一行⏎第二行"]);
+    let frame = type_keys(&mut session, "1");
+    assert_eq!(frame.commit.as_deref(), Some("第一行\n第二行"));
+    assert!(!frame.learned);
+    assert_eq!(session.open_panel(), None);
+    wowtype_core::clipboard::clear();
+}
+
+#[test]
+fn emoji_panel_search_and_pick() {
+    use wowtype_core::session::{Panel, Tool};
+    // 打了一半的拼音当搜索词；字母接着搜，退格删搜索词，删空了再按就关上
+    let mut session = with(engine());
+    type_keys(&mut session, "xiao");
+    let frame = session.toggle_emoji_panel();
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(frame.preedit, "xiao");
+    assert!(!session.composing());
+    assert_eq!(session.open_panel(), Some(Tool::Emoji { symbols: false }));
+    type_keys(&mut session, "<bs><bs><bs><bs>");
+    assert_eq!(session.frame(false).preedit, "");
+    type_keys(&mut session, "<bs>");
+    assert_eq!(session.open_panel(), None);
+    // 英文搜索；右移、数字选光标所在行的第几个
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    type_keys(&mut session, "smile");
+    let all = shown_texts(&mut session);
+    assert!(all.len() > 2, "{all:?}");
+    let frame = type_keys(&mut session, "2");
+    assert_eq!(frame.commit.as_deref(), Some(all[1].as_str()));
+    assert_eq!(session.open_panel(), None);
+    // 带 Ctrl 的组合键：收起面板，交给应用
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    let ctrl_c = Key { modifiers: modifier::CTRL, ..Key::char('c') };
+    assert!(!session.key(&ctrl_c).handled);
+    assert_eq!(session.open_panel(), None);
+    // 面板开着时单按 Shift 不切中英文
+    let mut session = with(engine());
+    session.toggle_emoji_panel();
+    session.key(&shift(keysym::SHIFT_L, false, 1000));
+    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1100)).mode_changed);
+}
+
+/// 一页 5 个、翻到第 2 页（光标在第 6 个上）以后按一个方向键，看它做了什么。
+fn arrow_effect(horizontal: bool, arrow_keys: ArrowKeys, keys: &str) -> &'static str {
+    let (mut session, _) = paged(Config {
+        horizontal,
+        arrow_keys,
+        ..Config::default()
+    });
+    type_keys(&mut session, "<pgdn>");
+    let frame = type_keys(&mut session, keys);
+    assert!(frame.handled, "{keys} 吃掉");
+    if frame.panel == Panel::Expanded {
+        return "展开";
+    }
+    if frame.preedit_cursor != frame.preedit.len() {
+        return "移光标";
+    }
+    match frame.cand_start + frame.cand_cursor.unwrap_or(0) {
+        0 => "上一页",
+        4 => "上一个",
+        5 => "不动",
+        6 => "下一个",
+        10 => "下一页",
+        other => panic!("{keys}：光标到了第 {other} 个"),
+    }
+}
+
+#[test]
+fn arrow_keys_in_each_layout() {
+    // #129：「方向键」两种用法 × 横排竖排，四种组合下各个方向键做什么
+    use ArrowKeys::{Candidates, Caret};
+    let cases = [
+        (true, Candidates, ["上一个", "下一个", "上一页", "展开"]),
+        (false, Candidates, ["上一页", "下一页", "上一个", "下一个"]),
+        // 移光标：上下键选词（跨页），左右键只管拼音里的光标，右键在末尾不动、不去挑候选
+        (true, Caret, ["移光标", "不动", "上一个", "下一个"]),
+        (false, Caret, ["移光标", "不动", "上一个", "下一个"]),
+    ];
+    for (horizontal, arrow_keys, want) in cases {
+        let got = ["<left>", "<right>", "<up>", "<down>"].map(|k| arrow_effect(horizontal, arrow_keys, k));
+        assert_eq!(got, want, "横排 {horizontal}、{arrow_keys:?}");
+    }
+}
+
+fn caret_session() -> Session<'static> {
+    let mut session = with(engine());
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        ..Config::default()
+    });
+    session
+}
+
+#[test]
+fn caret_edits_pinyin() {
+    // #129：左右键在拼音里移动光标，字母插在光标处，退格删光标前一个；到了两头吃掉，不去挑候选
+    let mut session = caret_session();
+    let frame = type_keys(&mut session, "nihao");
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "一开始光标在末尾");
+    let first = frame.cand_cursor;
+    let frame = type_keys(&mut session, "<right>");
+    assert!(frame.handled && frame.cand_cursor == first, "末尾的右键吃掉，候选不动");
+
+    let frame = type_keys(&mut session, "<left><left><left>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni", "光标在 ni 后面：{}", frame.preedit);
+    assert_eq!(frame.cand_cursor, first, "左键不动候选");
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nixhao", "字母插在光标处");
+    let frame = type_keys(&mut session, "<bs>");
+    assert_eq!(session.input(), "nihao", "退格删光标前一个");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "ni");
+
+    // Home 到最前：退格没东西删，左键吃掉
+    type_keys(&mut session, "<home>");
+    assert!(session.key(&Key::press(keysym::BACKSPACE)).handled);
+    assert_eq!(session.input(), "nihao", "光标在最前面时退格不删");
+    let frame = type_keys(&mut session, "<left>");
+    assert!(frame.handled && frame.preedit_cursor == 0 && frame.cand_cursor == first, "最前面的左键吃掉");
+    let frame = type_keys(&mut session, "<right>");
+    assert_eq!(&frame.preedit[..frame.preedit_cursor], "n");
+    // Delete 删光标后一个；末尾的 Delete 吃掉
+    type_keys(&mut session, "<del>");
+    assert_eq!(session.input(), "nhao");
+    type_keys(&mut session, "i<end>");
+    assert_eq!(session.input(), "nihao");
+    assert!(session.key(&Key::press(keysym::DELETE)).handled);
+    assert_eq!(session.input(), "nihao");
+
+    // 下键选下一个，空格上屏它
+    let second = texts(&mut session)[1].clone();
+    let frame = type_keys(&mut session, "<down><sp>");
+    assert_eq!(frame.commit, Some(second));
+}
+
+#[test]
+fn caret_resets_after_choosing_a_word() {
+    // 选了句首词：光标回到剩下的拼音末尾
+    let mut session = caret_session();
+    type_keys(&mut session, "nihaoshijie<left><left>");
+    choose_text(&mut session, "你好");
+    let frame = session.frame(true);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "{}", frame.preedit);
+    type_keys(&mut session, "a");
+    assert_eq!(session.remaining(), "shijiea");
+}
+
+#[test]
+fn caret_resets_when_switching_back_to_candidates() {
+    let mut session = caret_session();
+    type_keys(&mut session, "nihao<left><left>");
+    session.configure(Config::default());
+    let frame = session.frame(true);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len(), "换回挑候选：光标回到末尾");
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nihaox");
+}
+
+#[test]
+fn caret_stays_at_end_while_translating() {
+    // 「译」里拼音在候选框的原文框里，画不出光标：左右键吃掉、光标不动，上下键照样选词
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        translate_mode: true,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "nihao<left><home>");
+    assert!(frame.handled);
+    assert_eq!(frame.preedit_cursor, frame.preedit.len());
+    assert_eq!(type_keys(&mut session, "<down>").cand_cursor, Some(1));
+    type_keys(&mut session, "x");
+    assert_eq!(session.input(), "nihaox");
+}
+
+#[test]
+fn caret_shuangpin_shows_keys() {
+    // 双拼显示成全拼（zhong'guo）时换不回光标位置：光标在中间时显示打的键
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_shuangpin(true);
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = with(engine);
+    session.configure(Config {
+        arrow_keys: ArrowKeys::Caret,
+        ..Config::default()
+    });
+    let frame = type_keys(&mut session, "vsgo");
+    assert!(frame.preedit.contains("zhong"), "光标在末尾时照常显示全拼：{}", frame.preedit);
+    let frame = type_keys(&mut session, "<left>");
+    assert_eq!(frame.preedit, "vsgo");
+    assert_eq!(frame.preedit_cursor, 3);
+    assert_eq!(texts(&mut session)[0], "中国", "候选照旧按整个输入算");
+}
+
+// ---- 五笔 ----
+
+/// 节选自 rime-wubi 的 wubi86（LGPL-3.0；scripts/make-wubi.sh 生成的 wubi86.tsv 里原样的几行）：
+/// 25 个一级简码，加上下面用例用到的字词。
+const WUBI: &str = "\
+a\t工\t99454797
+b\t了\t1477224452
+c\t以\t418261033
+d\t在\t1133790406
+e\t有\t976401164
+f\t地\t476035359
+g\t一\t2015124793
+h\t上\t783204383
+i\t不\t1435362894
+j\t是\t1632303407
+k\t中\t563673763
+l\t国\t410863159
+m\t同\t181109711
+n\t民\t103051753
+o\t为\t453944671
+p\t这\t884456705
+q\t我\t1603337138
+r\t的\t4220000000
+s\t要\t421242294
+t\t和\t427734734
+u\t产\t367591032
+v\t发\t395047607
+w\t人\t1002212710
+x\t经\t202277809
+y\t主\t521303258
+gany\t开心\t77500000
+ggl\t一\t2830000000
+ggll\t一\t2830000000
+jfuj\t时间\t1020000000
+jgh\t是\t2210000000
+jghu\t是\t2210000000
+jjad\t日期\t368000000
+khlg\t中国\t1220000000
+khlg\t跨国\t13100000
+lgy\t国\t526000000
+lgyi\t国\t526000000
+ntc\t发\t1140000000
+ntcy\t发\t1140000000
+vb\t好\t308909363
+vbg\t好\t1780000000
+wq\t你\t597727619
+wqi\t你\t1490000000
+wqin\t您\t3090000000
+wqiy\t你\t1490000000
+wqiy\t仰泳\t400000
+wqvb\t你好\t70500000
+wqvb\t您好\t34700000
+wty\t八\t440000000
+";
+
+/// 一级简码，按 a–y 的顺序。
+const WUBI_LEVEL1: &str = "工了以在有地一上不是中国同民为这我的要和产发人经主";
+
+fn wubi_table() -> Option<Arc<wowtype_core::wubi::WubiTable>> {
+    Some(Arc::new(wowtype_core::wubi::WubiTable::from_tsv_str(WUBI).unwrap()))
+}
+
+/// 带五笔码表的引擎（拼音词库照旧，z 临时拼音用）。
+fn wubi_engine() -> &'static Engine {
+    let engine = engine();
+    engine.set_wubi(wubi_table());
+    engine
+}
+
+fn wubi_config() -> Config {
+    Config { wubi: true, ..Config::default() }
+}
+
+fn wubi_with(engine: &'static Engine, config: Config) -> Session<'static> {
+    let mut session = with(engine);
+    session.configure(config);
+    session
+}
+
+fn wubi_session() -> Session<'static> {
+    wubi_with(wubi_engine(), wubi_config())
+}
+
+fn comments(session: &mut Session) -> Vec<(String, String)> {
+    session
+        .candidates()
+        .iter()
+        .map(|c| (c.text.clone(), c.comment.clone()))
+        .collect()
+}
+
+#[test]
+fn wubi_level1_codes_and_space() {
+    // 一级简码：一个键一个字，空格上屏
+    for (letter, expected) in ('a'..='y').zip(WUBI_LEVEL1.chars()) {
+        let mut session = wubi_session();
+        let frame = type_keys(&mut session, &format!("{letter}<sp>"));
+        assert_eq!(frame.commit, Some(expected.to_string()), "{letter}");
+        assert!(!frame.learned, "五笔不学");
+    }
+}
+
+#[test]
+fn wubi_unique_four_codes_commit_at_once() {
+    // ggll 只有「一」：打满四码直接上屏
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "ggl").commit, None);
+    let frame = type_keys(&mut session, "l");
+    assert_eq!(frame.commit.as_deref(), Some("一"));
+    assert!(!session.composing());
+    // 有重码（wqvb 你好、您好）不上屏，按码表顺序列着
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqvb");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, "wqvb");
+    assert_eq!(texts(&mut session)[..2], ["你好", "您好"]);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    // 关掉以后四码唯一也等空格
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "ggll").commit, None);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("一"));
+}
+
+#[test]
+fn wubi_fifth_letter_commits_first() {
+    // 第五码顶字：四码时再打字母，先上屏光标处的候选，字母开始新码
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqvb");
+    let frame = type_keys(&mut session, "g");
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert_eq!(frame.preedit, "g");
+    // 光标挪到第二个再顶，上屏的是看到的那个
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqvb<right>");
+    let frame = type_keys(&mut session, "w");
+    assert_eq!(frame.commit.as_deref(), Some("您好"));
+    assert_eq!(frame.preedit, "w");
+    // 不到四码时字母一律接上
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqv");
+    assert_eq!(frame.commit, None);
+    assert_eq!(frame.preedit, "wqv");
+}
+
+#[test]
+fn wubi_empty_code() {
+    // 空码：编辑区留着、上方提示，可以退格改；再打字母丢掉空码重新开始；空格清空；回车上屏字母
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wx");
+    assert_eq!(frame.preedit, "wx");
+    assert_eq!(frame.cand_count, 0);
+    assert_eq!(frame.aux, "空码");
+    let frame = type_keys(&mut session, "<bs>");
+    assert_eq!(frame.aux, "");
+    assert_eq!(texts(&mut session)[0], "人");
+    let frame = type_keys(&mut session, "xg");
+    assert_eq!(frame.commit, None, "空码不上屏");
+    assert_eq!(frame.preedit, "g");
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wx<sp>");
+    assert_eq!(frame.commit, None);
+    assert!(!session.composing());
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wx<cr>").commit.as_deref(), Some("wx"));
+}
+
+#[test]
+fn wubi_punctuation_commits_first() {
+    // 标点顶字：先上屏首选再上屏标点；空码时只上屏标点
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wq,").commit.as_deref(), Some("你，"));
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wx.").commit.as_deref(), Some("。"));
+    // 引号在打码时也是标点，不是隔音符
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wq'").commit.as_deref(), Some("你‘"));
+    // 数字按当前页选
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wqvb2").commit.as_deref(), Some("您好"));
+}
+
+#[test]
+fn wubi_longer_codes_with_hints() {
+    // 不满四码时，码对上的在前（码表顺序），后面是以它开头的更长的码的词，带还要打的码
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let all = comments(&mut session);
+    assert_eq!(all[0], ("你".into(), "".into()));
+    assert!(all.contains(&("您".into(), "in".into())), "{all:?}");
+    assert!(all.contains(&("你好".into(), "vb".into())), "{all:?}");
+    assert_eq!(all.iter().filter(|(t, _)| t == "你").count(), 1, "同一个字只出一次");
+    // 一个码：带最短的码（你 是 wq，不是频次更高的 wqiy）
+    let mut session = wubi_session();
+    type_keys(&mut session, "w");
+    assert!(comments(&mut session).contains(&("你".into(), "q".into())));
+    // 没有精确码时首选是联想出来的词，空格上屏看到的那个
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqv");
+    assert_eq!(comments(&mut session)[0], ("你好".into(), "b".into()));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    // 关掉编码提示：候选照旧，不带码
+    let mut session = wubi_with(wubi_engine(), Config { wubi_hint: false, ..wubi_config() });
+    type_keys(&mut session, "wq");
+    assert!(comments(&mut session).iter().all(|(_, c)| c.is_empty()));
+    assert!(texts(&mut session).contains(&"您".to_string()));
+}
+
+#[test]
+fn wubi_uppercase_and_calculator() {
+    // 大写字母：打码时先顶字，再原样上屏；没在打字时直接上屏
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "wqA");
+    assert_eq!(frame.commit.as_deref(), Some("你A"));
+    assert!(!session.composing());
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "B").commit.as_deref(), Some("B"));
+    // 计算器用大写 V；小写 v 是「发」，v + 空格上屏「发」，不开工具栏
+    let mut session = wubi_session();
+    type_keys(&mut session, "V1+2*3");
+    assert_eq!(texts(&mut session)[0], "7");
+    assert_eq!(type_keys(&mut session, "=").commit.as_deref(), Some("7"));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "v<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("发"));
+    assert_eq!(session.open_panel(), None);
+    // 只打了 V：空格原样上屏 V；接着打码先把 V 上屏
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "V<sp>").commit.as_deref(), Some("V"));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "Vwq");
+    assert_eq!(frame.preedit, "wq");
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "Vw").commit.as_deref(), Some("V"));
+    // 计算器关了：V 就是大写字母
+    let mut session = wubi_with(wubi_engine(), Config { calculator: false, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "V").commit.as_deref(), Some("V"));
+}
+
+#[test]
+fn wubi_z_is_temporary_pinyin() {
+    let engine = wubi_engine();
+    // z 开头临时打全拼：编辑区 z + 分好音节的拼音，候选带五笔码（反查）
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "znihao");
+    assert_eq!(frame.preedit, "zni'hao");
+    assert_eq!(comments(&mut session)[0], ("你好".into(), "wqvb".into()));
+    let frame = type_keys(&mut session, "<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("你好"));
+    assert!(!frame.learned);
+    assert_eq!(engine.history_count("你好"), 0, "临时拼音不学");
+    // 有简码的字显示「简码/全码」，只有一个码的就是它
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zba");
+    assert!(comments(&mut session).contains(&("八".into(), "wty".into())));
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zshi");
+    assert!(comments(&mut session).contains(&("是".into(), "j/jghu".into())));
+    // 打码途中按 z：先顶字，再开始临时拼音
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "wqz");
+    assert_eq!(frame.commit.as_deref(), Some("你"));
+    assert_eq!(frame.preedit, "z");
+    // 临时拼音里不限四码，隔音符照旧；退格到只剩 z 再退格清空
+    let mut session = wubi_with(engine, wubi_config());
+    let frame = type_keys(&mut session, "zkai'xin");
+    assert_eq!(frame.preedit, "zkai'xin");
+    assert_eq!(texts(&mut session)[0], "开心");
+    type_keys(&mut session, "<bs><bs><bs><bs><bs><bs><bs>");
+    assert_eq!(session.input(), "z");
+    type_keys(&mut session, "<bs>");
+    assert!(!session.composing());
+    // 先选句首词，剩下的接着选（剩下的不以 z 开头，也还是拼音）；上屏的整句不学
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "znihaozhongguo");
+    assert_eq!(choose_text(&mut session, "你好").preedit, "你好zhong'guo");
+    assert_eq!(texts(&mut session)[0], "中国");
+    let frame = type_keys(&mut session, "<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("你好中国"));
+    assert!(!frame.learned);
+    assert_eq!(engine.history_count("你好中国"), 0);
+    // 日期时间在临时拼音里照常
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "zriqi");
+    assert_eq!(texts(&mut session)[..2], ["日期", "2026年11月11日"]);
+}
+
+#[test]
+fn wubi_arrow_keys_pick_candidates_even_in_caret_mode() {
+    // 方向键设成挪光标时：打五笔码还是左右挑候选（四码里挪光标没用）；临时拼音里照常挪光标，
+    // 但挪不到 z 前面（在 z 前面打字就不是拼音了）
+    let config = Config { arrow_keys: ArrowKeys::Caret, ..wubi_config() };
+    let mut session = wubi_with(wubi_engine(), config);
+    let frame = type_keys(&mut session, "wqvb<right>");
+    assert_eq!(frame.cand_cursor, Some(1));
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("您好"));
+    let mut session = wubi_with(wubi_engine(), config);
+    let frame = type_keys(&mut session, "znihao<home>");
+    assert_eq!(frame.preedit_cursor, 1);
+    type_keys(&mut session, "<left>x");
+    assert_eq!(session.input(), "zxnihao");
+}
+
+#[test]
+fn wubi_extras_do_not_move_code_slots() {
+    // 日期、时间、星期的码都是四码唯一，一打就上屏，不出写法（要写法用 zriqi）
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "jjad").commit.as_deref(), Some("日期"));
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    type_keys(&mut session, "jjad");
+    let all = texts(&mut session);
+    assert_eq!(all[0], "日期");
+    assert!(!all.iter().any(|t| t.contains("2026")), "{all:?}");
+    // emoji 推荐跟在码对上的候选后面，不算进「唯一」
+    let mut session = wubi_with(wubi_engine(), Config { wubi_auto_commit: false, ..wubi_config() });
+    type_keys(&mut session, "gany");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "开心");
+    assert_eq!(all[1].kind, CandidateKind::Emoji);
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "gany").commit.as_deref(), Some("开心"));
+    // 数字字后面的按键 emoji 也在精确码之后
+    let mut session = wubi_session();
+    type_keys(&mut session, "wty");
+    let all = session.candidates().to_vec();
+    assert_eq!(all[0].text, "八");
+    assert!(all[1..].iter().all(|c| c.kind == CandidateKind::Emoji));
+    assert!(all.iter().any(|c| c.text == "8\u{fe0f}\u{20e3}"), "{all:?}");
+}
+
+#[test]
+fn wubi_custom_codes_come_first() {
+    let engine = wubi_engine();
+    // 自定义编码排最前；和码表撞码时不唯一，不自动上屏
+    engine.lexicon().set_custom_tsv("ggll\t壹\nbj\t北京市\\n海淀区\nli si\t李四\n");
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "ggll").commit, None);
+    assert_eq!(texts(&mut session)[..2], ["壹", "一"]);
+    // 编码像拼音（bj）的也照样是五笔下的自定义编码；带换行的原样上屏
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "bj");
+    assert_eq!(texts(&mut session)[0], "北京市\n海淀区");
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("北京市\n海淀区"));
+    // 分了音节的（li si）是拼音读法，不占五笔的码位
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "lisi");
+    assert!(!texts(&mut session).contains(&"李四".to_string()));
+}
+
+#[test]
+fn wubi_traditional_output() {
+    let lexicon: Arc<dyn Lexicon> = Arc::new(MemoryLexicon::from_tsv_str(LEXICON).unwrap());
+    let mut engine = Engine::new(lexicon, Arc::new(BigramLm::default()));
+    engine.set_traditional(true);
+    engine.install_converter(Converter::from_tsv_str("国\t國\n发\t發\n").unwrap());
+    engine.set_wubi(wubi_table());
+    let engine: &'static Engine = Box::leak(Box::new(engine));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "l<sp>").commit.as_deref(), Some("國"));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "khlg").commit, None);
+    assert_eq!(texts(&mut session)[..2], ["中國", "跨國"]);
+}
+
+#[test]
+fn wubi_never_learns_or_forgets_pinyin_words() {
+    let engine = wubi_engine();
+    engine.add_user_word("ni hao", "你好", 5000.0).unwrap();
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "wqvb");
+    // Ctrl+Delete：五笔码的候选没有可忘的，拼音学过的「你好」不能顺手删掉
+    let forget = Key { modifiers: modifier::CTRL, ..Key::press(keysym::DELETE) };
+    let frame = session.key(&forget);
+    assert!(frame.handled && !frame.forgot);
+    assert!(engine.user_words().iter().any(|(_, w, _)| w == "你好"));
+    // 选词、数字选词、回车、切输入法都不学
+    for keys in ["wqvb<sp>", "wqvb2", "wq<cr>"] {
+        let mut session = wubi_with(engine, wubi_config());
+        let frame = type_keys(&mut session, keys);
+        assert!(frame.commit.is_some() && !frame.learned, "{keys}");
+    }
+    let mut session = wubi_with(engine, wubi_config());
+    type_keys(&mut session, "wq");
+    assert!(!session.reset(true).learned);
+    for word in ["你好", "您好", "wq", "你"] {
+        assert_eq!(engine.history_count(word), 0, "{word}");
+    }
+}
+
+#[test]
+fn wubi_pick_char_and_select_keys() {
+    // 以词定字：] 取最后一个字
+    let mut session = wubi_session();
+    assert_eq!(type_keys(&mut session, "wqvb]").commit.as_deref(), Some("好"));
+    // 分号选第二个
+    let config = Config {
+        select_keys: wowtype_core::session::SelectKeys::Semicolon,
+        ..wubi_config()
+    };
+    let mut session = wubi_with(wubi_engine(), config);
+    assert_eq!(type_keys(&mut session, "wqvb;").commit.as_deref(), Some("您好"));
+}
+
+#[test]
+fn wubi_without_table_types_pinyin_and_says_why() {
+    // 选了五笔、码表没载入：照全拼打（不会打不了字），候选框上方说为什么
+    let mut session = wubi_with(engine(), wubi_config());
+    let frame = type_keys(&mut session, "nihao");
+    assert_eq!(frame.preedit, "ni'hao");
+    assert!(frame.aux.contains("没有五笔码表"), "{}", frame.aux);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    assert_eq!(session.frame(false).aux, "", "没在打字时不提示");
+}
+
+#[test]
+fn wubi_english_switch_and_emoji_panel() {
+    // 打码途中切英文：已经打的码原样上屏（和拼音一样），不学
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let frame = session.set_mode(wowtype_core::session::Mode::English);
+    assert_eq!(frame.commit.as_deref(), Some("wq"));
+    assert!(!frame.learned);
+    // 表情快捷键：五笔码不当搜索词，先顶字
+    let mut session = wubi_session();
+    type_keys(&mut session, "wq");
+    let frame = session.toggle_emoji_panel();
+    assert_eq!(frame.commit.as_deref(), Some("你"));
+    assert_eq!(frame.panel, Panel::Emoji);
+    assert_eq!(frame.preedit, "");
+    // 临时拼音的拼音能当搜索词（不带 z）
+    let mut session = wubi_session();
+    type_keys(&mut session, "zxiao");
+    assert_eq!(session.toggle_emoji_panel().preedit, "xiao");
+}
+
+/// 真码表（scripts/make-wubi.sh 生成的 wubi86.tsv）：WOWTYPE_WUBI 指着它时才跑。
+#[test]
+fn wubi_real_table() {
+    let Ok(path) = std::env::var("WOWTYPE_WUBI") else {
+        eprintln!("没设 WOWTYPE_WUBI，跳过真码表的用例");
+        return;
+    };
+    let engine = engine();
+    assert!(engine.load_wubi(&path).unwrap() > 90_000);
+    for (letter, expected) in ('a'..='y').zip(WUBI_LEVEL1.chars()) {
+        let mut session = wubi_with(engine, wubi_config());
+        let frame = type_keys(&mut session, &format!("{letter}<sp>"));
+        assert_eq!(frame.commit, Some(expected.to_string()), "一级简码 {letter}");
+    }
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "ggll").commit.as_deref(), Some("一"));
+    let mut session = wubi_with(engine, wubi_config());
+    assert_eq!(type_keys(&mut session, "wqvb<sp>").commit.as_deref(), Some("你好"));
+}
+
+#[test]
+fn wubi_with_translate_auto_space_and_grid() {
+    use wowtype_core::autospace::{DIGITS, LETTERS};
+    use wowtype_core::session::Mode;
+    // 「译」里顶字：上屏的进原文，新码留在编辑区
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = wubi_session();
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    let frame = type_keys(&mut session, "wqvbg");
+    assert_eq!(frame.commit, None);
+    assert_eq!(session.translate_source(), "你好");
+    assert_eq!(frame.preedit, "g");
+    // 自动空格：顶字上屏的汉字和后面的大写字母之间补空格
+    let mut session = wubi_with(wubi_engine(), Config { auto_space: LETTERS | DIGITS, ..wubi_config() });
+    assert_eq!(type_keys(&mut session, "wqA").commit.as_deref(), Some("你 A"));
+    // 横排下键展开面板，照常挪光标、选；接着打字母先收起再接上
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>");
+    assert_eq!(frame.panel, Panel::Expanded);
+    let second = texts(&mut session)[1].clone();
+    assert_eq!(type_keys(&mut session, "<right><sp>").commit, Some(second));
+    let mut session = wubi_session();
+    let frame = type_keys(&mut session, "w<down>q");
+    assert_eq!(frame.panel, Panel::Normal);
+    assert_eq!(frame.preedit, "wq");
+}
+
+/// 上文能改排序的小引擎：「不」后面「骂」排第一，没有上文时「吗」排第一（真实词库里也是这样）。
+fn context_engine() -> &'static Engine {
+    let mut lm = BigramLm::new().with_backoff(0.001);
+    lm.add_unigram("不", 10.0);
+    lm.add_unigram("吗", 5.0);
+    lm.add_unigram("骂", 5.0);
+    lm.add_bigram("不", "骂", 8.0);
+    let lexicon: Arc<dyn Lexicon> = Arc::new(
+        MemoryLexicon::from_tsv_str("bu\t不\t9000\nma\t吗\t200\nma\t骂\t100\n").unwrap(),
+    );
+    Box::leak(Box::new(Engine::new(lexicon, Arc::new(lm))))
+}
+
+/// 打 ma 时排第一的候选（打完 Esc 掉，不上屏）。
+fn first_ma(session: &mut Session) -> String {
+    type_keys(session, "ma");
+    let first = texts(session)[0].clone();
+    type_keys(session, "<esc>");
+    first
+}
+
+/// 带着应用告诉的光标前的字按一个键（读得到周围文字的输入框）。
+fn key_with_surrounding(sym: u32, before: Option<char>) -> Key {
+    use wowtype_core::session::key_hints::SURROUNDING;
+    Key {
+        prev_char: before,
+        hints: SURROUNDING,
+        ..Key::press(sym)
+    }
+}
+
+#[test]
+fn context_follows_the_document() {
+    let mut session = with(context_engine());
+    assert_eq!(first_ma(&mut session), "吗", "没有上文");
+    type_keys(&mut session, "bu<sp>");
+    assert_eq!(first_ma(&mut session), "骂", "刚上屏了「不」，上文是它");
+
+    // 「不」删掉了（退格交给应用）：上文作废，再打 ma 是「吗」
+    type_keys(&mut session, "bu<sp><bs>");
+    assert_eq!(first_ma(&mut session), "吗", "退格删掉了「不」");
+    // 全选再 Delete、方向键挪了光标、Home、回车、Tab：都作废
+    for passed in [
+        Key { modifiers: modifier::CTRL, ..Key::char('a') },
+        Key::press(keysym::DELETE),
+        Key::press(keysym::LEFT),
+        Key::press(keysym::HOME),
+        Key::press(keysym::RETURN),
+        Key::press(keysym::TAB),
+    ] {
+        type_keys(&mut session, "bu<sp>");
+        assert!(!session.key(&passed).handled);
+        assert_eq!(first_ma(&mut session), "吗", "{passed:?} 交给了应用");
+    }
+    // 英文模式打的字母、交给应用的数字也改了光标前的字
+    type_keys(&mut session, "bu<sp>");
+    assert!(!session.key(&Key::char('3')).handled);
+    assert_eq!(first_ma(&mut session), "吗", "数字交给了应用");
+    // 单按的修饰键、松开不算
+    type_keys(&mut session, "bu<sp>");
+    session.key(&Key::press(keysym::SHIFT_R));
+    assert_eq!(first_ma(&mut session), "骂", "修饰键不改应用里的字");
+
+    // 点了别处、失去焦点（外壳调 reset(false)）：上文作废
+    type_keys(&mut session, "bu<sp>");
+    session.reset(false);
+    assert_eq!(first_ma(&mut session), "吗", "失去焦点再回来");
+    // 上屏（回车、切输入法时 reset(true)）不算放弃，上文照记
+    type_keys(&mut session, "bu<sp>");
+    session.reset(true);
+    assert_eq!(first_ma(&mut session), "骂");
+}
+
+#[test]
+fn context_is_checked_against_surrounding_text() {
+    // 应用告诉了光标前的字：开始打字时上文要和它对得上
+    let mut session = with(context_engine());
+    type_keys(&mut session, "bu<sp>");
+    session.key(&key_with_surrounding(u32::from(b'm'), Some('不')));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "骂", "光标前还是「不」，上文留着");
+    type_keys(&mut session, "<esc>");
+
+    // 在应用里用鼠标删掉了「不」（会话没看到键）：光标前是别的字，上文换成它
+    session.key(&key_with_surrounding(u32::from(b'm'), Some('好')));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "吗");
+    type_keys(&mut session, "<esc>");
+
+    // 光标前没有字了（文档清空了）
+    type_keys(&mut session, "bu<sp>");
+    session.key(&key_with_surrounding(u32::from(b'm'), None));
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "吗", "光标前没字，上文清空");
+    type_keys(&mut session, "<esc>");
+
+    // 读不到周围文字（终端）：只能信会话自己记的
+    type_keys(&mut session, "bu<sp>");
+    session.key(&Key { prev_char: None, ..Key::char('m') });
+    type_keys(&mut session, "a");
+    assert_eq!(texts(&mut session)[0], "骂");
+}
+
+#[test]
+fn abandoning_never_commits() {
+    use wowtype_core::session::Mode;
+    // 失去焦点、应用重置（外壳调 reset(false)）：拼音、五笔码、双拼、选了一半的句子都丢掉，
+    // 什么也不上屏（fcitx5 那边编辑区标了 DontCommit，工具包也不会自己把编辑区上屏）
+    let mut session = with(engine());
+    type_keys(&mut session, "nihaozhongguo");
+    choose_text(&mut session, "你好");
+    assert_eq!(session.frame(false).preedit, "你好zhong'guo");
+    let frame = session.reset(false);
+    assert_eq!((frame.commit, frame.preedit.as_str()), (None, ""), "选了一半的句子");
+    assert!(!session.composing());
+
+    let mut session = wubi_session();
+    type_keys(&mut session, "wqv");
+    assert_eq!(session.reset(false).commit, None, "五笔码");
+    type_keys(&mut session, "znihao");
+    assert_eq!(session.reset(false).commit, None, "五笔的临时拼音");
+
+    let mut shuangpin = Engine::new(
+        Arc::new(MemoryLexicon::from_tsv_str("zhong guo\t中国\t9000\n").unwrap()),
+        Arc::new(BigramLm::default()),
+    );
+    shuangpin.set_shuangpin(true);
+    let mut session = with(Box::leak(Box::new(shuangpin)));
+    assert_eq!(type_keys(&mut session, "vsgo").preedit, "zhong'guo");
+    assert_eq!(session.reset(false).commit, None, "双拼");
+
+    // 「译」：攒着的原文由外壳另外丢（clear_translation），拼音这里丢掉
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.set_mode(Mode::Translate);
+    type_keys(&mut session, "nihao<sp>hao");
+    assert_eq!(session.translate_source(), "你好");
+    assert_eq!(session.reset(false).commit, None, "「译」里打到一半");
+    session.clear_translation();
+    assert_eq!(session.translate_source(), "");
+    assert_eq!(session.reset(false).commit, None);
 }

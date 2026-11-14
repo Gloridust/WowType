@@ -108,6 +108,14 @@ func fresh() -> (Composer, FakeClient) {
     return (Composer(engine: engine, client: client), client)
 }
 
+/// 单按一下 Shift（按下、松开，会话判断单按）。每次往后挪一秒，不会被当成按住太久。
+var shiftClock = 100.0
+func tapShift(_ c: Composer) {
+    shiftClock += 1
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: shiftClock)
+    _ = c.shiftChanged(down: false, otherModifiers: false, now: shiftClock + 0.05)
+}
+
 do {
     let (c, client) = fresh()
     type(c, "nihao")
@@ -264,11 +272,12 @@ do {
 
 do {
     let (c, client) = fresh()
-    // 数字交给了应用，光标前是数字：后面的符号原样（20:22、3,000）
+    // 数字交给了应用，光标前是数字：后面的符号也交给应用原样上屏（20:22、3,000）
     client.committed = "20"
-    _ = c.handle(.char(":"))
-    client.committed += "22"
-    _ = c.handle(.char(","))
+    check(!c.handle(.char(":")), "数字后的冒号交给应用", client.committed)
+    client.committed += ":22"
+    check(!c.handle(.char(",")), "数字后的逗号交给应用", client.committed)
+    client.committed += ","
     check(client.committed == "20:22,", "数字后的符号不换成中文标点", client.committed)
     type(c, "nihao")
     _ = c.handle(.char(":"))
@@ -314,10 +323,52 @@ do {
 }
 
 do {
+    // 系统要结束组字（换输入框、点了别处、切走输入法）：打的字母原样上屏，编辑区清空，
+    // 不带分音节的隔音符（编辑区是「ni'hao」，上屏的是「nihao」）
     let (c, client) = fresh()
     type(c, "nihao")
+    check(client.marked == "ni'hao", "编辑区分了音节", client.marked)
     c.commitComposition()
-    check(client.committed == "nihao" && !c.isComposing, "切走输入法时原样上屏", client.committed)
+    check(client.committed == "nihao" && client.marked.isEmpty && client.page == nil && !c.isComposing,
+          "结束组字时原样上屏字母", client.committed)
+    client.committed = ""
+    type(c, "nihaoshi")
+    if let i = client.page?.texts.firstIndex(of: "你好") {
+        c.select(i)
+    }
+    check(client.marked == "你好shi" && client.committed.isEmpty, "选了句首的词", client.marked)
+    c.commitComposition()
+    check(client.committed == "你好shi" && client.marked.isEmpty, "选了一半：已选的词 + 剩下的字母", client.committed)
+}
+
+withConfig({ $0.inputScheme = .shuangpin }) { c, client in
+    // 双拼：上屏打的键，不是编辑区里显示的全拼
+    type(c, "nihk")
+    check(client.marked == "ni'hao", "双拼编辑区显示全拼", client.marked)
+    c.commitComposition()
+    check(client.committed == "nihk" && client.marked.isEmpty, "结束组字时双拼上屏打的键", client.committed)
+}
+
+do {
+    // 第一个候选上按左键：停在第一个，不绕到末页（再按空格不会上屏生僻字）
+    let (c, client) = fresh()
+    type(c, "shi")
+    let first = client.page?.texts.first ?? ""
+    check(c.handle(.key(Keysym.left)) && client.page?.cursor == 0 && client.page?.hasPrev == false,
+          "第一个上按左键停住", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.char(" "))
+    check(client.committed == first, "空格还是选第一个", client.committed)
+}
+
+do {
+    // 上文跟着文档走：上屏的字在应用里删掉了，排序就不该再看它
+    let (c, client) = fresh()
+    type(c, "nihao ")
+    check(client.committed == "你好", "上屏你好")
+    // 退格交给应用（会话借这一下让上文作废），假的输入框自己删字
+    check(!c.handle(.key(Keysym.backspace)), "没在打字时退格交给应用")
+    client.committed.removeLast()
+    check(!c.handle(.char("a", [.command])) && !c.handle(.key(Keysym.left)), "快捷键、方向键交给应用")
 }
 
 do {
@@ -356,7 +407,8 @@ do {
     type(c, "nihao")
     _ = c.handle(.char(" "))
     _ = c.handle(.char(","))
-    check(commits == ["你好", "，"], "上屏回调", "\(commits)")
+    // 只上屏标点不算学到了词，不回调（外壳按回调攒次数存学习数据）
+    check(commits == ["你好"], "上屏回调", "\(commits)")
 }
 
 do {
@@ -470,7 +522,7 @@ do {
           "Windows 换行（\\r\\n）")
 }
 
-withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client in
+withConfig({ $0.inputScheme = .shuangpin; $0.shuangpinScheme = "Xiaohe" }) { c, client in
     // 小鹤双拼：ni = ni，hao = hc
     type(c, "nihc")
     check(client.page?.texts.first == "你好", "小鹤双拼 nihc 出你好", "\(client.page?.texts ?? [])")
@@ -478,7 +530,7 @@ withConfig({ $0.shuangpin = true; $0.shuangpinScheme = "Xiaohe" }) { c, client i
     check(client.committed == "你好", "双拼空格上屏", client.committed)
 }
 
-withConfig({ $0.shuangpin = true }) { c, client in
+withConfig({ $0.inputScheme = .shuangpin }) { c, client in
     // 默认方案自然码：hao = hk
     type(c, "nihk")
     check(client.page?.texts.first == "你好", "自然码 nihk 出你好", "\(client.page?.texts ?? [])")
@@ -486,7 +538,7 @@ withConfig({ $0.shuangpin = true }) { c, client in
 
 do {
     var config = WowtypeConfig()
-    config.shuangpin = true
+    config.inputScheme = .shuangpin
     config.shuangpinScheme = "Dvorak"
     check(!engine.apply(config).isEmpty, "不认识的双拼方案报出来（改用自然码）")
     engine.apply(WowtypeConfig())
@@ -495,6 +547,97 @@ do {
 withConfig({ _ in }) { c, client in
     type(c, "nihk")
     check(client.page?.texts.first != "你好", "关掉双拼后 nihk 不是你好", "\(client.page?.texts ?? [])")
+}
+
+// 五笔：码表用 rime-wubi 的原样几行
+do {
+    check(WowtypeConfig.parse("Shuangpin=True\n").inputScheme == .shuangpin, "旧设置 Shuangpin=True 读成双拼")
+    check(WowtypeConfig.parse("InputScheme=Wubi86\nShuangpin=True\n").inputScheme == .wubi86, "有 InputScheme 时不看 Shuangpin")
+    var wubi = WowtypeConfig()
+    wubi.inputScheme = .wubi86
+    let written = wubi.serialized(into: "Shuangpin=True\n")
+    check(!written.contains("Shuangpin=") && written.contains("InputScheme=Wubi86"), "写回去删掉旧的 Shuangpin 开关", written)
+
+    var noTable = WowtypeConfig()
+    noTable.inputScheme = .wubi86
+    check(engine.apply(noTable, wubi: nil).contains { $0.contains("五笔码表") }, "没有码表时报出来")
+    let (c, client) = fresh()
+    c.apply(noTable)
+    type(c, "nihao")
+    check(client.page?.aux?.contains("没有五笔码表") == true && client.page?.texts.first == "你好",
+          "没有码表时照全拼打，候选框上方说为什么", "\(client.page?.aux ?? "nil") \(client.page?.texts ?? [])")
+    engine.apply(WowtypeConfig())
+
+    let table = "/tmp/wowtype-macos-harness-\(getpid()).wubi86.tsv"
+    writeFile(table, "g\t一\t2015124793\nggl\t一\t2830000000\nggll\t一\t2830000000\nv\t发\t395047607\n"
+              + "w\t人\t1002212710\nwq\t你\t597727619\nwqin\t您\t3090000000\nwqvb\t你好\t70500000\n"
+              + "wqvb\t您好\t34700000\n")
+    defer { unlink(table) }
+    func withWubi(_ change: (inout WowtypeConfig) -> Void = { _ in }, _ body: (Composer, FakeClient) -> Void) {
+        var config = WowtypeConfig()
+        config.inputScheme = .wubi86
+        change(&config)
+        check(engine.apply(config, wubi: table).isEmpty, "五笔码表载入")
+        let (c, client) = fresh()
+        c.apply(config)
+        body(c, client)
+        engine.apply(WowtypeConfig())
+    }
+    withWubi { c, client in
+        type(c, "ggll")
+        check(client.committed == "一" && client.marked.isEmpty, "五笔四码唯一自动上屏", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wqvb")
+        check(client.committed.isEmpty && Array(client.page?.texts.prefix(2) ?? []) == ["你好", "您好"], "五笔重码按码表顺序",
+              "\(client.page?.texts ?? [])")
+        type(c, "g")
+        check(client.committed == "你好" && client.marked == "g", "五笔第五码顶字，新码留在编辑区",
+              "\(client.committed) / \(client.marked)")
+    }
+    withWubi { c, client in
+        type(c, "wq")
+        let page = client.page
+        let hinted = page.map { p in p.texts.indices.contains { p.texts[$0] == "您" && p.comment($0) == "in" } } ?? false
+        check(hinted && page?.comment(0) == "", "五笔逐码提示：候选后面是还要打的码", "\(page?.texts ?? []) \(page?.comments ?? [])")
+        type(c, ",")
+        check(client.committed == "你，", "五笔标点顶字", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wx")
+        check(client.page?.aux == "空码" && client.page?.texts.isEmpty == true && client.marked == "wx", "五笔空码只有提示",
+              "\(client.page?.aux ?? "nil")")
+        _ = c.handle(.char(" "))
+        check(client.committed.isEmpty && client.marked.isEmpty, "五笔空码空格清空", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "znihao")
+        check(client.marked == "zni'hao" && client.page?.texts.first == "你好" && client.page?.comment(0) == "wqvb",
+              "五笔 z 临时拼音带反查的五笔码", "\(client.marked) \(client.page?.texts ?? []) \(client.page?.comments ?? [])")
+        _ = c.handle(.char(" "))
+        check(client.committed == "你好", "临时拼音上屏", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wqv")
+        c.commitComposition()
+        check(client.committed == "wqv" && client.marked.isEmpty, "结束组字时五笔码原样上屏", client.committed)
+        client.committed = ""
+        type(c, "g")
+        check(Array(client.page?.texts.prefix(2) ?? []) == ["一", "1️⃣"], "数字 emoji 跟在数字字后面",
+              "\(client.page?.texts ?? [])")
+    }
+    withWubi { c, client in
+        type(c, "v ")
+        check(client.committed == "发" && c.openPanel == nil, "五笔 v + 空格上屏「发」，不开工具栏", client.committed)
+    }
+    withWubi({ $0.wubiAutoCommit = false; $0.wubiHint = false }) { c, client in
+        type(c, "ggll")
+        check(client.committed.isEmpty && client.marked == "ggll", "关掉四码唯一自动上屏", client.committed)
+        _ = c.handle(.key(Keysym.escape))
+        type(c, "wq")
+        check(client.page?.comments.allSatisfy(\.isEmpty) == true && client.page?.texts.contains("您") == true,
+              "关掉编码提示：候选不带码", "\(client.page?.comments ?? [])")
+    }
 }
 
 // 纠错也会把 si 纠成 shi，测模糊音时关掉
@@ -555,7 +698,10 @@ withConfig({ $0.pickChar = false }) { c, client in
 }
 
 withConfig({ $0.halfwidthPunct = true }) { c, client in
-    _ = c.handle(.char(","))
+    // 半角：没在打字时标点交给应用（应用原样上屏）；打字途中先上屏候选再上屏半角标点
+    if !c.handle(.char(",")) {
+        client.committed += ","
+    }
     type(c, "nihao")
     _ = c.handle(.char("."))
     check(client.committed == ",你好.", "半角标点", client.committed)
@@ -619,7 +765,7 @@ do {
     }
     check(Set(templateKeys) == Set(WowtypeConfig.keys) && templateKeys.allSatisfy { d.value(forKey: $0) != nil },
           "模板里的键都能写回去", "\(Set(templateKeys).symmetricDifference(WowtypeConfig.keys))")
-    check(d.value(forKey: "Voice") == nil, "不认识的键没有写法")
+    check(d.value(forKey: "CheckUpdate") == nil, "不认识的键没有写法")
 
     // 每一项都改成不是默认值：写出来读回来一样（不管从模板、空文件还是只有注释的文件开始）
     var all = WowtypeConfig()
@@ -628,14 +774,19 @@ do {
         if d.value(forKey: key) == "False" { all.setValue("True", forKey: key) }
     }
     all.horizontal = false
+    all.arrowKeys = .caret
     all.pageSize = 4
     all.candidateFontSize = 22
+    all.inputScheme = .wubi86
     all.shuangpinScheme = "PinyinJiajia"
     all.shiftToggle = .off
     all.halfwidthPunct = true
     all.selectKeys = .semicolonQuote
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
+    all.toggleKey = Shortcut(name: "Control+space")
+    all.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
     all.translateModel = "qwen 2.5"
@@ -648,7 +799,7 @@ do {
         check(WowtypeConfig.parse(out) == all, "每一项改过的设置写进\(name)再读回来一样", out)
         check(all.serialized(into: out) == out, "再写一次不变（\(name)）")
     }
-    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nPageSize=4\n"),
+    check(all.serialized(into: "# 我的设置\n").hasPrefix("# 我的设置\nCandidateLayout=Vertical\nArrowKeys=Caret\nPageSize=4\n"),
           "文件里没有的键照模板顺序补在后面")
     check(all.serialized(into: nil).contains("Lexicon=\"/Users/me/词库 \\\"新\\\"\\\\v2.tsv\""),
           "带空格、引号的值加引号转义", all.serialized(into: nil))
@@ -749,10 +900,11 @@ do {
     check(CustomWords(text: fresh.text).entries == [.init(code: "gs", word: "公司")], "新文件加词读回来")
     check(CustomWords.isValidWord("四川省\\n宜宾市") && !CustomWords.isValidWord("a\tb")
           && !CustomWords.isValidWord("a\nb") && !CustomWords.isValidWord(""), "词里不能有 TAB、换行")
+    check(CustomWords.shown("四川省\\n宜宾市") == "四川省⏎宜宾市", "界面上 \\n 画成 ⏎")
 
     for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
                           ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
-                          ("hua r", "hua r"), ("zhongguo", "zhong guo")] {
+                          ("hua r", "hua r"), ("zhongguo", "zhong guo"), ("Biáng biáng miàn", "biang biang mian")] {
         check(CustomWords.normalizePinyin(input) == want, "拼音整理 \(input)", CustomWords.normalizePinyin(input) ?? "nil")
     }
     check(CustomWords.normalizePinyin("mail") == nil && CustomWords.normalizeCode("mail") == "mail"
@@ -766,6 +918,7 @@ do {
     }
     check(guess("你好") == "ni hao" && guess("重") == "chong", "整词取频次最高的", "\(guess("你好") ?? "nil") \(guess("重") ?? "nil")")
     check(guess("好你是") == "hao ni shi", "词库里没有的词逐字猜", guess("好你是") ?? "nil")
+    check(guess("你你好") == "ni ni hao" && guess("好好") == "hao hao", "叠字逐字猜", guess("你你好") ?? "nil")
     check(guess("你x") == nil && guess("") == nil && guess("是") == "shi", "有猜不出的字就不猜；最后一行没换行也找得到")
     if !ownLexicon, let f = fopen(lexicon, "rb") {
         var bytes: [UInt8] = []
@@ -839,6 +992,9 @@ do {
     check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
     check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
     check(Shortcut.emojiDefault.matches(.char(".", [.control, .command])) == false, "多按了 Command 不算")
+    let labels = ["Control+period", "Control+Shift+space", "Alt+x", "Control+Shift+E"].compactMap { Shortcut(name: $0)?.label }
+    check(labels == ["Control + .", "Control + Shift + 空格", "Option + X", "Control + Shift + E"],
+          "设置窗口里快捷键用 Mac 键盘上的叫法", "\(labels)")
 }
 
 withConfig({ _ in }) { c, client in
@@ -862,7 +1018,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("2"))
     check(c.openPanel == .phrases, "2 进常用语")
-    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在菜单「编辑自定义词」里添加",
+    check(client.page?.texts.isEmpty == true && client.page?.aux == "常用语：还没有，在设置的「自定义词」里添加",
           "没有自定义词时只有提示", client.page?.aux ?? "nil")
     _ = c.handle(.key(Keysym.backspace))
     check(c.openPanel == .menu, "退格返回菜单")
@@ -889,7 +1045,7 @@ withConfig({ $0.toolbar = false }) { c, _ in
     check(c.openPanel == nil, "关掉工具栏：v + 空格不打开")
 }
 
-withConfig({ $0.shuangpin = true }) { c, _ in
+withConfig({ $0.inputScheme = .shuangpin }) { c, _ in
     type(c, "v")
     _ = c.handle(.char(" "))
     check(c.openPanel == nil, "双拼时不开工具栏")
@@ -956,7 +1112,7 @@ withConfig({ _ in }) { c, client in
     _ = c.handle(.char(" "))
     _ = c.handle(.char("1"))
     check(!sampled && client.page?.texts.isEmpty == true
-              && client.page?.aux == "剪贴板：没打开，在设置（wowtype.conf）里写 ClipboardHistory=True",
+              && client.page?.aux == "剪贴板：没打开，在设置里打开「记录剪贴板历史」",
           "剪贴板历史默认关：不取、不列", client.page?.aux ?? "nil")
     _ = c.handle(.char(" "))
     check(c.openPanel == nil && client.committed.isEmpty, "空列表按空格关上")
@@ -1049,15 +1205,39 @@ withConfig({ _ in }) { c, client in
 
 withConfig({ _ in }) { c, client in
     c.recentEmoji = RecentEmoji()
-    c.toggleMode()
+    tapShift(c)
     check(c.handle(.char(".", [.control])) && c.openPanel != nil, "英文模式也能开表情面板")
     type(c, "pizza")
     _ = c.handle(.char(" "))
     check(client.committed == "🍕", "英文模式里搜索上屏", client.committed)
     check(!c.handle(.char("a")), "收起以后英文模式照常交给应用")
-    c.toggleMode()
+    tapShift(c)
     _ = c.handle(.char(".", [.control]))
     check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
+}
+
+withConfig({ $0.arrowKeys = .caret }) { c, client in
+    // #129：左右键移动拼音里的光标，字母插在光标处（会话做，外壳把光标位置交给应用）；上下键选词
+    type(c, "nihao")
+    let end = client.markedCursor
+    for _ in 0..<3 { _ = c.handle(.key(Keysym.left)) }
+    check(client.markedCursor < end && client.marked.prefix(client.markedCursor) == "ni",
+          "左键把光标移到 ni 后面", "\(client.marked) \(client.markedCursor)")
+    type(c, "x")
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nixhao",
+          "字母插在光标处", client.marked)
+    _ = c.handle(.key(Keysym.backspace))
+    check(String(client.marked.filter { $0 != " " && $0 != "'" }) == "nihao", "退格删光标前一个", client.marked)
+    _ = c.handle(.key(Keysym.end))
+    check(c.handle(.key(Keysym.right)) && client.page?.cursor == 0, "末尾的右键吃掉，不挑候选")
+    _ = c.handle(.key(Keysym.down))
+    check(client.page?.cursor == 1 && client.page?.expanded == false, "下键选下一个，不展开面板")
+}
+
+withConfig({ _ in }) { c, client in
+    type(c, "nihao")
+    _ = c.handle(.key(Keysym.left))
+    check(client.markedCursor == client.marked.utf16.count, "默认（都用来选词）光标一直在末尾", "\(client.markedCursor)")
 }
 
 withConfig({ $0.emojiKey = nil }) { c, _ in
@@ -1095,7 +1275,6 @@ withConfig({ $0.horizontal = false }) { c, client in
 /// 假的翻译器：译文由测试一步步给（running → done / error），和核心一样同一句话不重复请求。
 final class FakeTranslator: TranslationBackend {
     var isReady = true
-    weak var owner: AnyObject?
     var started: [String] = []
     var cancels = 0
     var snapshot = TranslateSnapshot(phase: .idle)
@@ -1222,11 +1401,11 @@ do {
     // Shift：中 → 英 → 译 → 中；没打开互译、翻译器没配好时只在中英之间切
     let r = translateRig()
     r.c.switchMode(to: .chinese)
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .english, "中 → 英")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .translate && r.c.translating, "英 → 译")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .chinese, "译 → 中")
     _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
     _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
@@ -1234,20 +1413,109 @@ do {
     check(r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1) && r.c.mode == .translate, "单按两次 Shift 到译")
 
     r.t.isReady = false
-    r.c.toggleMode()
-    r.c.toggleMode()
-    r.c.toggleMode()
+    tapShift(r.c)
+    tapShift(r.c)
+    tapShift(r.c)
     check(r.c.mode == .chinese, "翻译器没配好：英 → 中，切不到译", "\(r.c.mode)")
 
     let off = translateRig { $0.translate = false }
     check(off.c.mode == .chinese && !off.c.translateAvailable, "设置里没打开互译：切不到译")
-    off.c.toggleMode()
-    off.c.toggleMode()
+    tapShift(off.c)
+    tapShift(off.c)
     check(off.c.mode == .chinese, "没打开互译：英 → 中")
 
     let (plain, _) = fresh()
     plain.switchMode(to: .translate)
     check(plain.mode == .chinese, "没有翻译器切不到译")
+}
+
+do {
+    // 另设的切换键（#143），和 Linux 一样
+    check(WowtypeConfig().toggleKey == nil, "默认不用另设的切换键")
+    check(WowtypeConfig.parse("ToggleKey=Control+space").toggleKey?.name == "Control+space", "读出切换键")
+    check(WowtypeConfig.parse("ToggleKey=Hyper+F12").toggleKey == nil, "认不出的键保持不用")
+
+    let r = translateRig { $0.toggleKey = Shortcut(name: "Control+space") }
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "在「译」里按切换键回中文")
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .english, "切换键：中 → 英")
+    check(r.c.handle(.char(" ", [.control])) && r.c.mode == .chinese, "切换键：英 → 中")
+}
+
+withConfig({ $0.toggleKey = Shortcut(name: "Control+space") }) { c, client in
+    type(c, "nihao")
+    check(c.handle(.char(" ", [.control])) && c.mode == .english && client.committed == "nihao",
+          "打到一半按切换键：打的字母原样上屏、切到英文", client.committed)
+}
+
+withConfig({ _ in }) { c, _ in
+    check(!c.handle(.char(" ", [.control])) && c.mode == .chinese, "没设切换键：Control+空格交给应用")
+}
+
+withConfig({ $0.shiftToggle = .off; $0.toggleKey = Shortcut(name: "Control+space") }) { c, _ in
+    // #87 的用法：Shift 没用、关掉，靠另设的键切换。换设置时不该被拉回中文
+    check(c.handle(.char(" ", [.control])) && c.mode == .english, "关了 Shift 也能用切换键切到英文")
+    var again = WowtypeConfig()
+    again.shiftToggle = .off
+    again.toggleKey = Shortcut(name: "Control+space")
+    c.apply(again)
+    check(c.mode == .english, "有切换键时换设置不拉回中文")
+    again.toggleKey = nil
+    c.apply(again)
+    check(c.mode == .chinese, "关了 Shift、也没切换键：拉回中文（不然切不回来）")
+}
+
+do {
+    // 进出「译」的快捷键（#87），和 Linux 一样
+    check(WowtypeConfig().translateModeKey == nil, "默认不用互译键")
+    let parsed = WowtypeConfig.parse("TranslateModeKey=Control+Shift+y")
+    check(parsed.translateModeKey?.name == "Control+Shift+Y", "读出互译键", parsed.translateModeKey?.name ?? "nil")
+    check(!WowtypeConfig.template().contains("TranslateKey"), "模板里不出现 TranslateKey（会当成 API Key）")
+
+    let y = KeyInput.char("Y", [.control, .shift])
+    let r = translateRig { $0.translateModeKey = Shortcut(name: "Control+Shift+Y") }
+    r.c.switchMode(to: .english)
+    check(r.c.handle(y) && r.c.mode == .translate, "英文里按互译键进「译」")
+    type(r.c, "nihao ")
+    check(r.c.handle(y) && r.c.mode == .english && r.client.committed == "你好",
+          "在「译」里再按：原文原样上屏，回到进来前的英文", r.client.committed)
+    r.c.switchMode(to: .chinese)
+    type(r.c, "ni")
+    check(r.c.handle(y) && r.c.mode == .translate && r.c.input == "ni", "打到一半按互译键：拼音带进「译」", r.c.input)
+    _ = r.c.handle(.key(Keysym.escape))
+    check(r.c.handle(y) && r.c.mode == .chinese, "再按回中文")
+    // 设了互译键：单按 Shift 只在中英之间切；在「译」里单按回中文
+    tapShift(r.c)
+    tapShift(r.c)
+    check(r.c.mode == .chinese, "单按 Shift 两下：中 → 英 → 中，不进「译」", "\(r.c.mode)")
+    _ = r.c.handle(y)
+    tapShift(r.c)
+    check(r.c.mode == .chinese, "在「译」里单按 Shift 回中文")
+    // 进不了「译」：交给应用
+    r.client.allowsTranslation = false
+    check(!r.c.handle(y) && r.c.mode == .chinese, "密码框（安全输入）里互译键交给应用")
+    r.client.allowsTranslation = true
+    _ = r.c.handle(y)
+    r.t.isReady = false
+    check(r.c.handle(y) && r.c.mode == .chinese, "在「译」里翻译不能用了也按得出来")
+    check(!r.c.handle(y) && r.c.mode == .chinese, "翻译没配好：互译键交给应用")
+
+    // 两个设成同一个键：算互译键
+    let same = translateRig {
+        $0.toggleKey = Shortcut(name: "Control+Shift+Y")
+        $0.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    }
+    check(same.c.handle(y) && same.c.mode == .chinese, "同一个键：在「译」里回中文")
+    check(same.c.handle(y) && same.c.mode == .translate, "同一个键：再按进「译」")
+}
+
+withConfig({ $0.shiftToggle = .off; $0.translateModeKey = Shortcut(name: "Control+Shift+Y") }) { c, _ in
+    // 关了 Shift、只设了互译键：英文回不来，换设置时拉回中文（互译键只进出「译」）
+    c.switchMode(to: .english)
+    var again = WowtypeConfig()
+    again.shiftToggle = .off
+    again.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    c.apply(again)
+    check(c.mode == .chinese, "关了 Shift、只设了互译键：拉回中文")
 }
 
 do {
@@ -1307,7 +1575,7 @@ do {
     let cancels = r.t.cancels
     check(r.c.handle(.key(Keysym.escape)) && r.c.translateSource.isEmpty && r.client.page == nil
           && r.client.committed == "你好", "Esc 清空原文，不上屏", r.client.committed)
-    check(r.t.cancels == cancels + 1 && r.t.owner == nil, "Esc 取消请求")
+    check(r.t.cancels == cancels + 1, "Esc 取消请求")
 
     type(r.c, "nihao")
     _ = r.c.handle(.char(" "))
@@ -1362,19 +1630,19 @@ do {
     type(r.c, "nihao")
     _ = r.c.handle(.char(" "))
     type(r.c, "hao")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .chinese && r.client.committed == "你好" && r.c.isComposing && r.client.marked == "hao",
           "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
     check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
 
-    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏（原文是选好的字，后面是打的字母）
     let s = translateRig()
     type(s.c, "nihao")
     _ = s.c.handle(.char(" "))
     type(s.c, "hao")
     s.c.commitComposition()
-    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil, "切走时原文原样上屏",
-          s.client.committed)
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil && s.client.marked.isEmpty,
+          "切走时原文原样上屏", s.client.committed)
 
     // 设置里关掉互译：离开「译」
     let u = translateRig()
@@ -1417,7 +1685,8 @@ do {
     _ = r.c.handle(.char(" "))
     r.tick(0.6)
     other.cancel()
-    check(r.t.cancels == 0 && r.t.owner === r.c, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
+    // 每个会话只取消自己发的请求（会话记着发过没有）
+    check(r.t.cancels == 0, "别的输入框清空不取消这个的请求", "\(r.t.cancels)")
 }
 
 /// 文件的权限位。
@@ -1687,6 +1956,25 @@ do {
           && !LocalModel.safeLinkTarget("..") && !LocalModel.safeLinkTarget(""), "链接不许指到别处")
 }
 
+// MARK: 语音键
+
+do {
+    let d = WowtypeConfig()
+    check(d.voice && d.voiceKey == "Alt_R" && !d.voiceCopy, "语音默认开、右 Option、不复制")
+    let option = VoiceKey(name: "Alt_R")
+    check(option?.keyCode == 0x3D && option?.isModifier == true, "Alt_R 是右 Option")
+    // 右 Option 按着时 modifierFlags 带 NX_DEVICERALTKEYMASK（0x40），左 Option 是 0x20
+    check(option?.isDown(rawFlags: 0x80000 | 0x40) == true && option?.isDown(rawFlags: 0x80000 | 0x20) == false,
+          "分得清左右 Option")
+    check(VoiceKey(name: "F8")?.keyCode == 0x64 && VoiceKey(name: "F8")?.isModifier == false, "F8 不是修饰键")
+    check(VoiceKey(name: "Menu") == nil && VoiceKey(name: "") == nil && VoiceKey(name: "none") == nil,
+          "Mac 上没有的键、留空：不用语音键")
+    let c = WowtypeConfig.parse("Voice=False\nVoiceKey=F9\nVoiceCopy=True")
+    check(!c.voice && c.voiceKey == "F9" && c.voiceCopy, "读语音设置")
+    check(voiceWave([]) == "▁▁▁▁▁▁" && voiceWave([100, 0]) == "▁▁▁▁█▁"
+          && voiceWave([0, 10, 20, 30, 40, 50, 60]).count == 6, "音量画成 6 个竖条（和 Linux 一样）")
+}
+
 // MARK: 万象词库包（规矩和 Linux 设置的 install_lexicon_pack 一样）
 
 do {
@@ -1761,6 +2049,33 @@ if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
     type(c, "yi")
     let count = c.allCandidates().count
     check(count > 300, "yi 的字列全（超过 300 个）", "\(count)")
+
+    // 上文跟着文档走（真实词库 + 词库旁边的语言模型）：「不」后面 ma 的首选是「骂」，
+    // 「不」在应用里删掉了、换成了别的字、点到别处回来，再打 ma 不能还当「不」在前面
+    let lm = (lexicon.lastIndex(of: "/").map { String(lexicon[..<$0]) } ?? ".") + "/words.lm"
+    if access(lm, R_OK) == 0, let lmEngine = Engine(lexicon: lexicon, languageModel: lm) {
+        let client = FakeClient()
+        let c = Composer(engine: lmEngine, client: client)
+        func firstMa() -> String {
+            type(c, "ma")
+            let first = client.page?.texts.first ?? ""
+            _ = c.handle(.key(Keysym.escape))
+            return first
+        }
+        let alone = firstMa()
+        type(c, "bu ")
+        let afterBu = firstMa()
+        check(client.committed == "不" && afterBu != alone, "「不」后面 ma 的首选变了", "\(alone) / \(afterBu)")
+        _ = c.handle(.key(Keysym.backspace))
+        client.committed.removeLast()
+        check(firstMa() == alone, "退格删掉「不」以后 ma 回到没有上文的首选")
+        type(c, "bu ")
+        client.committed = "你好"  // 在应用里用鼠标改了，会话没看到键：拿光标前的字核对
+        check(firstMa() != afterBu, "光标前不是「不」了")
+        client.committed = "不"
+        c.commitComposition()  // 点到别处又回来
+        check(firstMa() == afterBu, "光标前还是「不」时照样用它", "\(afterBu)")
+    }
 }
 
 if failures > 0 {

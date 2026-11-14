@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(wowtype-fcitx5 VERSION 0.3.12 LANGUAGES CXX)
+project(wowtype-fcitx5 VERSION 0.4.0 LANGUAGES CXX)
 
 # fcitx5 5.1 的头文件用到了 std::span、std::source_location
 set(CMAKE_CXX_STANDARD 20)
@@ -9,9 +9,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(GNUInstallDirs)
 
-find_package(Fcitx5Core 5.1 REQUIRED)
-find_package(Fcitx5Config 5.1 REQUIRED)
-find_package(Fcitx5Utils 5.1 REQUIRED)
+# 最低 fcitx5 5.0（Ubuntu 22.04 是 5.0.14）。5.1 以后才有的功能下面按版本 / 头文件判断
+find_package(Fcitx5Core 5.0 REQUIRED)
+find_package(Fcitx5Config 5.0 REQUIRED)
+find_package(Fcitx5Utils 5.0 REQUIRED)
 
 # Rust 核心产物。先执行：cargo build --release -p wowtype-core（产物在 workspace 根 target/）
 #
@@ -112,6 +113,12 @@ endif()
 
 configure_file(conf/wowtype.conf.in
     "${CMAKE_CURRENT_BINARY_DIR}/wowtype.conf" @ONLY)
+# 插件清单里要求的 fcitx5 版本：编译时版本的「主.次.0」（5.1.x 上编的写 5.1.0，22.04 的 5.0.14 上编的写 5.0.0）。
+# 不写编译时的完整版本：Arch、Fedora 的包对 fcitx5 不写版本，CI 用最新的 fcitx5 编，用户的 fcitx5 只要
+# 晚一个小版本没升级，fcitx5 就不加载插件、也不报错。同一个次版本里缺符号（5.1.11 的自定义提示）的风险
+# 和以前写死 5.1.0 时一样。
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" _wowtype_fcitx_minor "${Fcitx5Core_VERSION}")
+set(WOWTYPE_FCITX_CORE_DEP "${_wowtype_fcitx_minor}.0")
 configure_file(conf/wowtype-addon.conf.in
     "${CMAKE_CURRENT_BINARY_DIR}/wowtype-addon.conf" @ONLY)
 
@@ -156,6 +163,27 @@ if(WOWTYPE_BUILD_TESTS)
     add_executable(wowtype-key-harness test/key_harness.cpp src/clipboard_copy.cpp)
     target_include_directories(wowtype-key-harness PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
     target_link_libraries(wowtype-key-harness PRIVATE Fcitx5::Core Fcitx5::Utils)
+    # 「密码框也用输入法」（Behavior/AllowInputMethodForPassword）5.0 没有：看头文件里有没有它的读取函数，
+    # 有就测「打开以后密码框里照常打中文」，没有就测「密码框里不用输入法、按键原样交给应用」
+    get_target_property(_wowtype_fcitx_inc Fcitx5::Core INTERFACE_INCLUDE_DIRECTORIES)
+    unset(WOWTYPE_FCITX_GLOBALCONFIG_H CACHE)  # 换了 fcitx5 重新配置时重新找（NO_CACHE 要 CMake 3.21）
+    find_file(WOWTYPE_FCITX_GLOBALCONFIG_H fcitx/globalconfig.h
+        PATHS ${_wowtype_fcitx_inc} NO_DEFAULT_PATH)
+    if(NOT WOWTYPE_FCITX_GLOBALCONFIG_H)
+        # 找不到就当没有这个设置的话，5.1 上会悄悄测弱的那种，所以直接报错
+        message(FATAL_ERROR "按键测试：在 ${_wowtype_fcitx_inc} 里找不到 fcitx/globalconfig.h")
+    endif()
+    set(_wowtype_password_option OFF)
+    file(STRINGS "${WOWTYPE_FCITX_GLOBALCONFIG_H}" _wowtype_password_lines
+        REGEX "allowInputMethodForPassword")
+    if(_wowtype_password_lines)
+        set(_wowtype_password_option ON)
+    endif()
+    message(STATUS "WowType 按键测试：fcitx5 ${Fcitx5Core_VERSION}，「密码框也用输入法」设置 ${_wowtype_password_option}"
+        "（globalconfig.h：${WOWTYPE_FCITX_GLOBALCONFIG_H}）")
+    if(_wowtype_password_option)
+        target_compile_definitions(wowtype-key-harness PRIVATE WOWTYPE_HAVE_PASSWORD_IM_OPTION=1)
+    endif()
 
     # 设置契约：导出 WowtypeConfig 的键、默认值、范围、可选值，scripts/test-config-contract.py 对照 spec/config.json
     add_executable(wowtype-config-dump test/config_dump.cpp)

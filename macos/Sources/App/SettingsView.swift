@@ -1,8 +1,8 @@
 // 设置窗口的界面（SwiftUI，macOS 12 起）。
 //
 // 页面、分组、文字照 Linux 的设置界面（settings/wowtype-config 的 build_general / build_input / build_emoji /
-// build_words），名字和顺序两边一样，选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能
-// （语音、检查更新）不列出来，它们在 wowtype.conf 里的键原样留着。
+// build_voice / build_translate / build_words），名字和顺序两边一样，选项说明对得上 fcitx5-addon/src/wowtype_engine.h。macOS 还没有的功能
+// （检查更新）不列出来，它的键在 wowtype.conf 里原样留着。
 // 每行一个标题，副标题最多一行；说明、注意事项、例子、来源、许可放进 ⓘ（InfoButton）或「更多选项」折叠里。
 // 样子也照 Linux：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片。
 
@@ -86,6 +86,7 @@ struct SettingsView: View {
         case .general: GeneralPage(model: model)
         case .input: InputPage(model: model)
         case .emoji: EmojiPage(model: model)
+        case .voice: VoicePage(model: model)
         case .translate: TranslatePage(model: model)
         case .words: WordsPage(model: model)
         }
@@ -182,6 +183,14 @@ private struct ToastView: View {
 // MARK: 常规
 
 private let issuesURL = URL(string: "https://github.com/Gloridust/WowType/issues/new")!
+/// 系统设置的「键盘」（只打开，不改系统设置）
+private let keyboardSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!
+
+/// 两个快捷键行的说明，和 Linux 设置的一样（settings/wowtype-config 的 TOGGLE_KEY_INFO、TRANSLATE_MODE_KEY_INFO）
+private let toggleKeyInfo = "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。"
+private let translateModeKeyInfo = "按它进「译」，在「译」里再按回到原来的模式。设了它，单按 Shift 就只在中文、英文之间切。\n\n"
+    + "要先在「翻译」页打开互译；没打开、密码框里这个键交给应用。"
+private let systemKeyNote = "\n\n系统的快捷键（比如 Control+空格）先处理，设成它们 WowType 收不到。"
 
 private struct GeneralPage: View {
     @ObservedObject var model: SettingsModel
@@ -191,9 +200,16 @@ private struct GeneralPage: View {
             PickerRow(title: "排列方向", selection: $model.config.horizontal,
                       options: [("横排", true), ("竖排", false)])
             RowDivider()
+            PickerRow(title: "方向键", subtitle: arrowKeysSubtitle,
+                      info: "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
+                          + "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
+                          + "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。",
+                      selection: $model.config.arrowKeys,
+                      options: [("都用来选词", .candidates), ("左右键移动光标", .caret)])
+            RowDivider()
             StepperRow(title: "每页个数", value: $model.config.pageSize, range: 3...9)
             RowDivider()
-            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down 和方向键") {
+            ExpanderRow(title: "翻页键", subtitle: "除了 Page Up / Page Down") {
                 SwitchRow(title: "- 和 =", isOn: $model.config.pageKeysMinus)
                 RowDivider()
                 SwitchRow(title: "[ 和 ]", subtitle: "打字途中不再出【】", isOn: $model.config.pageKeysBracket)
@@ -228,6 +244,15 @@ private struct GeneralPage: View {
             }
         }
     }
+
+    /// 方向键那一行的副标题：这种用法和候选排列下各个方向键做什么（和 Linux 设置一样）
+    private var arrowKeysSubtitle: String {
+        switch (model.config.arrowKeys, model.config.horizontal) {
+        case (.caret, _): return "↑ ↓ 选词，← → 在拼音里移动光标"
+        case (.candidates, true): return "← → 选词，↑ 上一页，↓ 展开更多候选"
+        case (.candidates, false): return "↑ ↓ 选词，← → 翻页"
+        }
+    }
 }
 
 // MARK: 输入
@@ -239,8 +264,10 @@ private let shuangpinSchemes: [(String, String)] = [
 
 private let fuzzyGroups: [(String, WritableKeyPath<WowtypeConfig, Bool>)] = [
     ("z = zh", \.fuzzyZh), ("c = ch", \.fuzzyCh), ("s = sh", \.fuzzySh), ("n = l", \.fuzzyNL),
-    ("f = h", \.fuzzyFH), ("r = l", \.fuzzyRL), ("an = ang", \.fuzzyAn), ("ian = iang", \.fuzzyIan),
-    ("uan = uang", \.fuzzyUan), ("en = eng", \.fuzzyEn), ("in = ing", \.fuzzyIn), ("un = ong", \.fuzzyUn),
+    ("f = h", \.fuzzyFH), ("r = l", \.fuzzyRL), ("an = ang", \.fuzzyAn), ("an = ai", \.fuzzyAnAi),
+    ("ian = iang", \.fuzzyIan), ("uan = uang", \.fuzzyUan), ("huang = wang", \.fuzzyHuangWang),
+    ("en = eng", \.fuzzyEn), ("eng = ong", \.fuzzyEngOng), ("in = ing", \.fuzzyIn), ("un = ong", \.fuzzyUn),
+    ("un = iong", \.fuzzyUnIong),
 ]
 
 private struct InputPage: View {
@@ -253,7 +280,7 @@ private struct InputPage: View {
                   + "万象拼音词更多，比雾凇多占约 300 MB 内存；从 amzxyz/rime_wanxiang（CC BY 4.0）转换，只用了它的词条。"
                   + "装在 ~/Library/Application Support/WowType/dicts/wanxiang。",
                   links: [("万象拼音项目主页", URL(string: "https://github.com/amzxyz/rime_wanxiang")!)]) {
-            RadioRow(title: "雾凇拼音（默认）", subtitle: "约 89 万条", selected: model.lexiconKind == .rimeIce) {
+            RadioRow(title: "雾凇拼音（默认）", subtitle: "在安装包里，不用下载", selected: model.lexiconKind == .rimeIce) {
                 model.useRimeIce()
             }
             .disabled(model.lexiconBusy)
@@ -267,7 +294,7 @@ private struct InputPage: View {
                     if (model.wanxiangVersion == nil || model.wanxiangUpdate != nil) && !noAsset {
                         Button(model.wanxiangVersion == nil ? "下载" : "更新") { model.installWanxiang() }
                     }
-                    IconButton(symbol: "folder", help: "从文件安装") { model.chooseWanxiangFile() }
+                    IconButton(symbol: "folder", help: "从文件安装（wowtype-data-wanxiang-*.tar.gz）") { model.chooseWanxiangFile() }
                     if model.wanxiangVersion != nil && model.lexiconKind != .wanxiang {
                         IconButton(symbol: "trash", help: "删除万象拼音") { model.removeWanxiang() }
                     }
@@ -285,24 +312,64 @@ private struct InputPage: View {
         }
         .onAppear { model.checkRelease() }
 
-        PrefGroup("输入方式") {
-            RadioRow(title: "拼音输入", subtitle: "全拼，也能只打声母", selected: !model.config.shuangpin) {
-                model.config.shuangpin = false
+        PrefGroup("输入方案") {
+            RadioRow(title: WowtypeConfig.InputScheme.quanpin.name, subtitle: "全拼，也能只打声母", selected: model.config.inputScheme == .quanpin) {
+                model.config.inputScheme = .quanpin
             }
             RowDivider()
-            RadioRow(title: "双拼输入", subtitle: "每个字打两个键", selected: model.config.shuangpin) {
-                model.config.shuangpin = true
+            RadioRow(title: WowtypeConfig.InputScheme.shuangpin.name, subtitle: "每个字打两个键", selected: model.config.shuangpin) {
+                model.config.inputScheme = .shuangpin
             }
             if model.config.shuangpin {
                 RowDivider()
                 PickerRow(title: "双拼方案", selection: $model.config.shuangpinScheme, options: schemeOptions)
+                RowDivider()
+                SwitchRow(title: "编辑区显示打的键", subtitle: "不翻成全拼，中英混打时看得出打了什么",
+                          isOn: $model.config.shuangpinShowKeys)
+            }
+            RowDivider()
+            RadioRow(title: WowtypeConfig.InputScheme.wubi86.name,
+                     subtitle: model.wubiTableAvailable ? "86 版，z 键临时打拼音"
+                         : "没有找到五笔码表 wubi86.tsv，重新安装 WowType 可以修好",
+                     selected: model.config.wubi) {
+                model.config.inputScheme = .wubi86
+            }
+            .disabled(!model.wubiTableAvailable)
+            if model.config.wubi {
+                RowDivider()
+                SwitchRow(title: "四码唯一自动上屏", subtitle: "打满四码、只有一个字词时直接上屏",
+                          isOn: $model.config.wubiAutoCommit)
+                RowDivider()
+                SwitchRow(title: "编码提示", subtitle: "候选后面显示还要打的码", isOn: $model.config.wubiHint)
             }
         }
 
         PrefGroup("中英文切换", info: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
                   + "打到一半切英文，已经打的字母原样上屏。") {
-            PickerRow(title: "切换键", selection: $model.config.shiftToggle,
+            // macOS 自己的切换：不经过输入法，哪个应用里都管用
+            ActionRow(title: "中/英 键（大写锁定键）", subtitle: "系统设置里打开后，在 WowType 和 ABC 之间切，所有应用里都管用",
+                      info: "在「系统设置 → 键盘 → 文字输入 → 输入法」点「编辑…」，打开"
+                          + "「使用“中/英”键切换“ABC”输入法」（键盘上没有 中/英 键时叫「使用大写锁定键切换“ABC”输入法」）。"
+                          + "打开以后按一下这个键在 WowType 和 ABC 之间切。") {
+                Button("打开键盘设置") { NSWorkspace.shared.open(keyboardSettingsURL) }
+            }
+            RowDivider()
+            PickerRow(title: "单按 Shift",
+                      info: "个别应用（比如一些用 Electron 做的）里单按 Shift 有时不灵，可以用上面的 中/英 键，或者下面另设的快捷键。",
+                      selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
+            RowDivider()
+            PickerRow(title: "另设一个切换键", info: toggleKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.toggleKey),
+                      options: shortcutOptions([("不用（单按 Shift 照常）", "")] + shortcuts(Array(Shortcut.toggleKeyPresets.dropFirst())),
+                                               current: model.config.toggleKey?.name ?? ""))
+            RowDivider()
+            PickerRow(title: "互译的快捷键",
+                      subtitle: model.config.translateModeKey != nil && !model.translateReady ? "先在「翻译」页打开互译" : nil,
+                      info: translateModeKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.translateModeKey),
+                      options: shortcutOptions([("不用", "")] + shortcuts(Array(Shortcut.translateModeKeyPresets.dropFirst())),
+                                               current: model.config.translateModeKey?.name ?? ""))
         }
 
         PrefGroup("拼音") {
@@ -318,7 +385,7 @@ private struct InputPage: View {
             SwitchRow(title: "繁体字", isOn: $model.config.traditional)
             RowDivider()
             SwitchRow(title: "更多生僻字", subtitle: "要装能显示它们的字体，比如花园明朝",
-                      info: "候选里也列出极少用的生僻字。系统自带的字体有些显示不了，会是方块。",
+                      info: "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。",
                       isOn: $model.config.rareExtChars)
             RowDivider()
             PickerRow(title: "标点样式", info: "数字后面的符号总是半角的，比如 3.14。",
@@ -326,19 +393,20 @@ private struct InputPage: View {
         }
 
         PrefGroup("快捷输入") {
-            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi", isOn: $model.config.dateTime)
+            SwitchRow(title: "日期和时间", subtitle: "打 riqi、shijian、xingqi（五笔前面加 z）", isOn: $model.config.dateTime)
             RowDivider()
-            SwitchRow(title: "计算器", subtitle: model.config.shuangpin ? "双拼时不可用" : "v1+2*3 → 7",
+            SwitchRow(title: "计算器", subtitle: schemeName.map { "\($0)时打大写 V：V1+2*3 → 7" } ?? "v1+2*3 → 7",
                       isOn: $model.config.calculator)
-                .disabled(model.config.shuangpin)
             RowDivider()
             SwitchRow(title: "工具栏",
-                      subtitle: model.config.shuangpin ? "双拼时不可用" : "打 v 再按空格：剪贴板、常用语、符号、表情",
-                      isOn: $model.config.toolbar)
-                .disabled(model.config.shuangpin)
+                      subtitle: schemeName.map { "\($0)时不可用" } ?? "打 v 再按空格：剪贴板、常用语、符号、表情",
+                      // 双拼、五笔时用不了：显示成关着（不改设置，换回全拼还是原来的）
+                      isOn: Binding(get: { schemeName == nil && model.config.toolbar },
+                                    set: { model.config.toolbar = $0 }))
+                .disabled(schemeName != nil)
             RowDivider()
             SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
-                      info: "给工具栏里的「剪贴板」用，最多记 20 条，切走输入法就清空。"
+                      info: "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
                           + "密码管理器标了「不要记」的不记，没标的密码会被记下并显示出来。",
                       isOn: $model.config.clipboardHistory)
             RowDivider()
@@ -349,13 +417,24 @@ private struct InputPage: View {
             SwitchRow(title: "以词定字", subtitle: "按 [ 取第一个字，按 ] 取最后一个字", isOn: $model.config.pickChar)
             RowDivider()
             ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
-                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
+                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序（比如终端）里不起作用。",
                         enabled: $model.config.autoSpace) {
                 SwitchRow(title: "汉字和英文字母之间", isOn: $model.config.autoSpaceLetters)
                 RowDivider()
                 SwitchRow(title: "汉字和数字之间", isOn: $model.config.autoSpaceDigits)
             }
         }
+    }
+
+    /// 快捷键下拉框选的键名（同 wowtype.conf）；空串是不用
+    private func shortcutBinding(_ path: WritableKeyPath<WowtypeConfig, Shortcut?>) -> Binding<String> {
+        Binding(get: { model.config[keyPath: path]?.name ?? "" },
+                set: { model.config[keyPath: path] = $0.isEmpty ? nil : Shortcut(name: $0) })
+    }
+
+    /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
+    private var schemeName: String? {
+        model.config.inputScheme == .quanpin ? nil : model.config.shuangpin ? "双拼" : "五笔"
     }
 
     private var schemeOptions: [(String, String)] {
@@ -377,7 +456,7 @@ private struct InputPage: View {
         if let release = model.release, release.wanxiang == nil {
             return "暂时没有下载包，可以从文件安装"
         }
-        return "约 170 万条，要下载约 20 MB"
+        return "词更多，要下载约 20 MB"
     }
 
     /// 没选时不写（文件格式在选文件的对话框里说）
@@ -399,7 +478,7 @@ private struct EmojiPage: View {
 
     var body: some View {
         PrefGroup("表情") {
-            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」时，第 3 个候选是 emoji",
+            SwitchRow(title: "打字时推荐 emoji", subtitle: "打「开心」「点赞」时，候选里有对应的 emoji",
                       isOn: $model.config.emojiSuggest)
             RowDivider()
             PickerRow(title: "表情面板快捷键",
@@ -417,10 +496,71 @@ private struct EmojiPage: View {
     }
 
     private var emojiKeyOptions: [(String, String)] {
-        let options = [("Control + .", "Control+period"), ("Control + ;", "Control+semicolon"),
-                       ("Control + Shift + E", "Control+Shift+E"), ("不用快捷键", "")]
-        let current = emojiKey.wrappedValue
-        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+        shortcutOptions(shortcuts(["Control+period", "Control+semicolon", "Control+Shift+E"]) + [("不用快捷键", "")],
+                        current: emojiKey.wrappedValue)
+    }
+}
+
+/// 快捷键（键名同 wowtype.conf）配上 Mac 键盘上的叫法：Control + .、Option + X
+private func shortcuts(_ names: [String]) -> [(String, String)] {
+    names.map { (Shortcut(name: $0)?.label ?? $0, $0) }
+}
+
+/// 设置文件里写的不是预设的快捷键：加一项「其他（Option + X）」
+private func shortcutOptions(_ options: [(String, String)], current: String) -> [(String, String)] {
+    options.contains { $0.1 == current } ? options : options + [("其他（\(shortcuts([current])[0].0)）", current)]
+}
+
+// MARK: 语音
+
+/// 和 Linux 设置的「语音」页一样：开关、语音键、复制到剪贴板，下面是识别模型。没有模型时开关灰掉、显示成关着。
+private struct VoicePage: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        let ready = model.voiceModelReady
+        PrefGroup("语音输入", info: "按住语音键说话，松开就上屏；或者点一下语音键开始说，停顿一会儿自动上屏。"
+                  + "说的时候按 Esc 取消。正在打拼音时语音键不起作用。\n\n"
+                  + "右 Option 按下时就开始听，Option+方向键这类组合会让麦克风亮一下就停；不想这样可以换成别的键。"
+                  + "F8–F10 在 Mac 笔记本上默认是媒体键，要在「系统设置 → 键盘」里打开「将 F1、F2 等键用作标准功能键」。") {
+            SwitchRow(title: "语音输入", subtitle: ready ? nil : "先在下面下载语音模型",
+                      isOn: Binding(get: { ready && model.config.voice }, set: { model.config.voice = $0 }))
+                .disabled(!ready)
+            RowDivider()
+            PickerRow(title: "语音键", selection: $model.config.voiceKey, options: voiceKeyOptions)
+                .disabled(!ready || !model.config.voice)
+            RowDivider()
+            SwitchRow(title: "同时复制到剪贴板", isOn: $model.config.voiceCopy)
+                .disabled(!ready || !model.config.voice)
+        }
+        PrefGroup("识别模型", info: "在本机识别，录音不上传。语音模型是微信输入法的离线语音包，属于腾讯，"
+                  + "从腾讯的服务器下载，WowType 不分发它；和这台电脑装没装微信输入法无关。\n\n"
+                  + "模型放在 ~/Library/Application Support/WowType/wtlocal。第一次用语音时系统会问要不要允许 WowType 使用麦克风；"
+                  + "WowType 每次更新后系统可能会再问一次。") {
+            HStack(spacing: 10) {
+                RowLabel(title: "语音模型", subtitle: model.voiceModelStatus)
+                if let (done, total) = model.voiceProgress {
+                    ProgressView(value: Double(done), total: Double(max(total, 1)))
+                        .frame(width: 90)
+                    Button("取消") { model.cancelVoiceDownload() }
+                } else if ready {
+                    IconButton(symbol: "trash", help: "删除语音模型（语音输入会关掉）") { model.removeVoiceModel() }
+                } else {
+                    Button(model.voiceError == nil ? "下载" : "重试") { model.downloadVoiceModel() }
+                }
+            }
+            .rowPadding()
+        }
+    }
+
+    /// 键名同 wowtype.conf 的 VoiceKey（fcitx5 键名）；Linux 拷过来的 Mac 上没有的键（Menu）单独列出来
+    private var voiceKeyOptions: [(String, String)] {
+        let options = VoiceKey.presets.map { ($0.label, $0.name) }
+        let current = model.config.voiceKey
+        if options.contains(where: { $0.1 == current }) { return options }
+        let label = current.isEmpty ? "不用语音键"
+            : VoiceKey(name: current) == nil ? "\(current)（Mac 上没有这个键）" : "其他（\(current)）"
+        return options + [(label, current)]
     }
 }
 
@@ -463,14 +603,14 @@ private struct TranslatePage: View {
 
     /// 「互译」那一行的状态（和 Linux 设置一样）：还差什么、Shift 关掉了切不到「译」、怎么切
     private var translateStatus: String {
-        let ready = model.config.translateLocal
-            ? model.localPlan.ready
-            : !model.config.translateBaseUrl.isEmpty && !model.config.translateModel.isEmpty
-        if !ready {
+        if !model.translateConfigured {
             return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
         }
+        if let key = model.config.translateModeKey {
+            return "按 \(key.label) 进出「译」"
+        }
         if model.config.shiftToggle == .off {
-            return "「输入」页关掉了 Shift 切换，切不到「译」"
+            return "「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键"
         }
         return "单按 Shift：中 → 英 → 译 → 中"
     }
@@ -678,7 +818,7 @@ private struct WordRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.word.replacingOccurrences(of: "\\n", with: "⏎"))
+                Text(CustomWords.shown(entry.word))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(entry.code)

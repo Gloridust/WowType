@@ -118,6 +118,7 @@ func checkConfigContract() {
         if let key = s["key"]?.string { byKey[key] = s }
     }
     let lists: [(String, [String])] = [
+        ("InputScheme", WowtypeConfig.InputScheme.allCases.map(\.rawValue)),
         ("ShuangpinScheme", WowtypeConfig.shuangpinSchemes),
         ("ShiftToggle", WowtypeConfig.ShiftToggle.allCases.map(\.rawValue)),
         ("SelectKeys", WowtypeConfig.SelectKeys.allCases.map(\.rawValue)),
@@ -127,6 +128,30 @@ func checkConfigContract() {
         let expected = byKey[key].map(enumValues) ?? []
         check(values == expected, "契约：\(key) 的可选值", "规格 \(expected)，macOS \(values)")
     }
+    let schemeNames = (byKey["InputScheme"]?["values"]?.array ?? []).map {
+        ($0["name"]?.string ?? "", $0["value"]?.string ?? "")
+    }
+    let ourSchemes = WowtypeConfig.InputScheme.allCases.map { ($0.name, $0.rawValue) }
+    check(ourSchemes.map { $0.0 } == schemeNames.map { $0.0 } && ourSchemes.map { $0.1 } == schemeNames.map { $0.1 },
+          "契约：输入方案的名字", "规格 \(schemeNames)，macOS \(ourSchemes)")
+    // whenMissing 的 ifTrue 指着的旧键（InputScheme 的 Shuangpin）已经不是设置项：从只有旧键的文件读进来，
+    // 在设置窗口里改成每一个可选值（包括默认值）存盘，读回来是改的值，文件里没有旧键了
+    for s in mine {
+        guard let key = s["key"]?.string, let old = s["whenMissing"]?["ifTrue"]?.string, byKey[old] == nil else {
+            continue
+        }
+        let file = "\(old)=True\n"
+        let base = WowtypeConfig.parse(file)
+        for value in enumValues(s) {
+            var wanted = base
+            wanted.setValue(value, forKey: key)
+            let written = wanted.merged(changesFrom: base, into: file)
+            check(WowtypeConfig.parse(written).value(forKey: key) == value,
+                  "契约：\(old)=True 的文件改成 \(key)=\(value) 存盘再读", written)
+            check(!written.split(separator: "\n").contains { $0.hasPrefix("\(old)=") },
+                  "契约：存盘以后文件里还有旧键 \(old)", written)
+        }
+    }
     let languages = (byKey["TranslateTarget"]?["values"]?.array ?? []).map {
         ($0["name"]?.string ?? "", $0["value"]?.string ?? "")
     }
@@ -135,6 +160,17 @@ func checkConfigContract() {
           "契约：互译语言的名字和代码", "规格 \(languages)，macOS \(WowtypeConfig.translateLanguages)")
     let providers = (spec["translateProviders"]?["items"]?.array ?? []).map {
         [$0["name"]?.string ?? "", $0["url"]?.string ?? "", $0["model"]?.string ?? ""]
+    }
+    // 语音键：设置窗口能选的和规格里 presets.macos 一样，每个都对得上 Mac 的键码
+    let voicePresets = byKey["VoiceKey"]?["presets"]?["macos"]?.array?.compactMap { $0.string } ?? []
+    check(VoiceKey.presets.map(\.name) == voicePresets, "契约：语音键的选项（macOS）",
+          "规格 \(voicePresets)，macOS \(VoiceKey.presets.map(\.name))")
+    check(VoiceKey.presets.allSatisfy { VoiceKey(name: $0.name) != nil }, "契约：语音键的选项都认得")
+    // 切换键、互译键：设置窗口能选的和规格里 presets.macos 一样，每个都认得、写回去键名不变
+    for (key, ours) in [("ToggleKey", Shortcut.toggleKeyPresets), ("TranslateModeKey", Shortcut.translateModeKeyPresets)] {
+        let presets = byKey[key]?["presets"]?["macos"]?.array?.compactMap { $0.string } ?? []
+        check(ours == presets, "契约：\(key) 的选项（macOS）", "规格 \(presets)，macOS \(ours)")
+        check(ours.dropFirst().allSatisfy { Shortcut(name: $0)?.name == $0 }, "契约：\(key) 的选项都认得")
     }
     let ourProviders = WowtypeConfig.translateProviders.map { [$0.name, $0.url, $0.model] }
     check(ourProviders == providers, "契约：翻译服务商", "规格 \(providers)，macOS \(ourProviders)")

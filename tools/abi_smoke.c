@@ -89,6 +89,17 @@ int main(int argc, char **argv) {
     check(c && wowtype_candidates_len(c) > 0, "predict_next 有结果");
     wowtype_candidates_free(c);
 
+    /* 领域模型：设两次是换掉不是叠着混；混上以后联想照样按通用模型；设错的路径不动原来的 */
+    if (*bigram) {
+        check(wowtype_engine_set_domain_lm(e, bigram) == 0, "set_domain_lm");
+        check(wowtype_engine_set_domain_lm(e, bigram) == 0, "set_domain_lm 再设一次");
+        c = wowtype_engine_predict_next(e, "今天", 3);
+        check(c && wowtype_candidates_len(c) > 0, "混上领域模型后 predict_next 有结果");
+        wowtype_candidates_free(c);
+    }
+    check(wowtype_engine_set_domain_lm(e, "/nonexistent/words.domain.lm") == -1, "set_domain_lm 文件不在返回 -1");
+    check(wowtype_engine_set_domain_lm(e, NULL) == 0, "set_domain_lm(NULL) 去掉");
+
     check(wowtype_engine_add_user_word(e, "wo wo te", "我特") == 0, "add_user_word");
     c = wowtype_engine_input(e, "wowote");
     check(c && has_candidate(c, "我特"), "user word 可输入");
@@ -197,7 +208,6 @@ int main(int argc, char **argv) {
         }
         check(wowtype_session_candidate_total(s) == 0, "session: no engine, no candidates");
         wowtype_session_set_engine(s, e);
-        wowtype_session_set_context(s, "");
         const WowtypeFrame *f = wowtype_session_frame(s);
         check(f && !f->handled && strcmp(f->preedit, "ni'hao'zhong'guo") == 0,
               "session: preedit segmented");
@@ -236,8 +246,8 @@ int main(int argc, char **argv) {
         }
         WowtypeKey enter = {sizeof(WowtypeKey), 0xff0d, 0, 0, 0};
         f = wowtype_session_key(s, &enter);
-        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0, "session: return commits raw letters");
-        check(wowtype_session_last_choice(s, &info) == -1, "session: return is not a candidate");
+        check(f && f->commit && strcmp(f->commit, "nihaozh") == 0 && f->learned,
+              "session: return commits raw letters (learned)");
         /* ABI 1.6：显示的这一页、点候选、上屏的是哪个候选、候选框状态 */
         for (const char *k = "nihao"; *k; ++k) {
             WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
@@ -263,11 +273,81 @@ int main(int argc, char **argv) {
         check(!wowtype_session_select(s, shown)->handled, "session: select out of range");
         f = wowtype_session_select(s, 0);
         check(f && f->handled && f->commit && strcmp(f->commit, first) == 0, "session: select commits");
-        check(wowtype_session_last_choice(s, &info) == 0 && strcmp(info.text, first) == 0,
-              "session: last choice");
+        check(f->learned && f->mode == WOWTYPE_MODE_CHINESE && !f->translating,
+              "session: 1.10 frame fields");
+        /* ABI 1.10：没在打字时标点由会话换成中文标点 */
+        WowtypeKey comma = {sizeof(WowtypeKey), ',', 0, 0, 0};
+        f = wowtype_session_key(s, &comma);
+        check(f && f->handled && f->commit && strcmp(f->commit, "，") == 0 && !f->learned,
+              "session: punctuation");
+        /* ABI 1.10：设置里的切换键、进出「译」的键由外壳认出来，带上动作交给会话 */
+        WowtypeKey toggle = {sizeof(WowtypeKey), ' ', WOWTYPE_MOD_CTRL | WOWTYPE_MOD_SHIFT, 0, 0,
+                             WOWTYPE_KEY_ACTION_TOGGLE_MODE};
+        f = wowtype_session_key(s, &toggle);
+        check(f && f->handled && f->mode_changed && f->mode == WOWTYPE_MODE_ENGLISH, "session: toggle key");
+        toggle.action = WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE;
+        f = wowtype_session_key(s, &toggle);
+        check(f && !f->handled && !f->mode_changed, "session: no translate, translate key passes through");
+        wowtype_session_set_mode(s, WOWTYPE_MODE_CHINESE);
         wowtype_session_set_engine(s, NULL);
         check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
         wowtype_session_free(s);
+    }
+
+    /* ABI 1.10：五笔码表、会话的五笔设置、候选后面的编码提示（comment）、空码提示（aux） */
+    {
+        const char *path = "/tmp/wowtype_abi_wubi.tsv";
+        FILE *table = fopen(path, "w");
+        check(table != NULL, "wubi: write table");
+        if (table) {
+            fputs("w\t\xE4\xBA\xBA\t100\nwq\t\xE4\xBD\xA0\t90\n"               /* 人 你 */
+                  "wqvb\t\xE4\xBD\xA0\xE5\xA5\xBD\t80\nwqvb\t\xE6\x82\xA8\xE5\xA5\xBD\t70\n", /* 你好 您好 */
+                  table);
+            fclose(table);
+        }
+        check(wowtype_engine_load_wubi(e, "/nonexistent/wubi86.tsv") == -1, "wubi: missing table is -1");
+        check(wowtype_engine_load_wubi(e, path) == 4, "wubi: load table");
+        WowtypeSessionConfig config;
+        memset(&config, 0, sizeof config);
+        config.size = sizeof config;
+        config.page_size = 9;
+        config.wubi = 1;
+        config.wubi_auto_commit = 1;
+        config.wubi_hint = 1;
+        WowtypeSession *s = wowtype_session_new(e, &config);
+        const char *keys = "wq";
+        for (const char *k = keys; *k; k++) {
+            WowtypeKey key = {sizeof(WowtypeKey), (uint32_t)*k, 0, 0, 0};
+            wowtype_session_key(s, &key);
+        }
+        WowtypeCandidateInfo info;
+        memset(&info, 0, sizeof info);
+        info.size = sizeof info;
+        check(wowtype_session_candidate_info(s, 0, &info) == 0 && strcmp(info.text, "\xE4\xBD\xA0") == 0 &&
+                  info.comment && info.comment[0] == 0,
+              "wubi: exact candidate has no comment");
+        check(wowtype_session_candidate_info(s, 1, &info) == 0 && strcmp(info.comment, "vb") == 0,
+              "wubi: longer code shows the rest");
+        WowtypeKey x = {sizeof(WowtypeKey), 'x', 0, 0, 0};
+        const WowtypeFrame *f = wowtype_session_key(s, &x);
+        check(f && f->cand_count == 0 && f->aux && strcmp(f->aux, "\xE7\xA9\xBA\xE7\xA0\x81") == 0, /* 空码 */
+              "wubi: empty code notice");
+        WowtypeKey space = {sizeof(WowtypeKey), ' ', 0, 0, 0};
+        f = wowtype_session_key(s, &space);
+        check(f && f->handled && f->commit == NULL && f->preedit[0] == 0, "wubi: space clears empty code");
+        wowtype_session_free(s);
+    }
+
+    /* ABI 1.10：自定义词的编码整理 */
+    {
+        const char *code = wowtype_custom_code("Ni H\xC7\x8Eo", 1);
+        check(code && strcmp(code, "ni hao") == 0, "custom code: pinyin");
+        code = wowtype_custom_code("Mail", 0);
+        check(code && strcmp(code, "mail") == 0, "custom code: letters");
+        check(wowtype_custom_code("Mail", 1) == NULL, "custom code: pinyin only");
+        const char lex[] = "ni\t\xE4\xBD\xA0\t1\nhao\t\xE5\xA5\xBD\t1\n";
+        code = wowtype_guess_pinyin(lex, sizeof lex - 1, "\xE4\xBD\xA0\xE5\xA5\xBD");
+        check(code && strcmp(code, "ni hao") == 0, "custom code: guess pinyin");
     }
 
     if (wowtype_abi_version() / 1000 != WOWTYPE_ABI_VERSION_MAJOR) {

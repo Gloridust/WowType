@@ -150,6 +150,90 @@ lmcnmac.bin 导不出来（§3），所以自己从语料训练。`wowtype-lmbui
 `scripts/make-data.sh` 从 [Release lm-2026.11.09](https://github.com/Gloridust/WowType/releases/tag/lm-2026.11.09)
 下载并核对 sha256。不带 NNLM 时（安装包用户的情况）日常句 84.8%、维基句 60.2%，逐键平均约 1.9 ms，和不带它时一样。
 
+### 3.3 语料词频
+
+`scripts/make-data.sh` 用雾凇拼音和 `data/` 下的表。除了热词表、词频修正、黑名单，默认还融一张
+**语料词频表 `data/tatoeba-freq.tsv`**：从 Tatoeba 中文句子（2026-11-05 的导出，全部 89248 句，CC BY 2.0 FR）
+挖出的两个字以上的词的次数，只有词频、不含句子。融合不联网、不要额外的 Python 包，本机构建和发布的词库一样。
+
+- 融法：按权重 0.3 融进已有词的词频（不加词），每个词最多抬到 20 × max(原频次, 1000)
+  （`blend-freq.py --max-factor 20 --floor 1000`）。不封顶时「汤姆」会从 52040 抬到 1563 万，比「现在」还高；
+  封顶后是 104 万。
+- 重新生成：`scripts/make-tatoeba-freq.sh`（下载钉死的导出、核对 sha256、用钉死版本的 jieba 和 opencc 分词转简）；
+  `scripts/make-tatoeba-freq.sh --check` 核对仓库里的表能逐字节重新生成（不进默认构建，要装 `tools/requirements-data.txt`）。
+- 不融：`WOWTYPE_NO_CORPUS_FREQ=1`，或者删掉 `data/tatoeba-freq.tsv`。
+- 换本机语料现挖：`WOWTYPE_CORPUS="a.txt b.txt.bz2"`（要 jieba），必须用 `WOWTYPE_CORPUS_LICENSE` 写清来源和许可证；
+  一行一句，带 TAB 的用 `WOWTYPE_CORPUS_COLUMN` 指定列，繁体加 `WOWTYPE_CORPUS_T2S=1`，权重 `WOWTYPE_CORPUS_WEIGHT`。
+  SOURCE.txt 里只记文件名和 sha256，不记路径。
+- Python 包：`python3 -m pip install --require-hashes -r tools/requirements-data.txt`（版本、哈希钉死；
+  脚本会核对已装的版本，分词和繁转简随版本变）。
+- 语料词频在合热词表之前做：`data/rime-ice-freq.tsv`（只提不降）和 `data/blocklist.tsv` 最后套，不会被冲掉。
+- 署名：SOURCE.txt 正文、deb 的 copyright、README 的致谢和许可证、发版说明。所有安装包都带 SOURCE.txt
+  （deb/rpm/Arch 装成 `/usr/share/doc/wowtype/DATA-SOURCE.txt`，macOS 在 Resources 里，数据压缩包和 Nix 也有）。
+
+工具（`tools/`）：`lexdata.py` 是共用的读写规则，`blend-freq.py` 融合词频，`mine_corpus_freq.py` 从语料挖词频。几条规则：
+
+- 「#」开头的表头和没改的行原样写回；改过的频次取整但不低于 1。频次小于 1 的单字是大字表的生僻读音
+  （`LexEntry::is_rare`，不参与组句），一律不动：取整成 1 就会进束搜索（雾凇里有 3.7 万个这样的读音）。
+- 占位频次（雾凇 ext/tencent 词表的 100，引擎加载时按组成部分重估）的词不融合、也不拿来算换算系数。
+- 按词融合，不按行：多音词各读音的频次之和当这个词的频次，融合后按原比例分回各读音，
+  换算系数也按词算（按行算的话，多音词的次数会给每个读音各加一遍，在换算系数里也重复算）。
+
+#### 评测（2026-11-14，本机 macOS，release 构建，`wowtype-eval --lm words.lm`）
+
+用例（都不提交）：
+
+- **Tatoeba 留出 A，3000 句**：Tatoeba 中文句子按固定种子 20261114 打乱（`tools/make_corpus_eval.py --split`），取最前面 3000 句。
+  选参数（单字要不要、权重、只提不降）时看过它，所以它不算完全没碰过。
+- **Tatoeba 留出 B，3000 句**：同一次打乱里接下来的 3000 句，选参数时一次都没打过分；参数定下来以后只跑了这一次。
+- **手写日常句 138 句**（`tools/eval/daily_sentences.txt`）、**逐词上下文 533 条**（`tools/eval/context.tsv`）：
+  选参数时也看过，量太小，单靠它们说明不了什么。
+
+评测时语料词频是从钉死的 Tatoeba 导出（89248 句）里去掉 A、B 两组和与日常句相同的句子之后挖的（83183 句），
+所以表里四组都没进语料。仓库里的 `data/tatoeba-freq.tsv` 用的是全部 89248 句（包括 A、B），
+拿它构建的词库不能再在 A、B 上评；下表的数字都是去掉 A、B 的那份挖出来的，融法和发布的一样（权重 0.3、封顶 20 倍）。
+同一份 rime-ice（927e1cf）、同一个 words.lm，合进 2026-11-14 的 pre-release 之后重跑。
+「+/-」是逐句比较：基线错、新的对 / 基线对、新的错。
+
+| 词库 | Tatoeba B 3000 句 top1 / top3 | Tatoeba A 3000 句 top1 / top3 | 日常句 138 top1 / top3 | 上下文 533 top1 / top3 |
+|---|---|---|---|---|
+| 基线（不开） | 1794 (59.8%) / 2018 (67.3%) | 1843 (61.4%) / 2051 (68.4%) | 119 (86.2%) / 125 (90.6%) | 472 (88.6%) / 521 (97.7%) |
+| 语料词频（发布的融法） | **1864 (62.1%)** / 2066 (68.9%)，+103 -33 | **1905 (63.5%)** / 2104 (70.1%)，+92 -30 | **123 (89.1%)** / 129 (93.5%)，+4 -0 | 473 (88.7%) / 521 (97.7%)，+2 -1 |
+| 同上，不封顶 | 1862 (62.1%) / 2067 (68.9%)，+104 -36 | 1905 (63.5%) / 2104 (70.1%)，+93 -31 | 123 / 129，+4 -0 | 473 / 521，+2 -1 |
+
+短输入（`wowtype-show --english --lm --max 18`，和插件一样，#156）：融了语料词频之后 d、l、b、ma、shi、ni、wo、zai、bu、de、le
+的 18 个候选和基线完全一样；xz、nh、shim 第 3~9 个有调换（xz 第 5 个多了「鞋子」，nh 第 9 个多了「女孩」），首选不变，
+`xz` 仍是「现在」（`data/rime-ice-freq.tsv` 修的那条）。
+fcitx5 按键测试里依赖词库的输入（nihao、zhongdi、kyi、yongzwen、kaixin、jixu……）首选也不变；
+`macos/test.sh`（`WOWTYPE_EXPECT_FULL_CHARS=1`）和 Ubuntu 24.04 容器里的 fcitx5 按键测试（`scripts/addon-test.sh`）
+用默认构建的词库跑通过。
+
+试过、没采用的：
+
+- 语料把单字也融进去：Tatoeba A +137 -67、日常句 +6 -0，但 d、l、b、shi 等首页全变了（shi 的「师」从第 6 掉到第 10），
+  改坏的大多是单字同音（再→在、是→市），所以只数两个字以上的词。
+- 语料只提不降（语料里比词库低的词不动）：Tatoeba A 1897，比双向融合的 1903 略差，日常句、上下文一样。
+- 语料权重 0.15 / 0.5（含单字时）：Tatoeba A 1910 / 1923，日常句 124 / 123，0.3（125）最好。
+- 可选数据源 jieba（jieba 词典调词频，再补 pypinyin 注音的新词）、cedict（CC-CEDICT 补词，频次给 10）：Tatoeba A
+  +35 -35 / +0 -0，日常句 -1 / 不变；新词的首选却变了一大片（jieba 5848 个拼音里 2880 个、cedict 1379 个），jieba 新词约一成是碎片。
+  jieba 换权重（0.15 / 0.5）、cedict 频次给 100 也没有一组三项都不掉，所以连代码一起删了（`WOWTYPE_DATA_EXTRAS`，最后一版在 81571e2）。
+- 语料封顶（只在 A 组、日常句、上下文上挑，B 组只在定下来以后跑一次）：倍数 3 / 4 / 10 / 20 / 30（下限 1000）时
+  A 组 1887 / 1894 / 1896 / 1905 / 1904，不封顶 1905；下限 100、10000（10 倍）时 1896、1899。
+  20 倍是 A 组上不掉分的最紧的一档：评测那份封顶 56 个词，发布那份（全部句子）57 个。
+
+语料词频已知的毛病：Tatoeba 是翻译腔的短句，人名多。封顶后「汤姆」52040 → 104 万、「玛丽」49655 → 99 万、
+「约翰」135770 → 58 万（`tangmu`、`mali` 首选本来就是它们）。雾凇里频次只有 1 的词最多抬到 2 万：
+嫉妒、披萨该抬（`pisa` 以前首选是「屁嫂」，现在是「披萨」；`jidu` 的「嫉妒」排第二），
+jieba 切出来的碎片也会抬（「道菜」1 → 13114，`daocai` 的首选成了「道菜」）——封顶分不开这两种，要压只能进黑名单。
+
+结论：只有语料词频在留出用例上都不掉、短输入首选不变，所以默认融。
+
+可复现：`data/tatoeba-freq.tsv` 在仓库里，默认构建只用标准库、不联网，同样的 rime-ice 跑两遍逐字节相同。
+这张表本身钉的是 Internet Archive 上的 `cmn_sentences.tsv.bz2`（2026-11-05 导出，sha256 `d603c1b9…91743`，
+地址和完整 sha256 在表头和 `scripts/make-tatoeba-freq.sh` 里）；`--check` 在 macOS（两个 venv）和 Ubuntu 24.04 容器里
+都逐字节重现了它。词库包版本 = rime-ice 日期 + REV 5（4 → 5 因为默认词库变了）；发版后
+`.github/scripts/nix-data-pr.sh` 照常开 PR 把 `nix/package.nix` 的 dataVersion 和 hash 改到新的词库包。
+
 ## 4. Cell 词典（`cell_dict.*.zh`）
 
 运行中的 WeType 从
@@ -324,6 +408,19 @@ DFS 实测（`probe_cursor_dfs.cpp`，dict kind 45）：
 
 「遍历 trie 导出词库」这条路走不通：trie 只存音节序列和频次，词条在另一套值编码里。
 要拿词条还是得解 `LargeDictValueHuffmanCodec` + 音节 ID 映射，或者换个思路。
+
+## 13.5 本地资产结构查看工具
+
+`tools/wetype-assets/` 下是只读的结构查看工具（互操作/研究用，读的是用户本机已安装的微信输入法，
+WowType 不带、不下载其中任何数据）：
+
+- `scan.py`：词典目录每份文件的大小、dict_type、头部魔数
+- `dump_xllm.py`：XLLM 大模型容器的配置、分词器概况和张量蓝图
+- `vad.py`：VAD 资源的配置参数、CMS 维度、DNN 头部
+- `wubi.py`：五笔词典容器（`swbd*.bin`）的结构统计（不输出词条）
+
+用法、边界和已确认的格式见 `tools/wetype-assets/README.md`。
+
 ## 14. 复现指南与失败记录（收尾）
 
 这一节给后来者：怎么从零复现这套分析，以及**哪些路走过、为什么没走通**。

@@ -46,6 +46,12 @@ public final class Engine {
         Int(wowtype_engine_load_english(handle, path))
     }
 
+    /// 混上领域词级模型（用户自己训的 words.domain.lm），nil 去掉；再调一次是换掉上一个。
+    @discardableResult
+    public func setDomainLM(_ path: String?) -> Bool {
+        wowtype_engine_set_domain_lm(handle, path) == 0
+    }
+
     @discardableResult
     public func loadUserDict(_ path: String) -> Int {
         Int(wowtype_engine_load_user_dict(handle, path))
@@ -74,11 +80,14 @@ public final class Engine {
 
     /// 简繁对照表载入过没有（繁体输出要用，第一次打开繁体时才读）。
     public private(set) var conversionLoaded = false
+    /// 五笔码表载入过没有（选了五笔才读）。
+    public private(set) var wubiLoaded = false
 
-    /// 设置里管引擎的部分（模糊音、纠错、双拼、生僻字、繁体），和 Linux 的 applyCoreSettings 一样。
-    /// conversion 是简繁对照表 s2t.tsv 的路径，没有就不出繁体。返回要记日志的问题。
+    /// 设置里管引擎的部分（模糊音、纠错、双拼、生僻字、繁体、五笔码表），和 Linux 的 applyCoreSettings 一样。
+    /// conversion 是简繁对照表 s2t.tsv 的路径，没有就不出繁体；wubi 是五笔码表 wubi86.tsv 的路径，
+    /// 没有时五笔照全拼打（候选框上方会话会说）。返回要记日志的问题。
     @discardableResult
-    public func apply(_ config: WowtypeConfig, conversion: String? = nil) -> [String] {
+    public func apply(_ config: WowtypeConfig, conversion: String? = nil, wubi: String? = nil) -> [String] {
         var problems: [String] = []
         wowtype_engine_set_fuzzy(handle, config.fuzzy ? 1 : 0)
         wowtype_engine_set_fuzzy_groups(handle, config.fuzzyGroups)
@@ -97,6 +106,13 @@ public final class Engine {
             }
         }
         wowtype_engine_set_traditional(handle, config.traditional && conversionLoaded ? 1 : 0)
+        if config.wubi && !wubiLoaded {
+            if let wubi, wowtype_engine_load_wubi(handle, wubi) > 0 {
+                wubiLoaded = true
+            } else {
+                problems.append("五笔码表载入失败 \(wubi ?? "（没有 wubi86.tsv）")，先按全拼打")
+            }
+        }
         return problems
     }
 
@@ -108,6 +124,8 @@ public final class Engine {
 /// 候选框要画的东西（会话给的这一页，或展开面板的这一屏）。
 public struct CandidatePage: Equatable {
     public var texts: [String]
+    /// 每个候选后面的小字（五笔还要打的码、z 临时拼音反查的五笔码），和 texts 一样长；没有的是空串
+    public var comments: [String] = []
     /// 光标在 texts 里的第几个；-1 不在这一页上（翻页翻走以后）
     public var cursor: Int
     public var hasPrev: Bool
@@ -121,6 +139,11 @@ public struct CandidatePage: Equatable {
     /// 互译时候选上下多出来的两行；不在互译时 nil。互译时没有候选（只攒着原文）也画框
     public var translate: TranslatePanel? = nil
     public static let columns = 6
+
+    /// 第 i 个候选后面的小字，没有是空串。
+    public func comment(_ i: Int) -> String {
+        i < comments.count ? comments[i] : ""
+    }
 }
 
 /// 互译时的候选框（Linux 上是 fcitx5 面板的 auxUp + 原文框、auxDown）。
@@ -166,7 +189,14 @@ public final class Composer {
     /// 原文停下来这么久才发请求（句末标点立刻发）
     public static let translateDelay = 0.5
 
-    public private(set) var mode: Mode = .chinese
+    /// 输入模式由会话管（单按 Shift 的判断也在会话里）。
+    public var mode: Mode {
+        switch wowtype_session_mode(session) {
+        case WOWTYPE_MODE_ENGLISH: return .english
+        case WOWTYPE_MODE_TRANSLATE: return .translate
+        default: return .chinese
+        }
+    }
     /// 设置（wowtype.conf）里管会话和外壳的部分；管引擎的部分用 Engine.apply。
     public private(set) var config = WowtypeConfig()
     /// 一页几个候选
@@ -185,10 +215,8 @@ public final class Composer {
     let session: OpaquePointer
     private(set) var engine: Engine?
     private(set) weak var client: TextClient?
-    private var shiftTap = ShiftTap()
-    /// 最近上屏的字（给会话当上文排序），只留末尾一小段。
-    private var recent = ""
-    /// 每次上屏后调用（外壳用来定时保存学习数据）。
+    /// 上屏里有引擎学到的选词时调用（frame->learned；外壳攒够次数存一次学习数据）。
+    /// 只上屏了标点、emoji、计算结果的不调。
     public var onCommit: ((String) -> Void)?
     /// Ctrl+Delete 忘掉了学错的词以后调用（外壳马上存学习数据，免得重启又回来）。
     public var onForget: (() -> Void)?
@@ -196,21 +224,19 @@ public final class Composer {
     /// 有新的就交给 ClipboardHistory.remember。
     public var sampleClipboard: (() -> Void)?
     /// 最近用过的 emoji（表情面板里排最前）。
+    /// 最近用过的 emoji（在核心里，一个进程一份）；测试里换一个只在内存里的
     public var recentEmoji = RecentEmoji.shared
     /// 开着的工具栏 / 表情面板（Toolbar.swift）；nil 是没开
-    var tool: ToolState?
 
-    // 互译
+    // 互译：攒原文、去抖、回车等译完、离开「译」上屏原文都在会话里，这里只画和排定时器
     /// 翻译器（一个进程一个，所有输入框共用）；nil 表示没有互译
     private var translator: TranslationBackend?
+    /// 交给会话的函数表背后的对象（会话借用它，换翻译器时先让会话换掉再放）
+    private var translateBridge: TranslateBridge?
     /// 攒着的原文（还没上屏）
-    public private(set) var translateSource = ""
-    /// 编辑区里现在写着的译文（原文改了、新译文还没写到这么长时先留着，免得一闪一闪）
-    private var translateShown = ""
-    /// 按过回车 / 空格，等译好了就上屏
-    private var translatePending = false
-    /// 什么时候发请求（clock 的时间）；nil 不用发
-    private var translateAt: Double?
+    public var translateSource: String {
+        String(cString: wowtype_session_translate_source(session))
+    }
     /// 现在画的是哪个结果（signature），结果变了才重画
     private var translateDrawn = ""
     /// 原文变了、在等译文：外壳开始每 50 毫秒调一次 pollTranslation（已经在调就不用管）。
@@ -246,10 +272,11 @@ public final class Composer {
         refresh()
     }
 
-    /// 换设置。Shift 切换关掉时回到中文；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
+    /// 换设置。Shift 切换关掉、也没另设切换键时回到中文（切不回来了；进出「译」的键只进出「译」，不算）；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
     public func apply(_ config: WowtypeConfig) {
         self.config = config
-        if config.shiftToggle == .off || (mode == .translate && !translateAvailable) {
+        let noWayBack = config.shiftToggle == .off && config.toggleKey == nil
+        if noWayBack || (mode == .translate && !translateAvailable) {
             switchMode(to: .chinese)
         }
         if !config.clipboardHistory {
@@ -261,10 +288,22 @@ public final class Composer {
     /// 换翻译器（外壳在设置里第一次打开互译时建）。
     public func setTranslator(_ translator: TranslationBackend?) {
         guard translator !== self.translator else { return }
-        leaveTranslate()
+        // 换翻译器前攒着的原文原样上屏（会话换翻译器时会丢掉原文）
+        let source = translateSource
+        if !source.isEmpty {
+            client?.insertText(source)
+        }
         self.translator = translator
+        let bridge = translator.map(TranslateBridge.init)
+        if var table = bridge?.table {
+            wowtype_session_set_translate_backend(session, &table)
+        } else {
+            wowtype_session_set_translate_backend(session, nil)
+        }
+        translateBridge = bridge
+        configure()
         if mode == .translate && !translateAvailable {
-            mode = .chinese
+            apply(wowtype_session_set_mode(session, WOWTYPE_MODE_CHINESE))
         }
         refresh()
     }
@@ -314,27 +353,31 @@ public final class Composer {
         if key.release {
             return false
         }
-        shiftTap.interrupt()
+        // 先报给会话：按住 Shift 时按了别的键，这一下就不算单按（下面有的键不交给会话）
+        observe(key)
         // 表情面板快捷键中英文都管；工具栏、表情面板开着时按键都归它们（和 Linux 一样）
         if let emojiKey = config.emojiKey, emojiKey.matches(key) {
             toggleEmojiPanel()
             return true
         }
-        if tool != nil {
+        if openPanel != nil {
             return handleToolKey(key)
         }
-        if !translateSource.isEmpty && !translating {
-            // 「译」里攒着原文时输入框变成了不能翻译的（开了安全输入）：原文先原样上屏
-            leaveTranslate()
-            refresh()
+        if let action = modeKeyAction(key) {
+            // 另设的切换键（中 ↔ 英，在「译」里回中文）、进出「译」的键：会话切；
+            // 进不了「译」（没配好、密码框）时交给应用。翻译器可能刚配好或者不能用了：先跟上（和单按 Shift 一样）
+            configure()
+            return sendToSession(key, action: action)
         }
-        // 互译、没在打拼音：回车上屏译文、退格删原文、数字和 / + 进原文……
-        if translating && !isComposing && handleTranslateKey(key) {
-            return true
+        // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
+        // 都由会话处理（「译」里攒着原文时输入框变成了不能翻译的，会话先把原文原样上屏）
+        if mode == .translate && !isComposing
+            && key.modifiers.isDisjoint(with: [.control, .option, .command]) {
+            return sendToSession(key)
         }
         if mode == .english {
-            // 英文模式：按键原样交给应用；汉字后面打字母、数字要补空格时自己上屏
-            return autoSpaceKey(key)
+            // 英文模式：按键原样交给应用；汉字后面打字母、数字要补空格时会话连空格一起上屏
+            return sendToSession(key)
         }
         let composing = isComposing
         if engine == nil && !composing {
@@ -342,9 +385,9 @@ public final class Composer {
             return false
         }
         if !key.modifiers.isDisjoint(with: [.control, .option, .command]) {
-            // 打字途中先问会话：Ctrl+Delete、Ctrl+退格忘掉光标处学错的词。
-            // 别的快捷键交给应用，打到一半时编辑区留着
-            return composing && sendToSession(key)
+            // 先问会话：打字途中 Ctrl+Delete、Ctrl+退格忘掉光标处学错的词。别的快捷键交给应用，
+            // 打到一半时编辑区留着；没在打字时会话借这一下知道应用里的字可能变了（上文作废）
+            return sendToSession(key)
         }
         if !composing {
             return handleIdle(key)
@@ -354,82 +397,91 @@ public final class Composer {
 
     /// Shift 的按下 / 松开（macOS 的 flagsChanged）。单按切中英文时返回 true。
     /// right 是右 Shift（设置里 ShiftToggle 可以只用一边，或者不用 Shift 切换）。
+    /// 判断在会话里（和 Linux 同一套规矩）：中间按了别的键、按住超过 0.5 秒、按下时带着别的修饰键、
+    /// 工具栏或表情面板开着都不算。
     @discardableResult
     public func shiftChanged(down: Bool, otherModifiers: Bool, now: Double, right: Bool = false) -> Bool {
-        let allowed: Bool
-        switch tool == nil ? config.shiftToggle : .off { // 工具栏、表情面板开着时不切
-        case .both: allowed = true
-        case .left: allowed = !right
-        case .right: allowed = right
-        case .off: allowed = false
-        }
-        guard allowed else {
-            shiftTap.interrupt()
+        configure() // 翻译器可能刚配好（本地模型下载完）：「译」这一档跟着
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.keysym = right ? 0xffe2 : 0xffe1
+        raw.release = down ? 0 : 1
+        raw.modifiers = otherModifiers ? Modifiers.control.rawValue : 0
+        raw.time_ms = UInt64(max(now, 0) * 1000)
+        guard let frame = wowtype_session_key(session, &raw), frame.pointee.mode_changed != 0 else {
             return false
         }
-        guard shiftTap.shift(down: down, otherModifiers: otherModifiers, now: now) else {
-            return false
-        }
-        toggleMode()
+        // 打到一半切英文：会话把已选的词 + 打的字母放进了 frame；离开「译」时是攒着的原文
+        apply(frame)
         return true
     }
 
     /// 别的修饰键变了（Command、Option 等）：这次 Shift 不算单按。
     public func otherModifierChanged() {
-        shiftTap.interrupt()
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
+        wowtype_session_key(session, &raw)
     }
 
-    /// 单按 Shift：中 → 英 → 译 → 中（没配好互译时只在中英之间切），和 Linux 一样。
-    public func toggleMode() {
-        switch mode {
-        case .chinese: switchMode(to: .english)
-        case .english: switchMode(to: translateAvailable ? .translate : .chinese)
-        case .translate: switchMode(to: .chinese)
+    /// 告诉会话有这个键（只用来打断单按 Shift，不处理）。
+    private func observe(_ key: KeyInput) {
+        var raw = WowtypeKey()
+        raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
+        raw.keysym = key.keysym
+        raw.modifiers = key.modifiers.rawValue
+        raw.action = UInt32(WOWTYPE_KEY_ACTION_OBSERVE)
+        wowtype_session_key(session, &raw)
+    }
+
+    /// 设置里另设的切换键、进出「译」的键（和 Linux 一样：两个一样时算进出「译」）。
+    private func modeKeyAction(_ key: KeyInput) -> UInt32? {
+        if config.translateModeKey?.matches(key) == true {
+            return UInt32(WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE)
         }
+        if config.toggleKey?.matches(key) == true {
+            return UInt32(WOWTYPE_KEY_ACTION_TOGGLE_MODE)
+        }
+        return nil
     }
 
-    /// 切模式。打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）；
+    /// 切模式。打到一半切英文：已选的词 + 打的字母原样上屏（会话做，和微信输入法一样）；
     /// 离开「译」：攒着的原文原样上屏，正在打的拼音留着接着打。
     public func switchMode(to newMode: Mode) {
         let target = newMode == .translate && !translateAvailable ? Mode.chinese : newMode
         guard target != mode else { return }
-        if mode == .translate {
-            leaveTranslate()
+        let raw: Int32
+        switch target {
+        case .chinese: raw = WOWTYPE_MODE_CHINESE
+        case .english: raw = WOWTYPE_MODE_ENGLISH
+        case .translate: raw = WOWTYPE_MODE_TRANSLATE
         }
-        if target == .english && isComposing {
-            commitInput()
-        }
-        mode = target
-        refresh()
+        apply(wowtype_session_set_mode(session, raw))
     }
 
-    /// 切走输入法、换输入框：打到一半的原样上屏（互译时拼音进原文，原文再原样上屏，和 Linux 一样），
-    /// 工具栏、表情面板收起来。
+    /// 系统要结束组字（换输入框、点了别处、切走输入法）：已选的词 + 打的字母原样上屏（和回车一样，
+    /// 双拼是打的键、五笔是码，不带分音节的隔音符）；互译时拼音先进原文，原文再原样上屏。
+    /// 工具栏、表情面板收起来，会话记的上文作废（回来时光标可能在别处）。
+    /// Linux 上同样的时候是丢掉：那边工具包抢先上屏的是编辑区里显示的字，输入法没法换成原始字母。
     public func commitComposition() {
         closeTool()
-        if isComposing {
-            commitInput()
+        if hasPendingText {
+            apply(wowtype_session_reset(session, 1))
         }
-        if !translateSource.isEmpty {
-            commitTranslateSource()
-        }
+        apply(wowtype_session_reset(session, 0))
     }
 
-    /// 放弃正在打的（输入框失去焦点）：拼音和互译攒着的原文都丢掉。
+    /// 放弃正在打的：拼音、选了一半的句子、互译攒着的原文都丢掉，工具栏、表情面板收起来，上文作废。
     public func cancel() {
-        tool = nil
-        clearTranslation()
+        closeTool()
+        translateDrawn = ""
+        wowtype_session_translate_clear(session)
         apply(wowtype_session_reset(session, 0))
     }
 
     /// 点候选框里显示的第 index 个（和按数字键一样）。
     public func select(_ index: Int) {
-        if let tool {
-            // 工具栏一页 9 个、表情面板一屏 36 个，index 是这一页 / 这一屏里的
-            let size = tool.panel.isEmoji ? CandidatePage.columns * ToolLimits.gridRows : ToolLimits.pageSize
-            selectTool(tool.cursor / size * size + index)
-            return
-        }
+        // 工具栏 / 表情面板开着时选的是面板这一页 / 这一屏里的第 index 项（会话认）
         guard index >= 0, let frame = wowtype_session_select(session, index), frame.pointee.handled != 0 else {
             return
         }
@@ -447,9 +499,26 @@ public final class Composer {
         config.date_time = settings.dateTime ? 1 : 0
         config.emoji_suggest = settings.emojiSuggest ? 1 : 0
         config.horizontal = settings.horizontal ? 1 : 0
+        config.arrow_keys = settings.arrowKeysValue
         config.page_keys = settings.pageKeys
         config.select_keys = settings.selectKeysValue
         config.pick_char = settings.pickChar ? 1 : 0
+        config.punct_style = settings.halfwidthPunct ? 1 : 0
+        config.auto_space = UInt32(bitPattern: settings.autoSpaceFlags)
+        switch settings.shiftToggle {
+        case .both: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_BOTH
+        case .left: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_LEFT
+        case .right: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_RIGHT
+        case .off: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_OFF
+        }
+        config.translate_mode = translateAvailable ? 1 : 0
+        config.translate_key = settings.translateModeKey == nil ? 0 : 1
+        config.toolbar = settings.toolbar ? 1 : 0
+        config.clipboard_history = settings.clipboardHistory ? 1 : 0
+        config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
+        config.wubi = settings.wubi ? 1 : 0
+        config.wubi_auto_commit = settings.wubiAutoCommit ? 1 : 0
+        config.wubi_hint = settings.wubiHint ? 1 : 0
         wowtype_session_configure(session, &config)
         if isComposing {
             refresh()
@@ -457,56 +526,33 @@ public final class Composer {
     }
 
     private func handleIdle(_ key: KeyInput) -> Bool {
-        guard let c = key.ascii else {
-            return false
+        // 都交给会话：字母开始编辑区（大写原样保留，Hello、iPhone 出英文候选）；
+        // 标点换成中文标点（半角样式、数字后面的、没有中文写法的交给应用）；
+        // 汉字后面打数字要补空格时会话自己上屏（第 5 章）；退格、方向键、回车这些交给应用，
+        // 会话借这一下知道应用里的字可能变了（上文作废）
+        if sendToSession(key) {
+            return true
         }
-        if key.isLetter {
-            // 大小写字母都开始编辑区（和 Linux 一样）：大写原样保留，Hello、iPhone 出英文候选
-            return sendToSession(key)
-        }
-        if key.isDigit {
-            // 数字交给应用；汉字后面要补空格时自己上屏（第 5 章）
-            return autoSpaceKey(key)
-        }
-        if let text = punctuation(for: c) {
-            insert(text)
+        // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
+        if translating, let c = key.ascii, c > 0x20, c < 0x7f, !key.isLetter {
+            insert(String(UnicodeScalar(c)))
             return true
         }
         return false
     }
 
     private func handleComposing(_ key: KeyInput) -> Bool {
-        if opensToolbar(key) {
-            return true
+        if key.keysym == 0x20 && input == "v" && config.clipboardHistory {
+            // 只打一个 v 再按空格打开工具栏（会话做）：剪贴板页要的历史先读一次
+            sampleClipboard?()
         }
         if sendToSession(key) {
             return true
         }
-        // 会话不管的键。展开面板里按了这种键，会话已经把面板收起来了，先重画
+        // 会话不管的键（标点、符号也是会话处理：先上屏候选再上屏标点）。展开面板里按了这种键，
+        // 会话已经把面板收起来了，先重画；其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
         refresh()
-        guard let c = key.ascii, c > 0x20, c < 0x7f, c != 0x27 else {
-            // 其他功能键（Tab、Home 等）打字途中吃掉，免得光标跑到别处
-            return true
-        }
-        // 打字途中按标点、其他可见字符（/ + 等）：先上屏当前候选（光标停在句首词上时，
-        // 选完它还剩半句，接着选第一个候选，直到整句上屏），再上屏标点或这个字符
-        for _ in 0..<16 where isComposing {
-            commitCurrent()
-        }
-        insert(punctuation(for: c) ?? String(UnicodeScalar(c)))
         return true
-    }
-
-    /// 没在打拼音时 ' 是单引号（‘ ’ 交替）；打拼音途中它是隔音符，进不到这里。
-    /// 引号左右交替的状态在核心里，所以一个键只能调一次 wowtype_punct。
-    private func punctuation(for c: UInt8) -> String? {
-        guard wowtype_fullwidth_punct(Int32(c)) != nil else {
-            return nil
-        }
-        guard let text = wowtype_punct(Int32(c), punctStyle, Int32(bitPattern: previousCharacter)) else {
-            return String(UnicodeScalar(c))
-        }
-        return String(cString: text)
     }
 
     /// 光标前一个字：互译时是攒着的原文的最后一个字（3.14 的点、20:22 的冒号要原样进原文）。
@@ -518,13 +564,30 @@ public final class Composer {
     }
 
     @discardableResult
-    private func sendToSession(_ key: KeyInput) -> Bool {
+    func sendToSession(_ key: KeyInput, action: UInt32 = UInt32(WOWTYPE_KEY_ACTION_NONE)) -> Bool {
         var raw = WowtypeKey()
         raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
         raw.keysym = key.keysym
         raw.modifiers = key.modifiers.rawValue
         raw.release = key.release ? 1 : 0
-        raw.prev_char = previousCharacter
+        raw.action = action
+        raw.time_ms = UInt64(max(clock(), 0) * 1000)
+        if client?.allowsTranslation != true {
+            // 密码框（安全输入）：「译」里也照常上屏、不往外发，进出「译」的键进不去
+            raw.hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE
+        }
+        if translating {
+            // 互译时上屏的字进原文：光标前的字是原文的最后一个字（3.14 的点、20:22 的冒号原样进原文），不补空格
+            raw.prev_char = previousCharacter
+            raw.hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE
+        } else {
+            // 应用告诉的才给（自己猜的给 0）：会话按它决定要不要补空格、核对自己记的上文；
+            // 数字后面的标点它自己也记
+            raw.prev_char = reliablePreviousCharacter
+            if raw.prev_char != 0 {
+                raw.hints |= WOWTYPE_KEY_HINT_SURROUNDING
+            }
+        }
         guard let frame = wowtype_session_key(session, &raw) else {
             return false
         }
@@ -535,27 +598,21 @@ public final class Composer {
         return handled
     }
 
-    /// 和按空格一样：上屏光标处的候选，没有候选时上屏原始输入。
-    private func commitCurrent() {
-        sendToSession(.char(" "))
-    }
-
-    func commitInput() {
-        // 回车：已选的词 + 剩下的字母原样上屏（会话会记选词）
-        apply(wowtype_session_reset(session, 1))
+    /// 应用告诉的光标前一个字（外壳自己猜的不算），没有是 0。
+    private var reliablePreviousCharacter: UInt32 {
+        client.map { $0.previousCharacterIsReliable ? $0.previousCharacter : 0 } ?? 0
     }
 
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
-    private func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
+    func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         if let frame, let commit = frame.pointee.commit {
-            insert(String(cString: commit))
-            // 选的是打字推荐的 emoji：记进最近用过（表情面板里排最前）
-            var info = WowtypeCandidateInfo()
-            info.size = UInt32(MemoryLayout<WowtypeCandidateInfo>.size)
-            if wowtype_session_last_choice(session, &info) == 0, info.kind == WOWTYPE_CAND_EMOJI,
-               let emoji = info.emoji {
-                recentEmoji.remember(String(cString: emoji))
+            // 会话已经补好了空格、记了上文；互译时上屏的是译文、原文
+            let text = String(cString: commit)
+            client?.insertText(text)
+            if frame.pointee.learned != 0 {
+                onCommit?(text)
             }
+            // 选了 emoji（打字推荐的、表情面板的）会话记进最近用过
         }
         if let frame, Int(frame.pointee.size) >= MemoryLayout<WowtypeFrame>.size, frame.pointee.forgot != 0 {
             onForget?()
@@ -563,58 +620,24 @@ public final class Composer {
         refresh()
     }
 
-    /// 汉字和字母、数字之间要不要补一个空格（设置里的 AutoSpace，只看这一处边界）。
-    private func needsAutoSpace(before next: String) -> Bool {
-        let flags = config.autoSpaceFlags
-        guard flags != 0, let client, let first = next.unicodeScalars.first,
-              client.previousCharacterIsReliable
-        else {
-            return false
-        }
-        let prev = client.previousCharacter
-        return prev != 0 && wowtype_autospace(Int32(bitPattern: prev), Int32(bitPattern: first.value), flags) == 1
-    }
-
-    /// 英文模式、没在打字时直接打的字母和数字：要补空格就连空格一起上屏，吃掉这个键。
-    private func autoSpaceKey(_ key: KeyInput) -> Bool {
-        guard key.modifiers.isDisjoint(with: [.control, .option, .command]),
-              key.isLetter || key.isDigit, let c = key.ascii
-        else {
-            return false
-        }
-        let text = String(UnicodeScalar(c))
-        guard needsAutoSpace(before: text) else {
-            return false
-        }
-        client?.insertText(" " + text)
-        return true
-    }
-
-    /// 上屏：交给应用（要补空格时带上空格）；互译时进原文。
+    /// 上屏一段与拼音无关的字（语音识别的结果）：交给会话，和工具栏、表情面板上屏的一样
+    /// 补空格、记上文，互译时进原文。
     func insert(_ text: String) {
         guard !text.isEmpty else { return }
-        if translating {
-            translateSource += text
-            translateSourceChanged(now: endsSentence(text))
-            refresh()
-        } else {
-            client?.insertText(needsAutoSpace(before: text) ? " " + text : text)
-        }
-        recent = String((recent + text).suffix(20))
-        wowtype_session_set_context(session, recent)
-        onCommit?(text)
+        apply(wowtype_session_commit_text(session, text, reliablePreviousCharacter))
     }
 
     func refresh() {
-        if let tool {
-            drawTool(tool)
+        if openPanel != nil {
+            drawTool()
+            return
+        }
+        if translating, let all = wowtype_session_frame(session), all.pointee.translating != 0,
+           isComposing || !translateSource.isEmpty {
+            refreshTranslate(all)
             return
         }
         let frame = isComposing ? wowtype_session_frame(session) : nil
-        if translating && (frame != nil || !translateSource.isEmpty) {
-            refreshTranslate(frame)
-            return
-        }
         guard let frame else {
             client?.setMarkedText("", cursor: 0)
             client?.showCandidates(nil)
@@ -631,216 +654,67 @@ public final class Composer {
         let f = frame.pointee
         // 只读显示的这些：候选可能有上千个
         var texts: [String] = []
+        var comments: [String] = []
         texts.reserveCapacity(f.cand_count)
         for i in 0..<f.cand_count {
             if let text = wowtype_session_candidate(session, i) {
                 texts.append(String(cString: text))
+                comments.append(wowtype_session_candidate_comment(session, i).map { String(cString: $0) } ?? "")
             }
         }
-        guard !texts.isEmpty else { return nil }
-        return CandidatePage(texts: texts, cursor: Int(f.cand_cursor), hasPrev: f.has_prev != 0,
-                             hasNext: f.has_next != 0, expanded: f.panel == 1, vertical: !config.horizontal)
+        // 五笔空码、没有码表时没有候选，只有上方一行提示
+        let aux = f.aux.map { String(cString: $0) }
+        guard !texts.isEmpty || aux != nil else { return nil }
+        var page = CandidatePage(texts: texts, cursor: Int(f.cand_cursor), hasPrev: f.has_prev != 0,
+                                 hasNext: f.has_next != 0, expanded: f.panel == 1, aux: aux, vertical: !config.horizontal)
+        page.comments = comments
+        return page
     }
 
     // MARK: 互译
 
-    /// 互译、没在打拼音时的键（Linux 的 handleTranslateKey）。返回 true 表示吃掉了。
-    private func handleTranslateKey(_ key: KeyInput) -> Bool {
-        guard key.modifiers.isDisjoint(with: [.control, .option, .command]) else {
-            return false
-        }
-        if !translateSource.isEmpty {
-            switch key.keysym {
-            case Keysym.returnKey, Keysym.keypadEnter:
-                if key.modifiers.contains(.shift) {
-                    commitTranslateSource()
-                } else {
-                    commitTranslation()
-                }
-                return true
-            case 0x20:
-                commitTranslation()
-                return true
-            case Keysym.escape:
-                clearTranslation()
-                refresh()
-                return true
-            case Keysym.backspace:
-                translateSource.removeLast()
-                translateSourceChanged(now: false)
-                refresh()
-                return true
-            case Keysym.left, Keysym.right, Keysym.up, Keysym.down, Keysym.home, Keysym.end,
-                 Keysym.pageUp, Keysym.pageDown, Keysym.tab, Keysym.delete:
-                // 原文里没有光标，别让应用里的光标乱跑
-                return true
-            default:
-                break
-            }
-        }
-        // 数字和没有中文写法的符号（/ + = 等）平时直接交给应用；互译时要进原文，免得插到前面
-        guard let c = key.ascii, c > 0x20, !key.isLetter, wowtype_fullwidth_punct(Int32(c)) == nil else {
-            return false
-        }
-        insert(String(UnicodeScalar(c)))
-        return true
-    }
-
-    /// 原文变了：停 0.5 秒（now 立刻）再发请求，外壳开始轮询。
-    private func translateSourceChanged(now: Bool) {
-        translatePending = false
-        guard !translateSource.isEmpty else {
-            clearTranslation()
-            return
-        }
-        translator?.owner = self
-        translateAt = clock() + (now ? 0 : Composer.translateDelay)
-        onTranslatePoll?()
-    }
-
-    private func clearTranslation() {
-        translateSource = ""
-        translateShown = ""
-        translatePending = false
-        translateAt = nil
-        translateDrawn = ""
-        if let translator, translator.owner === self {
-            translator.cancel()
-            translator.owner = nil
-        }
-    }
-
-    /// 离开「译」：攒着的原文原样上屏。
-    private func leaveTranslate() {
-        guard !translateSource.isEmpty else {
-            clearTranslation()
-            return
-        }
-        let source = translateSource
-        clearTranslation()
-        client?.insertText(source)
-    }
-
-    /// 外壳每 50 毫秒调一次：到时间就发请求，结果变了就重画，按过回车的译好了就上屏。
-    /// 返回 false 表示不用再调了（下一次原文变了会再叫 onTranslatePoll）。
+    /// 外壳每 50 毫秒调一次（会话的 wake_after_ms）：到时间就发请求，按过回车的译好了就上屏，
+    /// 结果变了就重画。返回 false 表示不用再调了（下一次原文变了会再叫 onTranslatePoll）。
     @discardableResult
     public func pollTranslation() -> Bool {
-        guard let translator else {
-            translateAt = nil
+        guard let frame = wowtype_session_tick(session, UInt64(max(clock(), 0) * 1000)) else {
             return false
         }
-        if translateSource.isEmpty {
-            translateAt = nil
-            if translator.owner === self {
-                translator.cancel()
-                translator.owner = nil
-            }
-            return false
-        }
-        if let at = translateAt, clock() >= at {
-            translateAt = nil
-            translator.owner = self
-            translator.start(translateSource)
-        }
-        let snapshot = translator.poll()
-        let fresh = translateSource == snapshot.source
-        if fresh && snapshot.phase == .error && translatePending {
-            // 出错了就不等了：错误写在候选框底下，回车重试
-            translatePending = false
-        }
-        if translatePending && fresh && snapshot.phase == .done {
-            commitTranslation()
-            return false
-        }
-        // 结果变了才重画；正在打拼音时候选列表（和翻到的页、光标）不动
-        if translateSignature(snapshot) != translateDrawn {
+        if frame.pointee.commit != nil {
+            // 按过回车，译好了：上屏译文（正在打的拼音留着）
+            translateDrawn = ""
+            apply(frame)
+        } else if frame.pointee.translating != 0 && translateSignature(frame) != translateDrawn {
+            // 结果变了才重画；正在打拼音时候选列表（和翻到的页、光标）不动
             refresh()
         }
-        return translateAt != nil || snapshot.phase == .running || translatePending
+        return frame.pointee.wake_after_ms > 0
     }
 
-    private func translateSignature(_ snapshot: TranslateSnapshot) -> String {
-        let fresh = translateSource == snapshot.source
-        var out = "\(fresh ? "\(snapshot.phase)" : "-")|\(translatePending)|\(translateSource)"
-        if fresh {
-            out += "|" + snapshot.text
-            if snapshot.phase == .error {
-                out += "|" + snapshot.error
-            }
-        }
-        return out
-    }
-
-    /// 回车 / 空格：译好了就上屏译文；还没译好（或出错了，回车就是重试）记下来，好了再上屏。
-    private func commitTranslation() {
-        guard let translator, !translateSource.isEmpty else { return }
-        let snapshot = translator.poll()
-        let fresh = translateSource == snapshot.source
-        if fresh && snapshot.phase == .done {
-            let text = snapshot.text
-            clearTranslation()
-            client?.insertText(text)
-            refresh()
-            return
-        }
-        translatePending = true
-        translator.owner = self
-        if !fresh || snapshot.phase == .error || snapshot.phase == .idle {
-            translator.start(translateSource)
-            translateAt = nil
-        }
-        onTranslatePoll?()
-        refresh()
-    }
-
-    /// Shift+回车：原文原样上屏。
-    private func commitTranslateSource() {
-        guard !translateSource.isEmpty else { return }
-        let source = translateSource
-        clearTranslation()
-        client?.insertText(source)
-        refresh()
+    private func translateSignature(_ frame: UnsafePointer<WowtypeFrame>) -> String {
+        let f = frame.pointee
+        return [f.translate_source, f.translate_text, f.translate_status, f.translate_title]
+            .map { String(cString: $0) }.joined(separator: "|") + "|\(f.translate_done)"
     }
 
     /// 互译时画编辑区和候选框（Linux 的 fillTranslateView）：编辑区里是译文，
-    /// 候选框顶上是「中→英 互译：」+ 原文 + 正在打的拼音，底下是状态。
-    private func refreshTranslate(_ frame: UnsafePointer<WowtypeFrame>?) {
-        guard let translator else { return }
-        let snapshot = translator.poll()
-        let fresh = !translateSource.isEmpty && translateSource == snapshot.source
-        let failed = fresh && snapshot.phase == .error
-        let done = fresh && snapshot.phase == .done
-        let text = fresh && !failed ? snapshot.text : ""
-        translateDrawn = translateSignature(snapshot)
-
-        // 编辑区里的译文：原文改了、新译文还没写到上一句那么长时先留着上一句
-        if translateSource.isEmpty || failed {
-            translateShown = ""
-        } else if done || text.utf8.count >= translateShown.utf8.count {
-            translateShown = text
+    /// 候选框顶上是「中→英 互译：」+ 原文 + 正在打的拼音，底下是状态。内容都是会话给的。
+    private func refreshTranslate(_ frame: UnsafePointer<WowtypeFrame>) {
+        let f = frame.pointee
+        translateDrawn = translateSignature(frame)
+        if f.wake_after_ms > 0 {
+            onTranslatePoll?()
         }
-
-        var box = translateSource
-        if let frame {
-            box += String(cString: frame.pointee.preedit)
+        let shown = String(cString: f.translate_text)
+        var box = String(cString: f.translate_source)
+        if isComposing {
+            box += String(cString: f.preedit)
         }
-        let status: String
-        if failed {
-            status = snapshot.error + "（回车重试）"
-        } else if translatePending {
-            status = "翻译中…好了就上屏"
-        } else if !translateSource.isEmpty && !done {
-            status = "翻译中…"
-        } else if !translateSource.isEmpty && frame == nil {
-            status = "回车上屏 · Shift+回车上屏原文 · Esc 清空"
-        } else {
-            status = ""
-        }
-        client?.setMarkedText(translateShown, cursor: translateShown.utf16.count)
-        var page = frame.flatMap(candidatePage)
+        client?.setMarkedText(shown, cursor: shown.utf16.count)
+        var page = (isComposing ? candidatePage(frame) : nil)
             ?? CandidatePage(texts: [], cursor: -1, hasPrev: false, hasNext: false, expanded: false)
-        page.translate = TranslatePanel(title: translator.tag(for: translateSource) + " 互译：",
-                                        source: box, status: status)
+        page.translate = TranslatePanel(title: String(cString: f.translate_title), source: box,
+                                        status: String(cString: f.translate_status))
         client?.showCandidates(page)
     }
 
@@ -856,11 +730,6 @@ public final class Composer {
         }
         return out
     }
-}
-
-/// 这段文字以句末标点（或换行）结尾：一句话多半打完了，马上翻译。
-func endsSentence(_ text: String) -> Bool {
-    ["。", "！", "？", "…", ".", "!", "?", "\n"].contains { text.hasSuffix($0) }
 }
 
 /// 单调时钟（秒）。

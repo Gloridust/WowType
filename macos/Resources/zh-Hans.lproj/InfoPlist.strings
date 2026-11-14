@@ -3,3 +3,5 @@
 "CFBundleDisplayName" = "WowType";
 "io.github.gloridust.inputmethod.WowType" = "WowType 拼音";
 "io.github.gloridust.inputmethod.WowType.Hans" = "WowType 拼音";
+
+"NSMicrophoneUsageDescription" = "按住语音键说话，WowType 在本机把说的话识别成文字。";

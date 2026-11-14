@@ -5,13 +5,9 @@
 // read_custom_words / parse_custom_words / merge_custom_words / normalize_code）。比 Linux 多一点：
 // 没动过的行（注释、频次列）原样写回去。
 //
-// 不依赖 Foundation：按键测试在 Linux 上也编。
+// 不依赖 Foundation：按键测试在 Linux 上也编。编码整理（拼音切音节）、猜拼音用核心的。
 
-#if canImport(Glibc)
-import Glibc
-#else
-import Darwin
-#endif
+import CWowtype
 
 public struct CustomWords: Equatable {
     public struct Entry: Equatable {
@@ -127,6 +123,29 @@ public struct CustomWords: Equatable {
         }
     }
 
+    /// 界面上显示的词：文件里的 \\n（换行）画成 ⏎（列表、提示都这样，和 Linux 设置一样）。
+    public static func shown(_ word: String) -> String {
+        // 不用 Foundation（Linux 上的按键测试也编这个文件）
+        var out = ""
+        var backslash = false
+        for c in word {
+            if backslash {
+                backslash = false
+                if c == "n" {
+                    out += "⏎"
+                    continue
+                }
+                out += "\\"
+            }
+            if c == "\\" {
+                backslash = true
+            } else {
+                out.append(c)
+            }
+        }
+        return backslash ? out + "\\" : out
+    }
+
     /// 加词时检查词：不能空，不能有 TAB 和换行（换行写成 \\n）。
     public static func isValidWord(_ word: String) -> Bool {
         !word.isEmpty && !word.contains(where: { $0 == "\t" || $0 == "\n" || $0 == "\r" })
@@ -152,183 +171,28 @@ public struct CustomWords: Equatable {
 // MARK: 编码
 
 extension CustomWords {
-    /// 合法拼音音节（和 core/src/syllable.rs 的 SYLLABLES、Linux 设置界面的 SYLLABLES 一致）
-    static let syllables: Set<String> = Set("""
-    a ai an ang ao ba bai ban bang bao bei ben beng bi bian biao bie bin bing bo bu ca cai can cang cao
-    ce cen ceng cha chai chan chang chao che chen cheng chi chong chou chu chua chuai chuan chuang chui
-    chun chuo ci cong cou cu cuan cui cun cuo da dai dan dang dao de dei den deng di dia dian diao die
-    ding diu dong dou du duan dui dun duo e ei en eng er fa fan fang fei fen feng fiao fo fou fu ga gai
-    gan gang gao ge gei gen geng gong gou gu gua guai guan guang gui gun guo ha hai han hang hao he hei
-    hen heng hm hng hong hou hu hua huai huan huang hui hun huo ji jia jian jiang jiao jie jin jing
-    jiong jiu ju juan jue jun jv jvan jve jvn ka kai kan kang kao ke kei ken keng kong kou ku kua kuai
-    kuan kuang kui kun kuo la lai lan lang lao le lei leng li lia lian liang liao lie lin ling liu lo
-    long lou lu luan lun luo lv lve ma mai man mang mao me mei men meng mi mian miao mie min ming miu mo
-    mou mu na nai nan nang nao ne nei nen neng ng ni nian niang niao nie nin ning niu nong nou nu nuan
-    nun nuo nv nve o ou pa pai pan pang pao pei pen peng pi pian piao pie pin ping po pou pu qi qia qian
-    qiang qiao qie qin qing qiong qiu qu quan que qun qv qvan qve qvn ran rang rao re ren reng ri rong
-    rou ru rua ruan rui run ruo sa sai san sang sao se sen seng sha shai shan shang shao she shei shen
-    sheng shi shou shu shua shuai shuan shuang shui shun shuo si song sou su suan sui sun suo ta tai tan
-    tang tao te tei teng ti tian tiao tie ting tong tou tu tuan tui tun tuo wa wai wan wang wei wen weng
-    wo wu xi xia xian xiang xiao xie xin xing xiong xiu xu xuan xue xun xv xvan xve xvn ya yan yang yao
-    ye yi yin ying yo yong you yu yuan yue yun yv yvan yve yvn za zai zan zang zao ze zei zen zeng zha
-    zhai zhan zhang zhao zhe zhei zhen zheng zhi zhong zhou zhu zhua zhuai zhuan zhuang zhui zhun zhuo
-    zi zong zou zu zuan zui zun zuo
-    """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init))
-
     /// 自定义词的编码：拼音整理成空格分开的音节；不是拼音但全是字母的（mail）原样小写。都不是返回 nil。
+    /// 规则和音节表在核心里（wowtype_custom_code），Linux 的加载也照那份。
     public static func normalizeCode(_ text: String) -> String? {
-        if let pinyin = normalizePinyin(text) {
-            return pinyin
-        }
-        let code = strip(Substring(text)).lowercased().filter { $0 != "'" }
-        guard !code.isEmpty, code.unicodeScalars.allSatisfy({ ("a"..."z").contains($0) }) else {
-            return nil
-        }
-        return code
+        wowtype_custom_code(text, 0).map { String(cString: $0) }
     }
 
     /// 把打的拼音整理成空格分开的音节：Ni Hǎo、nihao、ni'hao、ni3hao3 → ni hao。不合法返回 nil。
     public static func normalizePinyin(_ text: String) -> String? {
-        var plain = String.UnicodeScalarView()
-        for scalar in strip(Substring(text)).lowercased().unicodeScalars {
-            if let base = toneless[scalar] {
-                plain.append(base)
-            } else if (scalar == "\u{308}" || scalar == ":") && plain.last == "u" {
-                plain.removeLast()  // u + 分音符（没合成一个字的 ü）、u: 都是 v
-                plain.append("v")
-            } else if ("0"..."9").contains(scalar) || (0x300...0x36F).contains(scalar.value) {
-                continue  // 数字声调、单独的声调符号
-            } else {
-                plain.append(scalar)
-            }
-        }
-        var result: [String] = []
-        let tokens = String(plain).split(whereSeparator: { $0 == "'" || $0 == "’" || $0.isWhitespace })
-        for token in tokens.map(String.init) {
-            if syllables.contains(token) {
-                result.append(token)
-            } else if token == "r" && !result.isEmpty {
-                result.append(token)  // 儿化
-            } else if let parts = splitSyllables(token) {
-                result += parts
-            } else {
-                return nil
-            }
-        }
-        return result.isEmpty ? nil : result.joined(separator: " ")
+        wowtype_custom_code(text, 1).map { String(cString: $0) }
     }
-
-    /// nihao → [ni, hao]：音节数最少，一样多时前面的取长的。切不开返回 nil。
-    static func splitSyllables(_ text: String) -> [String]? {
-        let chars = Array(text)
-        let n = chars.count
-        // best[i]：从 i 切到最后最少几个音节、第一个多长
-        var best = [(count: Int, length: Int)?](repeating: nil, count: n + 1)
-        best[n] = (0, 0)
-        if n > 0 {
-            for i in stride(from: n - 1, through: 0, by: -1) {
-                for length in stride(from: min(6, n - i), through: 1, by: -1) {
-                    guard let rest = best[i + length], syllables.contains(String(chars[i..<i + length])) else {
-                        continue
-                    }
-                    if best[i] == nil || rest.count + 1 < best[i]!.count {
-                        best[i] = (rest.count + 1, length)
-                    }
-                }
-            }
-        }
-        guard best[0] != nil else { return nil }
-        var parts: [String] = []
-        var i = 0
-        while i < n {
-            let length = best[i]!.length
-            parts.append(String(chars[i..<i + length]))
-            i += length
-        }
-        return parts
-    }
-
-    /// 带声调的字母 → 不带的（ü 是 v）
-    private static let toneless: [Unicode.Scalar: Unicode.Scalar] = {
-        var map: [Unicode.Scalar: Unicode.Scalar] = [:]
-        let table: [(Unicode.Scalar, String)] = [("a", "āáǎà"), ("e", "ēéěèê"), ("i", "īíǐì"), ("o", "ōóǒò"),
-                                                 ("u", "ūúǔù"), ("v", "üǖǘǚǜ"), ("n", "ńňǹ"), ("m", "ḿ")]
-        for (base, marked) in table {
-            for scalar in marked.unicodeScalars {
-                map[scalar] = base
-            }
-        }
-        return map
-    }()
 }
 
 // MARK: 从词库猜拼音
 
 extension CustomWords {
     /// 在词库原文（拼音<TAB>词<TAB>频次）里找词的拼音：整个词有就取频次最高的那条，没有就一个字一个字找。
-    /// 猜不出（有词库里没有的字、英文）返回 nil。和 Linux 设置界面的 PinyinGuesser 一样。
+    /// 猜不出（有词库里没有的字、英文）返回 nil。核心做（wowtype_guess_pinyin），和 Linux 设置界面的
+    /// PinyinGuesser 规则一样。
     public static func guessPinyin(_ word: String, lexicon: UnsafeRawBufferPointer) -> String? {
-        guard !word.isEmpty, lexicon.count > 0 else { return nil }
-        if let found = lookup(word, lexicon) {
-            return normalizePinyin(found)
-        }
-        var readings: [String] = []
-        for char in word {
-            guard let reading = lookup(String(char), lexicon) else { return nil }
-            readings.append(reading)
-        }
-        return normalizePinyin(readings.joined(separator: " "))
-    }
-
-    private static func lookup(_ word: String, _ data: UnsafeRawBufferPointer) -> String? {
-        let needle = Array(("\t" + word + "\t").utf8)
-        let bytes = data.bindMemory(to: UInt8.self)
-        var best: String?
-        var bestFreq = -1.0
-        var from = 0
-        while let pos = find(needle, in: bytes, from: from) {
-            var start = pos
-            while start > 0, bytes[start - 1] != 0x0A {
-                start -= 1
-            }
-            var end = pos + needle.count
-            while end < bytes.count, bytes[end] != 0x0A {
-                end += 1
-            }
-            let freqText = strip(Substring(String(decoding: bytes[(pos + needle.count)..<end], as: UTF8.self)))
-            let freq = Double(freqText) ?? 0
-            if freq > bestFreq {
-                best = String(decoding: bytes[start..<pos], as: UTF8.self)
-                bestFreq = freq
-            }
-            from = end
-        }
-        return best
-    }
-
-    private static func find(_ needle: [UInt8], in bytes: UnsafeBufferPointer<UInt8>, from: Int) -> Int? {
-        guard let base = bytes.baseAddress, from < bytes.count, needle.count <= bytes.count - from else {
-            return nil
-        }
-        #if canImport(Darwin)
-        let hit = needle.withUnsafeBytes { n in
-            memmem(base + from, bytes.count - from, n.baseAddress, n.count)
-        }
-        guard let hit else { return nil }
-        return base.distance(to: hit.assumingMemoryBound(to: UInt8.self))
-        #else
-        var i = from
-        let last = bytes.count - needle.count
-        while i <= last {
-            guard let p = memchr(base + i, Int32(needle[0]), last - i + 1) else { return nil }
-            i = base.distance(to: p.assumingMemoryBound(to: UInt8.self))
-            if memcmp(base + i, needle, needle.count) == 0 {
-                return i
-            }
-            i += 1
-        }
-        return nil
-        #endif
+        guard !word.isEmpty, let base = lexicon.baseAddress, lexicon.count > 0 else { return nil }
+        return wowtype_guess_pinyin(base.assumingMemoryBound(to: CChar.self), lexicon.count, word)
+            .map { String(cString: $0) }
     }
 }
 

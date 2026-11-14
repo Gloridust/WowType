@@ -23,8 +23,11 @@ Rust 核心负责音节图、束搜索、词典/LM 打分和排序；C++ 只负�
 
 ## 依赖、构建和安装
 
-需要 **Fcitx5 5.1 或更新、C++20 和 Rust**。各发行版的软件包名称、词库准备、安装和桌面启用步骤统一见
-[安装说明](../docs/INSTALL.md)。Ubuntu 22.04 默认仓库的 Fcitx5 版本不满足要求。
+需要 **Fcitx5 5.0 或更新、C++20 和 Rust**。各发行版的软件包名称、词库准备、安装和桌面启用步骤统一见
+[安装说明](../docs/INSTALL.md)。
+
+5.1 以后才有的接口按版本判断：5.1.11 起才有自定义的中 / 英提示气泡（`WOWTYPE_HAVE_CUSTOM_IM_INFO`），
+更早的显示 Fcitx 5 默认的输入法提示。插件清单（`wowtype-addon.conf`）里要求的 fcitx5 版本是编译时版本的「主.次.0」（5.1.x 上编的写 5.1.0）。
 
 在仓库根目录构建并安装：
 
@@ -84,7 +87,7 @@ Rust 的符号也不导出（`--exclude-libs,ALL`），不会和别的插件冲�
 
 英文词表直接接受 rime 的 `en.dict.yaml`（「上屏<TAB>编码」），也可以每行一个词。
 
-词库在后台线程载入（全量 89 万条约 0.6 秒，有快照缓存时），不会卡住 fcitx5 启动；
+词库在后台线程载入（默认的全量词库约 0.6 秒，有快照缓存时），不会卡住 fcitx5 启动；
 载入完成前打字只显示拼音，空格上屏原始字母。
 
 词典格式（TSV，UTF-8）：
@@ -108,7 +111,9 @@ bigram 格式（可选）：
 
 - 已在 Ubuntu 26.04 + fcitx5 5.1.19 上编译，按键行为用 `scripts/addon-test.sh` 测过；
   还没装进日常使用的 fcitx5 里实际打字。
-- fcitx5 5.1 的头文件要求 C++20。
+- fcitx5 5.1 的头文件要求 C++20（5.0 的也能用 C++20 编）。
+- Ubuntu 22.04 + fcitx5 5.0.14 上按键测试全部通过（CI 的「插件 · ubuntu22.04」任务）；那里「密码框也用输入法」这个设置
+  还没有，测的是「密码框里不用输入法、按键原样交给应用」（CMake 看 `globalconfig.h` 里有没有这个设置决定测哪种）。
 - 排序是骨架版：词典频次 + bigram + 覆盖率 + 线性特征；LTR（LightGBM）、
   NNLM 重排、MixRank 只有 trait/钩子，没有真实模型。
 - 云候选没做。
@@ -116,8 +121,8 @@ bigram 格式（可选）：
 ## 配置
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
-`FuzzyZh` 等 9 组模糊音、`Shuangpin`、`ShuangpinScheme`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
-`Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`FuzzyZh` 等 16 组模糊音、`InputScheme`（拼音、双拼、五笔）、`ShuangpinScheme`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
+`ToggleKey`、`TranslateModeKey`、`Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -139,6 +144,7 @@ bigram 格式（可选）：
 | `WOWTYPE_DATETIME` / `WOWTYPE_CALC` | `0` 关掉日期时间候选 / V 模式计算器 |
 | `WOWTYPE_SHUANGPIN` | `1` 使用双拼 |
 | `WOWTYPE_SHUANGPIN_SCHEME` | 双拼方案：`ziranma`、`xiaohe`、`microsoft`、`sogou`、`abc`、`ziguang`、`pinyinjiajia`；设了就打开双拼 |
+| `WOWTYPE_WUBI` | 五笔码表 `wubi86.tsv` 的路径（选了五笔时才载入），默认在用户数据目录、`/usr/share/wowtype` 里找 |
 | `WOWTYPE_SHIFT_TOGGLE` | 单按哪个 Shift 切英文：`both`（默认）、`left`、`right`、`off` |
 | `WOWTYPE_TRADITIONAL` / `WOWTYPE_S2T` | 繁体输出 / 简繁表路径 |
 | `WOWTYPE_VERTICAL` | `1` 候选竖排 |
@@ -177,7 +183,8 @@ bigram 格式（可选）：
 
 ## 互译
 
-`Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）。
+`Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）；
+设了 `TranslateModeKey` 时单按 Shift 只切中英，「译」用这个键进出（插件认出键后带 `WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE` 交给会话，`ToggleKey` 是 `_TOGGLE_MODE`）。
 核心在 `core/src/translate.rs`（C 接口 `wowtype_translate_*`，见 `wowtype_core.h`）：
 
 - 所有上屏都经 `WowtypeEngine::emit()`；互译时不上屏，攒进 `WowtypeState::tsource_`

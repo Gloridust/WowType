@@ -5,9 +5,10 @@
 // 窗口开着时在文本编辑里改的、别的键不会被盖掉；切回窗口时文件变了就重新读。
 
 import AppKit
+import AVFoundation
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, input, emoji, translate, words
+    case general, input, emoji, voice, translate, words
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "常规"
         case .input: return "输入"
         case .emoji: return "表情"
+        case .voice: return "语音"
         case .translate: return "翻译"
         case .words: return "自定义词"
         }
@@ -27,6 +29,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .input: return "keyboard"
         case .emoji: return "face.smiling"
+        case .voice: return "mic"
         case .translate: return "character.bubble"
         case .words: return "book.closed"
         }
@@ -83,6 +86,8 @@ final class SettingsModel: ObservableObject {
     private var releaseChecking = false
     /// 安装包里的雾凇词库（猜拼音用；设置里换了词库就用换的那个）
     private let bundledLexicon: String?
+    /// 安装包里有五笔码表（wubi86.tsv）：没有时「五笔输入」灰掉，说为什么（和 Linux 设置一样）
+    let wubiTableAvailable: Bool
 
     /// 文件里现在的设置（上次读或写的）：保存时只写 config 和它不一样的键
     private var saved: WowtypeConfig
@@ -105,6 +110,7 @@ final class SettingsModel: ObservableObject {
         translateKeySet = !TranslateKeyFile.read(state.translateKeyPath).isEmpty
         wanxiangVersion = LexiconPack.installedVersion(folder: LexiconPackInstaller.folder(in: state.supportDir).path)
         bundledLexicon = state.resource("lexicon.tsv")
+        wubiTableAvailable = state.resource("wubi86.tsv") != nil
         configStamp = FileStamp(state.configPath)
         let loaded = WowtypeConfig.parse(readText(state.configPath) ?? "")
         saved = loaded
@@ -266,8 +272,8 @@ final class SettingsModel: ObservableObject {
                     let latest = try known ?? LexiconPackInstaller.fetchLatest()
                     let tarball = try LexiconPackInstaller.download(latest) { done, total in
                         let text = total > 0
-                            ? "正在下载：\(megabytes(done)) / \(megabytes(total))（\(done * 100 / total)%）"
-                            : "正在下载：\(megabytes(done))"
+                            ? "正在下载：\(LocalModel.sizeText(done)) / \(LocalModel.sizeText(total))（\(done * 100 / total)%）"
+                            : "正在下载：\(LocalModel.sizeText(done))"
                         DispatchQueue.main.async { [weak self] in self?.lexiconProgress = text }
                     }
                     defer { try? FileManager.default.removeItem(at: tarball) }
@@ -312,7 +318,7 @@ final class SettingsModel: ObservableObject {
         guard lexiconKind != .wanxiang, !lexiconBusy else { return }
         let freed = LexiconPackInstaller.remove(supportDir: supportDir)
         wanxiangVersion = nil
-        showToast("已删除万象拼音，空出 \(megabytes(freed))")
+        showToast("已删除万象拼音，空出 \(LocalModel.sizeText(freed))")
     }
 
     func chooseLexicon() {
@@ -336,6 +342,97 @@ final class SettingsModel: ObservableObject {
     // MARK: 本地翻译模型（和 Linux 设置的「离线翻译模型」一样：缺什么下什么）
 
     /// 正在下载时的进度（nil：没在下载）
+    // MARK: 语音模型（和 Linux 设置的「语音」页一样：从腾讯的 CDN 下载官方离线语音包）
+
+    /// 下载中的进度（已下, 总共）；没在下是 nil
+    @Published private(set) var voiceProgress: (Int64, Int64)?
+    @Published private(set) var voiceError: String?
+    @Published private var voiceRevision = 0
+    private var voiceControl: DownloadControl?
+    var voiceBusy: Bool { voiceProgress != nil }
+
+    var voiceModelReady: Bool {
+        _ = voiceRevision
+        return VoiceModelInstaller.isReady(supportDir: supportDir)
+    }
+
+    /// 「语音模型」那一行的状态，和 Linux 一样
+    var voiceModelStatus: String {
+        _ = voiceRevision
+        if let (done, total) = voiceProgress {
+            if done == 0 { return "正在连接…" }
+            if total > 0 && done >= total { return "正在解包…" }
+            return total > 0
+                ? "正在下载：\(LocalModel.sizeText(done)) / \(LocalModel.sizeText(total))（\(done * 100 / total)%）"
+                : "正在下载：\(LocalModel.sizeText(done))"
+        }
+        if voiceModelReady {
+            return "已下载（\(LocalModel.sizeText(LexiconPackInstaller.folderSize(VoiceModelInstaller.folder(in: supportDir)))))"
+        }
+        if let voiceError { return "没下载好：\(voiceError)" }
+        let part = VoiceModelInstaller.pack(in: supportDir).path + ".part"
+        if FileManager.default.fileExists(atPath: part) {
+            return "下了 \(LocalModel.sizeText(LocalModelInstaller.fileSize(part))) / "
+                + "\(LocalModel.sizeText(VoiceModelInstaller.size))，可以接着下"
+        }
+        return "要下载 \(LocalModel.sizeText(VoiceModelInstaller.size))，解开后约 130 MB"
+    }
+
+    func downloadVoiceModel() {
+        guard !voiceBusy else { return }
+        let control = DownloadControl()
+        voiceControl = control
+        voiceError = nil
+        voiceProgress = (0, VoiceModelInstaller.size)
+        let supportDir = self.supportDir
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result {
+                try VoiceModelInstaller.install(supportDir: supportDir, control: control) { done, total in
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.voiceControl === control else { return }
+                        self.voiceProgress = (done, total)
+                    }
+                }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.voiceControl = nil
+                self.voiceProgress = nil
+                self.voiceRevision += 1
+                switch result {
+                case .success:
+                    self.config.voice = true
+                    self.showToast("语音模型下载好了，按住\(self.voiceKeyLabel) 说话")
+                    // 顺手问一下麦克风权限，免得第一次按语音键时才弹框（同一个程序，输入法那边也认）
+                    AVCaptureDevice.requestAccess(for: .audio) { _ in }
+                case .failure(let error as DownloadCancelled):
+                    self.showToast(error.description)
+                case .failure(let error as PackError):
+                    self.voiceError = error.description
+                case .failure(let error):
+                    self.voiceError = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func cancelVoiceDownload() {
+        voiceControl?.cancel()
+    }
+
+    func removeVoiceModel() {
+        guard !voiceBusy else { return }
+        let freed = VoiceModelInstaller.remove(supportDir: supportDir)
+        config.voice = false
+        voiceRevision += 1
+        showToast(freed > 0 ? "已删除语音模型，空出 \(LocalModel.sizeText(freed))，语音输入已关闭" : "已删除")
+    }
+
+    /// 语音键在界面上的叫法
+    var voiceKeyLabel: String {
+        VoiceKey.presets.first { $0.name == config.voiceKey }?.label ?? config.voiceKey
+    }
+
     @Published private(set) var localProgress: LocalModelInstaller.Progress?
     /// 上次没下完的原因，再点下载时清掉
     @Published private(set) var localError: String?
@@ -350,6 +447,14 @@ final class SettingsModel: ObservableObject {
         LocalModelInstaller.plan(model: localModelFile.path, customServer: config.translateLlamaServer,
                                  supportDir: supportDir)
     }
+
+    /// 翻译配好了：本地模型下载好了，或者填了翻译服务的地址和模型
+    var translateConfigured: Bool {
+        config.translateLocal ? localPlan.ready : !config.translateBaseUrl.isEmpty && !config.translateModel.isEmpty
+    }
+
+    /// 「译」进得去：互译打开了，翻译也配好了
+    var translateReady: Bool { config.translate && translateConfigured }
 
     /// 输入法会用的 llama-server，和它是哪来的
     var localServerSummary: String? {
@@ -380,7 +485,9 @@ final class SettingsModel: ObservableObject {
         }
         let alert = NSAlert()
         alert.messageText = "下载离线翻译模型？"
-        alert.informativeText = LocalModel.terms + "\n\n一共 \(LocalModel.sizeText(plan.bytes))，下完会校验。"
+        let llama = plan.wantLlama ? "同时下载运行模型的程序 llama-server（llama.cpp 官方发布，MIT 许可）。" : ""
+        alert.informativeText = "一共 \(LocalModel.sizeText(plan.bytes))，下载完会校验文件。\(llama)\n\n"
+            + LocalModel.terms + "\n\n点「同意并下载」表示你接受这份许可。"
         alert.accessoryView = LinkButton(title: "许可协议全文", url: URL(string: LocalModel.license)!)
         alert.addButton(withTitle: "同意并下载")
         alert.addButton(withTitle: "取消")
@@ -540,7 +647,7 @@ final class SettingsModel: ObservableObject {
             newCode = ""
         }
         codeEdited = false
-        showToast(replaced ? "已更新「\(word)」" : "已添加「\(word)」，打 \(code.replacingOccurrences(of: " ", with: "")) 试试")
+        showToast(replaced ? "已更新「\(CustomWords.shown(word))」" : "已添加「\(CustomWords.shown(word))」，打 \(code.replacingOccurrences(of: " ", with: "")) 试试")
         return true
     }
 
@@ -548,7 +655,7 @@ final class SettingsModel: ObservableObject {
         var doc = readCustomWords()
         let removed = doc.remove(word: word)
         guard !removed.isEmpty, writeCustomWords(doc) else { return }
-        showToast("已删除「\(word)」", actionTitle: "撤销") { [weak self] in
+        showToast("已删除「\(CustomWords.shown(word))」", actionTitle: "撤销") { [weak self] in
             guard let self else { return }
             var doc = self.readCustomWords()
             for entry in removed {
@@ -650,10 +757,6 @@ final class SettingsModel: ObservableObject {
 
 /// 读文本文件；不在是 nil。不是 UTF-8 也读出来（坏的字节换成 �），免得当成没有文件、整个重写。
 /// 12.3 MB 这样的写法
-func megabytes(_ bytes: Int64) -> String {
-    String(format: "%.1f MB", Double(bytes) / 1_048_576)
-}
-
 func readText(_ path: String) -> String? {
     guard let data = FileManager.default.contents(atPath: path) else { return nil }
     return String(decoding: data, as: UTF8.self)

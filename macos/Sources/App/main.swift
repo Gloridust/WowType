@@ -3,12 +3,13 @@
 //   WowType.app/Contents/MacOS/WowType              输入法服务（系统按需启动）
 //   … --register | --enable | --select | --disable  向系统登记 / 打开 / 切换 / 关闭（install.sh 用）
 //   … --selftest                                    载入安装包里的词库打一句话，CI 用来检查链接和资源
-//   … --settings [general|input|emoji|translate|words] 设置窗口（另一个进程，输入法菜单里「设置…」开的就是它）
+//   … --settings [general|input|emoji|voice|translate|words] 设置窗口（另一个进程，输入法菜单里「设置…」开的就是它）
 //   … --install-lexicon [wanxiang | 文件.tar.gz]      装万象词库并切过去；--use-lexicon rime-ice|wanxiang 切换
 //   … --download-model [--accept-license]          下载本地翻译模型（缺 llama-server 时一起下）
 //   … --version
 
 import AppKit
+import CWowtype
 import InputMethodKit
 
 /// 自检里用的假输入框。
@@ -25,7 +26,7 @@ func selfTest() -> Bool {
     print("WowType \(appVersion)，核心接口版本 \(Engine.abiVersion)")
     print("资源目录 \(AppState.shared.resourceDir.path)")
     print("数据目录 \(AppState.shared.supportDir.path)")
-    for name in ["lexicon.tsv", "english.txt", "words.lm", "s2t.tsv"] {
+    for name in ["lexicon.tsv", "english.txt", "words.lm", "s2t.tsv", "wubi86.tsv"] {
         print("  \(name)：\(AppState.shared.resource(name) == nil ? "没有" : "有")")
     }
     let start = Date()
@@ -35,7 +36,7 @@ func selfTest() -> Bool {
     }
     print(String(format: "词库载入 %.1f 秒", Date().timeIntervalSince(start)))
     let config = AppState.shared.config
-    print("设置 \(AppState.shared.configPath)：\(config == WowtypeConfig() ? "默认" : "改过")，双拼 \(config.shuangpin ? config.shuangpinScheme : "关")")
+    print("设置 \(AppState.shared.configPath)：\(config == WowtypeConfig() ? "默认" : "改过")，输入方案 \(config.inputScheme.rawValue)\(config.shuangpin ? "（\(config.shuangpinScheme)）" : "")")
     // 下面照默认设置打一句（设置里开了双拼 nihao 就不是你好了）
     engine.apply(WowtypeConfig())
     let client = SelfTestClient()
@@ -46,7 +47,21 @@ func selfTest() -> Bool {
     let first = client.page?.texts.first ?? ""
     _ = composer.handle(.char(" "))
     print("nihao → 第一个候选「\(first)」，上屏「\(client.committed)」")
-    return client.committed == "你好"
+    guard client.committed == "你好" else { return false }
+    // 安装包里的五笔码表：wqvb 空格上屏「你好」
+    var wubi = WowtypeConfig()
+    wubi.inputScheme = .wubi86
+    for problem in engine.apply(wubi, wubi: AppState.shared.resource("wubi86.tsv")) {
+        print("FAIL \(problem)")
+    }
+    let wubiClient = SelfTestClient()
+    let wubiComposer = Composer(engine: engine, client: wubiClient)
+    wubiComposer.apply(wubi)
+    for c in "wqvb " {
+        _ = wubiComposer.handle(.char(c))
+    }
+    print("五笔 wqvb → 上屏「\(wubiClient.committed)」")
+    return wubiClient.committed == "你好"
 }
 
 /// 和 Linux 的 wowtype-config 一样：--install-lexicon wanxiang|<文件.tar.gz> 下载 / 装上万象并切过去，
@@ -131,8 +146,8 @@ func downloadModelCommand(accepted: Bool) -> Bool {
                 let text: String
                 switch p.stage {
                 case .connecting: text = "正在连接…"
-                case .model: text = "下载模型 \(p.percent)%（\(megabytes(p.done)) / \(megabytes(p.total))）"
-                case .llama: text = "下载 llama-server \(p.percent)%（\(megabytes(p.done)) / \(megabytes(p.total))）"
+                case .model: text = "下载模型 \(p.percent)%（\(LocalModel.sizeText(p.done)) / \(LocalModel.sizeText(p.total))）"
+                case .llama: text = "下载 llama-server \(p.percent)%（\(LocalModel.sizeText(p.done)) / \(LocalModel.sizeText(p.total))）"
                 case .unpacking: text = "安装 llama-server…"
                 }
                 print("\r\(text)   ", terminator: "")
@@ -157,6 +172,81 @@ func downloadModelCommand(accepted: Bool) -> Bool {
     return true
 }
 
+/// 和 Linux 的 wowtype-config 一样：--install-voice-model [语音包.apk] 下载（或从文件）装上语音模型并打开语音输入，
+/// --remove-voice-model 删掉模型并关掉语音输入。
+func voiceModelCommand(_ args: [String]) -> Bool {
+    let state = AppState.shared
+    var values = WowtypeConfig.parse(readText(state.configPath) ?? "")
+    let base = values
+    if args[0] == "--remove-voice-model" {
+        let freed = VoiceModelInstaller.remove(supportDir: state.supportDir)
+        print(freed > 0 ? "已删除语音模型，空出 \(LocalModel.sizeText(freed))" : "没有语音模型")
+        values.voice = false
+    } else {
+        let file = args.count > 1 ? URL(fileURLWithPath: args[1]) : nil
+        if VoiceModelInstaller.isReady(supportDir: state.supportDir) && file == nil {
+            print("语音模型已经有了：\(state.voiceModelDir)")
+        } else {
+            do {
+                let size = try VoiceModelInstaller.install(supportDir: state.supportDir, from: file,
+                                                           control: DownloadControl()) { done, total in
+                    let text = total > 0 ? "\(LocalModel.sizeText(done)) / \(LocalModel.sizeText(total))"
+                                         : LocalModel.sizeText(done)
+                    print("\r下载语音模型：\(text)   ", terminator: "")
+                    fflush(stdout)
+                }
+                print("\n语音模型装好了（\(LocalModel.sizeText(size))）：\(state.voiceModelDir)")
+            } catch {
+                print("\n语音模型没装好：\(error)")
+                return false
+            }
+        }
+        values.voice = true
+    }
+    do {
+        try writeText(values.merged(changesFrom: base, into: readText(state.configPath)), to: state.configPath)
+    } catch {
+        print("wowtype.conf 写不进去：\(error.localizedDescription)")
+        return false
+    }
+    print(values.voice ? "语音输入已打开：按住\(values.voiceKey == "Alt_R" ? "右 Option" : values.voiceKey) 说话"
+                       : "语音输入已关掉")
+    return true
+}
+
+/// 测试用：不开麦克风，读 wav（16kHz 单声道）当成按住语音键说的话，打印识别结果。
+func voiceTest(_ wav: String) -> Bool {
+    guard !wav.isEmpty else {
+        print("用法：WowType --voice-test 说的话.wav")
+        return false
+    }
+    setenv("WOWTYPE_VOICE_WAV", wav, 1)
+    guard let voice = wowtype_voice_new(AppState.shared.voiceModelDir) else {
+        print("核心没带语音")
+        return false
+    }
+    defer { wowtype_voice_free(voice) }
+    wowtype_voice_key_down(voice)
+    usleep(400_000)
+    wowtype_voice_key_up(voice)
+    let start = Date()
+    while Date().timeIntervalSince(start) < 60 {
+        let phase = Int(wowtype_voice_poll(voice))
+        let text = wowtype_voice_text(voice).map { String(cString: $0) } ?? ""
+        if phase == Int(WOWTYPE_VOICE_RESULT) {
+            print("识别结果：\(text)（\(String(format: "%.1f", Date().timeIntervalSince(start))) 秒）")
+            return !text.isEmpty
+        }
+        if phase == Int(WOWTYPE_VOICE_ERROR) {
+            print("出错：\(text)")
+            return false
+        }
+        usleep(50_000)
+    }
+    print("一分钟没出结果")
+    return false
+}
+
 let arguments = CommandLine.arguments
 if arguments.count > 1 {
     let ok: Bool
@@ -169,13 +259,16 @@ if arguments.count > 1 {
     case "--settings": SettingsApp.run(page: arguments.count > 2 ? arguments[2] : nil)
     case "--install-lexicon", "--use-lexicon": ok = lexiconCommand(Array(arguments.dropFirst()))
     case "--download-model": ok = downloadModelCommand(accepted: arguments.contains("--accept-license"))
+    case "--install-voice-model", "--remove-voice-model": ok = voiceModelCommand(Array(arguments.dropFirst()))
+    case "--voice-test": ok = voiceTest(arguments.count > 2 ? arguments[2] : "")
     case "--version":
         print(appVersion)
         ok = true
     default:
         print("用法：WowType [--register | --enable | --select | --disable | --selftest | --settings [页面] | --version |\n"
               + "              --install-lexicon [wanxiang | 文件.tar.gz] | --use-lexicon rime-ice|wanxiang |\n"
-              + "              --download-model [--accept-license]]")
+              + "              --download-model [--accept-license] | --install-voice-model [语音包.apk] |\n"
+              + "              --remove-voice-model | --voice-test 说的话.wav]")
         ok = false
     }
     exit(ok ? 0 : 1)
@@ -198,6 +291,12 @@ terminationSource.setEventHandler {
     exit(0)
 }
 terminationSource.resume()
+
+// 核心的接口主版本要和编译时的头文件一样（docs/ABI.md）：静态链接时一定对得上，改成动态库以后装错了版本就别跑
+if Int(wowtype_abi_version()) / 1000 != Int(WOWTYPE_ABI_VERSION_MAJOR) {
+    NSLog("WowType: 核心接口版本 %d 和编译时的主版本 %d 对不上", wowtype_abi_version(), WOWTYPE_ABI_VERSION_MAJOR)
+    exit(1)
+}
 
 guard let connection = Bundle.main.object(forInfoDictionaryKey: "InputMethodConnectionName") as? String,
       let bundleID = Bundle.main.bundleIdentifier

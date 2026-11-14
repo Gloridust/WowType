@@ -10,7 +10,8 @@
 #
 # 安装包和当前系统的 fcitx5 版本绑定，要在目标发行版上（或同版本容器里）打。
 # 包的版本号带发行版（0.1.0-1~ubuntu24.04）；文件名里不用 ~（GitHub Release 会把它改成 .）：
-# wowtype_0.1.0_ubuntu24.04_amd64.deb。
+# wowtype_0.1.0_ubuntu24.04_amd64.deb。发行版默认取 os-release 的 ${ID}${VERSION_ID}，
+# WOWTYPE_DISTRO=<名字> 可以指定（CI 传矩阵里的名字，免得镜像的版本号变成 25.0.x 时和一键安装对不上）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -52,6 +53,11 @@ build_deb() { # <包名> <版本> <架构> <依赖> <简介> <详细说明>
 data_copyright() { # <数据目录>：copyright 里词库那几段
   echo "Files: usr/share/wowtype/lexicon.tsv usr/share/wowtype/english.txt"
   echo "Comment: 转换自雾凇拼音 rime-ice（https://github.com/iDvel/rime-ice），见 DATA-SOURCE.txt"
+  # 语料词频（默认融进 data/tatoeba-freq.tsv）的来源、许可证、署名都在 SOURCE.txt 里
+  if grep -q 'tatoeba-freq.tsv' "$1/SOURCE.txt"; then
+    echo " 词频融进了 Tatoeba（https://tatoeba.org）中文句子统计出的词频，"
+    echo " 句子许可证 CC BY 2.0 FR，Tatoeba contributors；见 DATA-SOURCE.txt。"
+  fi
   echo "License: GPL-3.0"
   sed 's/^$/./; s/^/ /' "$1/LICENSE"
   echo
@@ -64,11 +70,20 @@ data_copyright() { # <数据目录>：copyright 里词库那几段
   echo " (https://zh.wikipedia.org/). Licensed under the Creative Commons"
   echo " Attribution-ShareAlike 4.0 International License:"
   echo " https://creativecommons.org/licenses/by-sa/4.0/legalcode"
+  echo
+  echo "Files: usr/share/wowtype/wubi86.tsv"
+  echo "Comment: 五笔 86 码表，转换自 Rime 五笔字型 rime-wubi（https://github.com/rime/rime-wubi），"
+  echo " 作者见 WUBI-AUTHORS，来源和钉死的提交见 WUBI-SOURCE.txt"
+  echo "License: LGPL-3.0"
+  sed 's/^$/./; s/^/ /' "$1/WUBI-LICENSE"
 }
 
 check_data() { # <数据目录>
   for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
     [[ -f "$1/$f" ]] || { echo "缺 $1/${f}，先跑 scripts/make-data.sh" >&2; exit 1; }
+  done
+  for f in wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS; do
+    [[ -f "$1/$f" ]] || { echo "缺 $1/${f}，先跑 scripts/make-wubi.sh" >&2; exit 1; }
   done
 }
 
@@ -78,7 +93,7 @@ engine)
   data=${WOWTYPE_DATA_DIR:-dist/data}
   check_data "$data"
   . /etc/os-release
-  distro="${ID}${VERSION_ID:-}"
+  distro="${WOWTYPE_DISTRO:-${ID}${VERSION_ID:-}}"
   debver="${version}-1~${distro}"
 
   cargo build --release --locked -p wowtype-core
@@ -96,14 +111,16 @@ engine)
                       while read -r f; do is_elf "$f" && echo "$f"; done)
   strip --strip-unneeded "${elfs[@]}"
 
-  # 词库：雾凇拼音（GPL-3.0）+ WowType 的词级语言模型（CC BY-SA 4.0）
-  for f in lexicon.tsv english.txt words.lm; do
+  # 词库：雾凇拼音（GPL-3.0）+ WowType 的词级语言模型（CC BY-SA 4.0）+ 五笔码表（rime-wubi，LGPL-3.0）
+  for f in lexicon.tsv english.txt words.lm wubi86.tsv; do
     install -Dm644 "$data/$f" "$stage/usr/share/wowtype/$f"
   done
   doc="$stage/usr/share/doc/wowtype"
   install -Dm644 README.md "$doc/README.md"
   install -Dm644 "$data/SOURCE.txt" "$doc/DATA-SOURCE.txt"
   install -Dm644 "$data/VERSION" "$doc/DATA-VERSION"
+  install -Dm644 "$data/WUBI-SOURCE.txt" "$doc/WUBI-SOURCE.txt"
+  install -Dm644 "$data/WUBI-AUTHORS" "$doc/WUBI-AUTHORS"
   {
   cat <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -114,7 +131,8 @@ Files: *
 License: MIT or Apache-2.0
 
 Files: usr/share/wowtype/s2t.tsv
-Comment: 由 OpenCC 的字符映射表生成（tools/opencc2tsv.py）
+Comment: 由 OpenCC 的字符表和词组表（STCharacters、STPhrases）生成（tools/opencc2tsv.py），
+ 版本见文件头，https://github.com/BYVoid/OpenCC
 License: Apache-2.0
 
 Files: usr/lib/*/fcitx5/libwowtype.so
@@ -141,7 +159,7 @@ EOF
   build_deb wowtype "$debver" "$(dpkg --print-architecture)" "$depends" \
     "WeChat-style pinyin input method for fcitx5" \
 "拼音输入法：长句、半成品输入、按错键纠错、按用户习惯学习。
-自带雾凇拼音（rime-ice）词库和词级语言模型。
+自带雾凇拼音（rime-ice）词库、词级语言模型和五笔 86 码表（rime-wubi）。
 装完在 fcitx5 配置里添加「WowType」，设置在应用菜单「WowType 设置」里。"
   ;;
 
@@ -152,7 +170,12 @@ data)
   version=${version//-/.}
   # 不用 deb 的系统：解压到 ~/.local/share/wowtype/ 即可
   tarball="$OUT/wowtype-data-rime-ice-$version.tar.gz"
-  tar -C "$data" -czf "$tarball" lexicon.tsv english.txt words.lm LICENSE SOURCE.txt
+  # 可复现：固定文件顺序、时间和属主，gzip 不写时间戳。内容不变时每次打出来的包
+  # sha256 都一样，打包脚本（如 AUR）钉住的校验和不会因为重新发版而失效。
+  tar -C "$data" --sort=name --mtime="@${SOURCE_DATE_EPOCH:-0}" \
+    --owner=0 --group=0 --numeric-owner -cf - \
+    lexicon.tsv english.txt words.lm LICENSE SOURCE.txt \
+    wubi86.tsv WUBI-LICENSE WUBI-SOURCE.txt WUBI-AUTHORS | gzip -n >"$tarball"
   echo "$tarball"
   ;;
 

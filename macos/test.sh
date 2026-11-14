@@ -6,6 +6,8 @@
 # 先编核心的静态库（不带语音，和 macOS 安装包一样），再用 swiftc 把 Sources/Shared 和 Tests/*.swift
 # 编成一个可执行文件跑一遍。没给词库时测试自己写一份小词库。
 # 测试也拿 spec/ 里的设置契约对照（WOWTYPE_SPEC_DIR，默认仓库的 spec/）。
+# 在 macOS 上、给的词库旁边有五笔码表（make-data.sh + make-wubi.sh 的输出目录）时，接着跑外壳测试
+# macos/ShellTests/run.sh：真的输入控制器、候选框，假的输入框。
 # 本机没有 swiftc 但有 docker 时：WOWTYPE_SWIFT_DOCKER=swift:6.1-noble macos/test.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -39,3 +41,8 @@ if [[ -n "${WOWTYPE_SWIFT_DOCKER:-}" ]]; then
   # 词库路径要在挂进去的目录里
 fi
 "${RUN[@]}" "$@"
+
+DATA_DIR=$(dirname "${1:-}")
+if [[ "$(uname)" == Darwin && -n "${1:-}" && -f "$DATA_DIR/wubi86.tsv" ]]; then
+  WOWTYPE_MACOS_TARGET_DIR=$TARGET_DIR macos/ShellTests/run.sh "$DATA_DIR"
+fi

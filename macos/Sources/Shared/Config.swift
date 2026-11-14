@@ -25,6 +25,25 @@ public struct WowtypeConfig: Equatable {
         case off = "Off", semicolon = "Semicolon", semicolonQuote = "SemicolonQuote"
     }
 
+    /// 打字途中方向键做什么（#129），见 spec/config.json 的 ArrowKeys
+    public enum ArrowKeys: String, CaseIterable {
+        case candidates = "Candidates", caret = "Caret"
+    }
+
+    /// 输入方案：全拼、双拼、五笔 86（见 spec/config.json 的 InputScheme）
+    public enum InputScheme: String, CaseIterable {
+        case quanpin = "Quanpin", shuangpin = "Shuangpin", wubi86 = "Wubi86"
+
+        /// 设置窗口里的名字（和 Linux 设置的 INPUT_SCHEMES、fcitx5 的 EnumI18n 一样）
+        public var name: String {
+            switch self {
+            case .quanpin: return "拼音输入"
+            case .shuangpin: return "双拼输入"
+            case .wubi86: return "五笔输入"
+            }
+        }
+    }
+
     /// 双拼方案在配置文件里的名字（和 Linux 一样），核心也认小写、别名。
     public static let shuangpinSchemes = ["Ziranma", "Xiaohe", "Microsoft", "Sogou", "ABC", "Ziguang", "PinyinJiajia"]
 
@@ -53,6 +72,7 @@ public struct WowtypeConfig: Equatable {
     ]
 
     public var horizontal = true
+    public var arrowKeys = ArrowKeys.candidates
     public var pageSize = 9
     public var pageKeysMinus = true
     public var pageKeysBracket = false
@@ -71,10 +91,20 @@ public struct WowtypeConfig: Equatable {
     public var fuzzyIan = true
     public var fuzzyUan = true
     public var fuzzyUn = false
+    public var fuzzyAnAi = false
+    public var fuzzyHuangWang = false
+    public var fuzzyUnIong = false
+    public var fuzzyEngOng = false
     public var typoCorrection = true
     public var rareExtChars = false
-    public var shuangpin = false
+    public var inputScheme = InputScheme.quanpin
     public var shuangpinScheme = "Ziranma"
+    /// 双拼时编辑区显示打的键（uivs），不翻成全拼（#122）
+    public var shuangpinShowKeys = false
+    /// 五笔打满四码、只有一个字词时直接上屏
+    public var wubiAutoCommit = true
+    /// 五笔候选后面显示还要打的码
+    public var wubiHint = true
     public var shiftToggle = ShiftToggle.both
     public var traditional = false
     public var halfwidthPunct = false
@@ -86,13 +116,23 @@ public struct WowtypeConfig: Equatable {
     public var autoSpace = false
     public var autoSpaceLetters = true
     public var autoSpaceDigits = true
-    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情，只在全拼下）
+    /// v + 空格打开工具栏（剪贴板、常用语、符号、表情；双拼、五笔时不开）
     public var toolbar = true
     /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
     public var clipboardHistory = false
+    /// 语音输入：按住 voiceKey 说话，松开出字（模型在设置窗口里下载）
+    public var voice = true
+    /// 语音键，fcitx5 键名：Alt_R（右 Option）、Control_R、F8…；留空不用
+    public var voiceKey = "Alt_R"
+    /// 语音识别的结果同时复制到剪贴板
+    public var voiceCopy = false
     /// 打开表情面板的快捷键，nil 不用快捷键。Linux 默认 Super+period；macOS 上 Command 组合键
     /// 多半到不了输入法，默认 Control+period（Super 也当 Control，见 Shortcut）
     public var emojiKey: Shortcut? = .emojiDefault
+    /// 另设的切换中 / 英文、进出「译」的快捷键（#143、#87），nil 不用。设了进出「译」的键时
+    /// 单按 Shift 只在中 ↔ 英之间切；两个一样时算进出「译」
+    public var toggleKey: Shortcut?
+    public var translateModeKey: Shortcut?
     /// 词库文件，空串用安装包里的雾凇词库；文件不在也用自带的
     public var lexicon = ""
     /// 候选字号（磅），只有 macOS 有：Linux 上字号跟着 fcitx5 主题
@@ -123,6 +163,7 @@ public struct WowtypeConfig: Equatable {
         let groups: [(Bool, UInt32)] = [
             (fuzzyZh, 1), (fuzzyCh, 2), (fuzzySh, 4), (fuzzyNL, 8), (fuzzyFH, 16), (fuzzyRL, 32),
             (fuzzyAn, 64), (fuzzyEn, 128), (fuzzyIn, 256), (fuzzyIan, 512), (fuzzyUan, 1024), (fuzzyUn, 2048),
+            (fuzzyAnAi, 4096), (fuzzyHuangWang, 8192), (fuzzyUnIong, 16384), (fuzzyEngOng, 32768),
         ]
         return groups.reduce(0) { $0 | ($1.0 ? $1.1 : 0) }
     }
@@ -141,6 +182,16 @@ public struct WowtypeConfig: Equatable {
         case .semicolonQuote: return Int32(WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE)
         }
     }
+
+    public var arrowKeysValue: Int32 {
+        switch arrowKeys {
+        case .candidates: return Int32(WOWTYPE_ARROW_KEYS_CANDIDATES)
+        case .caret: return Int32(WOWTYPE_ARROW_KEYS_CARET)
+        }
+    }
+
+    public var shuangpin: Bool { inputScheme == .shuangpin }
+    public var wubi: Bool { inputScheme == .wubi86 }
 
     /// wowtype_autospace 的 flags：1 汉字和字母之间、2 汉字和数字之间；总开关关着是 0
     public var autoSpaceFlags: Int32 {
@@ -164,6 +215,8 @@ public struct WowtypeConfig: Equatable {
         var config = WowtypeConfig()
         var inGroup = false
         var sawTranslateLocal = false
+        var sawInputScheme = false
+        var oldShuangpin = false
         // Swift 把 \r\n 当成一个字符，用 isNewline 才认得出 Windows 换行
         for raw in text.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
             let line = trim(Substring(raw))
@@ -179,11 +232,20 @@ public struct WowtypeConfig: Equatable {
             }
             let key = trim(line[..<eq])
             let value = unquote(trim(line[line.index(after: eq)...]))
+            if key == "Shuangpin" {
+                // 0.3.12 及以前的双拼开关：只在没有 InputScheme 时算，见下面；存盘时删掉（见 serialized）
+                oldShuangpin = value == "True"
+                continue
+            }
             config.setValue(value, forKey: key)
             sawTranslateLocal = sawTranslateLocal || key == "TranslateLocal"
+            sawInputScheme = sawInputScheme || key == "InputScheme"
         }
         if !sawTranslateLocal {
             config.translateLocal = impliedTranslateLocal(baseUrl: config.translateBaseUrl)
+        }
+        if !sawInputScheme, oldShuangpin {
+            config.inputScheme = .shuangpin
         }
         return config
     }
@@ -197,13 +259,17 @@ public struct WowtypeConfig: Equatable {
 
     /// 认识的键，顺序同模板（文件里没有、又不是默认值的键照这个顺序补在后面）。
     public static let keys = [
-        "CandidateLayout", "PageSize", "CandidateFontSize",
+        "CandidateLayout", "ArrowKeys", "PageSize", "CandidateFontSize",
         "PageKeysMinusEqual", "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar",
         "Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL",
         "FuzzyAn", "FuzzyEn", "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn",
-        "TypoCorrection", "RareExtChars", "Shuangpin", "ShuangpinScheme", "ShiftToggle", "Traditional",
+        "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong", "FuzzyEngOng",
+        "TypoCorrection", "RareExtChars", "InputScheme", "ShuangpinScheme", "ShuangpinShowKeys",
+        "WubiAutoCommit", "WubiHint", "ShiftToggle",
+        "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
-        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "EmojiKey",
+        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "Voice", "VoiceKey", "VoiceCopy", "EmojiKey",
+        "ToggleKey", "TranslateModeKey",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
         "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
@@ -215,11 +281,14 @@ public struct WowtypeConfig: Equatable {
         "Fuzzy": \.fuzzy, "FuzzyZh": \.fuzzyZh, "FuzzyCh": \.fuzzyCh, "FuzzySh": \.fuzzySh,
         "FuzzyNL": \.fuzzyNL, "FuzzyFH": \.fuzzyFH, "FuzzyRL": \.fuzzyRL, "FuzzyAn": \.fuzzyAn,
         "FuzzyEn": \.fuzzyEn, "FuzzyIn": \.fuzzyIn, "FuzzyIan": \.fuzzyIan, "FuzzyUan": \.fuzzyUan,
-        "FuzzyUn": \.fuzzyUn, "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
-        "Shuangpin": \.shuangpin, "Traditional": \.traditional, "PickChar": \.pickChar,
+        "FuzzyUn": \.fuzzyUn, "FuzzyAnAi": \.fuzzyAnAi, "FuzzyHuangWang": \.fuzzyHuangWang,
+        "FuzzyUnIong": \.fuzzyUnIong, "FuzzyEngOng": \.fuzzyEngOng,
+        "TypoCorrection": \.typoCorrection, "RareExtChars": \.rareExtChars,
+        "ShuangpinShowKeys": \.shuangpinShowKeys, "WubiAutoCommit": \.wubiAutoCommit, "WubiHint": \.wubiHint,
+        "Traditional": \.traditional, "PickChar": \.pickChar,
         "DateTime": \.dateTime, "Calculator": \.calculator, "EmojiSuggest": \.emojiSuggest,
         "AutoSpace": \.autoSpace, "AutoSpaceLetters": \.autoSpaceLetters, "AutoSpaceDigits": \.autoSpaceDigits,
-        "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory,
+        "Toolbar": \.toolbar, "ClipboardHistory": \.clipboardHistory, "Voice": \.voice, "VoiceCopy": \.voiceCopy,
         "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateLocal": \.translateLocal,
     ]
 
@@ -232,8 +301,12 @@ public struct WowtypeConfig: Equatable {
         switch key {
         case "CandidateLayout":
             if let v = matchName(value, ["Horizontal", "Vertical"]) { horizontal = v == "Horizontal" }
+        case "ArrowKeys":
+            if let v = matchName(value, ArrowKeys.allCases.map(\.rawValue)) { arrowKeys = ArrowKeys(rawValue: v)! }
         case "PageSize":
             if let n = Int(value) { pageSize = min(max(n, 3), 9) }
+        case "InputScheme":
+            if let v = matchName(value, InputScheme.allCases.map(\.rawValue)) { inputScheme = InputScheme(rawValue: v)! }
         case "ShuangpinScheme":
             if let v = matchName(value, WowtypeConfig.shuangpinSchemes) { shuangpinScheme = v }
         case "ShiftToggle":
@@ -245,12 +318,21 @@ public struct WowtypeConfig: Equatable {
         case "Lexicon": lexicon = value
         case "CandidateFontSize":
             if let n = Int(value) { candidateFontSize = min(max(n, 10), 40) }
+        case "VoiceKey": voiceKey = value
         case "EmojiKey":
             // 留空是不用快捷键；写错了保持默认
             if value.isEmpty {
                 emojiKey = nil
             } else if let key = Shortcut(name: value) {
                 emojiKey = key
+            }
+        case "ToggleKey", "TranslateModeKey":
+            // 留空是不用；写错了保持原样
+            let path: WritableKeyPath<WowtypeConfig, Shortcut?> = key == "ToggleKey" ? \.toggleKey : \.translateModeKey
+            if value.isEmpty {
+                self[keyPath: path] = nil
+            } else if let shortcut = Shortcut(name: value) {
+                self[keyPath: path] = shortcut
             }
         case "TranslateTarget":
             if let v = matchName(value, WowtypeConfig.translateTargets) { translateTarget = v }
@@ -272,14 +354,19 @@ public struct WowtypeConfig: Equatable {
         }
         switch key {
         case "CandidateLayout": return horizontal ? "Horizontal" : "Vertical"
+        case "ArrowKeys": return arrowKeys.rawValue
         case "PageSize": return String(pageSize)
+        case "InputScheme": return inputScheme.rawValue
         case "ShuangpinScheme": return shuangpinScheme
         case "ShiftToggle": return shiftToggle.rawValue
         case "PunctuationStyle": return halfwidthPunct ? "Halfwidth" : "Fullwidth"
         case "SelectKeys": return selectKeys.rawValue
         case "Lexicon": return lexicon
         case "CandidateFontSize": return String(candidateFontSize)
+        case "VoiceKey": return voiceKey
         case "EmojiKey": return emojiKey?.name ?? ""
+        case "ToggleKey": return toggleKey?.name ?? ""
+        case "TranslateModeKey": return translateModeKey?.name ?? ""
         case "TranslateTarget": return translateTarget
         case "TranslateBaseUrl": return translateBaseUrl
         case "TranslateModel": return translateModel
@@ -295,6 +382,7 @@ public struct WowtypeConfig: Equatable {
     /// 只动认识的键：值读出来已经一样的那行原样不动（大小写、引号、两边的空格都留着），不一样的只换 = 后面的值。
     /// 注释、空行、不认识的键（语音这些 macOS 还没有的）、[分组] 原样留着，所以 Linux 拷过来的文件
     /// 改完拿回 Linux 照样能用。文件里没有、又不是默认值的键补在最后一个设置后面（[分组] 前面）。
+    /// 只删一种行：0.3.12 及以前的 Shuangpin 开关（三端存盘都不写它）。
     /// text 是 nil 或空的（还没有文件）时从带说明的模板开始。
     public func serialized(into text: String?) -> String {
         guard let text, text.contains(where: { !$0.isWhitespace }) else {
@@ -305,6 +393,7 @@ public struct WowtypeConfig: Equatable {
         var seen = Set<String>()
         var firstGroup: Int?
         var crlf = false
+        var oldShuangpin: [Int] = []
         for i in lines.indices {
             var line = lines[i]
             let cr = line.hasSuffix("\r")
@@ -323,6 +412,10 @@ public struct WowtypeConfig: Equatable {
                 continue
             }
             let key = trim(line[..<eq])
+            if key == "Shuangpin" {
+                oldShuangpin.append(i)
+                continue
+            }
             guard let wanted = value(forKey: key) else {
                 continue
             }
@@ -340,6 +433,12 @@ public struct WowtypeConfig: Equatable {
             }
             lines[i] = String(line[..<start]) + quote(wanted) + (cr ? "\r" : "")
         }
+
+        // 0.3.12 及以前的双拼开关（parse 读过了）：删掉，方案只看 InputScheme（这些行都在 [分组] 前面）
+        for i in oldShuangpin.reversed() {
+            lines.remove(at: i)
+        }
+        firstGroup = firstGroup.map { $0 - oldShuangpin.count }
 
         // 文件里没有的键读出来是默认值；TranslateLocal 没写时跟着 TranslateBaseUrl 走（见 parse），按读回来的值比
         var implied = WowtypeConfig()
@@ -383,6 +482,9 @@ public struct WowtypeConfig: Equatable {
 
         # 候选排列：Horizontal 横排、Vertical 竖排
         CandidateLayout=Horizontal
+        # 打字途中方向键做什么：Candidates 都用来选词（横排左右键选词、上键上一页、下键展开；
+        # 竖排上下键选词、左右键翻页），Caret 上下键选词、左右键在拼音里移动光标
+        ArrowKeys=Candidates
         # 每页候选个数，3–9
         PageSize=\(d.pageSize)
         # 候选字号（磅），10–40，只有 macOS 有
@@ -411,15 +513,26 @@ public struct WowtypeConfig: Equatable {
         FuzzyIan=\(b(d.fuzzyIan))
         FuzzyUan=\(b(d.fuzzyUan))
         FuzzyUn=\(b(d.fuzzyUn))
+        FuzzyAnAi=\(b(d.fuzzyAnAi))
+        FuzzyHuangWang=\(b(d.fuzzyHuangWang))
+        FuzzyUnIong=\(b(d.fuzzyUnIong))
+        FuzzyEngOng=\(b(d.fuzzyEngOng))
         # 按错键自动纠正
         TypoCorrection=\(b(d.typoCorrection))
         # 候选末尾也列出扩展 B 区以后的生僻字（常见字体显示不了，默认关）
         RareExtChars=\(b(d.rareExtChars))
 
-        # 双拼；方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
+        # 输入方案：Quanpin 全拼、Shuangpin 双拼、Wubi86 五笔 86
+        InputScheme=\(d.inputScheme.rawValue)
+        # 双拼方案：Ziranma 自然码、Xiaohe 小鹤、Microsoft 微软、Sogou 搜狗、ABC 智能 ABC、
         # Ziguang 紫光、PinyinJiajia 拼音加加
-        Shuangpin=\(b(d.shuangpin))
         ShuangpinScheme=\(d.shuangpinScheme)
+        # 双拼时编辑区显示打的键（不翻成全拼）
+        ShuangpinShowKeys=\(b(d.shuangpinShowKeys))
+        # 五笔打满四码、只有一个字词时直接上屏
+        WubiAutoCommit=\(b(d.wubiAutoCommit))
+        # 五笔候选后面显示还要打的码
+        WubiHint=\(b(d.wubiHint))
 
         # 单按哪个 Shift 切中英文：Both、Left、Right、Off
         ShiftToggle=Both
@@ -429,7 +542,7 @@ public struct WowtypeConfig: Equatable {
         PunctuationStyle=Fullwidth
         # 打 riqi、shijian、xingqi 时给出当前日期时间
         DateTime=\(b(d.dateTime))
-        # v 开头算算式（v1+2*3，只在全拼下）
+        # v 开头算算式（v1+2*3；双拼、五笔时是大写 V）
         Calculator=\(b(d.calculator))
         # 打字时推荐 emoji
         EmojiSuggest=\(b(d.emojiSuggest))
@@ -438,18 +551,30 @@ public struct WowtypeConfig: Equatable {
         AutoSpaceLetters=\(b(d.autoSpaceLetters))
         AutoSpaceDigits=\(b(d.autoSpaceDigits))
 
-        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（只在全拼下）
+        # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（双拼、五笔时不开）
         Toolbar=\(b(d.toolbar))
         # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
         ClipboardHistory=\(b(d.clipboardHistory))
+
+        # 语音输入：按住语音键说话，松开出字（点按一下也行，说完停一下自动结束）。模型在设置窗口「语音」页下载
+        Voice=\(b(d.voice))
+        # 语音键：Alt_R 右 Option、Control_R 右 Control、F8、F9、F10；留空不用
+        VoiceKey=\(d.voiceKey)
+        # 说的话上屏的同时复制到剪贴板
+        VoiceCopy=\(b(d.voiceCopy))
         # 打开表情面板的快捷键，键名同 fcitx5：Control+period、Control+semicolon、Control+Shift+E；留空不用。
         # Command 组合键多半到不了输入法，写 Super 的当 Control
         EmojiKey=\(d.emojiKey?.name ?? "")
+        # 另设一个切换中 / 英文的快捷键，比如 Control+Shift+space；留空不用（单按 Shift 照常）。
+        # 系统的快捷键（Control+space 选上一个输入法）先被系统拿走，WowType 收不到
+        ToggleKey=\(d.toggleKey?.name ?? "")
+        # 进出「译」的快捷键，比如 Control+Shift+Y；留空不用。设了以后单按 Shift 只在中英之间切
+        TranslateModeKey=\(d.translateModeKey?.name ?? "")
 
         # 词库文件（拼音<TAB>词<TAB>频次），留空用自带的雾凇词库；文件不在也用自带的
         Lexicon=
 
-        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切）。
+        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切；设了 TranslateModeKey 时用它进出）。
         # 「译」里打的中文攒在候选框里，停 0.5 秒发去翻译，回车上屏译文。打的字会发给下面的服务。
         Translate=\(b(d.translate))
         # 译成哪种语言：en 英、ja 日、ko 韩、fr 法、de 德、es 西、ru 俄、pt 葡、it 意、vi 越、th 泰、id 印尼、ar 阿
