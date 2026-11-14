@@ -93,6 +93,11 @@ pub enum KeyAction {
     /// 外壳只是告诉会话有这个键（松开的、外壳自己处理掉的）：单按 Shift 的判断要看到按住
     /// Shift 时的每个键；会话不处理它。
     Observe,
+    /// 设置里另设的切换键（ToggleKey）：中 ↔ 英，在「译」里回中文（和单按 Shift 一样）。
+    ToggleMode,
+    /// 设置里进出「译」的快捷键（TranslateModeKey）：不在「译」里进「译」，在「译」里回到进来前的模式。
+    /// 进不了「译」（没配好翻译、[`key_hints::NO_TRANSLATE`] 的输入框）时不接，键交给应用。
+    ToggleTranslate,
 }
 
 /// 一次按键。
@@ -224,7 +229,13 @@ pub enum ShiftToggle {
 struct ShiftTap {
     /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
     down: Option<(u32, u32, u64)>,
+    /// 上一次单按切换的时刻（松开时）。
+    tapped_at: u64,
 }
+
+/// 单按切换以后这么久（毫秒）以内又按下的 Shift 不算：Electron 的应用有时把一次按下松开报成
+/// 两遍，人连按两下 Shift 没有这么快。
+const SHIFT_RETAP_MS: u64 = 50;
 
 impl Key {
     /// 按下一个键，不带修饰键。
@@ -473,8 +484,12 @@ pub struct Config {
     pub shift_toggle: ShiftToggle,
     /// 按住 Shift 多久以内松开才算单按（毫秒）：按久了多半是想打大写或者犹豫了。
     pub shift_tap_ms: u32,
-    /// 单按 Shift 的循环里有「译」：中 → 英 → 译 → 中（外壳配好了翻译服务才开）。
+    /// 有「译」（外壳配好了翻译服务才开）：单按 Shift 的循环里有它（中 → 英 → 译 → 中），
+    /// [`KeyAction::ToggleTranslate`] 进得去。
     pub translate_mode: bool,
+    /// 另设了进出「译」的快捷键（[`KeyAction::ToggleTranslate`]）：单按 Shift 只在中 ↔ 英之间切
+    /// （在「译」里单按回中文），不再绕到「译」。
+    pub translate_key: bool,
     /// 只打一个 v 再按空格打开工具栏（双拼、五笔、互译时不开）。
     pub toolbar: bool,
     /// 记剪贴板历史（设置里开了）：工具栏「剪贴板」页的提示看它。
@@ -507,6 +522,7 @@ impl Default for Config {
             shift_toggle: ShiftToggle::Both,
             shift_tap_ms: 500,
             translate_mode: false,
+            translate_key: false,
             toolbar: true,
             clipboard_history: false,
             shuangpin_keys: false,
@@ -618,6 +634,8 @@ pub struct Session<'e> {
     mode: Mode,
     /// 这次调用切换了模式（frame 取走）。
     mode_changed: bool,
+    /// 进「译」之前的模式：进出「译」的快捷键在「译」里按时回到这里。
+    translate_from: Mode,
     shift: ShiftTap,
     translator: Option<&'e dyn TranslateBackend>,
     translation: Translation,
@@ -654,6 +672,7 @@ impl Default for Session<'_> {
             hints: 0,
             mode: Mode::Chinese,
             mode_changed: false,
+            translate_from: Mode::Chinese,
             shift: ShiftTap::default(),
             translator: None,
             translation: Translation::default(),
@@ -783,6 +802,14 @@ impl<'e> Session<'e> {
     fn handle_key(&mut self, key: &Key) -> bool {
         if self.tool.is_some() {
             return self.tool_key(key);
+        }
+        match key.action {
+            KeyAction::ToggleMode => {
+                self.switch_mode(if self.mode == Mode::Chinese { Mode::English } else { Mode::Chinese });
+                return true;
+            }
+            KeyAction::ToggleTranslate => return self.toggle_translate(),
+            _ => {}
         }
         if self.mode == Mode::English && !self.composing() {
             return self.english_key(key);
@@ -1463,18 +1490,34 @@ impl<'e> Session<'e> {
             // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
             self.commit_input_now();
         }
+        if mode == Mode::Translate {
+            self.translate_from = self.mode;
+        }
         self.mode = mode;
         self.mode_changed = true;
     }
 
-    /// 单按 Shift 循环切换：中 → 英 →（有「译」时）译 → 中。
+    /// 单按 Shift 循环切换：中 → 英 →（有「译」、没另设进出「译」的键时）译 → 中。
     fn toggle_mode(&mut self) {
         let next = match self.mode {
             Mode::Chinese => Mode::English,
-            Mode::English if self.config.translate_mode => Mode::Translate,
+            Mode::English if self.config.translate_mode && !self.config.translate_key => Mode::Translate,
             Mode::English | Mode::Translate => Mode::Chinese,
         };
         self.switch_mode(next);
+    }
+
+    /// 进出「译」的快捷键：在「译」里回到进来前的模式（翻译不能用了也回得去）；不在就进「译」，
+    /// 打到一半的拼音带进去接着打（和单按 Shift 一样）。进不了时返回 false，键交给应用。
+    fn toggle_translate(&mut self) -> bool {
+        if self.mode == Mode::Translate {
+            self.switch_mode(self.translate_from);
+        } else if self.config.translate_mode && self.hints & key_hints::NO_TRANSLATE == 0 {
+            self.switch_mode(Mode::Translate);
+        } else {
+            return false;
+        }
+        true
     }
 
     /// Shift 的按下、松开，以及打断单按的别的键。Some：处理完了（handled 是里面的值，
@@ -1482,7 +1525,8 @@ impl<'e> Session<'e> {
     ///
     /// 和以前 Linux 外壳的规矩一样：按下时带着 Ctrl / Alt / Super、外壳开着面板时不算；
     /// 按住不放的自动重复不重新计时；松开时按键码认（没有键码时按符号）；
-    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算。
+    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算；
+    /// 切换以后 SHIFT_RETAP_MS 以内又按下的不算。
     fn shift_key(&mut self, key: &Key) -> Option<bool> {
         let sym = key.keysym;
         let is_shift = sym == keysym::SHIFT_L || sym == keysym::SHIFT_R;
@@ -1499,7 +1543,9 @@ impl<'e> Session<'e> {
             };
             let other = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0;
             let panel = key.hints & key_hints::PANEL_OPEN != 0 || self.tool.is_some();
-            if wanted && !other && !panel {
+            let tapped = self.shift.tapped_at;
+            let bounce = key.time_ms != 0 && tapped != 0 && key.time_ms.saturating_sub(tapped) < SHIFT_RETAP_MS;
+            if wanted && !other && !panel && !bounce {
                 let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
                 if !held {
                     self.shift.down = Some((sym, key.code, key.time_ms));
@@ -1529,6 +1575,7 @@ impl<'e> Session<'e> {
         if key.time_ms != 0 && down_at != 0 && held_ms > u64::from(self.config.shift_tap_ms) {
             return Some(false);
         }
+        self.shift.tapped_at = key.time_ms;
         self.toggle_mode();
         Some(true)
     }
@@ -1765,8 +1812,8 @@ impl<'e> Session<'e> {
                 KeyAction::NextPage => self.next_page(),
                 KeyAction::PrevCandidate => self.move_cursor(true),
                 KeyAction::NextCandidate => self.move_cursor(false),
-                // OBSERVE 在 key() 里就返回了，到不了这里
-                KeyAction::None | KeyAction::Observe => {}
+                // OBSERVE 在 key() 里就返回了，切模式的在 handle_key 开头，到不了这里
+                KeyAction::None | KeyAction::Observe | KeyAction::ToggleMode | KeyAction::ToggleTranslate => {}
             }
             return Some(true);
         }
