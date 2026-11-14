@@ -135,22 +135,25 @@ class WowTypeInputController: IMKInputController {
     /// 应用会多报、重报 flagsChanged（同一个状态来两遍），以前一比就当成按了别的修饰键，单按 Shift 就没了。
     /// 多报的按下会话当成重新按下，多报的松开没有按下对着、不算。
     private func handleFlags(_ event: NSEvent) {
-        let app = textInput?.bundleIdentifier() ?? "?"
-        flagsLog.debug("\(app, privacy: .public) key=\(event.keyCode) flags=\(String(event.modifierFlags.rawValue, radix: 16), privacy: .public) t=\(event.timestamp)")
+        // 插值只在开着 debug 日志时才算（不开时不去问应用是谁）
+        flagsLog.debug("\(self.textInput?.bundleIdentifier() ?? "?", privacy: .public) key=\(event.keyCode) flags=\(String(event.modifierFlags.rawValue, radix: 16), privacy: .public) t=\(event.timestamp)")
+        let flags = event.modifierFlags.rawValue
+        let others = NSEvent.ModifierFlags([.control, .option, .command]).rawValue
         let right = event.keyCode == VirtualKey.shiftRight
         guard right || event.keyCode == VirtualKey.shiftLeft else {
-            // 别的修饰键（Command、Option、Control、Fn、CapsLock）：这次 Shift 不算单按
-            composer.otherModifierChanged()
+            // 别的修饰键：按着 Control、Option、Command 时这次 Shift 不算单按。不带这几个的
+            // （Fn、CapsLock，或者应用多报的别的键码）不管
+            if flags & others != 0 {
+                composer.otherModifierChanged()
+            }
             return
         }
-        let flags = event.modifierFlags.rawValue
         // 左右 Shift 的设备位（NX_DEVICELSHIFTKEYMASK、NX_DEVICERSHIFTKEYMASK）；事件没带设备位时看 Shift 位
         let side: UInt = right ? 0x04 : 0x02
         let down = flags & 0x06 != 0 ? flags & side != 0 : flags & NSEvent.ModifierFlags.shift.rawValue != 0
         if down && event.timestamp - lastShiftTap < Self.shiftBounce {
             return
         }
-        let others = NSEvent.ModifierFlags([.control, .option, .command]).rawValue
         if composer.shiftChanged(down: down, otherModifiers: flags & others != 0, now: composer.clock(), right: right) {
             lastShiftTap = event.timestamp
         }

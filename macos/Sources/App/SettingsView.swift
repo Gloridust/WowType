@@ -347,7 +347,7 @@ private struct InputPage: View {
         PrefGroup("中英文切换", info: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
                   + "打到一半切英文，已经打的字母原样上屏。") {
             // macOS 自己的切换：不经过输入法，哪个应用里都管用
-            ActionRow(title: "中/英 键切换 WowType 和 ABC", subtitle: "系统自带，所有应用里都管用",
+            ActionRow(title: "中/英 键（大写锁定键）", subtitle: "系统设置里打开后，在 WowType 和 ABC 之间切，所有应用里都管用",
                       info: "在「系统设置 → 键盘 → 文字输入 → 输入法」点「编辑…」，打开"
                           + "「使用“中/英”键切换“ABC”输入法」（键盘上没有 中/英 键时叫「使用大写锁定键切换“ABC”输入法」）。"
                           + "打开以后按一下这个键在 WowType 和 ABC 之间切。") {

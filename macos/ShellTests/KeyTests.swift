@@ -137,6 +137,27 @@ func runKeyTests() {
         type(c, "ni")
         check(f.markedText == "ni", "过一会儿再按：回到中文", f.markedText)
     }
+    do {
+        // 按着 Shift 时来了别的键码的 flagsChanged：不带 Control / Option / Command 的不管，带的不算单按
+        func modifier(_ code: Int, _ extra: NSEvent.ModifierFlags, at t: TimeInterval) -> NSEvent {
+            NSEvent.keyEvent(with: .flagsChanged, location: .zero,
+                             modifierFlags: NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.shift.rawValue | 0x102 | extra.rawValue),
+                             timestamp: t, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                             isARepeat: false, keyCode: UInt16(code))!
+        }
+        let (c, f) = session()
+        let t = ProcessInfo.processInfo.systemUptime + 20
+        _ = c.handle(shiftEvent(down: true, at: t), client: c.fake)
+        _ = c.handle(modifier(kVK_Function, [], at: t + 0.02), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 0.1), client: c.fake)
+        type(c, "ab")
+        check(f.text == "ab", "中间多报一个不带 Control / Option / Command 的修饰键事件：照样切", f.text)
+        _ = c.handle(shiftEvent(down: true, at: t + 1), client: c.fake)
+        _ = c.handle(modifier(kVK_Command, .command, at: t + 1.02), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 1.1), client: c.fake)
+        type(c, "c")
+        check(f.text == "abc", "按着 Shift 按了 Command：不算单按", f.text)
+    }
 
     // 进出「译」的快捷键（真的 keyDown：Control+Shift+Y）
     do {

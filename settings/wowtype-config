@@ -4667,12 +4667,16 @@ class SettingsWindow(Adw.ApplicationWindow):
         usable = [SHIFT_NAMES[s] for s in SHIFT_SIDES.get(toggle, ())
                   if s not in {bare_shift(k) for _o, k in conflicts}]
         key = self.translate_mode_key()
+        held = self.values.get("TranslateModeKey", "") if not key else ""
         if not self.translate_ready():
             self.translate_row.set_subtitle(
                 "先在下面下载翻译模型" if self.values.get("TranslateLocal") == "True"
                 else "先在下面填好翻译服务")
         elif key:
             self.translate_row.set_subtitle(f"按 {key_label(key)} 进出「译」")
+        elif held:
+            # 设了互译键，单按 Shift 就不进「译」了；键又被 fcitx5 拿走，哪个都进不去
+            self.translate_row.set_subtitle(f"互译的快捷键 {key_label(held)} 被 fcitx5 占着，先在 Fcitx 5 配置里删掉它")
         elif toggle == "Off":
             self.translate_row.set_subtitle("「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键")
         elif conflicts:
