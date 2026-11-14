@@ -146,8 +146,8 @@ func downloadModelCommand(accepted: Bool) -> Bool {
                 let text: String
                 switch p.stage {
                 case .connecting: text = "正在连接…"
-                case .model: text = "下载模型 \(p.percent)%（\(megabytes(p.done)) / \(megabytes(p.total))）"
-                case .llama: text = "下载 llama-server \(p.percent)%（\(megabytes(p.done)) / \(megabytes(p.total))）"
+                case .model: text = "下载模型 \(p.percent)%（\(LocalModel.sizeText(p.done)) / \(LocalModel.sizeText(p.total))）"
+                case .llama: text = "下载 llama-server \(p.percent)%（\(LocalModel.sizeText(p.done)) / \(LocalModel.sizeText(p.total))）"
                 case .unpacking: text = "安装 llama-server…"
                 }
                 print("\r\(text)   ", terminator: "")

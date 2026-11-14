@@ -122,7 +122,7 @@ bigram 格式（可选）：
 
 插件读 `~/.config/fcitx5/conf/wowtype.conf`（`CandidateLayout`、`PageSize`、`Fuzzy`、`TypoCorrection`、
 `FuzzyZh` 等 16 组模糊音、`InputScheme`（拼音、双拼、五笔）、`ShuangpinScheme`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`SelectKeys`、`DateTime`、`Calculator`、
-`Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
+`ToggleKey`、`TranslateModeKey`、`Voice`、`VoiceKey`、`Translate` 等互译选项、`CheckUpdate`），`getConfig()` 暴露给 fcitx5 配置工具（`Configurable=True`），
 里面的「自定义词和更多设置」是 `ExternalOption`，打开 `wowtype-config`。
 设置界面改完调 D-Bus `org.fcitx.Fcitx.Controller1.ReloadAddonConfig("wowtype")`，插件 `reloadConfig()`
 重读配置文件和 `custom.tsv`（`wowtype_engine_load_custom_words`），不用重启 fcitx5。
@@ -183,7 +183,8 @@ bigram 格式（可选）：
 
 ## 互译
 
-`Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）。
+`Translate=True` 且填了 `TranslateBaseUrl`、`TranslateModel` 时，单按 Shift 是 中 → 英 → 译 → 中（状态栏「译」）；
+设了 `TranslateModeKey` 时单按 Shift 只切中英，「译」用这个键进出（插件认出键后带 `WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE` 交给会话，`ToggleKey` 是 `_TOGGLE_MODE`）。
 核心在 `core/src/translate.rs`（C 接口 `wowtype_translate_*`，见 `wowtype_core.h`）：
 
 - 所有上屏都经 `WowtypeEngine::emit()`；互译时不上屏，攒进 `WowtypeState::tsource_`

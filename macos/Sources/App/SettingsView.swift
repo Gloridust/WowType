@@ -183,6 +183,14 @@ private struct ToastView: View {
 // MARK: 常规
 
 private let issuesURL = URL(string: "https://github.com/Gloridust/WowType/issues/new")!
+/// 系统设置的「键盘」（只打开，不改系统设置）
+private let keyboardSettingsURL = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension")!
+
+/// 两个快捷键行的说明，和 Linux 设置的一样（settings/wowtype-config 的 TOGGLE_KEY_INFO、TRANSLATE_MODE_KEY_INFO）
+private let toggleKeyInfo = "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。"
+private let translateModeKeyInfo = "按它进「译」，在「译」里再按回到原来的模式。设了它，单按 Shift 就只在中文、英文之间切。\n\n"
+    + "要先在「翻译」页打开互译；没打开、密码框里这个键交给应用。"
+private let systemKeyNote = "\n\n系统的快捷键（比如 Control+空格）先处理，设成它们 WowType 收不到。"
 
 private struct GeneralPage: View {
     @ObservedObject var model: SettingsModel
@@ -286,7 +294,7 @@ private struct InputPage: View {
                     if (model.wanxiangVersion == nil || model.wanxiangUpdate != nil) && !noAsset {
                         Button(model.wanxiangVersion == nil ? "下载" : "更新") { model.installWanxiang() }
                     }
-                    IconButton(symbol: "folder", help: "从文件安装") { model.chooseWanxiangFile() }
+                    IconButton(symbol: "folder", help: "从文件安装（wowtype-data-wanxiang-*.tar.gz）") { model.chooseWanxiangFile() }
                     if model.wanxiangVersion != nil && model.lexiconKind != .wanxiang {
                         IconButton(symbol: "trash", help: "删除万象拼音") { model.removeWanxiang() }
                     }
@@ -338,14 +346,30 @@ private struct InputPage: View {
 
         PrefGroup("中英文切换", info: "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
                   + "打到一半切英文，已经打的字母原样上屏。") {
-            PickerRow(title: "切换键", selection: $model.config.shiftToggle,
+            // macOS 自己的切换：不经过输入法，哪个应用里都管用
+            ActionRow(title: "中/英 键（大写锁定键）", subtitle: "系统设置里打开后，在 WowType 和 ABC 之间切，所有应用里都管用",
+                      info: "在「系统设置 → 键盘 → 文字输入 → 输入法」点「编辑…」，打开"
+                          + "「使用“中/英”键切换“ABC”输入法」（键盘上没有 中/英 键时叫「使用大写锁定键切换“ABC”输入法」）。"
+                          + "打开以后按一下这个键在 WowType 和 ABC 之间切。") {
+                Button("打开键盘设置") { NSWorkspace.shared.open(keyboardSettingsURL) }
+            }
+            RowDivider()
+            PickerRow(title: "单按 Shift",
+                      info: "个别应用（比如一些用 Electron 做的）里单按 Shift 有时不灵，可以用上面的 中/英 键，或者下面另设的快捷键。",
+                      selection: $model.config.shiftToggle,
                       options: [("左右 Shift 都行", .both), ("左 Shift", .left), ("右 Shift", .right), ("不用 Shift 切换", .off)])
             RowDivider()
-            PickerRow(title: "另设一个切换键",
-                      info: "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
-                          + "Control+空格是 macOS 切换输入法的快捷键，系统先拿走，WowType 收不到："
-                          + "要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里把它关掉。",
-                      selection: toggleKey, options: toggleKeyOptions)
+            PickerRow(title: "另设一个切换键", info: toggleKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.toggleKey),
+                      options: shortcutOptions([("不用（单按 Shift 照常）", "")] + shortcuts(Array(Shortcut.toggleKeyPresets.dropFirst())),
+                                               current: model.config.toggleKey?.name ?? ""))
+            RowDivider()
+            PickerRow(title: "互译的快捷键",
+                      subtitle: model.config.translateModeKey != nil && !model.translateReady ? "先在「翻译」页打开互译" : nil,
+                      info: translateModeKeyInfo + systemKeyNote,
+                      selection: shortcutBinding(\.translateModeKey),
+                      options: shortcutOptions([("不用", "")] + shortcuts(Array(Shortcut.translateModeKeyPresets.dropFirst())),
+                                               current: model.config.translateModeKey?.name ?? ""))
         }
 
         PrefGroup("拼音") {
@@ -361,7 +385,7 @@ private struct InputPage: View {
             SwitchRow(title: "繁体字", isOn: $model.config.traditional)
             RowDivider()
             SwitchRow(title: "更多生僻字", subtitle: "要装能显示它们的字体，比如花园明朝",
-                      info: "候选里也列出极少用的生僻字。系统自带的字体有些显示不了，会是方块。",
+                      info: "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。",
                       isOn: $model.config.rareExtChars)
             RowDivider()
             PickerRow(title: "标点样式", info: "数字后面的符号总是半角的，比如 3.14。",
@@ -376,11 +400,13 @@ private struct InputPage: View {
             RowDivider()
             SwitchRow(title: "工具栏",
                       subtitle: schemeName.map { "\($0)时不可用" } ?? "打 v 再按空格：剪贴板、常用语、符号、表情",
-                      isOn: $model.config.toolbar)
+                      // 双拼、五笔时用不了：显示成关着（不改设置，换回全拼还是原来的）
+                      isOn: Binding(get: { schemeName == nil && model.config.toolbar },
+                                    set: { model.config.toolbar = $0 }))
                 .disabled(schemeName != nil)
             RowDivider()
             SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
-                      info: "给工具栏里的「剪贴板」用，最多记 20 条，切走输入法就清空。"
+                      info: "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
                           + "密码管理器标了「不要记」的不记，没标的密码会被记下并显示出来。",
                       isOn: $model.config.clipboardHistory)
             RowDivider()
@@ -396,7 +422,7 @@ private struct InputPage: View {
                       isOn: $model.config.prediction)
             RowDivider()
             ExpanderRow(title: "中英文之间自动加空格", subtitle: "第5章 → 第 5 章",
-                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序里不起作用。",
+                        info: "你好Mac → 你好 Mac。只在程序告诉输入法光标前是什么字时加，有些程序（比如终端）里不起作用。",
                         enabled: $model.config.autoSpace) {
                 SwitchRow(title: "汉字和英文字母之间", isOn: $model.config.autoSpaceLetters)
                 RowDivider()
@@ -405,17 +431,10 @@ private struct InputPage: View {
         }
     }
 
-    /// 键名同 wowtype.conf 的 ToggleKey；空串是不用
-    private var toggleKey: Binding<String> {
-        Binding(get: { model.config.toggleKey?.name ?? "" },
-                set: { model.config.toggleKey = $0.isEmpty ? nil : Shortcut(name: $0) })
-    }
-
-    private var toggleKeyOptions: [(String, String)] {
-        let options = [("不用（单按 Shift 照常）", ""), ("Control + 空格", "Control+space"),
-                       ("Control + Shift + 空格", "Control+Shift+space")]
-        let current = toggleKey.wrappedValue
-        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+    /// 快捷键下拉框选的键名（同 wowtype.conf）；空串是不用
+    private func shortcutBinding(_ path: WritableKeyPath<WowtypeConfig, Shortcut?>) -> Binding<String> {
+        Binding(get: { model.config[keyPath: path]?.name ?? "" },
+                set: { model.config[keyPath: path] = $0.isEmpty ? nil : Shortcut(name: $0) })
     }
 
     /// 双拼、五笔时 v 是字母键（计算器换大写 V、工具栏不开）：副标题里说是哪个；全拼是 nil。
@@ -482,11 +501,19 @@ private struct EmojiPage: View {
     }
 
     private var emojiKeyOptions: [(String, String)] {
-        let options = [("Control + .", "Control+period"), ("Control + ;", "Control+semicolon"),
-                       ("Control + Shift + E", "Control+Shift+E"), ("不用快捷键", "")]
-        let current = emojiKey.wrappedValue
-        return options.contains { $0.1 == current } ? options : options + [("其他（\(current)）", current)]
+        shortcutOptions(shortcuts(["Control+period", "Control+semicolon", "Control+Shift+E"]) + [("不用快捷键", "")],
+                        current: emojiKey.wrappedValue)
     }
+}
+
+/// 快捷键（键名同 wowtype.conf）配上 Mac 键盘上的叫法：Control + .、Option + X
+private func shortcuts(_ names: [String]) -> [(String, String)] {
+    names.map { (Shortcut(name: $0)?.label ?? $0, $0) }
+}
+
+/// 设置文件里写的不是预设的快捷键：加一项「其他（Option + X）」
+private func shortcutOptions(_ options: [(String, String)], current: String) -> [(String, String)] {
+    options.contains { $0.1 == current } ? options : options + [("其他（\(shortcuts([current])[0].0)）", current)]
 }
 
 // MARK: 语音
@@ -581,14 +608,14 @@ private struct TranslatePage: View {
 
     /// 「互译」那一行的状态（和 Linux 设置一样）：还差什么、Shift 关掉了切不到「译」、怎么切
     private var translateStatus: String {
-        let ready = model.config.translateLocal
-            ? model.localPlan.ready
-            : !model.config.translateBaseUrl.isEmpty && !model.config.translateModel.isEmpty
-        if !ready {
+        if !model.translateConfigured {
             return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
         }
+        if let key = model.config.translateModeKey {
+            return "按 \(key.label) 进出「译」"
+        }
         if model.config.shiftToggle == .off {
-            return "「输入」页关掉了 Shift 切换，切不到「译」"
+            return "「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键"
         }
         return "单按 Shift：中 → 英 → 译 → 中"
     }
@@ -796,7 +823,7 @@ private struct WordRow: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(entry.word.replacingOccurrences(of: "\\n", with: "⏎"))
+                Text(CustomWords.shown(entry.word))
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Text(entry.code)

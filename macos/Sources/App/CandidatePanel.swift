@@ -53,7 +53,7 @@ struct CandidateLayout {
         /// 展开面板里只有光标所在行标序号，别的行留出序号的位置，各行的词才对得齐
         var showLabel: Bool
         var current: Bool
-        /// 靠左摆（竖排）；false 在高亮底里居中
+        /// 靠左摆（竖排、展开面板）；false 在高亮底里居中
         var leading = false
     }
 
@@ -264,8 +264,9 @@ struct CandidateLayout {
             let (r, column) = (i / columns, i % columns)
             let y = top + CGFloat(r) * (height + Self.spacing)
             let frame = NSRect(x: xs[column], y: y, width: widths[column] + Self.cellPadding.width * 2, height: height)
+            // 靠左摆：同一列各行的词（和五笔码）对齐
             cells.append(Cell(frame: frame, label: "\(column + 1)", text: text, comment: page.comment(i),
-                              showLabel: r == cursorRow, current: i == page.cursor))
+                              showLabel: r == cursorRow, current: i == page.cursor, leading: true))
             if r == cursorRow {
                 row = NSRect(x: Self.inset.width, y: y, width: right - Self.inset.width, height: height)
             }
@@ -367,6 +368,10 @@ final class CandidatePanel {
     var fontSize: CGFloat = 17
     /// 输入框这一行和候选框之间
     private let gap: CGFloat = 4
+    /// 正在显示的这一页的排版；收起时 nil
+    private(set) var layout: CandidateLayout?
+    /// false：排好、摆好位置，但不把窗口放上屏幕（外壳测试 macos/ShellTests 用）
+    var onScreen = true
 
     init() {
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 100, height: 30),
@@ -383,15 +388,18 @@ final class CandidatePanel {
     }
 
     func hide() {
+        layout = nil
         panel.orderOut(nil)
     }
 
     /// line 是输入框光标所在行的矩形（屏幕坐标，左下角为原点）；拿不到时是空矩形。
     func show(_ page: CandidatePage, below line: NSRect) {
         let layout = CandidateLayout(page: page, fontSize: fontSize)
+        self.layout = layout
         view.layout = layout
         panel.setContentSize(layout.size)
         panel.setFrameOrigin(origin(for: layout.size, line: line))
+        guard onScreen else { return }
         panel.orderFrontRegardless()
         // 投影是照窗口里画出来的形状算的，大小一变就得先画好再重算
         panel.displayIfNeeded()

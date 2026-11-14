@@ -272,7 +272,7 @@ public final class Composer {
         refresh()
     }
 
-    /// 换设置。Shift 切换关掉、也没另设切换键时回到中文（切不回来了）；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
+    /// 换设置。Shift 切换关掉、也没另设切换键时回到中文（切不回来了；进出「译」的键只进出「译」，不算）；剪贴板历史关掉时马上清空；关掉了互译或者翻译器没配好时离开「译」（和 Linux 一样）。
     public func apply(_ config: WowtypeConfig) {
         self.config = config
         let noWayBack = config.shiftToggle == .off && config.toggleKey == nil
@@ -375,10 +375,11 @@ public final class Composer {
         if openPanel != nil {
             return handleToolKey(key)
         }
-        if let toggleKey = config.toggleKey, toggleKey.matches(key) {
-            // 另设的切换键：中 ↔ 英；在「译」里按回中文
-            switchMode(to: mode == .chinese ? .english : .chinese)
-            return true
+        if let action = modeKeyAction(key) {
+            // 另设的切换键（中 ↔ 英，在「译」里回中文）、进出「译」的键：会话切；
+            // 进不了「译」（没配好、密码框）时交给应用。翻译器可能刚配好或者不能用了：先跟上（和单按 Shift 一样）
+            configure()
+            return sendToSession(key, action: action)
         }
         // 互译、没在打拼音：回车上屏译文、Shift+回车上屏原文、Esc 清空、退格删原文、数字和符号进原文……
         // 都由会话处理（「译」里攒着原文时输入框变成了不能翻译的，会话先把原文原样上屏）
@@ -445,13 +446,15 @@ public final class Composer {
         wowtype_session_key(session, &raw)
     }
 
-    /// 单按 Shift：中 → 英 → 译 → 中（没配好互译时只在中英之间切），和 Linux 一样。
-    public func toggleMode() {
-        switch mode {
-        case .chinese: switchMode(to: .english)
-        case .english: switchMode(to: translateAvailable ? .translate : .chinese)
-        case .translate: switchMode(to: .chinese)
+    /// 设置里另设的切换键、进出「译」的键（和 Linux 一样：两个一样时算进出「译」）。
+    private func modeKeyAction(_ key: KeyInput) -> UInt32? {
+        if config.translateModeKey?.matches(key) == true {
+            return UInt32(WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE)
         }
+        if config.toggleKey?.matches(key) == true {
+            return UInt32(WOWTYPE_KEY_ACTION_TOGGLE_MODE)
+        }
+        return nil
     }
 
     /// 切模式。打到一半切英文：已选的词 + 打的字母原样上屏（会话做，和微信输入法一样）；
@@ -522,6 +525,7 @@ public final class Composer {
         case .off: config.shift_toggle = WOWTYPE_SHIFT_TOGGLE_OFF
         }
         config.translate_mode = translateAvailable ? 1 : 0
+        config.translate_key = settings.translateModeKey == nil ? 0 : 1
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
@@ -573,15 +577,16 @@ public final class Composer {
     }
 
     @discardableResult
-    func sendToSession(_ key: KeyInput) -> Bool {
+    func sendToSession(_ key: KeyInput, action: UInt32 = UInt32(WOWTYPE_KEY_ACTION_NONE)) -> Bool {
         var raw = WowtypeKey()
         raw.size = UInt32(MemoryLayout<WowtypeKey>.size)
         raw.keysym = key.keysym
         raw.modifiers = key.modifiers.rawValue
         raw.release = key.release ? 1 : 0
+        raw.action = action
         raw.time_ms = UInt64(max(clock(), 0) * 1000)
-        if mode == .translate && client?.allowsTranslation != true {
-            // 密码框（安全输入）：「译」里也照常上屏，不往外发
+        if client?.allowsTranslation != true {
+            // 密码框（安全输入）：「译」里也照常上屏、不往外发，进出「译」的键进不去
             raw.hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE
         }
         if client?.allowsTranslation == false {

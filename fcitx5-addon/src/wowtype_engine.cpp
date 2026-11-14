@@ -919,6 +919,7 @@ void WowtypeEngine::applyConfig() {
                                                       : WowtypeShiftToggle::Both;
     }
     toggleKey_ = *config_.toggleKey;
+    translateModeKey_ = *config_.translateModeKey;
     if (!canToggleMode()) { // 切不回中文了，回到中文
         asciiMode_ = false;
         translateMode_ = false;
@@ -1002,7 +1003,7 @@ void WowtypeEngine::applyConfig() {
              << "(" << shuangpinScheme_ << ")" << " 五笔=" << wubi_ << " Shift切换=" << static_cast<int>(shiftToggle_)
              << " 繁体=" << traditional_ << " 语音键=" << voiceKey_.toString()
              << " emoji推荐=" << emojiSuggest_ << " 表情键=" << emojiKey_.toString()
-             << " 中英键=" << toggleKey_.toString()
+             << " 中英键=" << toggleKey_.toString() << " 互译键=" << translateModeKey_.toString()
              << " 选词键=" << static_cast<int>(selectKeys_) << " 日期时间=" << dateTime_
              << " 计算器=" << calculator_ << " 工具栏=" << toolbar_
              << " 剪贴板历史=" << clipboardHistory_ << " 互译=" << translateEnabled_ << "("
@@ -1087,8 +1088,13 @@ bool WowtypeEngine::isEmojiKey(const fcitx::Key &key) const {
     return emojiKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{emojiKey_});
 }
 
-bool WowtypeEngine::isToggleKey(const fcitx::Key &key) const {
-    return toggleKey_.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{toggleKey_});
+uint32_t WowtypeEngine::modeKeyAction(const fcitx::Key &key) const {
+    auto is = [&key](const fcitx::Key &want) {
+        return want.sym() != FcitxKey_None && key.checkKeyList(fcitx::KeyList{want});
+    };
+    return is(translateModeKey_) ? WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE
+           : is(toggleKey_)      ? WOWTYPE_KEY_ACTION_TOGGLE_MODE
+                                 : WOWTYPE_KEY_ACTION_NONE;
 }
 
 bool WowtypeEngine::canToggleMode() const {
@@ -1235,6 +1241,7 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                           : shiftToggle_ == WowtypeShiftToggle::Off   ? WOWTYPE_SHIFT_TOGGLE_OFF
                                                                       : WOWTYPE_SHIFT_TOGGLE_BOTH;
     config.translate_mode = translateAvailable() ? 1 : 0;
+    config.translate_key = translateModeKey_.sym() != FcitxKey_None ? 1 : 0;
     config.toolbar = toolbar_ ? 1 : 0;
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
     config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
@@ -1256,7 +1263,7 @@ const WowtypeFrame *WowtypeEngine::sessionKey(fcitx::InputContext *ic, WowtypeSt
                    fcitx::CapabilityFlag::Email})) {
         hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE;
     }
-    if (ic && !translating(ic)) {
+    if (ic && !translatable(ic)) {
         hints |= WOWTYPE_KEY_HINT_NO_TRANSLATE;
     }
     // 读得到周围文字时会话拿光标前的字核对自己记的上文（在应用里删过、改过就作废）
@@ -1771,13 +1778,14 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         event.filterAndAccept();
         return;
     }
-    if (state->panel() == WOWTYPE_TOOL_NONE && isToggleKey(key)) {
-        // 另设的切换键：中 ↔ 英；在「译」里按回中文
-        coreReady();
-        syncSession(state);
-        syncMode(ic, state);
-        switchMode(ic, state, !asciiMode_ && !translateMode_, false, true);
-        event.filterAndAccept();
+    if (const uint32_t action = modeKeyAction(key); action && state->panel() == WOWTYPE_TOOL_NONE) {
+        // 另设的切换键（中 ↔ 英，在「译」里回中文）、互译键（进出「译」）：会话切；
+        // 进不了「译」（没配好、密码框）时交给应用
+        const WowtypeFrame *frame = sessionKey(ic, state, key, action);
+        if (frame && frame->handled) {
+            followSessionMode(ic, state, frame);
+            event.filterAndAccept();
+        }
         return;
     }
     if (state->panel() != WOWTYPE_TOOL_NONE) {
@@ -2000,7 +2008,6 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
     raw.repeat = event.rawKey().states().test(fcitx::KeyState::Repeat) ? 1 : 0;
     raw.time_ms = static_cast<uint64_t>(fcitx::now(CLOCK_MONOTONIC) / 1000);
     const bool wasExpanded = state->expanded_;
-    const bool wasPredicting = state->predicting();
     const WowtypeFrame *frame = wowtype_session_key(state->session_, &raw);
     if (!frame || !frame->mode_changed) {
         if (isShift) {
@@ -2014,21 +2021,29 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
         }
         return false;
     }
-    const int mode = frame->mode;
-    // 打到一半切英文：已选的词 + 打的字母原样上屏；离开「译」：原文原样上屏、拼音留着（会话已经放进 frame）
-    const bool redraw = frame->commit || wasPredicting;
-    if (frame->commit) {
-        finishCommit(ic, state, frame);
-    } else if (wasPredicting) {
-        state->forgetCandidates(); // 切模式收起了联想
-    }
-    switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
-    if (redraw) {
-        // 换好模式再画：离开「译」以后留着的拼音照普通的编辑区画
-        updateInputPanel(ic, state);
-    }
+    followSessionMode(ic, state, frame);
     event.filterAndAccept();
     return true;
+}
+
+void WowtypeEngine::followSessionMode(fcitx::InputContext *ic, WowtypeState *state,
+                                      const WowtypeFrame *frame) {
+    // 打到一半切英文：已选的词 + 打的字母原样上屏；离开「译」：原文原样上屏、拼音留着（会话已经放进 frame）
+    const int mode = frame->mode;
+    const bool committed = frame->commit != nullptr;
+    // 没在打字时画着候选（联想）：切模式时会话收起了它，跟着重画
+    const bool hadCandidates = !state->candidates_.empty();
+    if (committed) {
+        finishCommit(ic, state, frame);
+    } else if (!state->composing()) {
+        state->forgetCandidates();
+    }
+    switchMode(ic, state, mode == WOWTYPE_MODE_ENGLISH, mode == WOWTYPE_MODE_TRANSLATE, true);
+    if (committed || state->composing() || hadCandidates) {
+        // 换好模式再画：离开「译」以后留着的拼音照普通的编辑区画，不再画成互译的原文框；
+        // 带进「译」的拼音画成原文框
+        updateInputPanel(ic, state);
+    }
 }
 
 void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *state) {
@@ -2051,16 +2066,18 @@ void WowtypeEngine::syncMode(fcitx::InputContext *ic, WowtypeState *state) {
     if (wowtype_session_mode(state->session_) == want) {
         return;
     }
-    const bool wasPredicting = state->predicting();
-    const WowtypeFrame *frame = wowtype_session_set_mode(state->session_, want);
-    if (frame && frame->commit && ic) {
-        finishCommit(ic, state, frame);
-        updateInputPanel(ic, state);
-    } else if (wasPredicting && ic) {
-        // 切模式收起了联想
-        state->forgetCandidates();
-        updateInputPanel(ic, state);
+    auto set = [&](int mode) {
+        const WowtypeFrame *frame = wowtype_session_set_mode(state->session_, mode);
+        if (frame && frame->commit && ic) {
+            finishCommit(ic, state, frame);
+            updateInputPanel(ic, state);
+        }
+    };
+    if (want == WOWTYPE_MODE_TRANSLATE) {
+        // 别的输入框里进的「译」：会话先到进「译」前的模式，在这里按互译键也回得去
+        set(translateFrom_);
     }
+    set(want);
 }
 
 void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, bool ascii,
@@ -2070,6 +2087,9 @@ void WowtypeEngine::switchMode(fcitx::InputContext *ic, WowtypeState *state, boo
         // 打到一半切英文：已选的词 + 打的字母原样上屏（和微信输入法一样）
         commitInput(ic, state);
         updateInputPanel(ic, state);
+    }
+    if (translate && !translateMode_) {
+        translateFrom_ = asciiMode_ ? WOWTYPE_MODE_ENGLISH : WOWTYPE_MODE_CHINESE;
     }
     asciiMode_ = ascii;
     translateMode_ = translate;
@@ -2329,10 +2349,14 @@ bool WowtypeEngine::translateAvailable() const {
 }
 
 bool WowtypeEngine::translating(fcitx::InputContext *ic) const {
-    if (!translateMode_ || !ic || !translator_) {
+    return translateMode_ && translator_ && translatable(ic);
+}
+
+bool WowtypeEngine::translatable(fcitx::InputContext *ic) {
+    // 密码框之类：照常打中文，不往外发
+    if (!ic) {
         return false;
     }
-    // 密码框之类：照常打中文，不往外发
     const auto flags = ic->capabilityFlags();
     return !flags.test(fcitx::CapabilityFlag::Password) &&
            !flags.test(fcitx::CapabilityFlag::Sensitive);

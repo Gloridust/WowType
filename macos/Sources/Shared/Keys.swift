@@ -154,6 +154,11 @@ public struct Shortcut: Equatable, Sendable {
     /// 表情面板的默认快捷键（macOS）：Control+.
     public static let emojiDefault = Shortcut(keysym: 0x2e, modifiers: .control)
 
+    /// 设置窗口里切换键、进出「译」的键能选的（键名，空串是不用），和 spec/config.json 的
+    /// presets.macos 一样（测试对照）。只放 macOS 默认没被占的键：Control+空格是系统选上一个输入法的键
+    public static let toggleKeyPresets = ["", "Control+Shift+space"]
+    public static let translateModeKeyPresets = ["", "Control+Shift+Y"]
+
     public init(keysym: UInt32, modifiers: Modifiers) {
         self.keysym = Shortcut.fold(keysym)
         self.modifiers = modifiers.intersection([.shift, .control, .option])
@@ -188,6 +193,16 @@ public struct Shortcut: Equatable, Sendable {
         let names = Shortcut.asciiNames
         parts.append(index >= 0 && index < names.count ? names[index] : "?")
         return parts.joined(separator: "+")
+    }
+
+    /// 设置窗口里给人看的叫法（Mac 键盘上的名字）：Control + .、Option + X、Control + Shift + 空格。
+    public var label: String {
+        var parts: [String] = []
+        if modifiers.contains(.control) { parts.append("Control") }
+        if modifiers.contains(.option) { parts.append("Option") }
+        if modifiers.contains(.shift) { parts.append("Shift") }
+        let key = keysym == 0x20 ? "空格" : UnicodeScalar(keysym).map { String($0).uppercased() } ?? "?"
+        return (parts + [key]).joined(separator: " + ")
     }
 
     /// 这次按键是不是这个快捷键。CapsLock 不算；字母不分大小写（按着 Shift 时 macOS 给的是大写）。

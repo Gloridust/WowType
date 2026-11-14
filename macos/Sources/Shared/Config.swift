@@ -131,8 +131,10 @@ public struct WowtypeConfig: Equatable {
     /// 打开表情面板的快捷键，nil 不用快捷键。Linux 默认 Super+period；macOS 上 Command 组合键
     /// 多半到不了输入法，默认 Control+period（Super 也当 Control，见 Shortcut）
     public var emojiKey: Shortcut? = .emojiDefault
-    /// 另设一个切换中 / 英文的快捷键（#143），nil 不用；单按 Shift 照常
+    /// 另设的切换中 / 英文、进出「译」的快捷键（#143、#87），nil 不用。设了进出「译」的键时
+    /// 单按 Shift 只在中 ↔ 英之间切；两个一样时算进出「译」
     public var toggleKey: Shortcut?
+    public var translateModeKey: Shortcut?
     /// 词库文件，空串用安装包里的雾凇词库；文件不在也用自带的
     public var lexicon = ""
     /// 候选字号（磅），只有 macOS 有：Linux 上字号跟着 fcitx5 主题
@@ -269,7 +271,7 @@ public struct WowtypeConfig: Equatable {
         "Traditional",
         "PunctuationStyle", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
         "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "Voice", "VoiceKey", "VoiceCopy", "EmojiKey",
-        "ToggleKey",
+        "ToggleKey", "TranslateModeKey",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateLocal",
         "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
@@ -326,12 +328,13 @@ public struct WowtypeConfig: Equatable {
             } else if let key = Shortcut(name: value) {
                 emojiKey = key
             }
-        case "ToggleKey":
+        case "ToggleKey", "TranslateModeKey":
             // 留空是不用；写错了保持原样
+            let path: WritableKeyPath<WowtypeConfig, Shortcut?> = key == "ToggleKey" ? \.toggleKey : \.translateModeKey
             if value.isEmpty {
-                toggleKey = nil
+                self[keyPath: path] = nil
             } else if let shortcut = Shortcut(name: value) {
-                toggleKey = shortcut
+                self[keyPath: path] = shortcut
             }
         case "TranslateTarget":
             if let v = matchName(value, WowtypeConfig.translateTargets) { translateTarget = v }
@@ -365,6 +368,7 @@ public struct WowtypeConfig: Equatable {
         case "VoiceKey": return voiceKey
         case "EmojiKey": return emojiKey?.name ?? ""
         case "ToggleKey": return toggleKey?.name ?? ""
+        case "TranslateModeKey": return translateModeKey?.name ?? ""
         case "TranslateTarget": return translateTarget
         case "TranslateBaseUrl": return translateBaseUrl
         case "TranslateModel": return translateModel
@@ -565,14 +569,16 @@ public struct WowtypeConfig: Equatable {
         # 打开表情面板的快捷键，键名同 fcitx5：Control+period、Control+semicolon、Control+Shift+E；留空不用。
         # Command 组合键多半到不了输入法，写 Super 的当 Control
         EmojiKey=\(d.emojiKey?.name ?? "")
-        # 另设一个切换中 / 英文的快捷键：Control+space、Control+Shift+space；留空不用（单按 Shift 照常）。
-        # Control+space 是 macOS 切换输入法的快捷键，要先在「系统设置 → 键盘 → 键盘快捷键 → 输入法」里关掉
+        # 另设一个切换中 / 英文的快捷键，比如 Control+Shift+space；留空不用（单按 Shift 照常）。
+        # 系统的快捷键（Control+space 选上一个输入法）先被系统拿走，WowType 收不到
         ToggleKey=\(d.toggleKey?.name ?? "")
+        # 进出「译」的快捷键，比如 Control+Shift+Y；留空不用。设了以后单按 Shift 只在中英之间切
+        TranslateModeKey=\(d.translateModeKey?.name ?? "")
 
         # 词库文件（拼音<TAB>词<TAB>频次），留空用自带的雾凇词库；文件不在也用自带的
         Lexicon=
 
-        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切）。
+        # 互译：打开后单按 Shift 在 中 → 英 → 译 之间切（没配好翻译时只在中英之间切；设了 TranslateModeKey 时用它进出）。
         # 「译」里打的中文攒在候选框里，停 0.5 秒发去翻译，回车上屏译文。打的字会发给下面的服务。
         Translate=\(b(d.translate))
         # 译成哪种语言：en 英、ja 日、ko 韩、fr 法、de 德、es 西、ru 俄、pt 葡、it 意、vi 越、th 泰、id 印尼、ar 阿

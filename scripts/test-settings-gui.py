@@ -161,14 +161,26 @@ def run(app):
     step("开关", switches)
 
     def toggle_key():
-        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到。
-        # fcitx5 的快捷键直接给定，不看这台机器（/etc/xdg 里可能改过）
-        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+space"}}
-        win.toggle_key_row.set_selected(1)
-        check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
-        check("Ctrl+空格 切换输入法" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
-        win.toggle_key_row.set_selected(0)
-        check(win.toggle_key_row.get_subtitle() == "", "不用切换键时还有提示")
+        # 设成 fcitx5 也在用的键：提示 WowType 收不到。fcitx5 的快捷键直接给定，不看这台机器
+        # （/etc/xdg 里可能改过）；预设里没有 fcitx5 默认占着的键，这里假装用户在 fcitx5 里设了它
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+Shift+space"}}
+        toggle = win.key_rows["ToggleKey"]
+        toggle.set_selected(1)
+        check(win.values["ToggleKey"] == "Control+Shift+space", "切换键没存上")
+        check("Ctrl+Shift+空格 切换输入法" in toggle.get_subtitle(), f"没提示被 fcitx5 占着：{toggle.get_subtitle()}")
+        toggle.set_selected(0)
+        check(toggle.get_subtitle() == "", "不用切换键时还有提示")
+        # 互译键：互译没开时提示先去打开；也被 fcitx5 占着时提示占着
+        translate = win.key_rows["TranslateModeKey"]
+        translate.set_selected(1)
+        check(win.values["TranslateModeKey"] == "Control+Shift+Y", "互译键没存上")
+        check(translate.get_subtitle() == "先在「翻译」页打开互译", f"没提示先打开互译：{translate.get_subtitle()}")
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+Shift+Y"}}
+        win.refresh_translate_status()
+        check("fcitx5 也用 Ctrl+Shift+Y" in translate.get_subtitle(), f"互译键被占着没提示：{translate.get_subtitle()}")
+        win.fcitx_hotkey = {}
+        translate.set_selected(0)
+        check(translate.get_subtitle() == "", "不用互译键时还有提示")
     step("切换键", toggle_key)
 
     def entries():
@@ -202,28 +214,48 @@ def run(app):
     dialog("从文件装词库（取消）", lambda: win.on_lexicon_from_file(None))
 
     def export_words():
-        # 只有替身（GTK 4.10 以前）的文件对话框是普通窗口，能在这里点「保存」
+        # 替身（GTK 4.10 以前）的文件对话框：选好文件点「保存」以后，自定义词写到那个文件里。
+        # GTK 自己的选文件窗口换目录、回应「保存」都是异步的，在 CI 上时灵时不灵；这里要测的是
+        # 替身和导出本身，所以把选文件窗口换成一个马上「保存」到指定文件的假窗口
         if ns["FileDialog"] is not ns["_FileDialog"]:
             return
-        folder = tempfile.mkdtemp()
-        target = os.path.join(folder, "words.tsv")
-        for w in new_windows(win, win.on_export_words):
-            w.set_current_folder(Gio.File.new_for_path(folder))
-            w.set_current_name("words.tsv")
+        target = os.path.join(tempfile.mkdtemp(), "words.tsv")
+        asked = {}
 
-            def folder_ready(w=w):
-                # 文件对话框换目录是异步的，没换完就点「保存」会存到别处
-                current = w.get_current_folder()
-                return current is not None and current.get_path() == folder
-            check(pump_until(folder_ready), "文件对话框没切到目标目录")
-            # 目录还在载入时点「保存」会被对话框吞掉（窗口还开着）：没写出文件就再点
-            for _ in range(10):
-                if not w.get_visible():
-                    break
-                w.response(Gtk.ResponseType.ACCEPT)
-                if pump_until(lambda: os.path.exists(target), 3):
-                    break
-        check(pump_until(lambda: os.path.exists(target)), "导出自定义词没写出文件")
+        class Chooser:
+            def __init__(self, **_properties):
+                pass
+
+            def add_filter(self, _filter):
+                pass
+
+            def set_current_name(self, name):
+                asked["name"] = name
+
+            def set_current_folder(self, _folder):
+                pass
+
+            def connect(self, _signal, callback):
+                self.respond = callback
+
+            def show(self):
+                GLib.idle_add(lambda: self.respond(self, Gtk.ResponseType.ACCEPT) and False)
+
+            def get_file(self):
+                return Gio.File.new_for_path(target)
+
+            def destroy(self):
+                pass
+
+        real, Gtk.FileChooserNative = Gtk.FileChooserNative, Chooser
+        try:
+            win.on_export_words()
+            check(pump_until(lambda: os.path.exists(target)), "导出自定义词没写出文件")
+        finally:
+            Gtk.FileChooserNative = real
+        check(asked.get("name") == "wowtype-custom-words.tsv", "保存窗口里没填默认文件名")
+        with open(target, encoding="utf-8") as f:
+            check("测试" in f.read(), "导出的文件里没有刚加的自定义词")
     step("导出自定义词（保存）", export_words)
     step("打开网址", lambda: win.open_url("https://example.invalid/"))
     step("用编辑器打开自定义词", win.on_open_custom)

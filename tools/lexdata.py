@@ -1,8 +1,4 @@
-"""lexicon.tsv 的读写和几条共用规则，给 make-data.sh 的可选数据源用。
-
-    blend-freq.py   词频融合（jieba 词典、语料词频）
-    add-words.py    补词库里没有的词（jieba、CC-CEDICT）
-    jieba2tsv.py    jieba 词典 -> 词频表 / 带读音的候补词
+"""lexicon.tsv 的读写和几条共用规则，给 tools/blend-freq.py（语料词频融合）用。
 
 几条规则（改之前先看 core/src/lexicon.rs）：
 
@@ -14,12 +10,8 @@
   也不拿它们算换算系数：改成别的数它们就不再被估了。
 """
 
-import re
 import sys
 from collections import Counter
-
-# 基本区 + 扩展 A；扩展 B 以后的字常见字体没有，补词时不要
-CJK_WORD = re.compile(r"^[㐀-䶿一-鿿]+$")
 
 # 和 core/src/lexicon.rs 的 PLACEHOLDER_MIN_WORDS 一致
 PLACEHOLDER_MIN_WORDS = 1000
@@ -57,10 +49,6 @@ class Lexicon:
                     continue
                 self.rows.append([len(self.lines) - 1, cols[0], cols[1], freq])
         self.changed = set()
-        self.appended = []
-
-    def words(self):
-        return {row[2] for row in self.rows}
 
     def readings_by_word(self):
         """词 -> 这个词的所有行（多音词有几行）。"""
@@ -84,20 +72,9 @@ class Lexicon:
             return None
         return value
 
-    def char_readings(self, include_rare=False):
-        """单字 -> 读音集合。默认不算频次小于 1 的生僻读音（大字表补的）。"""
-        out = {}
-        for _, pinyin, word, freq in self.rows:
-            if len(word) == 1 and (include_rare or freq >= 1):
-                out.setdefault(word, set()).add(pinyin)
-        return out
-
     def set_freq(self, row, value):
         row[3] = value
         self.changed.add(row[0])
-
-    def append(self, pinyin, word, freq):
-        self.appended.append((pinyin, word, freq))
 
     def write(self, path):
         changed = {row[0]: row for row in self.rows if row[0] in self.changed}
@@ -108,8 +85,6 @@ class Lexicon:
                     out.write(line + "\n")
                 else:
                     out.write(f"{row[1]}\t{row[2]}\t{format_freq(row[3])}\n")
-            for pinyin, word, freq in self.appended:
-                out.write(f"{pinyin}\t{word}\t{format_freq(freq)}\n")
 
 
 def load_counts(path):

@@ -108,6 +108,14 @@ func fresh() -> (Composer, FakeClient) {
     return (Composer(engine: engine, client: client), client)
 }
 
+/// 单按一下 Shift（按下、松开，会话判断单按）。每次往后挪一秒，不会被当成按住太久。
+var shiftClock = 100.0
+func tapShift(_ c: Composer) {
+    shiftClock += 1
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: shiftClock)
+    _ = c.shiftChanged(down: false, otherModifiers: false, now: shiftClock + 0.05)
+}
+
 do {
     let (c, client) = fresh()
     type(c, "nihao")
@@ -778,6 +786,7 @@ do {
     all.lexicon = "/Users/me/词库 \"新\"\\v2.tsv"
     all.emojiKey = Shortcut(name: "Control+Shift+E")
     all.toggleKey = Shortcut(name: "Control+space")
+    all.translateModeKey = Shortcut(name: "Control+Shift+Y")
     all.voiceKey = "F8"
     all.translateTarget = "ja"
     all.translateBaseUrl = "http://127.0.0.1:11434/v1"
@@ -892,6 +901,7 @@ do {
     check(CustomWords(text: fresh.text).entries == [.init(code: "gs", word: "公司")], "新文件加词读回来")
     check(CustomWords.isValidWord("四川省\\n宜宾市") && !CustomWords.isValidWord("a\tb")
           && !CustomWords.isValidWord("a\nb") && !CustomWords.isValidWord(""), "词里不能有 TAB、换行")
+    check(CustomWords.shown("四川省\\n宜宾市") == "四川省⏎宜宾市", "界面上 \\n 画成 ⏎")
 
     for (input, want) in [("nihao", "ni hao"), ("Ni Hǎo", "ni hao"), ("ni3hao3", "ni hao"), ("xi'an", "xi an"),
                           ("xian", "xian"), ("Lǜ shī", "lv shi"), ("nu:", "nv"), ("nu\u{308}3", "nv"),
@@ -983,6 +993,9 @@ do {
     check(Shortcut(name: "Alt+semicolon")?.matches(.char(";", [.option])) == true, "Alt 是 Option，键名 semicolon")
     check(Shortcut(name: "Control+.")?.matches(.char(".", [.control, .caps])) == true, "键名可以是字符本身，CapsLock 不算")
     check(Shortcut.emojiDefault.matches(.char(".", [.control, .command])) == false, "多按了 Command 不算")
+    let labels = ["Control+period", "Control+Shift+space", "Alt+x", "Control+Shift+E"].compactMap { Shortcut(name: $0)?.label }
+    check(labels == ["Control + .", "Control + Shift + 空格", "Option + X", "Control + Shift + E"],
+          "设置窗口里快捷键用 Mac 键盘上的叫法", "\(labels)")
 }
 
 withConfig({ _ in }) { c, client in
@@ -1193,13 +1206,13 @@ withConfig({ _ in }) { c, client in
 
 withConfig({ _ in }) { c, client in
     c.recentEmoji = RecentEmoji()
-    c.toggleMode()
+    tapShift(c)
     check(c.handle(.char(".", [.control])) && c.openPanel != nil, "英文模式也能开表情面板")
     type(c, "pizza")
     _ = c.handle(.char(" "))
     check(client.committed == "🍕", "英文模式里搜索上屏", client.committed)
     check(!c.handle(.char("a")), "收起以后英文模式照常交给应用")
-    c.toggleMode()
+    tapShift(c)
     _ = c.handle(.char(".", [.control]))
     check(!c.handle(.char("v", [.command])) && c.openPanel == nil, "Command+V 收起表情面板、交给应用")
 }
@@ -1389,11 +1402,11 @@ do {
     // Shift：中 → 英 → 译 → 中；没打开互译、翻译器没配好时只在中英之间切
     let r = translateRig()
     r.c.switchMode(to: .chinese)
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .english, "中 → 英")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .translate && r.c.translating, "英 → 译")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .chinese, "译 → 中")
     _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 1.0)
     _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
@@ -1401,15 +1414,15 @@ do {
     check(r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1) && r.c.mode == .translate, "单按两次 Shift 到译")
 
     r.t.isReady = false
-    r.c.toggleMode()
-    r.c.toggleMode()
-    r.c.toggleMode()
+    tapShift(r.c)
+    tapShift(r.c)
+    tapShift(r.c)
     check(r.c.mode == .chinese, "翻译器没配好：英 → 中，切不到译", "\(r.c.mode)")
 
     let off = translateRig { $0.translate = false }
     check(off.c.mode == .chinese && !off.c.translateAvailable, "设置里没打开互译：切不到译")
-    off.c.toggleMode()
-    off.c.toggleMode()
+    tapShift(off.c)
+    tapShift(off.c)
     check(off.c.mode == .chinese, "没打开互译：英 → 中")
 
     let (plain, _) = fresh()
@@ -1450,6 +1463,60 @@ withConfig({ $0.shiftToggle = .off; $0.toggleKey = Shortcut(name: "Control+space
     again.toggleKey = nil
     c.apply(again)
     check(c.mode == .chinese, "关了 Shift、也没切换键：拉回中文（不然切不回来）")
+}
+
+do {
+    // 进出「译」的快捷键（#87），和 Linux 一样
+    check(WowtypeConfig().translateModeKey == nil, "默认不用互译键")
+    let parsed = WowtypeConfig.parse("TranslateModeKey=Control+Shift+y")
+    check(parsed.translateModeKey?.name == "Control+Shift+Y", "读出互译键", parsed.translateModeKey?.name ?? "nil")
+    check(!WowtypeConfig.template().contains("TranslateKey"), "模板里不出现 TranslateKey（会当成 API Key）")
+
+    let y = KeyInput.char("Y", [.control, .shift])
+    let r = translateRig { $0.translateModeKey = Shortcut(name: "Control+Shift+Y") }
+    r.c.switchMode(to: .english)
+    check(r.c.handle(y) && r.c.mode == .translate, "英文里按互译键进「译」")
+    type(r.c, "nihao ")
+    check(r.c.handle(y) && r.c.mode == .english && r.client.committed == "你好",
+          "在「译」里再按：原文原样上屏，回到进来前的英文", r.client.committed)
+    r.c.switchMode(to: .chinese)
+    type(r.c, "ni")
+    check(r.c.handle(y) && r.c.mode == .translate && r.c.input == "ni", "打到一半按互译键：拼音带进「译」", r.c.input)
+    _ = r.c.handle(.key(Keysym.escape))
+    check(r.c.handle(y) && r.c.mode == .chinese, "再按回中文")
+    // 设了互译键：单按 Shift 只在中英之间切；在「译」里单按回中文
+    tapShift(r.c)
+    tapShift(r.c)
+    check(r.c.mode == .chinese, "单按 Shift 两下：中 → 英 → 中，不进「译」", "\(r.c.mode)")
+    _ = r.c.handle(y)
+    tapShift(r.c)
+    check(r.c.mode == .chinese, "在「译」里单按 Shift 回中文")
+    // 进不了「译」：交给应用
+    r.client.allowsTranslation = false
+    check(!r.c.handle(y) && r.c.mode == .chinese, "密码框（安全输入）里互译键交给应用")
+    r.client.allowsTranslation = true
+    _ = r.c.handle(y)
+    r.t.isReady = false
+    check(r.c.handle(y) && r.c.mode == .chinese, "在「译」里翻译不能用了也按得出来")
+    check(!r.c.handle(y) && r.c.mode == .chinese, "翻译没配好：互译键交给应用")
+
+    // 两个设成同一个键：算互译键
+    let same = translateRig {
+        $0.toggleKey = Shortcut(name: "Control+Shift+Y")
+        $0.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    }
+    check(same.c.handle(y) && same.c.mode == .chinese, "同一个键：在「译」里回中文")
+    check(same.c.handle(y) && same.c.mode == .translate, "同一个键：再按进「译」")
+}
+
+withConfig({ $0.shiftToggle = .off; $0.translateModeKey = Shortcut(name: "Control+Shift+Y") }) { c, _ in
+    // 关了 Shift、只设了互译键：英文回不来，换设置时拉回中文（互译键只进出「译」）
+    c.switchMode(to: .english)
+    var again = WowtypeConfig()
+    again.shiftToggle = .off
+    again.translateModeKey = Shortcut(name: "Control+Shift+Y")
+    c.apply(again)
+    check(c.mode == .chinese, "关了 Shift、只设了互译键：拉回中文")
 }
 
 do {
@@ -1564,7 +1631,7 @@ do {
     type(r.c, "nihao")
     _ = r.c.handle(.char(" "))
     type(r.c, "hao")
-    r.c.toggleMode()
+    tapShift(r.c)
     check(r.c.mode == .chinese && r.client.committed == "你好" && r.c.isComposing && r.client.marked == "hao",
           "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
     check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")

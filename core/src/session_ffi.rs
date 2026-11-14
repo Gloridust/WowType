@@ -168,6 +168,8 @@ pub const WOWTYPE_KEY_ACTION_NEXT_PAGE: u32 = 2;
 pub const WOWTYPE_KEY_ACTION_PREV_CANDIDATE: u32 = 3;
 pub const WOWTYPE_KEY_ACTION_NEXT_CANDIDATE: u32 = 4;
 pub const WOWTYPE_KEY_ACTION_OBSERVE: u32 = 5;
+pub const WOWTYPE_KEY_ACTION_TOGGLE_MODE: u32 = 6;
+pub const WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE: u32 = 7;
 
 fn key_action(raw: u32) -> KeyAction {
     match raw {
@@ -176,6 +178,8 @@ fn key_action(raw: u32) -> KeyAction {
         WOWTYPE_KEY_ACTION_PREV_CANDIDATE => KeyAction::PrevCandidate,
         WOWTYPE_KEY_ACTION_NEXT_CANDIDATE => KeyAction::NextCandidate,
         WOWTYPE_KEY_ACTION_OBSERVE => KeyAction::Observe,
+        WOWTYPE_KEY_ACTION_TOGGLE_MODE => KeyAction::ToggleMode,
+        WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE => KeyAction::ToggleTranslate,
         _ => KeyAction::None,
     }
 }
@@ -229,6 +233,8 @@ pub struct WowtypeSessionConfig {
     pub wubi_auto_commit: c_int,
     /// 1.10 起：五笔编码提示，默认 1。
     pub wubi_hint: c_int,
+    /// 1.10 起：另设了进出「译」的快捷键，单按 Shift 只在中 ↔ 英之间切，默认 0。
+    pub translate_key: c_int,
     /// 1.10 起：联想（#89），默认 0。
     pub prediction: c_int,
 }
@@ -270,6 +276,7 @@ impl Default for WowtypeSessionConfig {
             wubi: c_int::from(config.wubi),
             wubi_auto_commit: c_int::from(config.wubi_auto_commit),
             wubi_hint: c_int::from(config.wubi_hint),
+            translate_key: c_int::from(config.translate_key),
             prediction: c_int::from(config.prediction),
         }
     }
@@ -323,6 +330,7 @@ impl WowtypeSessionConfig {
             wubi: self.wubi != 0,
             wubi_auto_commit: self.wubi_auto_commit != 0,
             wubi_hint: self.wubi_hint != 0,
+            translate_key: self.translate_key != 0,
             prediction: self.prediction != 0,
         }
     }

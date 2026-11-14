@@ -33,6 +33,7 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 
 在设置界面「翻译」里下载本地模型，或者在「用什么翻译」里选「自定义翻译服务」填一个 OpenAI 格式（`chat/completions`）的接口，打开「互译」，
 单按 Shift 就在 **中 → 英 → 译 → 中** 之间切换（没填好服务时只在中英之间切）。
+也可以在「输入」页设一个**互译的快捷键**（`TranslateModeKey`，比如 `Ctrl+Shift+Y`）：按它进「译」，在「译」里再按回到原来的模式（中文或英文）；设了以后单按 Shift 只在中英之间切。
 左 Shift 被 fcitx5 拿去「临时切换输入法」时切不到「译」，用右 Shift，或在设置「输入」页打开「Shift 只给 WowType 用」。
 
 切到「译」后照常打中文，用起来和微信输入法的「中英互译」一样：打的字攒在候选框里（顶上写着「中→英 互译」），
@@ -45,7 +46,8 @@ dbus-send --session --dest=org.fcitx.Fcitx5 /controller \
 | `Shift+回车` | 上屏原文 |
 | `退格` | 删原文最后一个字，停一下重新翻 |
 | `Esc` | 清空原文 |
-| 单按 `Shift` | 回到中文，原文原样上屏 |
+| 单按 `Shift`、另设的切换键 | 回到中文，原文原样上屏 |
+| 互译的快捷键 | 回到进「译」之前的模式，原文原样上屏 |
 
 - 打的是外文（比如英文）就翻成中文。数字、`/` `+` 这些符号也进原文。
 - 同一句话翻过一次会记住（最近 64 句），再打不用等。出错时候选框底下写原因，按回车重试。
@@ -149,6 +151,7 @@ VoiceCopy=False
 EmojiSuggest=True
 EmojiKey=Super+period
 ToggleKey=
+TranslateModeKey=
 Translate=False
 TranslateTarget=en
 TranslateBaseUrl=
@@ -181,9 +184,10 @@ Lexicon=
 | `ShuangpinScheme` | 双拼方案：`Ziranma` 自然码、`Xiaohe` 小鹤、`Microsoft` 微软、`Sogou` 搜狗、`ABC` 智能 ABC、`Ziguang` 紫光、`PinyinJiajia` 拼音加加 |
 | `ShuangpinShowKeys` | 双拼时编辑区显示打的键（`uivs`），不翻成全拼（`shi'zhong`），中英混打时看得出打了什么。默认 `False` |
 | `ShiftToggle` | 单按哪个 Shift 切中英文：`Both`、`Left`、`Right`、`Off`。fcitx5 自己的全局快捷键（「临时切换输入法」「切换输入法」「向前切换输入法」等任何一项）里用了同一个 Shift 时，fcitx5 先处理，WowType 收不到；设置界面「输入」页会提示，并能一键把 Shift 从 fcitx5 那边去掉（改的是 `~/.config/fcitx5/config`，关掉开关就还原；这个文件写不了时提示「只在这次有效」，NixOS 见[安装说明](INSTALL.md#单按-shift-在-nixos-上)） |
-| `InitialMode` | 从别的输入法切到 WowType、开机后第一次用时的模式：`Chinese`（默认）、`English`、`Last`（和上次切走时一样）。换窗口不算，中英文照旧全局保持；关了 Shift 切换（`ShiftToggle=Off`）、也没另设切换键（`ToggleKey`）时总是中文。只在 Linux（macOS 每个应用一份模式，还没有这一项） |
+| `InitialMode` | 从别的输入法切到 WowType、开机后第一次用时的模式：`Chinese`（默认）、`English`、`Last`（和上次切走时一样）。换窗口不算，中英文照旧全局保持；关了 Shift 切换（`ShiftToggle=Off`）、也没另设切换键（`ToggleKey`）时总是中文（`TranslateModeKey` 只进出「译」，不算）。只在 Linux（macOS 每个应用一份模式，还没有这一项） |
 | `VoiceKey` | fcitx5 的键名，如 `Alt_R`、`Control_R`、`Menu`、`F8` |
-| `ToggleKey` | 另设一个切换中 / 英文的快捷键（fcitx5 键名，如 `Control+space`、`Control+Shift+space`），留空不用；单按 Shift 照常。在「译」里按回到中文。fcitx5 自己的全局快捷键先处理：`Control+space` 默认是 fcitx5「切换启用/禁用输入法」的键（macOS 上是系统切换输入法的键），要先在那边删掉，设置界面会提示 |
+| `ToggleKey` | 另设一个切换中 / 英文的快捷键（fcitx5 键名，如 `Control+Shift+space`），留空不用；单按 Shift 照常。在「译」里按回到中文。fcitx5 自己的全局快捷键先处理：`Control+space` 默认是 fcitx5「切换启用/禁用输入法」的键（macOS 上是系统「选择上一个输入法」的键），设成它 WowType 收不到，所以设置里不再列它；Linux 设置界面会提示被 fcitx5 占着的键 |
+| `TranslateModeKey` | 进出「译」的快捷键（如 `Control+Shift+Y`），留空不用：按它进「译」（打到一半的拼音带进去），在「译」里再按回到进来前的模式；设了以后单按 Shift 只在中 ↔ 英之间切（在「译」里单按回中文）。互译没打开、翻译没配好、密码框里这个键交给应用。和 `ToggleKey` 设成同一个键时算这个 |
 | `EmojiKey` | 表情面板快捷键，fcitx5 的键名，如 `Super+period`、`Control+semicolon`；留空不用快捷键。macOS 上默认 `Control+period`，`Super` 当 `Control`（见 [macOS](#macos)） |
 | `TranslateTarget` | 互译语言：`en` 英、`ja` 日、`ko` 韩、`fr` 法、`de` 德、`es` 西、`ru` 俄、`pt` 葡、`it` 意、`vi` 越、`th` 泰、`id` 印尼、`ar` 阿 |
 | `TranslateBaseUrl`、`TranslateModel` | 翻译服务（OpenAI 格式）的地址和模型，见[互译](#互译) |
@@ -246,13 +250,16 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 
 现在认的项：`CandidateLayout`、`ArrowKeys`、`PageSize`、`PageKeys*`、`SelectKeys`、`PickChar`、`Prediction`、`Fuzzy` 和 `Fuzzy*` 各组、`TypoCorrection`、`RareExtChars`、
 `InputScheme`、`ShuangpinScheme`、`ShuangpinShowKeys`、`WubiAutoCommit`、`WubiHint`、`ShiftToggle`、`Traditional`、`PunctuationStyle`、`DateTime`、`Calculator`、`EmojiSuggest`、
-`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`ToggleKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
+`AutoSpace*`、`Lexicon`、`Toolbar`、`ClipboardHistory`、`EmojiKey`、`ToggleKey`、`TranslateModeKey`、`Voice`、`VoiceKey`、`VoiceCopy`、`Translate` 和 `Translate*` 各项，另外有一项只有 macOS 有的 `CandidateFontSize`（候选字号，10–40 磅，默认 17；Linux 上字号跟着 fcitx5 主题）。
 检查更新 macOS 还没做，对应的项写了也不起作用。
 
 [工具栏](#v--空格工具栏)和表情面板和 Linux 上一样用，不同的是：
 
 - **表情面板快捷键默认 `Control+.`**（`EmojiKey=Control+period`）。Command 组合键多半被应用的菜单先拿走、到不了输入法，
   所以写 `Super` 的当 `Control` 用：Linux 的默认值 `Super+period` 拷过来就是 `Control+.`。也可以换成 `Control+semicolon`、`Alt+semicolon`（`Alt` 是 Option）这类，留空不用快捷键。
+- **中英文切换**：系统自己的 `中/英` 键（大写锁定键）在 WowType 和 ABC 之间切，不经过输入法，所有应用里都管用：
+  在「系统设置 → 键盘 → 文字输入 → 输入法」点「编辑…」，打开「使用“中/英”键切换“ABC”输入法」（键盘上没有 中/英 键时叫「使用大写锁定键切换“ABC”输入法」），
+  设置窗口「输入」页有按钮直接打开键盘设置。单按 Shift 照常默认开着；`Control+space` 是系统「选择上一个输入法」的键，设成 `ToggleKey` 收不到。
 - **剪贴板历史**（默认关，`ClipboardHistory=True` 打开）直接读系统剪贴板：切换输入框、打开工具栏的「剪贴板」页时各看一眼，有新复制的文字就记下（只在内存里，退出输入法就清空，关掉开关立刻清空）。
   连着复制了好几次、中间没切换输入框的话，只记得到最后一次。
 - **密码**：密码框里系统不让输入法工作，取不到。很多密码管理器（比如 1Password、KeePassXC）复制密码时会给剪贴板标上 `org.nspasteboard.ConcealedType`，
@@ -307,13 +314,10 @@ macOS 还没有的功能不列）。窗口只改它认识的键，文件里的�
 | `wetype/nlrgpt2_nnlm.bin` | 可选：微信输入法的神经语言模型（16MB），有它整句候选更准，见下 |
 | `words.domain.lm` | 可选：自己训的领域词级模型，和 `words.lm` 混着用，见下 |
 
-**语料词频和自己构建词库时的可选数据源**：`scripts/make-data.sh` 用雾凇拼音和仓库里 `data/` 下的表，
+**语料词频**：`scripts/make-data.sh` 用雾凇拼音和仓库里 `data/` 下的表，
 其中 `data/tatoeba-freq.tsv` 是从 Tatoeba 中文句子（CC BY 2.0 FR）统计出的词频，默认融进已有词的词频
 （只有词频、不含句子，署名在 `SOURCE.txt`，装好后是 `DATA-SOURCE.txt`；`WOWTYPE_NO_CORPUS_FREQ=1` 不融）。
-`WOWTYPE_DATA_EXTRAS="jieba cedict"`（空格或逗号分隔，写哪个开哪个，默认不开）可以再加：
-`jieba` 用 jieba 词典（MIT）调词频、补一批读音可靠的词；`cedict` 用 CC-CEDICT（CC BY-SA 4.0）补人名地名等词。
-下载地址和 sha256 都钉死，需要的 Python 包按 `tools/requirements-data.txt` 装（版本和哈希也钉死）。
-各变量、实测效果和为什么只默认融了语料词频，见 [DATA.md §3.3](DATA.md#33-语料词频和构建词库的可选数据源)。
+换成本机语料、重新生成这张表和实测效果见 [DATA.md §3.3](DATA.md#33-语料词频)。
 
 **词级语言模型**：`words.lm` 记的是「哪两个词常连着出现」，束搜索靠它把长句拼对。
 安装包里自带一份（38 MB，装到 `/usr/share/wowtype/words.lm`，许可证 CC BY-SA 4.0），

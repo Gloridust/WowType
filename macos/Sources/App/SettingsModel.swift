@@ -272,8 +272,8 @@ final class SettingsModel: ObservableObject {
                     let latest = try known ?? LexiconPackInstaller.fetchLatest()
                     let tarball = try LexiconPackInstaller.download(latest) { done, total in
                         let text = total > 0
-                            ? "正在下载：\(megabytes(done)) / \(megabytes(total))（\(done * 100 / total)%）"
-                            : "正在下载：\(megabytes(done))"
+                            ? "正在下载：\(LocalModel.sizeText(done)) / \(LocalModel.sizeText(total))（\(done * 100 / total)%）"
+                            : "正在下载：\(LocalModel.sizeText(done))"
                         DispatchQueue.main.async { [weak self] in self?.lexiconProgress = text }
                     }
                     defer { try? FileManager.default.removeItem(at: tarball) }
@@ -318,7 +318,7 @@ final class SettingsModel: ObservableObject {
         guard lexiconKind != .wanxiang, !lexiconBusy else { return }
         let freed = LexiconPackInstaller.remove(supportDir: supportDir)
         wanxiangVersion = nil
-        showToast("已删除万象拼音，空出 \(megabytes(freed))")
+        showToast("已删除万象拼音，空出 \(LocalModel.sizeText(freed))")
     }
 
     func chooseLexicon() {
@@ -360,7 +360,11 @@ final class SettingsModel: ObservableObject {
     var voiceModelStatus: String {
         _ = voiceRevision
         if let (done, total) = voiceProgress {
-            return total > 0 ? "下载中 \(done * 100 / total)%" : "下载中 \(LocalModel.sizeText(done))"
+            if done == 0 { return "正在连接…" }
+            if total > 0 && done >= total { return "正在解包…" }
+            return total > 0
+                ? "正在下载：\(LocalModel.sizeText(done)) / \(LocalModel.sizeText(total))（\(done * 100 / total)%）"
+                : "正在下载：\(LocalModel.sizeText(done))"
         }
         if voiceModelReady {
             return "已下载（\(LocalModel.sizeText(LexiconPackInstaller.folderSize(VoiceModelInstaller.folder(in: supportDir)))))"
@@ -421,7 +425,7 @@ final class SettingsModel: ObservableObject {
         let freed = VoiceModelInstaller.remove(supportDir: supportDir)
         config.voice = false
         voiceRevision += 1
-        showToast(freed > 0 ? "已删除语音模型，空出 \(LocalModel.sizeText(freed))" : "已删除")
+        showToast(freed > 0 ? "已删除语音模型，空出 \(LocalModel.sizeText(freed))，语音输入已关闭" : "已删除")
     }
 
     /// 语音键在界面上的叫法
@@ -443,6 +447,14 @@ final class SettingsModel: ObservableObject {
         LocalModelInstaller.plan(model: localModelFile.path, customServer: config.translateLlamaServer,
                                  supportDir: supportDir)
     }
+
+    /// 翻译配好了：本地模型下载好了，或者填了翻译服务的地址和模型
+    var translateConfigured: Bool {
+        config.translateLocal ? localPlan.ready : !config.translateBaseUrl.isEmpty && !config.translateModel.isEmpty
+    }
+
+    /// 「译」进得去：互译打开了，翻译也配好了
+    var translateReady: Bool { config.translate && translateConfigured }
 
     /// 输入法会用的 llama-server，和它是哪来的
     var localServerSummary: String? {
@@ -473,7 +485,9 @@ final class SettingsModel: ObservableObject {
         }
         let alert = NSAlert()
         alert.messageText = "下载离线翻译模型？"
-        alert.informativeText = LocalModel.terms + "\n\n一共 \(LocalModel.sizeText(plan.bytes))，下完会校验。"
+        let llama = plan.wantLlama ? "同时下载运行模型的程序 llama-server（llama.cpp 官方发布，MIT 许可）。" : ""
+        alert.informativeText = "一共 \(LocalModel.sizeText(plan.bytes))，下载完会校验文件。\(llama)\n\n"
+            + LocalModel.terms + "\n\n点「同意并下载」表示你接受这份许可。"
         alert.accessoryView = LinkButton(title: "许可协议全文", url: URL(string: LocalModel.license)!)
         alert.addButton(withTitle: "同意并下载")
         alert.addButton(withTitle: "取消")
@@ -633,7 +647,7 @@ final class SettingsModel: ObservableObject {
             newCode = ""
         }
         codeEdited = false
-        showToast(replaced ? "已更新「\(word)」" : "已添加「\(word)」，打 \(code.replacingOccurrences(of: " ", with: "")) 试试")
+        showToast(replaced ? "已更新「\(CustomWords.shown(word))」" : "已添加「\(CustomWords.shown(word))」，打 \(code.replacingOccurrences(of: " ", with: "")) 试试")
         return true
     }
 
@@ -641,7 +655,7 @@ final class SettingsModel: ObservableObject {
         var doc = readCustomWords()
         let removed = doc.remove(word: word)
         guard !removed.isEmpty, writeCustomWords(doc) else { return }
-        showToast("已删除「\(word)」", actionTitle: "撤销") { [weak self] in
+        showToast("已删除「\(CustomWords.shown(word))」", actionTitle: "撤销") { [weak self] in
             guard let self else { return }
             var doc = self.readCustomWords()
             for entry in removed {
@@ -743,10 +757,6 @@ final class SettingsModel: ObservableObject {
 
 /// 读文本文件；不在是 nil。不是 UTF-8 也读出来（坏的字节换成 �），免得当成没有文件、整个重写。
 /// 12.3 MB 这样的写法
-func megabytes(_ bytes: Int64) -> String {
-    String(format: "%.1f MB", Double(bytes) / 1_048_576)
-}
-
 func readText(_ path: String) -> String? {
     guard let data = FileManager.default.contents(atPath: path) else { return nil }
     return String(decoding: data, as: UTF8.self)
