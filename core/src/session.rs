@@ -229,13 +229,7 @@ pub enum ShiftToggle {
 struct ShiftTap {
     /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
     down: Option<(u32, u32, u64)>,
-    /// 上一次单按切换的时刻（松开时）。
-    tapped_at: u64,
 }
-
-/// 单按切换以后这么久（毫秒）以内又按下的 Shift 不算：Electron 的应用有时把一次按下松开报成
-/// 两遍，人连按两下 Shift 没有这么快。
-const SHIFT_RETAP_MS: u64 = 50;
 
 impl Key {
     /// 按下一个键，不带修饰键。
@@ -1525,8 +1519,7 @@ impl<'e> Session<'e> {
     ///
     /// 和以前 Linux 外壳的规矩一样：按下时带着 Ctrl / Alt / Super、外壳开着面板时不算；
     /// 按住不放的自动重复不重新计时；松开时按键码认（没有键码时按符号）；
-    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算；
-    /// 切换以后 SHIFT_RETAP_MS 以内又按下的不算。
+    /// 按下以后按了别的键（按下或松开）就不算；按住超过 shift_tap_ms 不算。
     fn shift_key(&mut self, key: &Key) -> Option<bool> {
         let sym = key.keysym;
         let is_shift = sym == keysym::SHIFT_L || sym == keysym::SHIFT_R;
@@ -1543,9 +1536,7 @@ impl<'e> Session<'e> {
             };
             let other = key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0;
             let panel = key.hints & key_hints::PANEL_OPEN != 0 || self.tool.is_some();
-            let tapped = self.shift.tapped_at;
-            let bounce = key.time_ms != 0 && tapped != 0 && key.time_ms.saturating_sub(tapped) < SHIFT_RETAP_MS;
-            if wanted && !other && !panel && !bounce {
+            if wanted && !other && !panel {
                 let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
                 if !held {
                     self.shift.down = Some((sym, key.code, key.time_ms));
@@ -1575,7 +1566,6 @@ impl<'e> Session<'e> {
         if key.time_ms != 0 && down_at != 0 && held_ms > u64::from(self.config.shift_tap_ms) {
             return Some(false);
         }
-        self.shift.tapped_at = key.time_ms;
         self.toggle_mode();
         Some(true)
     }

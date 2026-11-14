@@ -1996,17 +1996,6 @@ fn translate_key_takes_translate_out_of_shift_cycle() {
 }
 
 #[test]
-fn shift_bounce_right_after_tap_is_ignored() {
-    use wowtype_core::session::Mode;
-    // Electron 的应用有时把一次 Shift 报成两遍：切换后 50 毫秒以内又按下的不算
-    let mut session = with(engine());
-    assert_eq!(tap(&mut session, 1000), Mode::English);
-    session.key(&shift(keysym::SHIFT_L, false, 1060));
-    assert!(!session.key(&shift(keysym::SHIFT_L, true, 1080)).mode_changed);
-    assert_eq!(tap(&mut session, 1200), Mode::Chinese, "人再按一下照常切");
-}
-
-#[test]
 fn clearing_one_session_keeps_others_request() {
     let t: &'static FakeTranslator = Box::leak(Box::default());
     let mut a = translating(t);
