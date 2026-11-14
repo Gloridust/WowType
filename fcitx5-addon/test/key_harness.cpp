@@ -2114,6 +2114,70 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      type(ic, "nihao<sp>");
                  },
                  [handledFlag](HarnessInputContext *ic) { return !*handledFlag && ic->committed == "你好"; }});
+    // 进出「译」的快捷键（#87）
+    const Key translateKey(FcitxKey_Y, KeyStates{KeyState::Ctrl, KeyState::Shift});
+    s.push_back({"设了互译键：单按 Shift 只在中英之间切",
+                 [c, addon, reset, url](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nTranslateModeKey=Control+Shift+Y\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     ic->setCapabilityFlags(CapabilityFlag::Preedit);
+                     tapKey(ic, FcitxKey_Shift_R); // 中 → 英
+                     tapKey(ic, FcitxKey_Shift_R); // 英 → 中，不进「译」
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好")});
+    s.push_back({"互译键进「译」：打到一半的拼音带进去接着打",
+                 [reset, press, translateKey](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "ni");
+                     check(press(ic, translateKey), "互译键被接住");
+                     type(ic, "hao<sp>");
+                 },
+                 [](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic) == "你好" && aux(ic).find("中→英") != std::string::npos;
+                 }});
+    s.push_back({"在「译」里再按互译键：原文原样上屏，回到中文",
+                 [press, translateKey](HarnessInputContext *ic) {
+                     press(ic, translateKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 expectCommit("你好你好")});
+    s.push_back({"英文里按互译键进「译」，再按回到英文",
+                 [reset, press, translateKey](HarnessInputContext *ic) {
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     press(ic, translateKey);
+                     press(ic, translateKey);
+                     type(ic, "abc");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed == "abc" && ic->committed.empty(); }});
+    s.push_back({"关了 Shift、只设了互译键：重新读设置时从英文回中文（互译键回不到英文以外），互译键在中和译之间",
+                 [c, addon, reset, url, press, translateKey](HarnessInputContext *ic) {
+                     // 上一步还在英文
+                     std::ofstream(c->configFile)
+                         << "Translate=True\nTranslateBaseUrl=" << url
+                         << "\nTranslateModel=mock\nTranslateTarget=en\nShiftToggle=Off\nTranslateModeKey=Control+Shift+Y\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     type(ic, "ni");
+                     press(ic, translateKey);
+                     type(ic, "hao<sp>");
+                     press(ic, translateKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [](HarnessInputContext *ic) { return ic->passed.empty() && ic->committed == "你好你好"; }});
+    s.push_back({"没开互译：互译键交给应用，还在中文",
+                 [c, addon, reset, press, translateKey, handledFlag](HarnessInputContext *ic) {
+                     std::ofstream(c->configFile) << "TranslateModeKey=Control+Shift+Y\n";
+                     addon->reloadConfig();
+                     reset(ic);
+                     *handledFlag = press(ic, translateKey);
+                     type(ic, "nihao<sp>");
+                 },
+                 [handledFlag](HarnessInputContext *ic) { return !*handledFlag && ic->committed == "你好"; }});
     s.push_back({"关掉互译后 Shift 只在中英之间切",
                  [c, addon, reset](HarnessInputContext *ic) {
                      std::filesystem::remove(c->configFile);

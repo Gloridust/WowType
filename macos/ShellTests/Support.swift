@@ -173,6 +173,8 @@ enum Key {
     case char(Character)
     case special(Int)
     case control(Character)
+    /// Control + Shift + 这个键（字母写大写）
+    case controlShift(Character)
 
     static let space = Key.special(kVK_Space)
     static let backspace = Key.special(kVK_Delete)
@@ -204,6 +206,14 @@ func keyDown(_ key: Key) -> NSEvent {
         chars = c == " " ? "\u{0}" : String(UnicodeScalar(UInt8(c.asciiValue! & 0x1f)))
         ignoring = String(c)
         flags = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.control.rawValue | 0x101)
+    case .controlShift(let c):
+        // 按着 Shift：charactersIgnoringModifiers 是大写；Control 把 characters 变成控制字符
+        guard let (k, _) = keyTable[c] else { fatalError("键表里没有 \(c)") }
+        code = k
+        chars = c == " " ? "\u{0}" : String(UnicodeScalar(UInt8(c.asciiValue! & 0x1f)))
+        ignoring = String(c)
+        flags = NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.control.rawValue
+                                      | NSEvent.ModifierFlags.shift.rawValue | 0x103)
     case .special(let k):
         code = k
         let function: [Int: Int] = [kVK_LeftArrow: NSLeftArrowFunctionKey, kVK_RightArrow: NSRightArrowFunctionKey,

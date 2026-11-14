@@ -280,6 +280,15 @@ int main(int argc, char **argv) {
         f = wowtype_session_key(s, &comma);
         check(f && f->handled && f->commit && strcmp(f->commit, "，") == 0 && !f->learned,
               "session: punctuation");
+        /* ABI 1.10：设置里的切换键、进出「译」的键由外壳认出来，带上动作交给会话 */
+        WowtypeKey toggle = {sizeof(WowtypeKey), ' ', WOWTYPE_MOD_CTRL | WOWTYPE_MOD_SHIFT, 0, 0,
+                             WOWTYPE_KEY_ACTION_TOGGLE_MODE};
+        f = wowtype_session_key(s, &toggle);
+        check(f && f->handled && f->mode_changed && f->mode == WOWTYPE_MODE_ENGLISH, "session: toggle key");
+        toggle.action = WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE;
+        f = wowtype_session_key(s, &toggle);
+        check(f && !f->handled && !f->mode_changed, "session: no translate, translate key passes through");
+        wowtype_session_set_mode(s, WOWTYPE_MODE_CHINESE);
         wowtype_session_set_engine(s, NULL);
         check(wowtype_session_candidate_total(s) == 0, "session: engine unset");
         wowtype_session_free(s);

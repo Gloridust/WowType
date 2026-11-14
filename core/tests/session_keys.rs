@@ -1921,6 +1921,80 @@ fn leaving_translate_commits_source() {
     assert!(frame.translate.is_none());
 }
 
+/// 外壳认出设置里的快捷键后交给会话的键（ToggleKey、TranslateModeKey）。
+fn hotkey(action: wowtype_core::session::KeyAction, hints: u32) -> Key {
+    Key { keysym: keysym::SPACE, modifiers: modifier::CTRL | modifier::SHIFT, action, hints, ..Key::default() }
+}
+
+fn tap(session: &mut Session<'_>, at: u64) -> wowtype_core::session::Mode {
+    session.key(&shift(keysym::SHIFT_L, false, at));
+    session.key(&shift(keysym::SHIFT_L, true, at + 50)).mode
+}
+
+#[test]
+fn toggle_key_switches_chinese_english() {
+    use wowtype_core::session::{KeyAction::ToggleMode, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = translating(t);
+    type_keys(&mut session, "nihao<sp>");
+    let frame = session.key(&hotkey(ToggleMode, 0));
+    assert!(frame.handled && frame.mode_changed);
+    assert_eq!((frame.mode, frame.commit.as_deref()), (Mode::Chinese, Some("你好")), "在「译」里回中文，原文原样上屏");
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).mode, Mode::English);
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).mode, Mode::Chinese);
+    // 打到一半切英文：和单按 Shift 一样原样上屏
+    type_keys(&mut session, "ni");
+    assert_eq!(session.key(&hotkey(ToggleMode, 0)).commit.as_deref(), Some("ni"));
+}
+
+#[test]
+fn translate_key_enters_and_leaves_translate() {
+    use wowtype_core::session::{key_hints::NO_TRANSLATE, KeyAction::ToggleTranslate, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, translate_key: true, ..Config::default() });
+    // 中 → 译 → 中；打到一半的拼音带进「译」接着打
+    type_keys(&mut session, "ni");
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert!(frame.handled && frame.mode_changed && frame.commit.is_none());
+    assert_eq!(frame.mode, Mode::Translate);
+    type_keys(&mut session, "hao<sp>");
+    assert_eq!(session.translate_source(), "你好");
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert_eq!((frame.mode, frame.commit.as_deref()), (Mode::Chinese, Some("你好")), "回中文，原文原样上屏");
+    // 英 → 译 → 英：回到进来前的模式
+    session.set_mode(Mode::English);
+    assert_eq!(session.key(&hotkey(ToggleTranslate, 0)).mode, Mode::Translate);
+    assert_eq!(session.key(&hotkey(ToggleTranslate, 0)).mode, Mode::English);
+    // 密码框里进不了：键交给应用，模式不变
+    let frame = session.key(&hotkey(ToggleTranslate, NO_TRANSLATE));
+    assert!(!frame.handled && !frame.mode_changed);
+    assert_eq!(frame.mode, Mode::English);
+    // 在「译」里翻译不能用了（设置里关掉、密码框）也回得去
+    session.key(&hotkey(ToggleTranslate, 0));
+    session.configure(Config { translate_key: true, ..Config::default() });
+    let frame = session.key(&hotkey(ToggleTranslate, NO_TRANSLATE));
+    assert!(frame.handled);
+    assert_eq!(frame.mode, Mode::English);
+    // 没有「译」：键交给应用
+    let frame = session.key(&hotkey(ToggleTranslate, 0));
+    assert!(!frame.handled && !frame.mode_changed);
+}
+
+#[test]
+fn translate_key_takes_translate_out_of_shift_cycle() {
+    use wowtype_core::session::{KeyAction::ToggleTranslate, Mode};
+    let t: &'static FakeTranslator = Box::leak(Box::default());
+    let mut session = with(engine());
+    session.set_translator(Some(t));
+    session.configure(Config { translate_mode: true, translate_key: true, ..Config::default() });
+    let modes: Vec<Mode> = (1..=3).map(|i| tap(&mut session, 1000 * i)).collect();
+    assert_eq!(modes, [Mode::English, Mode::Chinese, Mode::English], "单按 Shift 只在中 ↔ 英之间切");
+    session.key(&hotkey(ToggleTranslate, 0));
+    assert_eq!(tap(&mut session, 5000), Mode::Chinese, "在「译」里单按 Shift 回中文");
+}
+
 #[test]
 fn clearing_one_session_keeps_others_request() {
     let t: &'static FakeTranslator = Box::leak(Box::default());

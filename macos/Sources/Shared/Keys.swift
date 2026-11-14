@@ -154,6 +154,11 @@ public struct Shortcut: Equatable, Sendable {
     /// 表情面板的默认快捷键（macOS）：Control+.
     public static let emojiDefault = Shortcut(keysym: 0x2e, modifiers: .control)
 
+    /// 设置窗口里切换键、进出「译」的键能选的（键名，空串是不用），和 spec/config.json 的
+    /// presets.macos 一样（测试对照）。只放 macOS 默认没被占的键：Control+空格是系统选上一个输入法的键
+    public static let toggleKeyPresets = ["", "Control+Shift+space"]
+    public static let translateModeKeyPresets = ["", "Control+Shift+Y"]
+
     public init(keysym: UInt32, modifiers: Modifiers) {
         self.keysym = Shortcut.fold(keysym)
         self.modifiers = modifiers.intersection([.shift, .control, .option])

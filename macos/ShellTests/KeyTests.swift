@@ -113,6 +113,100 @@ func runKeyTests() {
         check(f.markedText == "ni", "再按回到中文", f.markedText)
     }
 
+    // Chromium / Electron 的应用会多报、重报 flagsChanged：一次单按只切一次
+    do {
+        let (c, f) = session()
+        let t = ProcessInfo.processInfo.systemUptime + 10
+        for event in [shiftEvent(down: true, at: t), shiftEvent(down: true, at: t),
+                      shiftEvent(down: false, at: t + 0.1), shiftEvent(down: false, at: t + 0.1)] {
+            _ = c.handle(event, client: c.fake)
+        }
+        type(c, "ab")
+        check(f.text == "ab", "按下、松开各报两遍：切到英文一次", f.text)
+        // 切完以后又把原来的按下、松开重发一遍（时刻还是原来的）：不算
+        _ = c.handle(shiftEvent(down: true, at: t), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 0.1), client: c.fake)
+        // 刚松开 20 毫秒又来一遍按下松开：回弹，不算
+        _ = c.handle(shiftEvent(down: true, at: t + 0.12), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 0.15), client: c.fake)
+        type(c, "c")
+        check(f.text == "abc", "重发的、回弹的都不算：还在英文", f.text)
+        // 人再按一下照常切
+        _ = c.handle(shiftEvent(down: true, at: t + 1), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 1.1), client: c.fake)
+        type(c, "ni")
+        check(f.markedText == "ni", "过一会儿再按：回到中文", f.markedText)
+    }
+    do {
+        // 按着 Shift 时来了别的键码的 flagsChanged：不带 Control / Option / Command 的不管，带的不算单按
+        func modifier(_ code: Int, _ extra: NSEvent.ModifierFlags, at t: TimeInterval) -> NSEvent {
+            NSEvent.keyEvent(with: .flagsChanged, location: .zero,
+                             modifierFlags: NSEvent.ModifierFlags(rawValue: NSEvent.ModifierFlags.shift.rawValue | 0x102 | extra.rawValue),
+                             timestamp: t, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",
+                             isARepeat: false, keyCode: UInt16(code))!
+        }
+        let (c, f) = session()
+        let t = ProcessInfo.processInfo.systemUptime + 20
+        _ = c.handle(shiftEvent(down: true, at: t), client: c.fake)
+        _ = c.handle(modifier(kVK_Function, [], at: t + 0.02), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 0.1), client: c.fake)
+        type(c, "ab")
+        check(f.text == "ab", "中间多报一个不带 Control / Option / Command 的修饰键事件：照样切", f.text)
+        _ = c.handle(shiftEvent(down: true, at: t + 1), client: c.fake)
+        _ = c.handle(modifier(kVK_Command, .command, at: t + 1.02), client: c.fake)
+        _ = c.handle(shiftEvent(down: false, at: t + 1.1), client: c.fake)
+        type(c, "c")
+        check(f.text == "abc", "按着 Shift 按了 Command：不算单按", f.text)
+    }
+
+    // 进出「译」的快捷键（真的 keyDown：Control+Shift+Y）
+    do {
+        let translate = ["Translate": "True", "TranslateLocal": "False", "TranslateBaseUrl": "http://127.0.0.1:9/v1",
+                         "TranslateModel": "shelltest", "TranslateModeKey": "Control+Shift+Y"]
+        let (c, f) = session(translate)
+        tapShift(c)
+        tapShift(c)
+        type(c, "ni")
+        check(f.markedText == "ni", "设了互译键：单按 Shift 两下是中 → 英 → 中，不进「译」", f.markedText)
+        press(c, .escape)
+        check(press(c, .controlShift("Y")), "Control+Shift+Y 吃掉")
+        check(panel?.aux?.hasPrefix("译") == true, "互译键进「译」：提示「译 …」", "\(String(describing: panel?.aux))")
+        check(press(c, .controlShift("Y")) && panel?.aux == "中", "再按回中文：提示「中」", "\(String(describing: panel?.aux))")
+        tapShift(c)
+        press(c, .controlShift("Y"))
+        check(press(c, .controlShift("Y")) && panel?.aux == "英", "英文里进「译」再按：回到英文", "\(String(describing: panel?.aux))")
+        // 在「译」里单按 Shift：回中文
+        press(c, .controlShift("Y"))
+        tapShift(c)
+        type(c, "ni")
+        check(f.markedText == "ni", "在「译」里单按 Shift 回中文", f.markedText)
+    }
+    do {
+        // 没开互译：互译键交给应用
+        let (c, f) = session(["TranslateModeKey": "Control+Shift+Y"])
+        check(!press(c, .controlShift("Y")) && panel == nil, "没开互译：Control+Shift+Y 交给应用")
+        type(c, "ni")
+        check(f.markedText == "ni", "还在中文", f.markedText)
+    }
+    do {
+        // 关了 Shift、只设了互译键：怎么按都不会卡在英文
+        let (c, f) = session(["ShiftToggle": "Off", "Translate": "True", "TranslateLocal": "False",
+                              "TranslateBaseUrl": "http://127.0.0.1:9/v1", "TranslateModel": "shelltest",
+                              "TranslateModeKey": "Control+Shift+Y"])
+        tapShift(c)
+        press(c, .controlShift("Y"))
+        press(c, .controlShift("Y"))
+        type(c, "ni")
+        check(f.markedText == "ni", "关了 Shift、只有互译键：在中和译之间，回得到中文", f.markedText)
+    }
+    do {
+        // 预设的切换键 Control+Shift+空格（真的 keyDown）
+        let (c, f) = session(["ToggleKey": "Control+Shift+space"])
+        check(press(c, .controlShift(" ")) && panel?.aux == "英", "Control+Shift+空格切到英文", "\(String(describing: panel?.aux))")
+        type(c, "ab")
+        check(f.text == "ab", "英文里字母交给应用", f.text)
+    }
+
     // 方向键 = 移光标
     do {
         let (c, f) = session(["ArrowKeys": "Caret"])

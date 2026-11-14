@@ -166,6 +166,12 @@ func checkConfigContract() {
     check(VoiceKey.presets.map(\.name) == voicePresets, "契约：语音键的选项（macOS）",
           "规格 \(voicePresets)，macOS \(VoiceKey.presets.map(\.name))")
     check(VoiceKey.presets.allSatisfy { VoiceKey(name: $0.name) != nil }, "契约：语音键的选项都认得")
+    // 切换键、互译键：设置窗口能选的和规格里 presets.macos 一样，每个都认得、写回去键名不变
+    for (key, ours) in [("ToggleKey", Shortcut.toggleKeyPresets), ("TranslateModeKey", Shortcut.translateModeKeyPresets)] {
+        let presets = byKey[key]?["presets"]?["macos"]?.array?.compactMap { $0.string } ?? []
+        check(ours == presets, "契约：\(key) 的选项（macOS）", "规格 \(presets)，macOS \(ours)")
+        check(ours.dropFirst().allSatisfy { Shortcut(name: $0)?.name == $0 }, "契约：\(key) 的选项都认得")
+    }
     let ourProviders = WowtypeConfig.translateProviders.map { [$0.name, $0.url, $0.model] }
     check(ourProviders == providers, "契约：翻译服务商", "规格 \(providers)，macOS \(ourProviders)")
 

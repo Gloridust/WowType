@@ -161,14 +161,26 @@ def run(app):
     step("开关", switches)
 
     def toggle_key():
-        # 另设的切换键选 Ctrl+空格：fcitx5 默认拿它切换输入法，提示 WowType 收不到。
-        # fcitx5 的快捷键直接给定，不看这台机器（/etc/xdg 里可能改过）
-        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+space"}}
-        win.toggle_key_row.set_selected(1)
-        check(win.values["ToggleKey"] == "Control+space", "切换键没存上")
-        check("Ctrl+空格 切换输入法" in win.toggle_key_row.get_subtitle(), "没提示 Ctrl+空格被 fcitx5 占着")
-        win.toggle_key_row.set_selected(0)
-        check(win.toggle_key_row.get_subtitle() == "", "不用切换键时还有提示")
+        # 设成 fcitx5 也在用的键：提示 WowType 收不到。fcitx5 的快捷键直接给定，不看这台机器
+        # （/etc/xdg 里可能改过）；预设里没有 fcitx5 默认占着的键，这里假装用户在 fcitx5 里设了它
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+Shift+space"}}
+        toggle = win.key_rows["ToggleKey"]
+        toggle.set_selected(1)
+        check(win.values["ToggleKey"] == "Control+Shift+space", "切换键没存上")
+        check("Ctrl+Shift+空格 切换输入法" in toggle.get_subtitle(), f"没提示被 fcitx5 占着：{toggle.get_subtitle()}")
+        toggle.set_selected(0)
+        check(toggle.get_subtitle() == "", "不用切换键时还有提示")
+        # 互译键：互译没开时提示先去打开；也被 fcitx5 占着时提示占着
+        translate = win.key_rows["TranslateModeKey"]
+        translate.set_selected(1)
+        check(win.values["TranslateModeKey"] == "Control+Shift+Y", "互译键没存上")
+        check(translate.get_subtitle() == "先在「翻译」页打开互译", f"没提示先打开互译：{translate.get_subtitle()}")
+        win.fcitx_hotkey = {"TriggerKeys": {"0": "Control+Shift+Y"}}
+        win.refresh_translate_status()
+        check("fcitx5 也用 Ctrl+Shift+Y" in translate.get_subtitle(), f"互译键被占着没提示：{translate.get_subtitle()}")
+        win.fcitx_hotkey = {}
+        translate.set_selected(0)
+        check(translate.get_subtitle() == "", "不用互译键时还有提示")
     step("切换键", toggle_key)
 
     def entries():

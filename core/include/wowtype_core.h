@@ -363,6 +363,13 @@ typedef struct WowtypeSession WowtypeSession;
 /* 1.10 起：外壳只是告诉会话有这个键（松开的、外壳自己处理掉的），会话不处理它，只用来判断
  * 单按 Shift（按住 Shift 时按了别的键就不算）。外壳每个非 Shift 的键都先这样报一下。 */
 #define WOWTYPE_KEY_ACTION_OBSERVE 5
+/* 1.10 起：设置里另设的切换键（ToggleKey），外壳认出来后带上这个动作交给会话：中 ↔ 英，
+ * 在「译」里回中文；frame->mode_changed 为 1。开着工具栏、表情面板时别带（按键归面板）。 */
+#define WOWTYPE_KEY_ACTION_TOGGLE_MODE 6
+/* 1.10 起：进出「译」的快捷键（TranslateModeKey）：不在「译」里进「译」（打到一半的拼音带进去），
+ * 在「译」里回到进来之前的模式。没有「译」（translate_mode 为 0）或者输入框带
+ * WOWTYPE_KEY_HINT_NO_TRANSLATE 时 frame->handled 为 0，键交给应用。 */
+#define WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 7
 
 /* 一次按键。keysym 是 XKB keysym 的子集（字母、数字、标点、方向、功能键）。
  * size 填 sizeof(WowtypeKey)：以后在末尾加字段，旧外壳没填的字段当 0。 */
@@ -388,7 +395,8 @@ typedef struct {
 #define WOWTYPE_KEY_HINT_SURROUNDING (1u << 3)   /* 应用告诉了光标周围的文字：prev_char 为 0 是光标前确实没有字 */
 
 /* 输入模式（1.10 起）。单按 Shift（Shift_L 0xffe1 / Shift_R 0xffe2 的按下、松开都交给会话）
- * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1。
+ * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1；
+ * 设了 translate_key 时只在中 ↔ 英之间切（在「译」里回中文），「译」用 WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 进出。
  * 英文模式下会话只管字母、数字前的自动空格，别的键都交给应用。互译时的上屏还在外壳。 */
 #define WOWTYPE_MODE_CHINESE 0
 #define WOWTYPE_MODE_ENGLISH 1
@@ -436,7 +444,8 @@ typedef struct {
                           * 可以相加；0 关（默认） */
     int shift_toggle;    /* 1.10 起：WOWTYPE_SHIFT_TOGGLE_*，默认两边都行 */
     uint32_t shift_tap_ms; /* 1.10 起：按住 Shift 多久以内松开算单按（毫秒），0 用默认 500 */
-    int translate_mode;  /* 1.10 起：单按 Shift 的循环里有「译」（配好了翻译服务），默认 0 */
+    int translate_mode;  /* 1.10 起：有「译」（配好了翻译服务）：单按 Shift 的循环里有它，
+                          * WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 进得去，默认 0 */
     int toolbar;         /* 1.10 起：只打一个 v 再按空格打开工具栏（双拼、五笔、互译时不开），默认 1 */
     int clipboard_history; /* 1.10 起：记剪贴板历史（工具栏「剪贴板」页的提示看它），默认 0 */
     int shuangpin_keys;  /* 1.10 起：双拼时编辑区显示打的键（uivs），不翻成全拼（shi'zhong），默认 0 */
@@ -447,6 +456,8 @@ typedef struct {
                           * frame->aux 提示没有码表。引擎的双拼开关要关着 */
     int wubi_auto_commit; /* 1.10 起：五笔打满四码、只有一个候选时直接上屏，默认 1 */
     int wubi_hint;       /* 1.10 起：五笔逐码提示的候选后面显示还要打的码（WowtypeCandidateInfo.comment），默认 1 */
+    int translate_key;   /* 1.10 起：另设了进出「译」的快捷键（WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE），
+                          * 单按 Shift 只在中 ↔ 英之间切，默认 0 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。

@@ -102,11 +102,16 @@ func type(_ c: TestController, _ text: String) {
     }
 }
 
-/// 单按一下 Shift（按下、0.1 秒后松开）。
+/// 上一下 Shift 松开的事件时刻
+private var lastShiftUp: TimeInterval = 0
+
+/// 单按一下 Shift（按下、0.1 秒后松开）。事件时刻和真键盘一样往后走：下一下在上一下松开 0.2 秒以后，
+/// 不然会被当成 Electron 那种重报的回弹。
 func tapShift(_ c: TestController, right: Bool = false) {
-    let t = ProcessInfo.processInfo.systemUptime
+    let t = max(ProcessInfo.processInfo.systemUptime, lastShiftUp + 0.2)
     _ = c.handle(shiftEvent(down: true, right: right, at: t), client: c.fake)
     _ = c.handle(shiftEvent(down: false, right: right, at: t + 0.1), client: c.fake)
+    lastShiftUp = t + 0.1
 }
 
 /// 候选框现在排的这一页（收起时 nil）
