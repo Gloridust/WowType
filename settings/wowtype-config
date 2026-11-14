@@ -126,6 +126,7 @@ DEFAULTS = {
     "EmojiSuggest": "True",
     "EmojiKey": "Super+period",
     "ToggleKey": "",
+    "TranslateModeKey": "",
     "Translate": "False",
     "TranslateTarget": "en",
     "TranslateBaseUrl": "",
@@ -315,12 +316,20 @@ EMOJI_KEYS = [
     ("Ctrl + Shift + E", "Control+Shift+E"),
     ("不用快捷键", ""),
 ]
-# 另设的切换中 / 英文快捷键（#143）。Ctrl+空格默认是 fcitx5 切换输入法的键，要先让出来
+# 另设的切换中 / 英文、进出互译的快捷键（#143、#87）。只放 fcitx5 默认没占的键（Ctrl+空格是它切换
+# 启用/禁用输入法的键）；文件里写了别的键也认，下拉框里多一项「其他」
 TOGGLE_KEYS = [
     ("不用（单按 Shift 照常）", ""),
-    ("Ctrl + 空格", "Control+space"),
     ("Ctrl + Shift + 空格", "Control+Shift+space"),
 ]
+TRANSLATE_MODE_KEYS = [
+    ("不用", ""),
+    ("Ctrl + Shift + Y", "Control+Shift+Y"),
+]
+# 两个快捷键行的说明（和 macOS 设置的一样）
+TOGGLE_KEY_INFO = "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。"
+TRANSLATE_MODE_KEY_INFO = ("按它进「译」，在「译」里再按回到原来的模式。设了它，单按 Shift 就只在中文、英文之间切。\n\n"
+                           "要先在「翻译」页打开互译；没打开、密码框里这个键交给应用。")
 
 # 合法拼音音节（和 core/src/syllable.rs 的 SYLLABLES 一致，核心的测试会比对；macOS 设置直接用核心的）
 SYLLABLES = frozenset("""
@@ -3635,20 +3644,14 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.shift_names.index(current) if current in self.shift_names else 0)
         self.shift_row.connect("notify::selected", self.on_shift_toggle_changed)
         switch.add(self.shift_row)
-        current = self.values.get("ToggleKey", DEFAULTS["ToggleKey"])
-        labels = [label for label, _ in TOGGLE_KEYS]
-        self.toggle_keys = [name for _, name in TOGGLE_KEYS]
-        if current not in self.toggle_keys:
-            labels.append(f"其他（{current}）")
-            self.toggle_keys.append(current)
-        self.toggle_key_row = Adw.ComboRow(title="另设一个切换键", model=Gtk.StringList.new(labels))
-        self.add_info(self.toggle_key_row,
-                      "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。\n\n"
-                      "Ctrl+空格默认是 fcitx5 切换输入法的键，fcitx5 先拿走，WowType 收不到："
-                      "要先在「Fcitx 5 配置 → 全局选项 → 快捷键」里把它从「切换启用/禁用输入法」删掉。")
-        self.toggle_key_row.set_selected(self.toggle_keys.index(current))
-        self.toggle_key_row.connect("notify::selected", self.on_toggle_key_changed)
-        switch.add(self.toggle_key_row)
+        fcitx_note = "\n\nfcitx5 自己的快捷键（比如 Ctrl+空格）先处理，设成它们 WowType 收不到，这一行会提示。"
+        self.key_rows = {
+            "ToggleKey": self.make_key_row("ToggleKey", "另设一个切换键", TOGGLE_KEYS, TOGGLE_KEY_INFO + fcitx_note),
+            "TranslateModeKey": self.make_key_row("TranslateModeKey", "互译的快捷键", TRANSLATE_MODE_KEYS,
+                                                  TRANSLATE_MODE_KEY_INFO + fcitx_note),
+        }
+        for row in self.key_rows.values():
+            switch.add(row)
         self.initial_names = [name for _, name in INITIAL_MODES]
         self.initial_row = Adw.ComboRow(
             title="切到 WowType 时",
@@ -3892,21 +3895,38 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.set_value("ShiftToggle", self.shift_names[row.get_selected()])
         self.refresh_shift_conflict()
 
-    def on_toggle_key_changed(self, row, _param):
-        self.set_value("ToggleKey", self.toggle_keys[row.get_selected()])
-        self.refresh_toggle_key_hint()
+    def make_key_row(self, key, title, presets, info):
+        """快捷键下拉框：预设几个键，文件里写了别的键时多一项「其他」。"""
+        current = self.values.get(key, DEFAULTS[key])
+        labels = [label for label, _ in presets]
+        names = [name for _, name in presets]
+        if current not in names:
+            labels.append(f"其他（{current}）")
+            names.append(current)
+        row = Adw.ComboRow(title=title, model=Gtk.StringList.new(labels))
+        self.add_info(row, info)
+        row.key_names = names
+        row.set_selected(names.index(current))
+        row.connect("notify::selected", lambda r, _p: self.on_key_row_changed(key, r))
+        return row
 
-    def refresh_toggle_key_hint(self):
-        """另设的切换键也是 fcitx5 的全局快捷键时（Ctrl+空格默认就是）说一声：fcitx5 先拿走，WowType 收不到。"""
-        key = self.values.get("ToggleKey", "")
-        taken = fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None))
-        row = self.toggle_key_row
-        if taken:
-            row.set_subtitle(f"fcitx5 也用 {key_label(key)} {FCITX_OPTION_NAMES[taken]}，"
-                             "WowType 收不到，先在 Fcitx 5 配置里删掉它（见 ⓘ）")
-            row.add_css_class("wt-warning")
-        else:
-            row.set_subtitle("")
+    def on_key_row_changed(self, key, row):
+        self.set_value(key, row.key_names[row.get_selected()])
+        self.refresh_translate_status()
+
+    def refresh_key_hints(self):
+        """快捷键也是 fcitx5 的全局快捷键时（Ctrl+空格默认就是）说一声：fcitx5 先拿走，WowType 收不到。
+        互译键设了、互译却没开时也说一声。"""
+        for key, row in self.key_rows.items():
+            value = self.values.get(key, "")
+            taken = fcitx_hotkey_taking(value, getattr(self, "fcitx_hotkey", None))
+            if taken:
+                row.set_subtitle(f"fcitx5 也用 {key_label(value)} {FCITX_OPTION_NAMES[taken]}，"
+                                 "WowType 收不到，先在 Fcitx 5 配置里删掉它")
+                row.add_css_class("wt-warning")
+                continue
+            idle = key == "TranslateModeKey" and value and not self.translate_on()
+            row.set_subtitle("先在「翻译」页打开互译" if idle else "")
             row.remove_css_class("wt-warning")
 
     def refresh_shift_conflict(self):
@@ -3947,7 +3967,6 @@ class SettingsWindow(Adw.ApplicationWindow):
                 row.set_subtitle(f"已让出；{switch_hint}")
                 self.shift_free_info.set_text("fcitx5 不再用 Shift 切输入法。关掉这个开关就还给 fcitx5。")
                 row.remove_css_class("wt-warning")
-            self.refresh_toggle_key_hint()
             self.refresh_translate_status()
         self.fcitx.get_config(GLOBAL_URI, done)
 
@@ -4621,7 +4640,17 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_translate_toggled(self, row, _param):
         self.refresh_translate_status()
         if row.get_active() and self.translate_ready():
-            self.toast("单按 Shift 两下切到「译」")
+            key = self.translate_mode_key()
+            self.toast(f"按 {key_label(key)} 进出「译」" if key else "单按 Shift 两下切到「译」")
+
+    def translate_on(self):
+        """互译打开了，翻译也配好了：「译」进得去。"""
+        return self.values.get("Translate") == "True" and self.translate_ready()
+
+    def translate_mode_key(self):
+        """设了、fcitx5 也没占着的互译键；没有是空串。"""
+        key = self.values.get("TranslateModeKey", "")
+        return "" if fcitx_hotkey_taking(key, getattr(self, "fcitx_hotkey", None)) else key
 
     def translate_ready(self):
         if self.values.get("TranslateLocal") == "True":
@@ -4629,18 +4658,23 @@ class SettingsWindow(Adw.ApplicationWindow):
         return bool(self.url_row.get_text().strip() and self.tmodel_row.get_text().strip())
 
     def refresh_translate_status(self):
+        """「翻译」页互译那一行的副标题（怎么进「译」），连带「输入」页两个快捷键行的提示。"""
         if not hasattr(self, "test_row"):
             return
+        self.refresh_key_hints()
         conflicts = getattr(self, "shift_conflicts", [])
         toggle = self.values.get("ShiftToggle", "Both")
         usable = [SHIFT_NAMES[s] for s in SHIFT_SIDES.get(toggle, ())
                   if s not in {bare_shift(k) for _o, k in conflicts}]
+        key = self.translate_mode_key()
         if not self.translate_ready():
             self.translate_row.set_subtitle(
                 "先在下面下载翻译模型" if self.values.get("TranslateLocal") == "True"
                 else "先在下面填好翻译服务")
+        elif key:
+            self.translate_row.set_subtitle(f"按 {key_label(key)} 进出「译」")
         elif toggle == "Off":
-            self.translate_row.set_subtitle("「输入」页关掉了 Shift 切换，切不到「译」")
+            self.translate_row.set_subtitle("「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键")
         elif conflicts:
             taken = shift_side_names(conflicts)
             self.translate_row.set_subtitle(
@@ -5132,7 +5166,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.key_row.set_selected(self.voice_keys.index(DEFAULTS["VoiceKey"]))
             self.refresh_voice_model()
             self.emoji_key_row.set_selected(self.emoji_keys.index(DEFAULTS["EmojiKey"]))
-            self.toggle_key_row.set_selected(self.toggle_keys.index(DEFAULTS["ToggleKey"]))
+            for key, row in self.key_rows.items():
+                row.set_selected(row.key_names.index(DEFAULTS[key]))
             self.target_row.set_selected(0)
             self.toast("已恢复默认设置")
         dialog.connect("response", answered)
