@@ -134,7 +134,7 @@ private struct StatsMenuIcon: View {
             let line = 2 * scale
             let frame = CGRect(x: 3 * scale, y: 3 * scale,
                                width: 18 * scale, height: 18 * scale)
-            context.stroke(Path(roundedRect: frame, cornerRadius: 2 * scale, style: .continuous),
+            context.stroke(Path(roundedRect: frame, cornerRadius: 2 * scale),
                            with: .color(color), lineWidth: line)
             for (from, to, y) in [(9.0, 7.0, 17.0), (13.0, 7.0, 12.0), (11.0, 7.0, 7.0)] {
                 var path = Path()
