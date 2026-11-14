@@ -1,6 +1,7 @@
 // 进程里只有一份的东西：词库（后台载入）、设置、数据目录、定时保存学习数据、互译的翻译器。
 
 import AppKit
+import CWowtype
 
 final class AppState {
     static let shared = AppState()
