@@ -3344,9 +3344,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.add_info(self.arrow_row,
                       "选「左右键移动光标」时，← → 把光标移进打了一半的拼音，打的字母插在光标处，"
                       "退格删光标前一个，Home、End、Delete 也管用；↑ ↓ 选词，到了一页的两头接着翻页。"
-                      "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。\n\n"
-                      "GNOME 的 Input Method Panel 扩展画不出编辑区里的光标，那里看不到光标在哪"
-                      "（打字、删除照常对）。")
+                      "翻页用 Page Up / Page Down 或下面的翻页键。「译」里没有光标。")
         current = self.values.get("ArrowKeys", DEFAULTS["ArrowKeys"])
         self.arrow_row.set_selected(self.arrow_names.index(current) if current in self.arrow_names else 0)
         self.arrow_row.connect("notify::selected", self.on_arrow_keys_changed)
