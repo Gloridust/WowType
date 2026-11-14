@@ -525,15 +525,16 @@ void runCases(Instance &instance) {
         check(!p2.empty() && ic->committed == p2[0], "接着空格选下一页第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
-    type(ic.get(), "shi<left>");
+    type(ic.get(), "shi");
     {
+        const auto p1 = page(ic.get());
+        type(ic.get(), "<left>");
         auto *list = common();
-        const auto last = page(ic.get());
-        check(list && !list->hasNext() && list->hasPrev() &&
-                  list->cursorIndex() == list->size() - 1,
-              "第一个上按左键：绕到最后一页最后一个");
+        check(list && list->hasNext() && !list->hasPrev() && list->cursorIndex() == 0 &&
+                  page(ic.get()) == p1,
+              "第一个上按左键：停在第一个，不绕到最后一页");
         type(ic.get(), "<sp>");
-        check(!last.empty() && ic->committed == last.back(), "空格选最后一个，实际 " + ic->committed);
+        check(!p1.empty() && ic->committed == p1[0], "空格选第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");
@@ -666,15 +667,15 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "shi");
     {
+        const auto p1 = page(ic.get());
         if (auto *list = common()) {
             list->prevCandidate();
         }
         auto *list = common();
-        const auto last = page(ic.get());
-        check(list && !list->hasNext() && list->cursorIndex() == list->size() - 1,
-              "列表 prevCandidate 从第一个绕到最后一个");
+        check(list && list->cursorIndex() == 0 && page(ic.get()) == p1,
+              "列表 prevCandidate 在第一个上停住");
         type(ic.get(), "<sp>");
-        check(!last.empty() && ic->committed == last.back(), "接着空格选最后一个，实际 " + ic->committed);
+        check(!p1.empty() && ic->committed == p1[0], "接着空格选第一个，实际 " + ic->committed);
     }
     fresh(ic.get());
     type(ic.get(), "shi");
@@ -785,6 +786,90 @@ void runCases(Instance &instance) {
     ic->focusOut();
     ic->focusIn();
     check(ic->committed.empty() && preedit(ic.get()).empty(), "失去焦点不上屏、编辑区清空，实际 " + ic->committed);
+
+    // 编辑区画在输入框里时（应用支持 preedit）：失去焦点、应用重置输入框，GTK / Qt 的输入模块会把
+    // 编辑区里没标 DontCommit 的字上屏，不支持的（XIM）由 fcitx5 代劳。WowType 的编辑区整段标了
+    // DontCommit：文档里不留「ni'hao」、选了一半的「你好zhong'guo」、五笔码
+    ic->setCapabilityFlags(CapabilityFlag::Preedit);
+    {
+        const auto client = [&]() { return ic->inputPanel().clientPreedit(); };
+        fresh(ic.get());
+        type(ic.get(), "nihao");
+        check(client().toString() == "ni'hao" && client().toStringForCommit().empty(),
+              "输入框里的编辑区是 ni'hao，失去焦点时没有要上屏的：[" + client().toStringForCommit() + "]");
+        ic->focusOut();
+        ic->focusIn();
+        check(ic->committed.empty() && client().toString().empty(),
+              "失去焦点：fcitx5 替应用上屏的也是空的，实际 " + ic->committed);
+        fresh(ic.get());
+        type(ic.get(), "nihaozhongguo");
+        const auto cands = page(ic.get());
+        const auto at = std::find(cands.begin(), cands.end(), "你好");
+        if (at != cands.end() && at - cands.begin() < 9) {
+            type(ic.get(), std::to_string(at - cands.begin() + 1));
+        }
+        check(client().toString() == "你好zhong'guo" && client().toStringForCommit().empty(),
+              "选了一半的句子也不会被应用上屏：" + client().toString());
+        ic->reset();
+        check(ic->committed.empty() && client().toString().empty() && preedit(ic.get()).empty(),
+              "应用重置输入框（点了别处）：丢掉，实际 " + ic->committed);
+        // GTK 4.14 的输入框全选（Ctrl+A）时会重置输入法：Ctrl+A 交给应用、编辑区留着，应用一重置就丢掉
+        fresh(ic.get());
+        type(ic.get(), "nihao");
+        check(!send(ic.get(), Key(FcitxKey_a, KeyState::Ctrl)) && client().toString() == "ni'hao",
+              "打字途中 Ctrl+A 交给应用，编辑区留着：" + client().toString());
+        ic->reset();
+        check(ic->committed.empty() && client().toString().empty(),
+              "应用跟着重置输入框：丢掉，不留 ni'hao，实际 " + ic->committed);
+        fresh(ic.get());
+    }
+    ic->setCapabilityFlags(CapabilityFlags{});
+
+    // 上文跟着文档走：「不」后面 ma 的候选和没有上文时不一样；「不」删掉了（退格、全选再删、点到别处）
+    // 再打 ma 要回到没有上文时的样子，不能还当「不」在前面。看整页的顺序，不看哪个词排第一
+    // （词库、语言模型不同，首选不一样：雾凇是「骂」，万象还是「吗」）
+    {
+        const auto ma = [&]() {
+            type(ic.get(), "ma");
+            const auto cands = join(page(ic.get()));
+            type(ic.get(), "<esc>");
+            return cands;
+        };
+        fresh(ic.get());
+        type(ic.get(), "<bs>");
+        const std::string alone = ma();
+        type(ic.get(), "bu<sp>");
+        const std::string afterBu = ma();
+        if (ic->committed != "不" || afterBu == alone) {
+            // 这个词库、语言模型里「不」不改 ma 的排序：没法从候选上看出上文
+            std::printf("skip 上文跟着文档走（「不」不改 ma 的排序：%s）\n", alone.c_str());
+        } else {
+            check(true, "「不」后面 ma 的候选变了：" + alone + "/ " + afterBu);
+            type(ic.get(), "<bs>");
+            check(ma() == alone, "退格删掉「不」以后回到没有上文的样子");
+            type(ic.get(), "bu<sp>");
+            send(ic.get(), Key(FcitxKey_a, KeyState::Ctrl));
+            type(ic.get(), "<del>");
+            check(ma() == alone, "全选再 Delete 以后回到没有上文的样子");
+            type(ic.get(), "bu<sp>");
+            ic->focusOut();
+            ic->focusIn();
+            check(ma() == alone, "失去焦点再回来以后回到没有上文的样子");
+            // 读得到周围文字：拿光标前的字核对（在应用里用鼠标改过，会话没看到键）
+            ic->setCapabilityFlags(CapabilityFlag::SurroundingText);
+            type(ic.get(), "bu<sp>");
+            ic->surroundingText().setText("不", 1, 1);
+            check(ma() == afterBu, "光标前还是「不」：照样用它");
+            ic->surroundingText().setText("你好", 2, 2);
+            check(ma() != afterBu, "光标前换成了别的字：不再当「不」在前面");
+            type(ic.get(), "bu<sp>");
+            ic->surroundingText().setText("", 0, 0);
+            check(ma() == alone, "文档清空了：回到没有上文的样子");
+            ic->surroundingText().invalidate();
+            ic->setCapabilityFlags(CapabilityFlags{});
+        }
+        fresh(ic.get());
+    }
 
     // 连续上屏很多字，上下文按 UTF-8 截断不出错
     fresh(ic.get());
@@ -945,15 +1030,20 @@ void runCases(Instance &instance) {
     fresh(ic.get());
     type(ic.get(), "shi");
     {
-        const auto shi = page(ic.get());
-        // 词库不同时「十」不一定在第一页：在的话后面跟 🔟，不在就不出 🔟
-        bool ten = false, after = false, keycap = false;
-        for (std::size_t i = 0; i < shi.size(); ++i) {
-            ten = ten || shi[i] == "十";
-            keycap = keycap || shi[i] == "🔟";
-            after = after || (i > 0 && shi[i] == "🔟" && shi[i - 1] == "十");
+        // 词库不同（还有前面学到的）时「十」排第几不一定：在第一页上的话 🔟 紧跟在它后面
+        // （「十」是第一页最后一个时 🔟 在第二页开头），不在第一页就不出 🔟。看全部候选
+        auto list = ic->inputPanel().candidateList();
+        auto *all = list ? dynamic_cast<CommonCandidateList *>(list.get()) : nullptr;
+        int ten = -1, keycap = -1;
+        std::vector<std::string> shi;
+        for (int i = 0; all && i < all->totalSize(); ++i) {
+            shi.push_back(all->candidateFromAll(i).text().toString());
+            ten = ten < 0 && shi.back() == "十" ? i : ten;
+            keycap = keycap < 0 && shi.back() == "🔟" ? i : keycap;
         }
-        check(ten ? after : !keycap, "shi：十 后面是 🔟：" + join(shi));
+        const bool firstPage = all && ten >= 0 && ten < all->pageSize();
+        shi.resize(std::min<std::size_t>(shi.size(), 12));
+        check(firstPage ? keycap == ten + 1 : keycap < 0, "shi：十 后面是 🔟：" + join(shi));
     }
     fresh(ic.get());
     type(ic.get(), "bage");
@@ -1000,10 +1090,8 @@ void runCases(Instance &instance) {
         check(page(ic.get()) == v1, "竖排左键翻回来");
         type(ic.get(), "<up>");
         auto list = ic->inputPanel().candidateList();
-        check(list && list->cursorIndex() == list->size() - 1 && page(ic.get()) != v1,
-              "竖排第一个上按上键：绕到最后一个");
-        type(ic.get(), "<down>");
-        check(page(ic.get()) == v1, "再按下键绕回第一个");
+        check(list && list->cursorIndex() == 0 && page(ic.get()) == v1,
+              "竖排第一个上按上键：停在第一个，不绕到最后一个");
         type(ic.get(), "<sp>");
         check(!v1.empty() && ic->committed == v1[0], "空格选第一个，实际 " + ic->committed);
     }
@@ -1154,7 +1242,9 @@ void runCases(Instance &instance) {
         KeyEvent release(ic.get(), Key(sym, KeyState::Shift), true);
         return ic->keyEvent(release);
     };
+    check(instance.inputMethodLabel(ic.get()) == "中", "中文时提示「中」：" + instance.inputMethodLabel(ic.get()));
     check(tapShift(FcitxKey_Shift_R), "单按右 Shift 被接住");
+    check(instance.inputMethodLabel(ic.get()) == "英", "英文时提示「英」：" + instance.inputMethodLabel(ic.get()));
     type(ic.get(), "nihao,");
     check(ic->committed.empty() && ic->passed == "nihao," && preedit(ic.get()).empty(),
           "英文模式字母、标点原样交给应用，实际 passed=" + ic->passed);

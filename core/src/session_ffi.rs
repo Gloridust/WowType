@@ -43,6 +43,7 @@ pub struct WowtypeKey {
 pub const WOWTYPE_KEY_HINT_NO_AUTO_SPACE: u32 = crate::session::key_hints::NO_AUTO_SPACE;
 pub const WOWTYPE_KEY_HINT_PANEL_OPEN: u32 = crate::session::key_hints::PANEL_OPEN;
 pub const WOWTYPE_KEY_HINT_NO_TRANSLATE: u32 = crate::session::key_hints::NO_TRANSLATE;
+pub const WOWTYPE_KEY_HINT_SURROUNDING: u32 = crate::session::key_hints::SURROUNDING;
 
 /// 外壳自己的翻译器（C 布局，1.10 起）：macOS 用它把自己的翻译器（测试里是假的）交给会话。
 /// 函数都不阻塞。poll 把这次的原文、译文、出错原因写进三个出参（在下一次 poll 前有效），
@@ -780,7 +781,7 @@ unsafe fn shown_candidate<'a>(session: *mut WowtypeSession, index: usize) -> Opt
     handle.c_candidates().get(at)
 }
 
-/// 清空编辑区；commit_pending 非 0 时把已选的词和原始输入放进 frame->commit。
+/// 清空编辑区；commit_pending 非 0 时把已选的词和原始输入放进 frame->commit，为 0 是放弃（上文也作废）。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_session_reset(
     session: *mut WowtypeSession,

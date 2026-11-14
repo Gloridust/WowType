@@ -315,10 +315,52 @@ do {
 }
 
 do {
+    // 系统要结束组字（换输入框、点了别处、切走输入法）：打的字母原样上屏，编辑区清空，
+    // 不带分音节的隔音符（编辑区是「ni'hao」，上屏的是「nihao」）
     let (c, client) = fresh()
     type(c, "nihao")
+    check(client.marked == "ni'hao", "编辑区分了音节", client.marked)
     c.commitComposition()
-    check(client.committed == "nihao" && !c.isComposing, "切走输入法时原样上屏", client.committed)
+    check(client.committed == "nihao" && client.marked.isEmpty && client.page == nil && !c.isComposing,
+          "结束组字时原样上屏字母", client.committed)
+    client.committed = ""
+    type(c, "nihaoshi")
+    if let i = client.page?.texts.firstIndex(of: "你好") {
+        c.select(i)
+    }
+    check(client.marked == "你好shi" && client.committed.isEmpty, "选了句首的词", client.marked)
+    c.commitComposition()
+    check(client.committed == "你好shi" && client.marked.isEmpty, "选了一半：已选的词 + 剩下的字母", client.committed)
+}
+
+withConfig({ $0.inputScheme = .shuangpin }) { c, client in
+    // 双拼：上屏打的键，不是编辑区里显示的全拼
+    type(c, "nihk")
+    check(client.marked == "ni'hao", "双拼编辑区显示全拼", client.marked)
+    c.commitComposition()
+    check(client.committed == "nihk" && client.marked.isEmpty, "结束组字时双拼上屏打的键", client.committed)
+}
+
+do {
+    // 第一个候选上按左键：停在第一个，不绕到末页（再按空格不会上屏生僻字）
+    let (c, client) = fresh()
+    type(c, "shi")
+    let first = client.page?.texts.first ?? ""
+    check(c.handle(.key(Keysym.left)) && client.page?.cursor == 0 && client.page?.hasPrev == false,
+          "第一个上按左键停住", "\(client.page?.cursor ?? -1)")
+    _ = c.handle(.char(" "))
+    check(client.committed == first, "空格还是选第一个", client.committed)
+}
+
+do {
+    // 上文跟着文档走：上屏的字在应用里删掉了，排序就不该再看它
+    let (c, client) = fresh()
+    type(c, "nihao ")
+    check(client.committed == "你好", "上屏你好")
+    // 退格交给应用（会话借这一下让上文作废），假的输入框自己删字
+    check(!c.handle(.key(Keysym.backspace)), "没在打字时退格交给应用")
+    client.committed.removeLast()
+    check(!c.handle(.char("a", [.command])) && !c.handle(.key(Keysym.left)), "快捷键、方向键交给应用")
 }
 
 do {
@@ -566,6 +608,15 @@ do {
               "五笔 z 临时拼音带反查的五笔码", "\(client.marked) \(client.page?.texts ?? []) \(client.page?.comments ?? [])")
         _ = c.handle(.char(" "))
         check(client.committed == "你好", "临时拼音上屏", client.committed)
+    }
+    withWubi { c, client in
+        type(c, "wqv")
+        c.commitComposition()
+        check(client.committed == "wqv" && client.marked.isEmpty, "结束组字时五笔码原样上屏", client.committed)
+        client.committed = ""
+        type(c, "g")
+        check(Array(client.page?.texts.prefix(2) ?? []) == ["一", "1️⃣"], "数字 emoji 跟在数字字后面",
+              "\(client.page?.texts ?? [])")
     }
     withWubi { c, client in
         type(c, "v ")
@@ -1517,14 +1568,14 @@ do {
           "单按 Shift 回到中文：原文上屏，拼音留着", "\(r.client.committed) / \(r.client.marked)")
     check(r.client.page?.translate == nil, "回到中文后候选框没有互译那两行")
 
-    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏
+    // 切走输入法 / 换输入框：拼音原样进原文，原文再上屏（原文是选好的字，后面是打的字母）
     let s = translateRig()
     type(s.c, "nihao")
     _ = s.c.handle(.char(" "))
     type(s.c, "hao")
     s.c.commitComposition()
-    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil, "切走时原文原样上屏",
-          s.client.committed)
+    check(s.client.committed == "你好hao" && !s.c.hasPendingText && s.client.page == nil && s.client.marked.isEmpty,
+          "切走时原文原样上屏", s.client.committed)
 
     // 设置里关掉互译：离开「译」
     let u = translateRig()
@@ -1931,6 +1982,33 @@ if getenv("WOWTYPE_EXPECT_FULL_CHARS") != nil {
     type(c, "yi")
     let count = c.allCandidates().count
     check(count > 300, "yi 的字列全（超过 300 个）", "\(count)")
+
+    // 上文跟着文档走（真实词库 + 词库旁边的语言模型）：「不」后面 ma 的首选是「骂」，
+    // 「不」在应用里删掉了、换成了别的字、点到别处回来，再打 ma 不能还当「不」在前面
+    let lm = (lexicon.lastIndex(of: "/").map { String(lexicon[..<$0]) } ?? ".") + "/words.lm"
+    if access(lm, R_OK) == 0, let lmEngine = Engine(lexicon: lexicon, languageModel: lm) {
+        let client = FakeClient()
+        let c = Composer(engine: lmEngine, client: client)
+        func firstMa() -> String {
+            type(c, "ma")
+            let first = client.page?.texts.first ?? ""
+            _ = c.handle(.key(Keysym.escape))
+            return first
+        }
+        let alone = firstMa()
+        type(c, "bu ")
+        let afterBu = firstMa()
+        check(client.committed == "不" && afterBu != alone, "「不」后面 ma 的首选变了", "\(alone) / \(afterBu)")
+        _ = c.handle(.key(Keysym.backspace))
+        client.committed.removeLast()
+        check(firstMa() == alone, "退格删掉「不」以后 ma 回到没有上文的首选")
+        type(c, "bu ")
+        client.committed = "你好"  // 在应用里用鼠标改了，会话没看到键：拿光标前的字核对
+        check(firstMa() != afterBu, "光标前不是「不」了")
+        client.committed = "不"
+        c.commitComposition()  // 点到别处又回来
+        check(firstMa() == afterBu, "光标前还是「不」时照样用它", "\(afterBu)")
+    }
 }
 
 if failures > 0 {

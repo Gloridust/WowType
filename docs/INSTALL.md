@@ -227,6 +227,7 @@ export QT_IM_MODULE=fcitx
 Wayland 的客户端支持不同：KDE / KWin 的原生 Qt 通道通常应让 `QT_IM_MODULE` 保持未设置，
 支持 text-input-v3 的 GTK 应用也可使用原生通道。按 [Fcitx 官方 Wayland 指南](https://fcitx-im.org/wiki/Using_Fcitx_5_on_Wayland/en)
 配置自己的桌面，不要把上面的 X11 变量统一写入所有 Wayland 会话。
+例外是 sway 1.9（Ubuntu 24.04 带的版本）：它不画输入法的弹出窗口，GTK 应用走 text-input-v3 时看不到候选框（fcitx5 自己的 Unicode 选字框也看不到）；保留上面的 `GTK_IM_MODULE=fcitx`、`QT_IM_MODULE=fcitx`（im-config 默认就是这样）一切正常。sway 1.10 两种都行。
 需要自启动文件的 XDG 桌面可将 `/usr/share/applications/org.fcitx.Fcitx5.desktop` 复制到 `~/.config/autostart/`；
 KDE Wayland 使用其虚拟键盘设置，避免重复启动。
 

@@ -384,9 +384,9 @@ public final class Composer {
             return false
         }
         if !key.modifiers.isDisjoint(with: [.control, .option, .command]) {
-            // 打字途中先问会话：Ctrl+Delete、Ctrl+退格忘掉光标处学错的词。
-            // 别的快捷键交给应用，打到一半时编辑区留着
-            return composing && sendToSession(key)
+            // 先问会话：打字途中 Ctrl+Delete、Ctrl+退格忘掉光标处学错的词。别的快捷键交给应用，
+            // 打到一半时编辑区留着；没在打字时会话借这一下知道应用里的字可能变了（上文作废）
+            return sendToSession(key)
         }
         if !composing {
             return handleIdle(key)
@@ -456,17 +456,19 @@ public final class Composer {
         apply(wowtype_session_set_mode(session, raw))
     }
 
-    /// 切走输入法、换输入框：打到一半的原样上屏（互译时拼音进原文，原文再原样上屏，和 Linux 一样），
-    /// 工具栏、表情面板收起来。
+    /// 系统要结束组字（换输入框、点了别处、切走输入法）：已选的词 + 打的字母原样上屏（和回车一样，
+    /// 双拼是打的键、五笔是码，不带分音节的隔音符）；互译时拼音先进原文，原文再原样上屏。
+    /// 工具栏、表情面板收起来，会话记的上文作废（回来时光标可能在别处）。
+    /// Linux 上同样的时候是丢掉：那边工具包抢先上屏的是编辑区里显示的字，输入法没法换成原始字母。
     public func commitComposition() {
         closeTool()
-        // 互译时拼音先进原文，攒着的原文再原样上屏（会话做）
-        if isComposing || !translateSource.isEmpty {
+        if hasPendingText {
             apply(wowtype_session_reset(session, 1))
         }
+        apply(wowtype_session_reset(session, 0))
     }
 
-    /// 放弃正在打的（输入框失去焦点）：拼音和互译攒着的原文都丢掉。
+    /// 放弃正在打的：拼音、选了一半的句子、互译攒着的原文都丢掉，工具栏、表情面板收起来，上文作废。
     public func cancel() {
         closeTool()
         translateDrawn = ""
@@ -520,20 +522,15 @@ public final class Composer {
     }
 
     private func handleIdle(_ key: KeyInput) -> Bool {
-        guard let c = key.ascii else {
-            return false
-        }
-        guard c > 0x20, c < 0x7f else {
-            return false
-        }
         // 都交给会话：字母开始编辑区（大写原样保留，Hello、iPhone 出英文候选）；
         // 标点换成中文标点（半角样式、数字后面的、没有中文写法的交给应用）；
-        // 汉字后面打数字要补空格时会话自己上屏（第 5 章）
+        // 汉字后面打数字要补空格时会话自己上屏（第 5 章）；退格、方向键、回车这些交给应用，
+        // 会话借这一下知道应用里的字可能变了（上文作废）
         if sendToSession(key) {
             return true
         }
         // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
-        if translating && !key.isLetter {
+        if translating, let c = key.ascii, c > 0x20, c < 0x7f, !key.isLetter {
             insert(String(UnicodeScalar(c)))
             return true
         }
@@ -579,8 +576,12 @@ public final class Composer {
             raw.prev_char = previousCharacter
             raw.hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE
         } else {
-            // 应用告诉的才给（自己猜的给 0）：会话按它决定要不要补空格；数字后面的标点它自己也记
-            raw.prev_char = client.map { $0.previousCharacterIsReliable ? $0.previousCharacter : 0 } ?? 0
+            // 应用告诉的才给（自己猜的给 0）：会话按它决定要不要补空格、核对自己记的上文；
+            // 数字后面的标点它自己也记
+            raw.prev_char = reliablePreviousCharacter
+            if raw.prev_char != 0 {
+                raw.hints |= WOWTYPE_KEY_HINT_SURROUNDING
+            }
         }
         guard let frame = wowtype_session_key(session, &raw) else {
             return false
@@ -592,22 +593,17 @@ public final class Composer {
         return handled
     }
 
-    /// 和按空格一样：上屏光标处的候选，没有候选时上屏原始输入。
-    private func commitCurrent() {
-        sendToSession(.char(" "))
-    }
-
-    func commitInput() {
-        // 回车：已选的词 + 剩下的字母原样上屏（会话会记选词）
-        apply(wowtype_session_reset(session, 1))
+    /// 应用告诉的光标前一个字（外壳自己猜的不算），没有是 0。
+    private var reliablePreviousCharacter: UInt32 {
+        client.map { $0.previousCharacterIsReliable ? $0.previousCharacter : 0 } ?? 0
     }
 
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
     func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         if let frame, let commit = frame.pointee.commit {
-            // 会话已经补好了空格（insert 不再补）；互译时进原文
+            // 会话已经补好了空格、记了上文；互译时上屏的是译文、原文
             let text = String(cString: commit)
-            insert(text, spaced: true)
+            client?.insertText(text)
             if frame.pointee.learned != 0 {
                 onCommit?(text)
             }
@@ -619,31 +615,11 @@ public final class Composer {
         refresh()
     }
 
-    /// 汉字和字母、数字之间要不要补一个空格（设置里的 AutoSpace，只看这一处边界）。
-    private func needsAutoSpace(before next: String) -> Bool {
-        let flags = config.autoSpaceFlags
-        guard flags != 0, let client, let first = next.unicodeScalars.first,
-              client.previousCharacterIsReliable
-        else {
-            return false
-        }
-        let prev = client.previousCharacter
-        return prev != 0 && wowtype_autospace(Int32(bitPattern: prev), Int32(bitPattern: first.value), flags) == 1
-    }
-
-    /// 上屏：交给应用（要补空格时带上空格；spaced：会话上屏的已经补过了）；互译时进原文。
-    /// 上文由会话自己记；存学习数据的回调只在会话上屏学到的词时调（见 apply）。
-    func insert(_ text: String, spaced: Bool = false) {
+    /// 上屏一段与拼音无关的字（语音识别的结果）：交给会话，和工具栏、表情面板上屏的一样
+    /// 补空格、记上文，互译时进原文。
+    func insert(_ text: String) {
         guard !text.isEmpty else { return }
-        if spaced {
-            // 会话上屏的（补好了空格；互译时是译文、原文）
-            client?.insertText(text)
-        } else if translating {
-            // 工具栏、表情面板上屏的：互译时交给会话攒进原文
-            apply(wowtype_session_commit_text(session, text, 0))
-        } else {
-            client?.insertText(needsAutoSpace(before: text) ? " " + text : text)
-        }
+        apply(wowtype_session_commit_text(session, text, reliablePreviousCharacter))
     }
 
     func refresh() {
