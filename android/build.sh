@@ -27,7 +27,7 @@ TARGET_SDK=35
 APP=android/app
 
 for f in lexicon.tsv english.txt words.lm LICENSE SOURCE.txt VERSION; do
-  [[ -f "$DATA/$f" ]] || { echo "数据目录里没有 $f（先跑 scripts/make-data.sh）" >&2; exit 1; }
+  [[ -f "$DATA/$f" ]] || { echo "数据目录里没有 ${f}（先跑 scripts/make-data.sh）" >&2; exit 1; }
 done
 
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
@@ -55,7 +55,7 @@ patch=${patch:-0}
 [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ ]] || { echo "看不懂版本号 $VERSION" >&2; exit 1; }
 VCODE=$((10#$major * 10000 + 10#$minor * 100 + 10#$patch))
 
-echo "WowType $VERSION（软件版本 $VCODE），架构：$ABIS"
+echo "WowType ${VERSION}（软件版本 ${VCODE}），架构：${ABIS}"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$OUT" "$work/assets/wowtype" "$work/lib" "$work/gen" "$work/classes" "$work/dex"
@@ -105,7 +105,7 @@ for abi in $ABIS; do
     arm64-v8a) build_native "$abi" aarch64-linux-android aarch64-linux-android${MIN_SDK}-clang ;;
     armeabi-v7a) build_native "$abi" armv7-linux-androideabi armv7a-linux-androideabi${MIN_SDK}-clang ;;
     x86_64) build_native "$abi" x86_64-linux-android x86_64-linux-android${MIN_SDK}-clang ;;
-    *) echo "不认识的架构 $abi（支持 arm64-v8a、armeabi-v7a、x86_64）" >&2; exit 1 ;;
+    *) echo "不认识的架构 ${abi}（支持 arm64-v8a、armeabi-v7a、x86_64）" >&2; exit 1 ;;
   esac
 done
 
@@ -146,4 +146,4 @@ unzip -l "$apk" | grep -E 'lib/.+/libwowtype\.so|classes\.dex|assets/wowtype/lex
 echo
 ls -lh "${apks[@]}"
 ( cd "$OUT" && sha256sum -- *.apk | tee SHA256SUMS.android )
-echo "APK 在 $OUT（arm64 优先；别的架构用 WOWTYPE_ANDROID_ABIS=\"arm64-v8a armeabi-v7a x86_64\" 再打）"
+echo "APK 在 ${OUT}（arm64 优先；别的架构用 WOWTYPE_ANDROID_ABIS=\"arm64-v8a armeabi-v7a x86_64\" 再打）"
