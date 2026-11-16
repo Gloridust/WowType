@@ -151,6 +151,75 @@ jobs:
           name: macos-zip
           path: dist/macos/*.zip
 
+  android:
+    # 安卓输入法外壳（android/）：主机 JVM 上的 JNI + 会话测试、打 arm64 APK。
+    # 发版时 WowType-<版本>-android-arm64-v8a.apk 跟 Linux / macOS 的包一起进 Release（artifact 叫 pkg-android-arm64）。
+    name: 安卓输入法（arm64）
+    needs: data
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/download-artifact@v4
+        with:
+          name: data
+          path: dist/data
+      - name: Android SDK 和 NDK
+        run: |
+          sdkmanager="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null
+          "$sdkmanager" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: JNI 和会话冒烟测试（主机 JVM，不需要模拟器）
+        run: android/test.sh dist/data
+      - name: 签名密钥
+        # 配了 WOWTYPE_ANDROID_KEYSTORE_BASE64（密钥库文件的 base64）就用它签名，升级能覆盖安装；
+        # 没配时 build.sh 生成一个临时密钥（装得上，但换一次构建就升不了级）
+        env:
+          KS_B64: ${{ secrets.WOWTYPE_ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.WOWTYPE_ANDROID_KEYSTORE_PASS }}
+          KEY_PASS: ${{ secrets.WOWTYPE_ANDROID_KEY_PASS }}
+          KS_ALIAS: ${{ secrets.WOWTYPE_ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/wowtype-android.keystore"
+            {
+              echo "WOWTYPE_ANDROID_KEYSTORE=$RUNNER_TEMP/wowtype-android.keystore"
+              echo "WOWTYPE_ANDROID_KEYSTORE_PASS=$KS_PASS"
+              echo "WOWTYPE_ANDROID_KEY_PASS=$KEY_PASS"
+              if [ -n "$KS_ALIAS" ]; then echo "WOWTYPE_ANDROID_KEY_ALIAS=$KS_ALIAS"; fi
+            } >> "$GITHUB_ENV"
+          fi
+      - name: 打包 APK（arm64）
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then export WOWTYPE_VERSION=${GITHUB_REF_NAME#v}; fi
+          android/build.sh dist/data dist/android
+      - name: 检查 APK
+        run: |
+          apk=$(ls dist/android/WowType-*-android-arm64-v8a.apk)
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libwowtype.so'
+          unzip -l "$apk" | grep -q 'assets/wowtype/lexicon.tsv'
+          # 微信的语音模型、NNLM 不能进安装包
+          if unzip -l "$apk" | grep -Ei 'wtlocal|nnlm|gguf|HY-MT|wetype'; then
+            echo "APK 里有不能分发的模型"; exit 1
+          fi
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          # 叫 pkg-*：发版任务按 pkg-* 收安装包
+          name: pkg-android-arm64
+          path: dist/android/WowType-*-android-arm64-v8a.apk
+
   data:
     name: 词库（rime-ice）
     runs-on: ubuntu-24.04
@@ -568,7 +637,7 @@ jobs:
   release:
     name: 发布
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [installer, core, data, data-wanxiang, addon, arch, fedora, nix, macos-app]
+    needs: [installer, core, data, data-wanxiang, addon, arch, fedora, nix, macos-app, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -637,6 +706,13 @@ jobs:
           \`\`\`
 
           或者下载 \`WowType-${GITHUB_REF_NAME#v}-macos.pkg\` 双击安装。安装包没有 Apple 开发者签名：第一次打开时系统会说无法验证，点「完成」，再到「系统设置 → 隐私与安全性」往下找到 WowType，点「仍要打开」。
+
+          ## 安装（Android 7.0 以上，arm64 优先）
+
+          下载 \`WowType-${GITHUB_REF_NAME#v}-android-arm64-v8a.apk\`，用 \`adb install\`，或者传到手机上点开安装（要允许「安装未知应用」）。
+          装完打开 WowType，点「启用 WowType」在系统设置里打开它，再在任何输入框里长按地球键选 WowType。
+          词库和语言模型都在包里，第一次载入要几秒，不联网；模拟器 / Chromebook 用 \`WowType-${GITHUB_REF_NAME#v}-android-x86_64.apk\`。
+          这一版还没有语音、互译、工具栏和表情面板，也还没有双拼 / 五笔 / 模糊音的设置入口，详见仓库里的 \`android/README.md\`。
 
           安装包里的词库来自 [rime-ice](https://github.com/iDvel/rime-ice)（GPL-3.0），词频另用了 [Tatoeba](https://tatoeba.org) 的中文句子（CC BY 2.0 FR）统计，词级语言模型 words.lm 和整句增强模型 nnlm.bin 是 CC BY-SA 4.0；详见安装包里的 DATA-SOURCE.txt。
           五笔 86 码表 wubi86.tsv 来自 [rime-wubi](https://github.com/rime/rime-wubi)（LGPL-3.0），作者和钉死的提交见随包的 WUBI-AUTHORS、WUBI-SOURCE.txt。

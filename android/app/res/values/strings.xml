@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WowType</string>
+    <string name="ime_name">WowType 拼音</string>
+    <string name="subtype_pinyin">拼音</string>
+
+    <string name="setup_intro">一个本地拼音输入法：整句一次打完、打一半就有词、按错键也能认出来，越用越懂你。不联网，输入内容不离开手机。</string>
+    <string name="setup_enabled">已在系统输入法里启用。长按键盘上的地球键就能选 WowType。</string>
+    <string name="setup_disabled">还没启用：点下面的「启用 WowType」，在系统设置里打开它。</string>
+    <string name="setup_enable">启用 WowType</string>
+    <string name="setup_choose">选择输入法</string>
+    <string name="setup_load">载入词库</string>
+    <string name="setup_loading">正在载入词库…</string>
+    <string name="setup_usage">用法：拼音候选在键盘上方，点候选上屏；空格选第一个，回车把拼音原样上屏；「中/英」切输入模式；逗号句号在中文模式上屏全角标点。词库和语言模型都在安装包里，第一次载入要几秒，之后就快了。</string>
+</resources>
