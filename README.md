@@ -102,6 +102,7 @@
 - deepin 的安装包只有 x86_64
 - **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
 - **Windows 10（1803 起）/ 11**，x64：预览版，见下面的 [Windows](#windows)
+- **Android 7.0（API 24）或更新**，arm64 优先，见下面的 [安卓](#安卓)
 
 ### 一行命令安装（推荐）
 
@@ -183,6 +184,18 @@ Windows 10 1803 或更新、Windows 11，x64。**预览版**：输入行为和 L
   正在用着输入法的应用重新打开以后用新版
 - 卸载：「设置 → 应用 → 已安装的应用」里找到「WowType 输入法」。学到的词和设置留在 `%LOCALAPPDATA%\WowType`
 - 还没有的、和另两端不一样的地方见 [docs/WINDOWS.md](docs/WINDOWS.md)
+
+### 安卓
+
+Android 7.0（API 24）或更新，**优先 arm64（arm64-v8a）**；也有 x86_64 包（模拟器 / Chromebook）。
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `WowType-<版本>-android-arm64-v8a.apk`，
+用 `adb install` 装，或者传到手机上点开装（要允许「安装未知应用」）。装完打开 WowType，
+点「启用 WowType」在系统设置里打开它，再在任何输入框里长按地球键选 WowType。
+词库和语言模型都在 APK 里，第一次载入要几秒；不联网，输入内容不离开手机。
+
+这一版没有语音、互译、工具栏和表情面板，也还没有双拼 / 五笔 / 模糊音的设置入口，见 [android/README.md](android/README.md)。
+安装包是自签名的（没有上架应用商店）。
 
 ### 手动安装
 
