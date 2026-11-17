@@ -1988,7 +1988,14 @@ bool WowtypeEngine::handleShiftKey(fcitx::InputContext *ic, WowtypeState *state,
         return false;
     }
     followSessionMode(ic, state, frame);
-    event.filterAndAccept();
+    // 按下的 Shift 已交给应用，松开也要配对交回去，否则 IDEA 等应用收不到双击 Shift。
+    // filter 阻止后续输入法处理，但不 accept，前端仍可把原始事件交给应用。
+    // xkb 将松开翻成布局切换键时仍消费，避免额外触发应用的布局切换行为。
+    if (isShift) {
+        event.filter();
+    } else {
+        event.filterAndAccept();
+    }
     return true;
 }
 

@@ -1235,6 +1235,19 @@ void runCases(Instance &instance) {
           "默认（都用来选词）左键不动编辑区的光标：@" + std::to_string(ic->inputPanel().preedit().cursor()));
     fresh(ic.get());
 
+    // IDEA 双击 Shift 要收到两组完整事件；左右 Shift 各测一轮，不以延迟切换换取双击。
+    for (const auto sym : {FcitxKey_Shift_L, FcitxKey_Shift_R}) {
+        for (int tap = 0; tap < 2; ++tap) {
+            KeyEvent press(ic.get(), Key(sym), false);
+            check(!ic->keyEvent(press), "双击 Shift：按下交给应用");
+            KeyEvent release(ic.get(), Key(sym, KeyState::Shift), true);
+            check(!ic->keyEvent(release) && release.filtered(),
+                  "双击 Shift：松开交给应用且不再进入后续输入法处理");
+            check(instance.inputMethodLabel(ic.get()) == (tap == 0 ? "英" : "中"),
+                  "双击 Shift：每次立即切换，两次回到原来的中文模式");
+        }
+    }
+
     // 单按 Shift 切英文（#28）：右 Shift 不是 fcitx 默认的临时切换键，走的是 WowType 自己的英文模式
     const auto tapShift = [&](KeySym sym) {
         KeyEvent press(ic.get(), Key(sym), false);
@@ -1243,7 +1256,7 @@ void runCases(Instance &instance) {
         return ic->keyEvent(release);
     };
     check(instance.inputMethodLabel(ic.get()) == "中", "中文时提示「中」：" + instance.inputMethodLabel(ic.get()));
-    check(tapShift(FcitxKey_Shift_R), "单按右 Shift 被接住");
+    check(!tapShift(FcitxKey_Shift_R), "单按右 Shift 切换后松开交给应用");
     check(instance.inputMethodLabel(ic.get()) == "英", "英文时提示「英」：" + instance.inputMethodLabel(ic.get()));
     type(ic.get(), "nihao,");
     check(ic->committed.empty() && ic->passed == "nihao," && preedit(ic.get()).empty(),
@@ -1254,7 +1267,7 @@ void runCases(Instance &instance) {
     check(ic->committed == "你好", "再按一次回到中文：" + ic->committed);
     fresh(ic.get());
     type(ic.get(), "nih");
-    tapShift(FcitxKey_Shift_R);
+    check(!tapShift(FcitxKey_Shift_R), "有预编辑文本时 Shift 松开也交给应用");
     check(ic->committed == "nih" && preedit(ic.get()).empty(), "打到一半切英文，字母原样上屏：" + ic->committed);
     tapShift(FcitxKey_Shift_R);
     fresh(ic.get());
@@ -1328,7 +1341,7 @@ void runCases(Instance &instance) {
                        Key(FcitxKey_ISO_Next_Group, KeyState::Shift, 50)) &&
                   english(),
               "松开时符号变了（同一键码）也算单按 Shift");
-        check(tapCoded(Key(FcitxKey_Shift_R, KeyStates(), 62), Key(FcitxKey_Shift_R, KeyStates(), 62)) &&
+        check(!tapCoded(Key(FcitxKey_Shift_R, KeyStates(), 62), Key(FcitxKey_Shift_R, KeyStates(), 62)) &&
                   !english(),
               "松开时状态里没带 Shift 也切换（切回中文）");
         check(!tapCoded(Key(FcitxKey_Shift_L, KeyStates(), 50), Key(FcitxKey_Shift_R, KeyState::Shift, 62)) &&
@@ -1345,7 +1358,7 @@ void runCases(Instance &instance) {
             KeyEvent repeat(ic.get(), Key(FcitxKey_Shift_R, KeyState::Repeat, 62), false);
             ic->keyEvent(repeat);
             KeyEvent release(ic.get(), Key(FcitxKey_Shift_R, KeyState::Shift, 62), true);
-            check(ic->keyEvent(release) && english(), "按住 Shift 有自动重复也算单按");
+            check(!ic->keyEvent(release) && english(), "按住 Shift 有自动重复也算单按，松开交给应用");
             tapShift(FcitxKey_Shift_R);
             check(!english(), "再按一下回中文");
         }
@@ -1366,7 +1379,7 @@ void runCases(Instance &instance) {
         }
         instance.setCurrentInputMethod(ic.get(), "wowtype", true);
         check(instance.inputMethod(ic.get()) == "wowtype" && !english(), "回到 WowType 中文");
-        check(tapShift(FcitxKey_Shift_R) && english(), "清掉以后右 Shift 又归 WowType");
+        check(!tapShift(FcitxKey_Shift_R) && english(), "清掉以后右 Shift 切换模式并交给应用");
         tapShift(FcitxKey_Shift_R);
         check(!english(), "回中文");
     }
