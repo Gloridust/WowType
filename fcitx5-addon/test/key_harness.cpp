@@ -1703,6 +1703,49 @@ void runCases(Instance &instance) {
         check(!english(), "测完回到中文");
     }
     {
+        // #254：换窗口、换应用时按 WindowMode 定中 / 英；默认 Same，和以前一样不动
+        const auto english = [&]() {
+            fresh(ic.get());
+            type(ic.get(), "a");
+            const bool ascii = ic->passed == "a" && preedit(ic.get()).empty();
+            fresh(ic.get());
+            return ascii;
+        };
+        const auto switchWindow = [&]() {
+            ic->focusOut();
+            ic->focusIn();
+        };
+        std::ofstream(configDir + "/wowtype.conf") << "WindowMode=English\n";
+        addon->reloadConfig();
+        switchWindow();
+        check(english(), "WindowMode=English：换窗口后是英文");
+        // 在窗口里切回中文，再换窗口又按默认定成英文
+        tapShift(FcitxKey_Shift_R);
+        check(!english(), "单按 Shift 还是能切回中文");
+        switchWindow();
+        check(english(), "再换窗口又回到默认的英文");
+        // 只设了 WindowMode、没设 InitialMode 时，切输入法仍按 InitialMode 的默认中文
+        instance.setCurrentInputMethod(ic.get(), "testim", true);
+        instance.setCurrentInputMethod(ic.get(), "wowtype", true);
+        check(!english(), "切输入法时 InitialMode 优先，回到中文");
+        // WindowMode=Chinese：换窗口定成中文
+        std::ofstream(configDir + "/wowtype.conf") << "WindowMode=Chinese\n";
+        addon->reloadConfig();
+        tapShift(FcitxKey_Shift_R);
+        check(english(), "先切到英文");
+        switchWindow();
+        check(!english(), "WindowMode=Chinese：换窗口后是中文");
+        // 默认 Same：换窗口保持当前模式（和以前一样）
+        std::filesystem::remove(configDir + "/wowtype.conf");
+        addon->reloadConfig();
+        tapShift(FcitxKey_Shift_R);
+        check(english(), "默认 WindowMode：先在当前窗口切到英文");
+        switchWindow();
+        check(english(), "WindowMode 默认 Same：换窗口还是英文");
+        tapShift(FcitxKey_Shift_R);
+        check(!english(), "测完回到中文");
+    }
+    {
         // #82：认 Shift 松开要看键码。xkb 选项（grp:shifts_toggle 等）或 fcitx5 按输入法布局重新翻译时，
         // 松开那一下 Shift 已经算按着，同一个键（左 Shift 键码 50）可能翻成 ISO_Next_Group
         const auto english = [&]() {

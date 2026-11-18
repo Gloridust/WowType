@@ -345,6 +345,7 @@ DEFAULTS = {
     "WubiHint": "True",
     "ShiftToggle": "Both",
     "InitialMode": "Chinese",
+    "WindowMode": "Same",
     "Traditional": "False",
     "PunctuationStyle": "Fullwidth",
     "SelectKeys": "Off",
@@ -483,6 +484,13 @@ INITIAL_MODES = [
     ("和上次切走时一样", "Last"),
 ]
 
+# 换到新窗口、新应用时的默认中 / 英（#254）
+WINDOW_MODES = [
+    ("和上次一样", "Same"),
+    ("中文", "Chinese"),
+    ("英文", "English"),
+]
+
 # 枚举项认哪些写法（区分大小写，认不出的读成默认值，和插件、macOS 一样，见 spec/config.json）
 ENUMS = {
     "CandidateLayout": ("Horizontal", "Vertical"),
@@ -491,6 +499,7 @@ ENUMS = {
     "ShuangpinScheme": tuple(value for _label, value in SHUANGPIN_SCHEMES),
     "ShiftToggle": tuple(value for _label, value in SHIFT_TOGGLES),
     "InitialMode": tuple(value for _label, value in INITIAL_MODES),
+    "WindowMode": tuple(value for _label, value in WINDOW_MODES),
     "PunctuationStyle": tuple(value for _label, value in PUNCT_STYLES),
     "SelectKeys": tuple(value for _label, value in SELECT_KEYS),
     "TranslateTarget": tuple(code for _label, code, _english in TRANSLATE_LANGUAGES),
@@ -5012,6 +5021,35 @@ class SettingsWindow(Adw.ApplicationWindow):
             check.connect("toggled", self.on_scheme_toggled, scheme)
         page.add(mode)
 
+        defaults = Adw.PreferencesGroup(title="默认状态")
+        defaults.set_header_suffix(self.info_button(
+            "换到新窗口、新应用时用哪种模式。默认「和上次一样」，中英文照旧全局保持；"
+            "选了中文或英文，每次换到新窗口、新应用都先定成它。"))
+        self.window_names = [name for _, name in WINDOW_MODES]
+        self.window_row = Adw.ComboRow(
+            title="默认中/英文",
+            subtitle="换到新窗口、新应用时；和上次一样就不变",
+            model=Gtk.StringList.new([label for label, _ in WINDOW_MODES]))
+        current = self.values.get("WindowMode", "Same")
+        self.window_row.set_selected(
+            self.window_names.index(current) if current in self.window_names else 0)
+        self.window_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "WindowMode", self.window_names[row.get_selected()]))
+        defaults.add(self.window_row)
+        self.punct_names = [name for _, name in PUNCT_STYLES]
+        self.punct_row = Adw.ComboRow(
+            title="默认全角/半角",
+            subtitle="中文标点还是英文标点",
+            model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
+        self.add_info(self.punct_row, "数字后面的符号总是半角的，比如 3.14。")
+        current = self.values.get("PunctuationStyle", "Fullwidth")
+        self.punct_row.set_selected(
+            self.punct_names.index(current) if current in self.punct_names else 0)
+        self.punct_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "PunctuationStyle", self.punct_names[row.get_selected()]))
+        defaults.add(self.punct_row)
+        page.add(defaults)
+
         switch = Adw.PreferencesGroup(title="中英文切换")
         switch.set_header_suffix(self.info_button(
             "单按一下 Shift 切到英文，字母和半角标点直接上屏，再按一下回到中文。"
@@ -5065,16 +5103,6 @@ class SettingsWindow(Adw.ApplicationWindow):
         rare = self.make_switch("RareExtChars", "更多生僻字", "要装能显示它们的字体，比如 fonts-hanazono")
         self.add_info(rare, "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。")
         pinyin.add(rare)
-        self.punct_names = [name for _, name in PUNCT_STYLES]
-        self.punct_row = Adw.ComboRow(
-            title="标点样式", model=Gtk.StringList.new([label for label, _ in PUNCT_STYLES]))
-        self.add_info(self.punct_row, "数字后面的符号总是半角的，比如 3.14。")
-        current = self.values.get("PunctuationStyle", "Fullwidth")
-        self.punct_row.set_selected(
-            self.punct_names.index(current) if current in self.punct_names else 0)
-        self.punct_row.connect("notify::selected", lambda row, _p: self.set_value(
-            "PunctuationStyle", self.punct_names[row.get_selected()]))
-        pinyin.add(self.punct_row)
         page.add(pinyin)
 
         extras = Adw.PreferencesGroup(title="快捷输入")

@@ -1116,6 +1116,7 @@ void WowtypeEngine::applyConfig() {
         translateMode_ = false;
     }
     initialMode_ = *config_.initialMode;
+    windowMode_ = *config_.windowMode;
     punctStyle_ = *config_.punctStyle;
     if (const char *env = std::getenv("WOWTYPE_PUNCT_STYLE"); env && *env) {
         const std::string name = env;
@@ -2164,7 +2165,7 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     clearTranslation(state);
     coreReady();
     // 从别的输入法切回来（不是换窗口获得焦点）、启动后第一次用：按「切到 WowType 时」定中 / 英
-    // （#158：切走时是英文，切回来还是英文，打不了中文）。换窗口不动，模式照旧全局保持；
+    // （#158：切走时是英文，切回来还是英文，打不了中文）。换窗口默认不动，模式照旧全局保持；
     // 进出密码框时 fcitx5 自己换成键盘布局再换回来（CapabilityChanged），也不算用户切回来。
     bool switchedBack = false;
     if (event.type() == fcitx::EventType::InputContextSwitchInputMethod) {
@@ -2174,6 +2175,11 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     if (switchedBack || !initialModeApplied_) {
         initialModeApplied_ = true;
         applyInitialMode(ic, state);
+    }
+    // 换窗口、换应用获得焦点：设了「默认中/英文」就定一次（#254；默认和上次一样，不动）。
+    // 切换输入法的事件优先，别让两边抢着定。
+    if (!switchedBack && event.type() == fcitx::EventType::InputContextFocusIn) {
+        applyWindowMode(ic, state);
     }
     // 最近用过的 emoji 在核心里（所有输入框共用），存在 ~/.local/share/wowtype/emoji-recent.txt
     wowtype_recent_emoji_path(recentEmojiPath().c_str());
@@ -2322,6 +2328,18 @@ void WowtypeEngine::applyInitialMode(fcitx::InputContext *ic, WowtypeState *stat
     }
     // 切不回中文时不进英文
     const bool english = initialMode_ == WowtypeInitialMode::English && canToggleMode();
+    if (english == asciiMode_ && !translateMode_) {
+        return;
+    }
+    switchMode(ic, state, english, false, false);
+}
+
+void WowtypeEngine::applyWindowMode(fcitx::InputContext *ic, WowtypeState *state) {
+    if (windowMode_ == WowtypeWindowMode::Same) {
+        return;
+    }
+    // 和 applyInitialMode 一样：切不回中文时不进英文；「译」里换窗口也回到默认的中 / 英
+    const bool english = windowMode_ == WowtypeWindowMode::English && canToggleMode();
     if (english == asciiMode_ && !translateMode_) {
         return;
     }
