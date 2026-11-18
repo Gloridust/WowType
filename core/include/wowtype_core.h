@@ -100,7 +100,7 @@ int wowtype_engine_load_wubi(WowtypeEngineHandle *engine, const char *path);
 const char *wowtype_fullwidth_punct(int ascii_codepoint);
 
 /* 按标点样式转换：style 0 全角、1 半角；prev 是光标前一个字符（不知道传 0）。
- * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字后面的符号）。 */
+ * 返回 NULL 表示原样上屏这个 ASCII 字符（半角样式、数字写法里的符号）。 */
 const char *wowtype_punct(int ascii_codepoint, int style, int prev_codepoint);
 
 /* 中英文之间自动补空格（ABI 1.2 起）：prev 是光标前一个字，next 是要上屏的第一个字；
@@ -394,7 +394,7 @@ typedef struct {
     uint32_t modifiers; /* WOWTYPE_MOD_* */
     uint32_t release;   /* 0 按下，1 松开 */
     uint32_t prev_char; /* 应用里光标前一个字符（Unicode 码位），读不到给 0。1.10 起会话按它决定
-                         * 数字后面的标点保持英文（读不到时看会话自己记的上一个字）、要不要自动补空格
+                         * 数字写法里的标点保持英文（读不到时看会话自己记的上一个字）、要不要自动补空格
                          * （读不到就不补），带 WOWTYPE_KEY_HINT_SURROUNDING 时还拿它核对会话记的上文 */
     uint32_t action;    /* WOWTYPE_KEY_ACTION_*（1.6 起） */
     uint32_t hints;     /* 1.10 起：WOWTYPE_KEY_HINT_*，输入框的情况 */

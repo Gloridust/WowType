@@ -236,6 +236,11 @@ void runCases(Instance &instance) {
               std::string(text) + " 原样（数字后的符号不换成中文标点），实际 上屏「" + ic->committed +
                   "」交给应用「" + ic->passed + "」");
     }
+    // 顿号没有半角形态：数字后面按 \ 还是顿号（#250）
+    fresh(ic.get());
+    type(ic.get(), "1\\");
+    check(ic->passed == "1" && ic->committed == "、", "1\\ -> 1、，实际 上屏「" + ic->committed +
+                                                       "」交给应用「" + ic->passed + "」");
     // 以词定字（#83）：[ 取首选的第一个字，] 取最后一个字；单字时照常先上屏再出【】
     fresh(ic.get());
     type(ic.get(), "nihao[");

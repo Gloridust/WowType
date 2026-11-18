@@ -1592,6 +1592,17 @@ fn punctuation_after_digit_stays_ascii() {
     assert!(!type_keys(&mut session, "3").handled);
     assert!(!type_keys(&mut session, "<bs>").handled);
     assert_eq!(type_keys(&mut session, ".").commit.as_deref(), Some("。"));
+    // 顿号没有半角形态：数字后面按 \ 照样上屏「、」（#250）
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "1").handled);
+    assert_eq!(type_keys(&mut session, "\\").commit.as_deref(), Some("、"));
+    // 问号、括号也没有可信的半角形态
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "1").handled);
+    assert_eq!(type_keys(&mut session, "?").commit.as_deref(), Some("？"));
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "1").handled);
+    assert_eq!(type_keys(&mut session, ")").commit.as_deref(), Some("）"));
 }
 
 #[test]

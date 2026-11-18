@@ -448,7 +448,7 @@ private struct InputPage: View {
                       info: "候选里也列出极少用的生僻字。系统自带的字体一般显示不了，会是方块。",
                       isOn: $model.config.rareExtChars)
             RowDivider()
-            PickerRow(title: "标点样式", info: "数字后面的符号总是半角的，比如 3.14。",
+            PickerRow(title: "标点样式", info: "数字写法里的符号保持半角，比如 3.14、20:22；顿号、问号照常全角。",
                       selection: $model.config.halfwidthPunct, options: [("全角 ，。", false), ("半角 , .", true)])
         }
 

@@ -286,6 +286,14 @@ do {
 
 do {
     let (c, client) = fresh()
+    // 顿号没有半角形态：数字后面按 \ 还是顿号（#250）
+    check(!c.handle(.char("1")), "数字交给应用")
+    _ = c.handle(.char("\\"))
+    check(client.committed == "、", "1\\ -> 1、", client.committed)
+}
+
+do {
+    let (c, client) = fresh()
     // 不在打字时数字、快捷键交给应用
     check(!c.handle(.char("1")), "数字交给应用")
     check(!c.handle(.char("c", .command)), "Command+C 交给应用")

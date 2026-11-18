@@ -110,7 +110,7 @@ pub struct Key {
     /// 松开（按下是 false）。
     pub release: bool,
     /// 应用里光标前一个字符（外壳读周围文字得到），读不到是 None（带 [`key_hints::SURROUNDING`] 时是光标前没有字）。
-    /// 数字后面的标点保持英文、自动空格、核对上文都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
+    /// 数字写法里的标点保持英文、自动空格、核对上文都看它；读不到时标点看会话自己记的上一个字，自动空格不补。
     pub prev_char: Option<char>,
     /// 外壳认出来的全局热键（翻页、移光标），没有是 None。
     pub action: KeyAction,
@@ -1828,7 +1828,7 @@ impl<'e> Session<'e> {
     /// 字母、隔音符以外的可见 ASCII 字符（标点、符号、数字），会话的选词、翻页规则都没用上它时。
     ///
     /// - 正在输入：先上屏候选（光标停在句首词上时接着选，直到整句上屏），再上屏这个字符
-    ///   （全角样式下有中文标点的换成中文标点，数字后面的保持英文）
+    ///   （全角样式下有中文标点的换成中文标点，数字写法里的符号保持英文）
     /// - 没在输入：有中文标点的换成中文标点上屏；数字前面要补空格（汉字后面打数字）就自己上屏；
     ///   别的交给应用
     fn symbol_key(&mut self, c: char, key: &Key) -> bool {
@@ -1848,7 +1848,7 @@ impl<'e> Session<'e> {
             return true;
         }
         if self.translating() {
-            // 互译时打的字都进原文：数字、没有中文写法的符号、数字后面的点（3.14）也是
+            // 互译时打的字都进原文：数字、没有中文写法的符号、数字写法里的点（3.14）也是
             let text = self.punct_text(c, self.last_char).unwrap_or_else(|| c.to_string());
             self.emit(&text);
             return true;
@@ -1873,7 +1873,7 @@ impl<'e> Session<'e> {
         }
     }
 
-    /// c 在全角样式下换成的中文标点；半角样式、数字后面、没有中文标点的是 None。
+    /// c 在全角样式下换成的中文标点；半角样式、数字写法里的符号、没有中文标点的是 None。
     fn punct_text(&mut self, c: char, prev: Option<char>) -> Option<String> {
         crate::symbols::punct_with(c, self.config.punct_style, prev, &mut self.quotes).map(str::to_owned)
     }

@@ -186,7 +186,7 @@ public protocol TextClient: AnyObject {
     func setMarkedText(_ text: String, cursor: Int)
     /// 画候选框；nil 表示收起。
     func showCandidates(_ page: CandidatePage?)
-    /// 光标前一个字符（Unicode 码位），不知道给 0。数字后面的符号（3.14、20:22）要原样上屏。
+    /// 光标前一个字符（Unicode 码位），不知道给 0。数字写法里的符号（3.14、20:22）要原样上屏。
     var previousCharacter: UInt32 { get }
     /// 能把打的字发去翻译。密码框之类（macOS 上是系统开着安全输入时）照常打中文，不往外发。
     var allowsTranslation: Bool { get }
@@ -552,13 +552,13 @@ public final class Composer {
 
     private func handleIdle(_ key: KeyInput) -> Bool {
         // 都交给会话：字母开始编辑区（大写原样保留，Hello、iPhone 出英文候选）；
-        // 标点换成中文标点（半角样式、数字后面的、没有中文写法的交给应用）；
+        // 标点换成中文标点（半角样式、数字写法里的符号、没有中文写法的交给应用）；
         // 汉字后面打数字要补空格时会话自己上屏（第 5 章）；退格、方向键、回车这些交给应用，
         // 会话借这一下知道应用里的字可能变了（上文作废）
         if sendToSession(key) {
             return true
         }
-        // 互译时打的字都要进原文：会话交给应用的（数字后面的点 3.14、半角标点）原样进原文
+        // 互译时打的字都要进原文：会话交给应用的（数字写法里的点 3.14、半角标点）原样进原文
         if translating, let c = key.ascii, c > 0x20, c < 0x7f, !key.isLetter {
             insert(String(UnicodeScalar(c)))
             return true
@@ -607,7 +607,7 @@ public final class Composer {
             raw.hints |= WOWTYPE_KEY_HINT_NO_AUTO_SPACE
         } else {
             // 应用告诉的才给（自己猜的给 0）：会话按它决定要不要补空格、核对自己记的上文；
-            // 数字后面的标点它自己也记
+            // 数字写法里的标点它自己也记
             raw.prev_char = reliablePreviousCharacter
             if raw.prev_char != 0 {
                 raw.hints |= WOWTYPE_KEY_HINT_SURROUNDING

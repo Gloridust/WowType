@@ -2144,7 +2144,7 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     }
 
     // 没在打字时也交给会话：字母（大写原样保留，Hello、iPhone 要用到）开始编辑区；
-    // 标点换成中文标点（半角样式、数字后面的、没有中文写法的 / + 交给应用）；
+    // 标点换成中文标点（半角样式、数字写法里的符号、没有中文写法的 / + 交给应用）；
     // 汉字后面打数字要补空格时会话自己上屏（第5章）
     if (const WowtypeFrame *frame = sessionKey(ic, state, key); frame && frame->handled) {
         applySessionFrame(ic, state, frame);

@@ -118,7 +118,8 @@ pub enum PunctStyle {
 /// 按样式和光标前一个字符决定标点。返回 `None` 表示原样上屏这个 ASCII 字符。
 ///
 /// - 半角样式：一律原样上屏
-/// - 全角样式：数字后面的符号一律原样（3.14、20:22、3,000、50%），不换成中文标点
+/// - 全角样式：数字后面的小数点、千分位、时间这些保持英文（3.14、20:22、3,000、50%）；
+///   顿号、问号之类没有半角形态的照常换成中文标点（1、）
 ///
 /// 引号左右交替的状态记在线程里（C 接口 `wowtype_punct` 用）；会话用 [`punct_with`]，各记各的。
 pub fn punct(ascii: char, style: PunctStyle, prev: Option<char>) -> Option<&'static str> {
@@ -129,6 +130,13 @@ pub fn punct(ascii: char, style: PunctStyle, prev: Option<char>) -> Option<&'sta
         out
     })
 }
+
+/// 数字后面仍保持半角的符号：小数、千分位、时间、范围、金额、幂、比较、下标。
+/// 它们的半角形态本身是数字写法的一部分，换成全角就错了。
+///
+/// 其余标点不进这张表：`\` 换成的是顿号，`?` `!` `;`、括号、引号也没有可信的
+/// 半角写法，数字后面照常换成中文标点（#250）。
+const NUMERIC_PUNCT: &str = ".,:%$~^_<>[]";
 
 /// 同 [`punct`]，引号左右交替的状态由调用方保管（每个输入会话一份：在 A 应用里开的引号，
 /// 到 B 应用里不该变成右引号）。`quotes` 是双引号、单引号各自上一次给的是不是左引号。
@@ -141,7 +149,7 @@ pub fn punct_with(
     if style == PunctStyle::Halfwidth {
         return None;
     }
-    if prev.is_some_and(|c| c.is_ascii_digit()) {
+    if prev.is_some_and(|c| c.is_ascii_digit()) && NUMERIC_PUNCT.contains(ascii) {
         return None;
     }
     if ascii == '"' || ascii == '\'' {
@@ -229,8 +237,8 @@ mod tests {
     #[test]
     fn punct_after_digit_stays_ascii() {
         use PunctStyle::*;
-        // 3.14、20:22、3,000、50%：数字后面的符号都原样
-        for c in ['.', ':', ',', ';', '(', ')', '$', '~', '"', '}'] {
+        // 3.14、20:22、3,000、50%、3~5、5$、3^2、3<5、a[3]：数字写法里的符号都原样
+        for c in ['.', ':', ',', '%', '$', '~', '^', '_', '<', '>', '[', ']'] {
             assert_eq!(punct(c, Fullwidth, Some('3')), None, "{c}");
         }
         assert_eq!(punct('.', Fullwidth, Some('好')), Some("。"));
@@ -238,6 +246,19 @@ mod tests {
         assert_eq!(punct(':', Fullwidth, Some('好')), Some("："));
         // 全角数字不算
         assert_eq!(punct(':', Fullwidth, Some('３')), Some("："));
+
+        // 顿号没有半角形态，数字后面照常是「、」；问号、括号、直角引号也一样（#250）
+        assert_eq!(punct('\\', Fullwidth, Some('1')), Some("、"));
+        assert_eq!(punct('\\', Fullwidth, Some('好')), Some("、"));
+        assert_eq!(punct('?', Fullwidth, Some('3')), Some("？"));
+        assert_eq!(punct('!', Fullwidth, Some('3')), Some("！"));
+        assert_eq!(punct(';', Fullwidth, Some('3')), Some("；"));
+        assert_eq!(punct(')', Fullwidth, Some('3')), Some("）"));
+        assert_eq!(punct('}', Fullwidth, Some('3')), Some("」"));
+        assert!(punct('"', Fullwidth, Some('3')).is_some());
+        assert!(punct('\'', Fullwidth, Some('3')).is_some());
+        // 半角样式还是原样
+        assert_eq!(punct('\\', Halfwidth, Some('1')), None);
     }
 
     /// 主流输入法的写法：Shift+6 省略号、Shift+- 破折号、Shift+4 人民币符号、` 间隔号。
