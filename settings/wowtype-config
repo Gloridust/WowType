@@ -107,6 +107,9 @@ def _xdg(name, fallback):
 
 
 CONFIG_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "fcitx5", "conf", "wowtype.conf")
+# 设置窗口自己的外观（主题、强调色、自定义 CSS），和输入法设置分开存：fcitx5 写 wowtype.conf 时会
+# 丢它不认识的项，界面偏好不能放那里
+UI_CONFIG_FILE = os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "wowtype", "ui.json")
 DATA_DIR = os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "wowtype")
 CUSTOM_FILE = os.environ.get("WOWTYPE_CUSTOM") or os.path.join(DATA_DIR, "custom.tsv")
 VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
@@ -379,6 +382,18 @@ DEFAULTS = {
     "Lexicon": "",
 }
 
+# 设置窗口自己的外观。存在 UI_CONFIG_FILE，不写进 wowtype.conf。
+UI_DEFAULTS = {
+    "theme": "System",       # System / Light / Dark
+    "accent": "#0EAF76",     # #rrggbb
+    "stylesheet": "",        # 自定义 CSS 文件路径，留空不用
+}
+UI_THEMES = [
+    ("跟随系统", "System"),
+    ("浅色", "Light"),
+    ("深色", "Dark"),
+]
+
 # 数字项的范围（界面上的数字框），和插件的 IntConstrain 一样
 RANGES = {
     "PageSize": (3, 9),
@@ -496,48 +511,192 @@ ENUMS = {
     "TranslateTarget": tuple(code for _label, code, _english in TRANSLATE_LANGUAGES),
 }
 
-# 设置窗口的样式（照微信输入法：薄荷绿渐变侧栏、绿色选中块、白色圆角卡片）
-GREEN = "#0EAF76"
+# 设置窗口的样式（照微信输入法：薄荷绿渐变侧栏、强调色选中块、圆角卡片）。
+# @accent@、@fg@ 这些在 theme_css 里换成当前主题的颜色；文字颜色都写明，系统主题认错时也不会白字白底。
 STYLE_LIGHT = """
-.wt-sidebar { background-image: linear-gradient(180deg, #d9f3e6 0%, #e9f8f0 40%, #f5fbf8 100%); }
+@define-color theme_fg_color @fg@;
+@define-color theme_text_color @fg@;
+@define-color window_fg_color @fg@;
+@define-color view_fg_color @fg@;
+window, headerbar { color: @fg@; }
+.wt-sidebar { background-image: linear-gradient(180deg, #d9f3e6 0%, #e9f8f0 40%, #f5fbf8 100%); color: @fg@; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
 .wt-nav, .wt-nav row { background: transparent; }
-.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; }
-.wt-nav row:hover { background: alpha(#0EAF76, 0.10); }
-.wt-nav row:selected { background: #0EAF76; color: white; }
-.wt-nav row:selected image, .wt-nav row:selected label { color: white; }
-.wt-content, .wt-content headerbar { background: #f5f7f6; box-shadow: none; }
-.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
-.wt-content list.boxed-list { border-radius: 12px; background: white; box-shadow: 0 0 0 1px #e6eae8; }
-.wt-content preferencesgroup > box > box > label.heading { color: #6b7570; }
+.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; color: @fg@; }
+.wt-nav row:hover { background: alpha(@accent@, 0.10); }
+.wt-nav row:selected { background: @accent@; color: @accent_fg@; }
+.wt-nav row:selected image, .wt-nav row:selected label { color: @accent_fg@; }
+.wt-content, .wt-content headerbar { background: @bg@; box-shadow: none; color: @fg@; }
+.wt-content row, .wt-content button, .wt-content entry, .wt-content spinbutton { color: @fg@; }
+.wt-content button.suggested-action { color: @accent_fg@; }
+.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; color: @fg@; }
+.wt-content list.boxed-list {
+  border-radius: 12px; background: @card@; box-shadow: 0 0 0 1px @border@; color: @fg@;
+}
+.wt-content preferencesgroup > box > box > label.heading,
+.wt-content .subtitle, .wt-content .dim-label, .wt-sidebar .dim-label {
+  color: @fg_muted@; opacity: 1;
+}
 """
 STYLE_DARK = """
-.wt-sidebar { background-image: linear-gradient(180deg, #17332a 0%, #1c2a25 45%, #202523 100%); }
+@define-color theme_fg_color @fg@;
+@define-color theme_text_color @fg@;
+@define-color window_fg_color @fg@;
+@define-color view_fg_color @fg@;
+window, headerbar { color: @fg@; }
+.wt-sidebar { background-image: linear-gradient(180deg, #17332a 0%, #1c2a25 45%, #202523 100%); color: @fg@; }
 .wt-sidebar headerbar { background: transparent; box-shadow: none; }
 .wt-brand { margin: 4px 22px 18px 22px; }
 .wt-brand-name { font-weight: 800; font-size: 15pt; }
 .wt-nav, .wt-nav row { background: transparent; }
-.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; }
-.wt-nav row:hover { background: alpha(#3CCB93, 0.12); }
-.wt-nav row:selected { background: #0EAF76; color: white; }
-.wt-nav row:selected image, .wt-nav row:selected label { color: white; }
-.wt-content, .wt-content headerbar { background: #1d201f; box-shadow: none; }
-.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; }
-.wt-content list.boxed-list { border-radius: 12px; background: #282c2a; box-shadow: 0 0 0 1px #3b4144; }
-.wt-content preferencesgroup > box > box > label.heading { color: #a3aca8; }
+.wt-nav row { border-radius: 10px; margin: 2px 12px; padding: 9px 12px; color: @fg@; }
+.wt-nav row:hover { background: alpha(@accent@, 0.18); }
+.wt-nav row:selected { background: @accent@; color: @accent_fg@; }
+.wt-nav row:selected image, .wt-nav row:selected label { color: @accent_fg@; }
+.wt-content, .wt-content headerbar { background: @bg@; box-shadow: none; color: @fg@; }
+.wt-content row, .wt-content button, .wt-content entry, .wt-content spinbutton { color: @fg@; }
+.wt-content button.suggested-action { color: @accent_fg@; }
+.wt-page-title { font-weight: 800; font-size: 20pt; margin: -14px 0 -8px 0; color: @fg@; }
+.wt-content list.boxed-list {
+  border-radius: 12px; background: @card@; box-shadow: 0 0 0 1px @border@; color: @fg@;
+}
+.wt-content preferencesgroup > box > box > label.heading,
+.wt-content .subtitle, .wt-content .dim-label, .wt-sidebar .dim-label {
+  color: @fg_muted@; opacity: 1;
+}
 """
-# 开关、单选框、主按钮换成 WowType 绿（旧版 libadwaita 用命名颜色，1.6 起用 CSS 变量）
+# 开关、单选框、主按钮换成强调色（旧版 libadwaita 用命名颜色，1.6 起用 CSS 变量）
 STYLE_ACCENT = """
-@define-color accent_bg_color #0EAF76;
-@define-color accent_color %s;
-@define-color accent_fg_color #ffffff;
+@define-color accent_bg_color @accent@;
+@define-color accent_color @accent_text@;
+@define-color accent_fg_color @accent_fg@;
 .wt-warning .subtitle { color: @warning_color; }
 """
 STYLE_ACCENT_VARS = """
-:root { --accent-bg-color: #0EAF76; --accent-fg-color: #ffffff; --accent-color: %s; }
+:root { --accent-bg-color: @accent@; --accent-fg-color: @accent_fg@; --accent-color: @accent_text@; }
 """
+# libadwaita 1.6 起整窗用 CSS 变量：系统主题认错时（#255）也能让按钮、对话框和卡片一个颜色
+STYLE_THEME_VARS = """
+:root {
+  --window-bg-color: @bg@; --window-fg-color: @fg@;
+  --view-bg-color: @card@; --view-fg-color: @fg@;
+  --card-bg-color: @card@; --card-fg-color: @fg@;
+  --headerbar-bg-color: @bg@; --headerbar-fg-color: @fg@;
+  --dialog-bg-color: @card@; --dialog-fg-color: @fg@;
+  --popover-bg-color: @card@; --popover-fg-color: @fg@;
+}
+"""
+
+HEX_COLOR = re.compile(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def normalize_accent(text):
+    """`#abc` / `#aabbcc` 规整成小写 `#aabbcc`；认不出返回 None。"""
+    text = (text or "").strip()
+    if not HEX_COLOR.match(text):
+        return None
+    if len(text) == 4:
+        text = "#" + "".join(c * 2 for c in text[1:])
+    return text.lower()
+
+
+def hex_channels(text):
+    return tuple(int(text[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def hex_luminance(text):
+    """相对亮度（WCAG），0 黑、1 白。"""
+    r, g, b = (c / 255 for c in hex_channels(text))
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in (r, g, b)]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def mix_hex(first, second, amount):
+    """first 往 second 混 amount（0–1）。"""
+    a, b = hex_channels(first), hex_channels(second)
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * amount) for x, y in zip(a, b))
+
+
+def contrast_ratio(first, second):
+    """WCAG 对比度，1（一样）到 21（黑白）。"""
+    high, low = sorted((hex_luminance(first), hex_luminance(second)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def accent_text_color(accent, dark):
+    """强调色当文字时用的颜色：深色调亮、浅色调暗，至少保证 3:1。"""
+    background = "#1d201f" if dark else "#ffffff"
+    target = "#ffffff" if dark else "#000000"
+    amount = 0.45 if dark else 0.30
+    color = mix_hex(accent, target, amount)
+    while amount < 0.9 and contrast_ratio(color, background) < 3:
+        amount += 0.1
+        color = mix_hex(accent, target, amount)
+    return color
+
+
+def accent_fg_color(accent):
+    """强调色当背景时，上面的字用黑还是白；WowType 绿上仍然用白字，太浅的才换黑。"""
+    return "#ffffff" if contrast_ratio(accent, "#ffffff") >= 2.5 else "#1f2328"
+
+
+def rgba_from_hex(text):
+    rgba = Gdk.RGBA()
+    if not rgba.parse(normalize_accent(text) or UI_DEFAULTS["accent"]):
+        rgba.parse(UI_DEFAULTS["accent"])
+    return rgba
+
+
+def rgba_to_hex(rgba):
+    return "#%02x%02x%02x" % (round(rgba.red * 255), round(rgba.green * 255), round(rgba.blue * 255))
+
+
+def shorten_path(path):
+    home = os.path.expanduser("~")
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
+def theme_css(dark, accent=None):
+    """内置浅色 / 深色样式，强调色可以换；返回一整段 CSS。"""
+    accent = normalize_accent(accent) or normalize_accent(UI_DEFAULTS["accent"])
+    light = {
+        "fg": "#1f2328", "fg_muted": "#5f6b64", "bg": "#f5f7f6",
+        "card": "#ffffff", "border": "#e6eae8",
+    }
+    palette = light if not dark else {
+        "fg": "#e6e9e7", "fg_muted": "#a3aca8", "bg": "#1d201f",
+        "card": "#282c2a", "border": "#3b4144",
+    }
+    css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT
+    if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):
+        css += STYLE_ACCENT_VARS
+    if Adw.get_minor_version() >= 6:
+        css += STYLE_THEME_VARS
+    values = {
+        **palette,
+        "accent": accent,
+        "accent_text": accent_text_color(accent, dark),
+        "accent_fg": accent_fg_color(accent),
+    }
+    for name, value in values.items():
+        css = css.replace(f"@{name}@", value)
+    return css
+
+
+def system_prefers_dark():
+    """Adw.StyleManager 认不出 KDE 的深色时，再看 GTK 的主题名和「偏好深色」（#255）。"""
+    manager = Adw.StyleManager.get_default()
+    if manager.get_dark():
+        return True
+    settings = Gtk.Settings.get_default()
+    if settings is None:
+        return False
+    if settings.props.gtk_application_prefer_dark_theme:
+        return True
+    return "dark" in (settings.props.gtk_theme_name or "").lower()
+
 
 VOICE_KEYS = [
     ("右 Alt", "Alt_R"),
@@ -708,6 +867,61 @@ def write_config(values, extra):
     """存设置：和默认值不一样的项，加上原文里设置界面不认识的行（extra）原样留着。"""
     lines = config_lines(values) + list(extra)
     write_atomic(CONFIG_FILE, "\n".join(lines) + "\n" if lines else "")
+
+
+def read_ui_config():
+    """设置窗口自己的外观（UI_CONFIG_FILE）；读不出来、认不出的值用默认。"""
+    values = dict(UI_DEFAULTS)
+    try:
+        with open(UI_CONFIG_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return values
+    if not isinstance(data, dict):
+        return values
+    theme = data.get("theme")
+    if any(value == theme for _label, value in UI_THEMES):
+        values["theme"] = theme
+    accent = normalize_accent(data.get("accent"))
+    if accent:
+        values["accent"] = accent
+    stylesheet = data.get("stylesheet")
+    if isinstance(stylesheet, str):
+        values["stylesheet"] = stylesheet.strip()
+    return values
+
+
+def write_ui_config(**changes):
+    values = {**read_ui_config(), **changes}
+    values["theme"] = next((value for _label, value in UI_THEMES
+                            if value == values.get("theme")), UI_DEFAULTS["theme"])
+    values["accent"] = normalize_accent(values.get("accent")) or UI_DEFAULTS["accent"]
+    values["stylesheet"] = str(values.get("stylesheet") or "").strip()
+    write_atomic(UI_CONFIG_FILE, json.dumps(values, ensure_ascii=False, indent=2) + "\n")
+    return values
+
+
+def reset_ui_config():
+    try:
+        os.remove(UI_CONFIG_FILE)
+    except OSError:
+        pass
+
+
+def stylesheet_path(value):
+    return os.path.expanduser((value or "").strip())
+
+
+def read_stylesheet(value):
+    """自定义 CSS 的内容和出错原因（读不了返回空串）。"""
+    path = stylesheet_path(value)
+    if not path:
+        return "", None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read(256 * 1024), None
+    except (OSError, UnicodeDecodeError) as e:
+        return "", str(e)
 
 
 def log(message):
@@ -4499,6 +4713,7 @@ FileDialog = getattr(Gtk, "FileDialog", _FileDialog)
 class SettingsWindow(Adw.ApplicationWindow):
     def __init__(self, app, page=None):
         super().__init__(application=app, title="WowType 设置")
+        self.app = app
         self.fcitx = Fcitx()
         self.guesser = PinyinGuesser()
         self.values, self.extra = read_config()
@@ -4712,6 +4927,40 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.font_handler = self.font_row.connect("notify::value", self.on_font_size_changed)
         look.add(self.font_row)
         page.add(look)
+
+        ui_look = Adw.PreferencesGroup(title="设置窗口")
+        ui_look.set_header_suffix(self.info_button(
+            "只改这个设置窗口，不影响候选框。系统是深色、界面却看不清时，把主题固定成浅色或深色；"
+            "强调色和自定义 CSS 会马上生效，下次打开还留着。"))
+        self.ui_theme_names = [value for _label, value in UI_THEMES]
+        self.ui_theme_row = Adw.ComboRow(
+            title="主题",
+            subtitle="跟随系统，或者固定浅色 / 深色",
+            model=Gtk.StringList.new([label for label, _ in UI_THEMES]))
+        self.ui_theme_handler = self.ui_theme_row.connect("notify::selected", self.on_ui_theme_changed)
+        ui_look.add(self.ui_theme_row)
+
+        self.ui_accent_row = Adw.ActionRow(title="强调色", subtitle="按钮、选中项的颜色")
+        self.ui_accent_button = Gtk.ColorButton(valign=Gtk.Align.CENTER,
+                                                tooltip_text="选一个强调色（默认 WowType 绿）")
+        self.ui_accent_button.set_use_alpha(False)
+        self.ui_accent_button.connect("color-set", self.on_ui_accent_changed)
+        self.ui_accent_row.add_suffix(self.ui_accent_button)
+        ui_look.add(self.ui_accent_row)
+
+        self.ui_css_row = Adw.ActionRow(
+            title="自定义样式表",
+            subtitle="用 CSS 改颜色、字体；留空用上面的内置主题")
+        self.ui_css_choose = Gtk.Button(label="选择…", valign=Gtk.Align.CENTER)
+        self.ui_css_choose.connect("clicked", self.on_ui_css_choose)
+        self.ui_css_row.add_suffix(self.ui_css_choose)
+        self.ui_css_clear = Gtk.Button(icon_name="edit-clear-symbolic", valign=Gtk.Align.CENTER,
+                                       tooltip_text="不用自定义样式表")
+        self.ui_css_clear.connect("clicked", self.on_ui_css_clear)
+        self.ui_css_row.add_suffix(self.ui_css_clear)
+        ui_look.add(self.ui_css_row)
+        page.add(ui_look)
+        self.refresh_ui_look()
 
         # 帮助：小技巧折起来；macOS 设置窗口的「帮助」和这里一样（打开数据目录代替导出日志）
         help_group = Adw.PreferencesGroup(title="帮助")
@@ -5265,6 +5514,77 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.kimpanel.set_string(
                 "font", font_with_size(self.kimpanel.get_string("font") or KIMPANEL_DEFAULT_FONT, size))
         log(f"候选字号改成 {size:g}")
+
+    def refresh_ui_look(self):
+        """把「设置窗口」那一组对齐到 UI_CONFIG_FILE 里的值。"""
+        ui = self.app.ui
+        self.ui_theme_row.handler_block(self.ui_theme_handler)
+        self.ui_theme_row.set_selected(
+            self.ui_theme_names.index(ui["theme"]) if ui["theme"] in self.ui_theme_names else 0)
+        self.ui_theme_row.handler_unblock(self.ui_theme_handler)
+        self.ui_accent_button.set_rgba(rgba_from_hex(ui["accent"]))
+        self.ui_accent_row.set_subtitle(f"按钮、选中项的颜色（{ui['accent']}）")
+        path = stylesheet_path(ui["stylesheet"])
+        if not path:
+            self.ui_css_row.set_subtitle("用 CSS 改颜色、字体；留空用上面的内置主题")
+        elif os.path.isfile(path):
+            self.ui_css_row.set_subtitle(f"正在用 {shorten_path(path)}")
+        else:
+            self.ui_css_row.set_subtitle(f"找不到 {shorten_path(path)}，点「选择…」重新选")
+        self.ui_css_clear.set_visible(bool(path))
+
+    def save_ui_config(self, **changes):
+        try:
+            self.app.ui = write_ui_config(**changes)
+        except OSError as e:
+            log(f"设置窗口的外观没存上：{e}")
+            self.toast(f"没存上：{e}")
+            return False
+        self.app.update_style_css()
+        self.refresh_ui_look()
+        return True
+
+    def on_ui_theme_changed(self, row, _param):
+        theme = self.ui_theme_names[row.get_selected()]
+        if self.save_ui_config(theme=theme):
+            label = dict((value, label) for label, value in UI_THEMES)[theme]
+            log(f"设置窗口主题改成 {theme}")
+            self.toast(f"设置窗口已换成{label}")
+
+    def on_ui_accent_changed(self, button, _param=None):
+        accent = rgba_to_hex(button.get_rgba())
+        if self.save_ui_config(accent=accent):
+            log(f"设置窗口强调色改成 {accent}")
+            self.toast(f"强调色已换成 {accent}")
+
+    def on_ui_css_choose(self, _button):
+        dialog = FileDialog(title="选一个 CSS 样式表")
+        patterns = Gtk.FileFilter(name="CSS 样式表（*.css）")
+        patterns.add_pattern("*.css")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(patterns)
+        dialog.set_filters(filters)
+
+        def chosen(dialog, result):
+            try:
+                path = dialog.open_finish(result).get_path()
+            except GLib.Error:
+                return  # 取消
+            if path:
+                self.set_ui_stylesheet(path)
+        dialog.open(self, None, chosen)
+
+    def set_ui_stylesheet(self, path):
+        if not self.save_ui_config(stylesheet=path):
+            return
+        _css, error = read_stylesheet(path)
+        log(f"设置窗口用自定义样式表 {path}" + (f"（读不了：{error}）" if error else ""))
+        self.toast(f"样式表读不了：{error}" if error else "已用自定义样式表")
+
+    def on_ui_css_clear(self, _button):
+        self.save_ui_config(stylesheet="")
+        log("设置窗口不用自定义样式表了")
+        self.toast("已换回内置样式")
 
     def on_theme_toggled(self, row, _param):
         on = row.get_active()
@@ -6637,7 +6957,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_reset(self, *_args):
         dialog = AlertDialog(heading="恢复默认设置？",
                                  body="排列方向、模糊音、语音键等回到默认值。自定义词和翻译服务"
-                                      "（地址、模型、Key）不受影响。")
+                                      "（地址、模型、Key）不受影响。设置窗口的主题和颜色也回到默认。")
         dialog.add_response("cancel", "取消")
         dialog.add_response("reset", "恢复默认")
         dialog.set_response_appearance("reset", ResponseAppearance.DESTRUCTIVE)
@@ -6666,6 +6986,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             for key, row in self.key_rows.items():
                 row.set_selected(row.key_names.index(DEFAULTS[key]))
             self.target_row.set_selected(0)
+            reset_ui_config()
+            self.app.reload_ui_config()
+            self.refresh_ui_look()
             self.toast("已恢复默认设置")
         dialog.connect("response", answered)
         dialog.present(self)
@@ -6718,6 +7041,7 @@ class SettingsApp(Adw.Application):
         super().__init__(application_id=APP_ID,
                          flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.page = None
+        self.ui = read_ui_config()
         self.add_main_option("page", 0, GLib.OptionFlags.NONE, GLib.OptionArg.STRING,
                              "打开时显示的页面：general、input、emoji、voice、translate、words、update", "页面")
 
@@ -6731,7 +7055,7 @@ class SettingsApp(Adw.Application):
         settings = Gtk.Settings.get_default()
         settings.connect("notify::gtk-font-name", lambda *_: self.update_font_css())
         self.update_font_css()
-        # 微信输入法风格的配色，深色模式换一套
+        # 微信输入法风格的配色；主题、强调色、自定义 CSS 在「常规 → 设置窗口」里改
         self.style_css = Gtk.CssProvider()
         Gtk.StyleContext.add_provider_for_display(
             Gdk.Display.get_default(), self.style_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
@@ -6746,13 +7070,28 @@ class SettingsApp(Adw.Application):
         quoted = ", ".join('"' + f.replace('"', "") + '"' for f in families)
         css_load(self.font_css, f"window {{ font-family: {quoted}; }}")
 
+    def reload_ui_config(self):
+        self.ui = read_ui_config()
+        self.update_style_css()
+
     def update_style_css(self):
-        dark = Adw.StyleManager.get_default().get_dark()
-        accent_text = "#3CCB93" if dark else "#0a8a5c"
-        css = (STYLE_DARK if dark else STYLE_LIGHT) + STYLE_ACCENT % accent_text
-        if (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 16):
-            css += STYLE_ACCENT_VARS % accent_text
-        css_load(self.style_css, css)
+        manager = Adw.StyleManager.get_default()
+        scheme = {"Light": Adw.ColorScheme.FORCE_LIGHT,
+                  "Dark": Adw.ColorScheme.FORCE_DARK}.get(self.ui["theme"])
+        wanted = scheme if scheme is not None else Adw.ColorScheme.DEFAULT
+        if manager.get_color_scheme() != wanted:
+            manager.set_color_scheme(wanted)
+        dark = scheme == Adw.ColorScheme.FORCE_DARK if scheme is not None else system_prefers_dark()
+        css = theme_css(dark, self.ui["accent"])
+        stylesheet, error = read_stylesheet(self.ui["stylesheet"])
+        if error:
+            log(f"自定义样式表读不了（{self.ui['stylesheet']}）：{error}")
+        elif stylesheet:
+            css += "\n" + stylesheet
+        try:
+            css_load(self.style_css, css)
+        except Exception as e:  # 自定义 CSS 写坏了也不能让设置窗口打不开
+            log(f"设置窗口的样式没装上：{e}")
 
     def do_command_line(self, command_line):
         options = command_line.get_options_dict().end().unpack()

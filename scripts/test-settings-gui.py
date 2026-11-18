@@ -32,7 +32,7 @@ with open(wubi_table, "w", encoding="utf-8") as f:
 
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "settings", "wowtype-config")
 ns = runpy.run_path(path, run_name="wowtype_settings_test")
-from gi.repository import Adw, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk  # noqa: E402
 
 print(f"GTK 4.{Gtk.get_minor_version()}，libadwaita 1.{Adw.get_minor_version()}")
 if not ns["gui_supported"]():
@@ -111,6 +111,40 @@ def run(app):
         win.layout_row.set_selected(0)
         check(win.arrow_row.get_subtitle() == "← → 选词，↑ 上一页，↓ 展开更多候选", "横排的副标题不对")
     step("方向键", arrow_keys)
+
+    def ui_look():
+        # 设置窗口自己的主题、强调色、自定义样式表：存 ui.json，马上换样式
+        def accent(text):
+            color = Gdk.RGBA()
+            check(color.parse(text), f"颜色 {text} 认不出")
+            win.ui_accent_button.set_rgba(color)
+            win.on_ui_accent_changed(win.ui_accent_button)
+
+        check(win.ui_theme_row.get_selected() == 0, "主题默认不是跟随系统")
+        win.ui_theme_row.set_selected(2)
+        check(ns["read_ui_config"]()["theme"] == "Dark", "深色主题没存上")
+        win.ui_theme_row.set_selected(1)
+        check(ns["read_ui_config"]()["theme"] == "Light", "浅色主题没存上")
+        accent("#3366cc")
+        check(ns["read_ui_config"]()["accent"] == "#3366cc", "强调色没存上")
+        css_file = os.path.join(tempfile.mkdtemp(), "ui.css")
+        with open(css_file, "w", encoding="utf-8") as f:
+            f.write("window { color: #123456; }\n")
+        win.set_ui_stylesheet(css_file)
+        check(ns["read_ui_config"]()["stylesheet"] == css_file, "自定义样式表没存上")
+        check(win.ui_css_clear.get_visible(), "用了自定义样式表，清除按钮没出来")
+        win.on_ui_css_clear(None)
+        check(ns["read_ui_config"]()["stylesheet"] == "", "自定义样式表没清掉")
+        check(not win.ui_css_clear.get_visible(), "清掉样式表后清除按钮还在")
+        # 「恢复默认设置」删 ui.json：值回到默认
+        ns["write_ui_config"](theme="Dark", accent="#123456", stylesheet=css_file)
+        ns["reset_ui_config"]()
+        check(ns["read_ui_config"]() == ns["UI_DEFAULTS"], "恢复默认没清掉设置窗口的外观")
+        # 颜色换回默认，后面的用例不受影响
+        win.ui_theme_row.set_selected(0)
+        accent(ns["UI_DEFAULTS"]["accent"])
+        check(ns["read_ui_config"]()["theme"] == "System", "没回到跟随系统")
+    step("设置窗口主题和颜色", ui_look)
 
     def input_scheme():
         # 「输入方案」单选：双拼才出方案和显示打的键，五笔才出它的两个开关；双拼、五笔时计算器换大写 V、工具栏灰掉

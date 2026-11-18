@@ -313,6 +313,38 @@ macOS 还没有的功能不列；Linux 单独一页的「更新」在「常规�
   - `VoiceCopy=True` 时说的话上屏后也复制到剪贴板（密码框里不复制）。
 - 上面的环境变量 macOS 不认（输入法是系统启动的，拿不到你设的环境变量）。
 
+## 设置窗口的主题和颜色
+
+只有 Linux 的设置界面有，改的是设置窗口自己，不影响候选框。存在 `~/.config/wowtype/ui.json`：
+
+```json
+{
+  "theme": "System",
+  "accent": "#0EAF76",
+  "stylesheet": ""
+}
+```
+
+| 键 | 取值 |
+|---|---|
+| `theme` | `System` 跟随系统（默认）、`Light` 浅色、`Dark` 深色。系统深色、设置窗口却白字白底看不清时（KDE 等桌面可能认错），改成 `Light` 或 `Dark` |
+| `accent` | 强调色，`#rrggbb`，默认 WowType 绿 `#0EAF76`。按钮、开关、选中的导航用它；上面的字按深浅自动黑 / 白 |
+| `stylesheet` | 自定义 CSS 文件路径，留空不用。读不了就只用内置主题，原因写进日志 |
+
+自定义样式表接在内置样式后面，可以用 GTK CSS 改字体、颜色、间距。例子里这些类名能用：
+`.wt-sidebar`（左侧栏）、`.wt-content`（右侧内容）、`.wt-nav`（导航列表）、`.wt-page-title`（页面标题）、
+`.wt-content list.boxed-list`（卡片）。比如固定深色、把选中项换成蓝色：
+
+```css
+@define-color accent_bg_color #3366cc;
+@define-color accent_fg_color #ffffff;
+.wt-nav row:selected { background: #3366cc; }
+.wt-content list.boxed-list { background: #242424; color: #f0f0f0; }
+```
+
+改完不用重启，设置窗口马上重画。菜单里的「恢复默认设置」会把 `ui.json` 一起删掉。
+命令行也能改：直接编辑这个 JSON，或者把 `theme` 写成 `Light`。
+
 ## 数据文件
 
 词库和英文词表按这个顺序找，用第一个找到的：环境变量 → 配置里的 `Lexicon`（只管词库） → `~/.local/share/wowtype/` → `/usr/share/wowtype/`。
