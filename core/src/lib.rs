@@ -1165,6 +1165,7 @@ impl Engine {
             }
             return Ok(result);
         };
+        let completion = crate::shuangpin::has_open_key(self.config.shuangpin_scheme, display);
         let mut result = self.pinyin_candidates(&first.pinyin, Some(display), at_ms)?;
         result.retain_mut(|c| {
             let used = if is_raw_candidate(c) {
@@ -1182,7 +1183,9 @@ impl Engine {
         // 有重码时，其他读法的整句候选补在后面
         let max = self.config.max_candidates.max(1);
         for other in variants.iter().skip(1) {
-            for mut c in self.query_plain(&other.pinyin.to_ascii_lowercase(), at_ms)? {
+            for mut c in
+                self.query_plain(&other.pinyin.to_ascii_lowercase(), at_ms, completion)?
+            {
                 if result.len() >= max {
                     break;
                 }
@@ -1212,7 +1215,13 @@ impl Engine {
     ) -> Result<Vec<Candidate>> {
         let display = raw.trim();
         let normalized = display.to_ascii_lowercase();
-        let mut result = self.query_plain(&normalized, at_ms)?;
+        // 双拼每个音节都是两个键：打满的音节就是完整的，不能再当「没打完」去补全
+        // （whlo = wang'luo，不该出现 望楼 王龙）；只有最后单出来的一个键才补全
+        let completion = match raw_display {
+            Some(keys) => crate::shuangpin::has_open_key(self.config.shuangpin_scheme, keys),
+            None => true,
+        };
+        let mut result = self.query_plain(&normalized, at_ms, completion)?;
 
         protect_exact_input(&mut result);
         promote_picked(&mut result);
@@ -1253,7 +1262,7 @@ impl Engine {
             compose_candidates(&mut result, prefix, self.config.max_candidates.max(1));
         }
         if self.config.more_candidates {
-            self.append_more_candidates(raw, display, &normalized, &mut result)?;
+            self.append_more_candidates(raw, display, &normalized, completion, &mut result)?;
         }
         Ok(result)
     }
@@ -1346,6 +1355,7 @@ impl Engine {
         raw: &str,
         display: &str,
         normalized: &str,
+        completion: bool,
         result: &mut Vec<Candidate>,
     ) -> Result<()> {
         let max = self.config.max_candidates.max(1);
@@ -1362,7 +1372,7 @@ impl Engine {
                 mode: GraphMode::Full,
                 allow_erhua: true,
                 typo,
-                completion: true,
+                completion,
             },
         );
         let graph = if full.has_exact_path() || !self.config.jianpin_fallback {
@@ -1704,15 +1714,26 @@ impl Engine {
     ///
     /// 模糊音视图里精确读音和模糊读音都有（模糊词扣 `fuzzy_penalty`），一次搜索就够了，
     /// 两种读音的词按各自的分数排在一起。
-    fn query_plain(&self, normalized: &str, at_ms: u64) -> Result<Vec<Candidate>> {
-        self.run_query(normalized, at_ms, self.config.fuzzy)
+    fn query_plain(
+        &self,
+        normalized: &str,
+        at_ms: u64,
+        completion: bool,
+    ) -> Result<Vec<Candidate>> {
+        self.run_query(normalized, at_ms, self.config.fuzzy, completion)
     }
 
     /// 跑一次查询；fuzzy=true 时精确读音和模糊音读音的词一起搜。
     ///
     /// 末音节补全（zhongg -> 中国、zhonggu -> 中国）和纠错都做成了音节图里的边，
     /// 一次搜索就能同时给出精确、补全、纠错三类候选。
-    fn run_query(&self, normalized: &str, at_ms: u64, fuzzy: bool) -> Result<Vec<Candidate>> {
+    fn run_query(
+        &self,
+        normalized: &str,
+        at_ms: u64,
+        fuzzy: bool,
+        completion: bool,
+    ) -> Result<Vec<Candidate>> {
         let parsed = parse(normalized)?;
         if parsed.is_empty() {
             return Ok(Vec::new());
@@ -1724,7 +1745,7 @@ impl Engine {
                 mode: GraphMode::Full,
                 allow_erhua: true,
                 typo,
-                completion: true,
+                completion,
             },
         );
         // 不靠补全、纠错就能完整解析：直接用全拼。
@@ -3948,6 +3969,46 @@ mod tests {
         assert!(e.input("nihc").iter().any(|x| x.text == "你好"));
         // 学习时传进来的拼音是全拼
         assert!(e.input("nihk").iter().all(|x| x.text != "你好"));
+    }
+
+    #[test]
+    fn shuangpin_completed_syllable_does_not_expand() {
+        // 双拼每个音节固定两个键：打满的音节就是完整的，不能再当「没打完」去补全。
+        // whlo（自然码）= wang'luo，l+o 同时是 luo 和 lo；以前第一个变体 wang'lo 又把
+        // lou、long 当补全放到了最前面（望楼、王龙），wang'luo 的词反而排到后面。
+        let lexicon: Arc<dyn Lexicon> = Arc::new(
+            MemoryLexicon::from_tsv_str(concat!(
+                "wang luo\t网络\t9000\n",
+                "wang luo\t网罗\t8000\n",
+                "wang lou\t望楼\t7000\n",
+                "wang long\t王龙\t6000\n",
+                "wang lo\t望咯\t5000\n",
+                "shuan guo\t涮锅\t4000\n",
+                "zhong guo\t中国\t8000\n",
+            ))
+            .unwrap(),
+        );
+        let lm: Arc<dyn LanguageModel> = Arc::new(BigramLm::default());
+        let mut e = Engine::new(lexicon, lm);
+        e.set_shuangpin(true);
+
+        let c = e.input("whlo");
+        assert_eq!(c[0].text, "网络", "{c:?}");
+        assert!(
+            c.iter().all(|x| x.pinyin != "wang lou" && x.pinyin != "wang long"),
+            "打满的音节不该补全出 lou/long：{c:?}"
+        );
+        // 重码的另一种读法（wang'lo 语气词）仍然查得到
+        assert!(c.iter().any(|x| x.pinyin == "wang lo"), "{c:?}");
+
+        // ud = shuang：不该补全成 shuan'guo（涮锅）
+        assert!(
+            e.input("ud").iter().all(|x| x.pinyin != "shuan guo"),
+            "ud 不该补全出 shuan guo"
+        );
+
+        // 最后单一个键仍是没打完的声母：补全照常（vsg = zhong'g -> 中国）
+        assert!(e.input("vsg").iter().any(|x| x.text == "中国"));
     }
 
     #[test]

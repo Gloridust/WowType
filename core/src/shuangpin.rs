@@ -17,6 +17,9 @@ use std::sync::OnceLock;
 
 use crate::syllable::{split, SYLLABLES};
 
+/// 同一组按键对应几个音节时排在最后的（少见的）音节。
+const RARE_SYLLABLES: &[&str] = &["lo"];
+
 /// 变体上限，防止病态输入把候选数量炸开。
 pub const MAX_VARIANTS: usize = 8;
 
@@ -502,6 +505,11 @@ fn table(scheme: Scheme) -> &'static HashMap<[u8; 2], Vec<&'static str>> {
                 }
             }
         }
+        // 各方案里 lo 和 luo 都是 lo 两个键：常用的 luo（落、络）排前面，
+        // 语气词 lo（咯）排后面，否则 whlo 会先按 wang'lo 解
+        for list in map.values_mut() {
+            list.sort_by_key(|s| RARE_SYLLABLES.contains(s));
+        }
         map
     })
 }
@@ -537,6 +545,17 @@ pub fn trailing_initial(scheme: Scheme, key: u8) -> Option<&'static str> {
         b'a'..=b'z' => Some(LETTERS[(key - b'a') as usize]),
         _ => None,
     }
+}
+
+/// 输入的键数是奇数：最后一个键是还没打完的声母（`vsg` -> `zhong'g`），这时才需要补全。
+/// 偶数个键时每个音节都已打满，不该再补全。
+pub fn has_open_key(scheme: Scheme, input: &str) -> bool {
+    input
+        .bytes()
+        .filter(|&b| scheme.is_key(b.to_ascii_lowercase()))
+        .count()
+        % 2
+        == 1
 }
 
 /// 一种解码结果：全拼（音节之间用隔音符）和每个音节在原始输入里的结束位置。
