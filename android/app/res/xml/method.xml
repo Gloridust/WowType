@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="io.github.gloridust.wowtype.SetupActivity"
+    android:supportsSwitchingToNextInputMethod="false">
+    <subtype
+        android:label="@string/subtype_pinyin"
+        android:imeSubtypeLocale="zh_CN"
+        android:imeSubtypeMode="keyboard"
+        android:languageTag="zh-CN"
+        android:isAsciiCapable="false" />
+</input-method>

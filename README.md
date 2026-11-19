@@ -101,6 +101,7 @@
 - Ubuntu 22.04 的 GNOME 是 42：绿色候选框主题和语音浮条（GNOME 扩展，要 GNOME 45+）用不了，见[安装说明](docs/INSTALL.md#ubuntu-2204fcitx5-50)
 - deepin 的安装包只有 x86_64
 - **macOS 12 或更新**（Apple 芯片和 Intel 都行），见下面的 [macOS](#macos)
+- **Android 7.0（API 24）或更新**，arm64 优先，见下面的 [安卓](#安卓)
 
 ### 一行命令安装（推荐）
 
@@ -160,6 +161,18 @@ curl -fsSL https://raw.githubusercontent.com/Gloridust/WowType/main/install.sh |
 - 卸载：设置窗口「常规」页最下面的「卸载 WowType」（或者终端里
   `"$HOME/Library/Input Methods/WowType.app/Contents/MacOS/WowType" --uninstall`）。自定义词、学到的词和设置留在
   `~/Library/Application Support/WowType`，不要了自己删掉
+
+### 安卓
+
+Android 7.0（API 24）或更新，**优先 arm64（arm64-v8a）**；也有 x86_64 包（模拟器 / Chromebook）。
+
+到 [Releases](https://github.com/Gloridust/WowType/releases) 下载 `WowType-<版本>-android-arm64-v8a.apk`，
+用 `adb install` 装，或者传到手机上点开装（要允许「安装未知应用」）。装完打开 WowType，
+点「启用 WowType」在系统设置里打开它，再在任何输入框里长按地球键选 WowType。
+词库和语言模型都在 APK 里，第一次载入要几秒；不联网，输入内容不离开手机。
+
+这一版没有语音、互译、工具栏和表情面板，也还没有双拼 / 五笔 / 模糊音的设置入口，见 [android/README.md](android/README.md)。
+安装包是自签名的（没有上架应用商店）。
 
 ### 手动安装
 
