@@ -198,6 +198,7 @@ std::string userConfigDir() {
 constexpr const char *kOverlayService = "io.github.gloridust.WowType.VoiceOverlay";
 constexpr const char *kOverlayPath = "/io/github/gloridust/WowType";
 constexpr const char *kOverlayInterface = "io.github.gloridust.WowType.Voice1";
+constexpr const char *kGridInterface = "io.github.gloridust.WowType.Grid1";
 constexpr uint32_t kOverlayHide = 0;
 constexpr uint32_t kOverlayListening = 1;
 constexpr uint32_t kOverlayRecognizing = 2;
@@ -912,6 +913,8 @@ void WowtypeEngine::setupVoiceOverlay() {
                     overlayBroken_ = false;
                     overlayAcked_ = false;
                     overlaySentAt_ = 0;
+                    gridOverlayAcked_ = false;
+                    gridOverlayShown_ = false;
                     WLOG_I() << "WowType: 语音浮条" << (owner.empty() ? "不在了" : "就绪");
                 }
             });
@@ -924,6 +927,56 @@ void WowtypeEngine::setupVoiceOverlay() {
                 if (msg.sender() == overlayOwner_ && overlaySentAt_ && state != kOverlayHide &&
                     state != kOverlayDone) {
                     overlayAcked_ = true;
+                }
+                return true;
+            });
+        gridAckSlot_ = overlayBus_->addMatch(
+            fcitx::dbus::MatchRule(kOverlayService, kOverlayPath, kGridInterface, "Ack"),
+            [this](fcitx::dbus::Message &msg) {
+                bool visible = false;
+                msg >> visible;
+                if (msg.sender() == overlayOwner_ && visible) {
+                    const bool first = !gridOverlayAcked_;
+                    gridOverlayAcked_ = true;
+                    if (first) {
+                        if (auto *ic = gridOverlayIc_.get()) {
+                            auto &panel = ic->inputPanel();
+                            panel.setPreedit(fcitx::Text());
+                            panel.setAuxUp(fcitx::Text());
+                            panel.setAuxDown(fcitx::Text());
+                            panel.setCandidateList(nullptr);
+                            ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+                        }
+                    }
+                }
+                return true;
+            });
+        gridActionSlot_ = overlayBus_->addMatch(
+            fcitx::dbus::MatchRule(kOverlayService, kOverlayPath, kGridInterface, "Action"),
+            [this](fcitx::dbus::Message &msg) {
+                std::string kind;
+                int32_t index = 0;
+                msg >> kind >> index;
+                if (msg.sender() != overlayOwner_) {
+                    return true;
+                }
+                auto *ic = gridOverlayIc_.get();
+                if (!ic) {
+                    return true;
+                }
+                auto *state = ic->propertyFor(&factory_);
+                if (!state) {
+                    return true;
+                }
+                if (kind == "select" && index >= 0) {
+                    const std::size_t globalIdx = gridOverlayPageStart_ + static_cast<std::size_t>(index);
+                    if (globalIdx < state->candidates_.size()) {
+                        commitCandidate(ic, state, globalIdx);
+                    }
+                } else if (kind == "prev" || kind == "next") {
+                    const uint32_t act = kind == "prev" ? WOWTYPE_KEY_ACTION_PREV_PAGE
+                                                        : WOWTYPE_KEY_ACTION_NEXT_PAGE;
+                    applySessionFrame(ic, state, state->sessionKey(0, 0, act));
                 }
                 return true;
             });
@@ -1319,6 +1372,7 @@ bool WowtypeEngine::canToggleMode() const {
 }
 
 WowtypeEngine::~WowtypeEngine() {
+    hideGridOverlay();
     // 退出时不能无限等（#244：桌面会话结束时 fcitx5 卡在这里，等到被 SIGTERM）。后台还在载入词库的，
     // 最多等几秒；还没好就交给一个分离的线程等它载完再释放，这里不管了（进程反正要退出）
     if (loading_.valid()) {
@@ -1970,10 +2024,15 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         if (frame && frame->aux) {
             panel.setAuxUp(fcitx::Text(frame->aux));
         }
-        if (!state->candidates_.empty()) {
-            if (open == WOWTYPE_TOOL_EMOJI || open == WOWTYPE_TOOL_SYMBOLS) {
+        if (open == WOWTYPE_TOOL_EMOJI || open == WOWTYPE_TOOL_SYMBOLS) {
+            if (!state->candidates_.empty()) {
                 fillGridPanel(ic, state);
             } else {
+                hideGridOverlay();
+            }
+        } else {
+            hideGridOverlay();
+            if (!state->candidates_.empty()) {
                 fillToolPanel(ic, state);
             }
         }
@@ -1984,6 +2043,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
 
     const bool translate = translating(ic) && translator_;
     if (!state->composing()) {
+        hideGridOverlay();
         if (translate) {
             fillTranslateView(ic, state, panel);
         } else if (state->associating()) {
@@ -2015,7 +2075,9 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
 
     if (state->expanded_ && !state->candidates_.empty()) {
         fillGridPanel(ic, state);
-    } else if (!state->candidates_.empty()) {
+    } else {
+        hideGridOverlay();
+        if (!state->candidates_.empty()) {
         auto candidates = std::make_unique<WowtypeSessionList>(state);
         candidates->setLayoutHint(horizontal_
                                       ? fcitx::CandidateLayoutHint::Horizontal
@@ -2035,6 +2097,7 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         candidates->mirror(state->panelPage_,
                            std::min(state->panelCursor_, state->candidates_.size() - 1));
         panel.setCandidateList(std::move(candidates));
+        }
     }
 
     ic->updatePreedit();
@@ -2078,7 +2141,82 @@ void WowtypeEngine::fillAssociation(fcitx::InputPanel &panel, WowtypeState *stat
 /// 以前的〔〕太细，一行汉字里找不到光标在哪个词上，#270）；同一屏里各列
 /// 按最宽的词补齐，这样上下键在同一列里走。classic UI 和 kimpanel 都只会画一行或
 /// 一列，画不了真正的网格，所以用全角字符拼出来。
+void WowtypeEngine::sendGridOverlay(fcitx::InputContext *ic, WowtypeState *state, bool visible) {
+    if (!overlayBus_ || overlayOwner_.empty()) {
+        return;
+    }
+    std::string preedit;
+    std::string aux;
+    std::vector<std::string> items;
+    int32_t cursorInPage = 0;
+    int32_t cursorRow = 0;
+    int32_t page = 0;
+    int32_t totalPages = 1;
+    int32_t x = 0, y = 0, w = 0, h = 0;
+    bool relative = false;
+    double scale = 1.0;
+
+    if (visible && ic && state && !state->candidates_.empty()) {
+        constexpr std::size_t kGridScreen = kGridCols * kGridRows;
+        const std::size_t n = state->candidates_.size();
+        const std::size_t cursor = std::min(state->gridCursor_, n - 1);
+        const std::size_t pageIdx = cursor / kGridScreen;
+        const std::size_t pageCount = (n + kGridScreen - 1) / kGridScreen;
+        const std::size_t start = pageIdx * kGridScreen;
+        const std::size_t end = std::min(n, start + kGridScreen);
+        gridOverlayPageStart_ = start;
+        gridOverlayIc_ = ic->watch();
+
+        for (std::size_t i = start; i < end; ++i) {
+            items.push_back(shownCandidate(state->candidates_[i]).toString());
+        }
+        cursorInPage = static_cast<int32_t>(cursor - start);
+        cursorRow = static_cast<int32_t>((cursor - start) / kGridCols);
+        page = static_cast<int32_t>(pageIdx);
+        totalPages = static_cast<int32_t>(pageCount);
+
+        const WowtypeFrame *frame = wowtype_session_frame(state->session_);
+        if (frame && frame->preedit) {
+            preedit = frame->preedit;
+        }
+        if (frame && frame->aux) {
+            aux = frame->aux;
+        }
+        const auto &rect = ic->cursorRect();
+        x = rect.left();
+        y = rect.top();
+        w = rect.width();
+        h = rect.height();
+        relative = ic->capabilityFlags().test(fcitx::CapabilityFlag::RelativeRect);
+        scale = ic->scaleFactor();
+    }
+
+    auto msg = overlayBus_->createSignal(kOverlayPath, kGridInterface, "State");
+    msg << visible << preedit << aux << items << cursorInPage << cursorRow << page << totalPages
+        << x << y << w << h << relative << scale;
+    msg.send();
+    gridOverlayShown_ = visible;
+}
+
+void WowtypeEngine::hideGridOverlay() {
+    if (!gridOverlayShown_) {
+        return;
+    }
+    sendGridOverlay(nullptr, nullptr, false);
+}
+
 void WowtypeEngine::fillGridPanel(fcitx::InputContext *ic, WowtypeState *state) {
+    if (!overlayOwner_.empty()) {
+        sendGridOverlay(ic, state, true);
+        if (gridOverlayAcked_) {
+            auto &panel = ic->inputPanel();
+            panel.setPreedit(fcitx::Text());
+            panel.setAuxUp(fcitx::Text());
+            panel.setAuxDown(fcitx::Text());
+            panel.setCandidateList(nullptr);
+            return;
+        }
+    }
     static const char *kLabels[] = {"\uFF11", "\uFF12", "\uFF13",
                                     "\uFF14", "\uFF15", "\uFF16"};
     static_assert(sizeof(kLabels) / sizeof(kLabels[0]) == kGridCols);
@@ -2437,6 +2575,7 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
     }
     // 光标去了别处：还没发的挪光标不发了，之后的重置也不再当成是自己发的键引起的
     dropCursorDelta(ic);
+    hideGridOverlay();
     if (appKeysTarget_.get() == ic) {
         appKeysAtUsec_ = 0;
     }

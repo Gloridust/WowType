@@ -68,3 +68,81 @@
   height: 34px;
   margin-left: 18px;
 }
+
+/* 展开 6×6 候选网格浮窗（grid.js） */
+.wowtype-grid-card {
+  background-color: #ffffff;
+  border: 1.5px solid #dce3df;
+  border-radius: 14px;
+  box-shadow: 0 6px 22px 0 rgba(29, 35, 33, 0.16);
+  padding: 8px 10px;
+  color: #1d2321;
+}
+
+.wowtype-grid-header {
+  padding: 2px 6px 6px 6px;
+  border-bottom: 1px solid #edf1ef;
+  margin-bottom: 6px;
+}
+
+.wowtype-grid-preedit {
+  color: #4a5751;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.wowtype-grid-pager {
+  spacing: 4px;
+}
+
+.wowtype-grid-page-btn {
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 14px;
+  color: #4a5751;
+}
+
+.wowtype-grid-page-btn:hover {
+  background-color: rgba(14, 175, 118, 0.14);
+}
+
+.wowtype-grid-page-text {
+  font-size: 12px;
+  color: #7a8580;
+}
+
+.wowtype-grid-rows {
+  spacing: 3px;
+}
+
+.wowtype-grid-row {
+  spacing: 4px;
+}
+
+.wowtype-grid-cell {
+  border-radius: 8px;
+  padding: 4px 9px;
+  font-size: 15px;
+  color: #1d2321;
+  background-color: transparent;
+}
+
+.wowtype-grid-cell:hover {
+  background-color: rgba(14, 175, 118, 0.14);
+}
+
+.wowtype-grid-cell-active,
+.wowtype-grid-cell-active:hover {
+  background-color: #0eaf76 !important;
+  color: #ffffff !important;
+}
+
+.wowtype-grid-num {
+  font-size: 12px;
+  color: #7a8580;
+  margin-right: 4px;
+}
+
+.wowtype-grid-cell-active .wowtype-grid-num {
+  color: rgba(255, 255, 255, 0.88);
+}
