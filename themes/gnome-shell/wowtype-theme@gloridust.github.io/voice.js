@@ -13,6 +13,8 @@ import Mtk from 'gi://Mtk';
 import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
+import {stageRect} from './cursor.js';
+
 const BUS_NAME = 'io.github.gloridust.WowType.VoiceOverlay';
 const OBJECT_PATH = '/io/github/gloridust/WowType';
 const INTERFACE = 'io.github.gloridust.WowType.Voice1';
@@ -206,28 +208,11 @@ export class VoiceOverlay {
             this._hide(DONE_HOLD_MS);
     }
 
-    // 光标矩形换成舞台坐标，算法和 Input Method Panel 扩展一样。
-    // protocol_to_stage_rect 是 GNOME 47 才有的（Xwayland 缩放）；45、46 上没有它，坐标本来就是舞台坐标，
-    // 原样用（#170：GNOME 46 上报 "protocol_to_stage_rect is not a function"，浮条一直画不出来）
+    // 光标矩形换成舞台坐标（cursor.js，和 Input Method Panel 扩展一样）；应用没给光标位置时是 null
     _stageRect(x, y, w, h, relative, scale) {
         if (!x && !y && !w && !h)
             return null;
-        const focus = global.display.focus_window;
-        const toStage = r => focus && typeof focus.protocol_to_stage_rect === 'function'
-            ? focus.protocol_to_stage_rect(r) : r;
-        let rect;
-        if (relative && focus) {
-            const k = St.ThemeContext.get_for_stage(global.stage).scale_factor / (scale || 1);
-            rect = toStage(new Mtk.Rectangle({x: x * k, y: y * k, width: w * k, height: h * k}));
-            const actor = focus.get_compositor_private();
-            if (actor) {
-                rect.x += actor.x;
-                rect.y += actor.y;
-            }
-        } else {
-            rect = toStage(new Mtk.Rectangle({x, y, width: w, height: h}));
-        }
-        return {x: rect.x, y: rect.y, w: rect.width, h: rect.height};
+        return stageRect(x, y, w, h, relative, scale);
     }
 
     // ── 出现 / 收起 ──────────────────────────────────────────────────────

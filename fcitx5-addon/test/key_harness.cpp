@@ -10,6 +10,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -3392,6 +3393,196 @@ void runVoiceNoModelCase(Instance &instance, std::function<void()> done) {
     runVoiceScript(instance, "语音·没有模型", steps, done);
 }
 
+/// 展开面板的网格（#270）：在会话总线上假装是 GNOME 扩展，收插件发的 Show / Hide。
+/// 回执时 kimpanel 拿到空列表、格子和光标发给扩展、点格子选词；不回执（或扩展不在）时照旧把网格拼成几行给 kimpanel。
+struct FakeGrid {
+    std::unique_ptr<dbus::Bus> bus;
+    std::unique_ptr<dbus::Slot> show;
+    std::unique_ptr<dbus::Slot> hide;
+    bool ack = true;
+    int shows = 0;
+    int hides = 0;
+    bool visible = false;
+    uint32_t serial = 0, first = 0, cursor = 0, cols = 0, page = 0, pages = 0;
+    std::vector<std::string> cells;
+    std::string header;
+    std::string addon;
+
+    void send(const char *signal, uint32_t a, std::optional<uint32_t> b = std::nullopt) {
+        auto msg = bus->createSignal("/io/github/gloridust/WowType", "io.github.gloridust.WowType.Grid1", signal);
+        msg.setDestination(addon);
+        msg << a;
+        if (b) {
+            msg << *b;
+        }
+        msg.send();
+    }
+};
+
+void runGridOverlayCase(Instance &instance, std::function<void()> done) {
+    const char *address = std::getenv("DBUS_SESSION_BUS_ADDRESS");
+    if (!address || !*address) {
+        std::printf("skip 展开面板的网格（没有会话总线）\n");
+        done();
+        return;
+    }
+    static constexpr char kService[] = "io.github.gloridust.WowType.CandidateGrid";
+    static constexpr char kPath[] = "/io/github/gloridust/WowType";
+    static constexpr char kInterface[] = "io.github.gloridust.WowType.Grid1";
+    auto grid = std::make_shared<FakeGrid>();
+    grid->bus = std::make_unique<dbus::Bus>(dbus::BusType::Session);
+    grid->bus->attachEventLoop(&instance.eventLoop());
+    FakeGrid *fake = grid.get();
+    grid->show = grid->bus->addMatch(
+        dbus::MatchRule("", kPath, kInterface, "Show"), [fake](dbus::Message &msg) {
+            msg >> fake->serial >> fake->cells >> fake->first >> fake->cursor >> fake->cols >> fake->page >>
+                fake->pages >> fake->header;
+            fake->addon = msg.sender();
+            ++fake->shows;
+            fake->visible = true;
+            if (fake->ack) {
+                fake->send("Ack", fake->serial);
+            }
+            return true;
+        });
+    grid->hide = grid->bus->addMatch(dbus::MatchRule("", kPath, kInterface, "Hide"),
+                                     [fake](dbus::Message &) {
+                                         ++fake->hides;
+                                         fake->visible = false;
+                                         return true;
+                                     });
+    check(grid->bus->requestName(kService, Flags<dbus::RequestNameFlag>{}), "展开面板的网格：假扩展占上名字");
+    auto listSize = [](VoiceScript &s) {
+        auto list = s.ic->inputPanel().candidateList();
+        return list ? list->size() : -1;
+    };
+    // 输入框上是不是 kimpanel 能画的旧网格（拼成几行、光标处的词用【】框起来）
+    auto framedRows = [](VoiceScript &s) {
+        for (const auto &row : page(s.ic.get())) {
+            if (row.find("【") != std::string::npos) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto firstPage = std::make_shared<std::vector<std::string>>();
+
+    using Steps = std::vector<std::pair<int, std::function<void(VoiceScript &)>>>;
+    Steps steps{
+        // 等插件看到扩展上线
+        {3, [firstPage, listSize](VoiceScript &s) {
+             fresh(s.ic.get());
+             type(s.ic.get(), "shi");
+             *firstPage = page(s.ic.get());
+             type(s.ic.get(), "<down>");
+             check(listSize(s) == 0, s.name + "：展开后 kimpanel 拿到空列表，实际 " +
+                                         std::to_string(listSize(s)) + " 项");
+             check(s.ic->inputPanel().preedit().empty() && s.ic->inputPanel().auxUp().empty(),
+                   s.name + "：编辑区挪到网格上，kimpanel 什么都不画，实际 " + preedit(s.ic.get()));
+         }},
+        {5, [fake, firstPage, listSize](VoiceScript &s) {
+             const auto &want = *firstPage;
+             check(fake->shows > 0 && fake->visible && fake->cols == 6 && fake->first == 0 && fake->cursor == 0 &&
+                       fake->page == 0 && fake->pages >= 2 && fake->cells.size() == 36,
+                   s.name + "：扩展收到第一屏 36 格、6 列、光标在第一个，实际 " +
+                       std::to_string(fake->cells.size()) + " 格 光标 " + std::to_string(fake->cursor) + " 共 " +
+                       std::to_string(fake->pages) + " 屏");
+             check(want.size() >= 6 && fake->cells.size() >= 6 &&
+                       std::equal(want.begin(), want.begin() + 6, fake->cells.begin()),
+                   s.name + "：第一行 6 格就是横排候选框的前 6 个：" + join(fake->cells));
+             check(fake->header == "shi", s.name + "：编辑区（应用不画时）画在网格上面：" + fake->header);
+             check(listSize(s) == 0, s.name + "：回执了，kimpanel 还是空列表");
+             // 键盘照旧：右移两格、下移一行，光标在第 9 个（第二行第三格）
+             type(s.ic.get(), "<right><right><down>");
+         }},
+        {6, [fake](VoiceScript &s) {
+             check(fake->cursor == 8 && fake->first == 0,
+                   s.name + "：右右下以后光标在第 9 格，实际 " + std::to_string(fake->cursor));
+             // 过时的一屏上点的不算
+             s.ic->committed.clear();
+             fake->send("Select", fake->serial - 1, 4);
+         }},
+        {7, [fake](VoiceScript &s) {
+             check(s.ic->committed.empty(), s.name + "：点的是过时的一屏，不选，实际 " + s.ic->committed);
+             // 点第 5 格
+             fake->hides = 0;
+             fake->send("Select", fake->serial, 4);
+         }},
+        {8, [fake, firstPage](VoiceScript &s) {
+             const auto &want = *firstPage;
+             check(want.size() > 4 && s.ic->committed == want[4],
+                   s.name + "：点第 5 格选第 5 个，实际 " + s.ic->committed);
+             check(fake->hides > 0 && !fake->visible, s.name + "：选了词，网格收起");
+             // 数字选光标所在行（和 kimpanel 的网格一样）
+             fresh(s.ic.get());
+             type(s.ic.get(), "zhi");
+             *firstPage = page(s.ic.get());
+             type(s.ic.get(), "<down><down>2");
+             check(firstPage->size() > 7 && s.ic->committed == (*firstPage)[7],
+                   s.name + "：数字选光标所在行，实际 " + s.ic->committed);
+             // Esc 收起
+             fresh(s.ic.get());
+             fake->hides = 0;
+             type(s.ic.get(), "shi<down><esc>");
+         }},
+        {9, [fake, listSize](VoiceScript &s) {
+             check(fake->hides > 0 && !fake->visible && listSize(s) > 6 && preedit(s.ic.get()) == "shi",
+                   s.name + "：Esc 收起网格，回到横排候选框");
+             // 一直下移到第 7 行：网格翻到第二屏
+             type(s.ic.get(), "<down><down><down><down><down><down><down>");
+         }},
+        {10, [fake](VoiceScript &s) {
+             check(fake->visible && fake->page == 1 && fake->first == 36 && fake->cursor == 36,
+                   s.name + "：下移到第 7 行，扩展收到第二屏，实际第 " + std::to_string(fake->page + 1) +
+                       " 屏、第一格 " + std::to_string(fake->first) + "、光标 " + std::to_string(fake->cursor));
+             // 失去焦点：网格收起
+             fake->hides = 0;
+             s.ic->focusOut();
+         }},
+        {11, [fake](VoiceScript &s) {
+             check(fake->hides > 0 && !fake->visible, s.name + "：失去焦点，网格收起");
+             s.ic->focusIn();
+             fresh(s.ic.get());
+             // 扩展「坏了」：不再回执
+             fake->ack = false;
+             type(s.ic.get(), "shi<down>");
+         }},
+        {12, [listSize](VoiceScript &s) {
+             check(listSize(s) == 0, s.name + "：刚展开时还在等扩展，kimpanel 是空列表");
+         }},
+        {19, [fake, listSize, framedRows](VoiceScript &s) {
+             check(listSize(s) > 0 && framedRows(s) && !fake->visible,
+                   s.name + "：等不到回执，退回 kimpanel 拼成几行的网格，叫扩展收起：" + join(page(s.ic.get())));
+             type(s.ic.get(), "<right>");
+             check(framedRows(s), s.name + "：之后照旧给 kimpanel 拼好的网格");
+             // 回执迟到了：下次照样交给扩展
+             fake->ack = true;
+             fake->send("Ack", fake->serial);
+         }},
+        {20, [listSize](VoiceScript &s) {
+             type(s.ic.get(), "<right>");
+             check(listSize(s) == 0, s.name + "：迟到的回执来了，又交给扩展画");
+         }},
+        // 扩展下线：正显示着的网格马上换回 kimpanel 的
+        {21, [grid](VoiceScript &) {
+             grid->show.reset();
+             grid->hide.reset();
+             grid->bus.reset();
+         }},
+        {23, [framedRows](VoiceScript &s) {
+             check(framedRows(s), s.name + "：扩展下线，正显示着的换回 kimpanel 拼好的网格：" +
+                                      join(page(s.ic.get())));
+             fresh(s.ic.get());
+             type(s.ic.get(), "shi<down>");
+             check(framedRows(s), s.name + "：扩展不在，展开照旧拼成几行给 kimpanel");
+             fresh(s.ic.get());
+             check(s.ic->committed.empty(), s.name + "：Esc 不上屏，实际 " + s.ic->committed);
+             std::printf("展开面板的网格：回执了就交给扩展画，等不到回执、扩展不在就退回 kimpanel\n");
+         }},
+    };
+    runVoiceScript(instance, "展开面板的网格", steps, done);
+}
+
 /// 语音浮条的回执（#170）：在会话总线上假装是 GNOME 扩展，收插件发的 State。
 /// 先每个都回 Ack：提示交给浮条，候选框里没有字；再不回了：等 0.8 秒后插件改在候选框里提示。
 /// 走「没有模型」那条路（按语音键只提示去下载），不用真的录音。
@@ -3760,12 +3951,14 @@ int main(int argc, char **argv) {
         runTranslateCase(instance, [&instance]() {
             runVoiceNoModelCase(instance, [&instance]() {
             runVoiceOverlayCase(instance, [&instance]() {
+            runGridOverlayCase(instance, [&instance]() {
                 runVoiceCase(instance, [&instance]() {
                     runVoiceCancelCases(instance, [&instance]() {
                         std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
                         instance.exit();
                     });
                 });
+            });
             });
             });
         });

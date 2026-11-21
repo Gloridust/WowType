@@ -32,6 +32,27 @@
   color: #ffffff;
 }
 
+/* 展开的候选面板（grid.js，#270）：外框、格子用的是上面 kimpanel 候选框的样式类，只有光标处那一格是绿的。
+ * Input Method Panel 自己的 minwidth-zero 没加载时，也别撑成菜单的最小宽度 */
+.wowtype-grid-boxpointer.popup-menu {
+  min-width: 0;
+}
+
+.kimpanel-popup-content .wowtype-grid-cell {
+  margin: 1px;
+}
+
+.wowtype-grid-label {
+  font-size: 0.8em;
+  margin-right: 0.35em;
+}
+
+.wowtype-grid-page {
+  font-size: 0.8em;
+  padding: 0.2em 0.6em 0 0;
+  color: rgba(127, 127, 127, 0.9);
+}
+
 /* 语音输入浮条（voice.js），配色和尺寸照宣传片 */
 .wowtype-voice-pill {
   background-color: #ffffff;

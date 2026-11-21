@@ -531,7 +531,7 @@ WowType 默认用自己的绿色主题：选中的词是图标里的那种绿，
   所以这个主题不用它们（选中的词还是圆角的绿块）。
 - **GNOME（Wayland）**：候选框是 Input Method Panel 扩展画的，fcitx5 的主题管不到。WowType 另带一个只有样式表的小扩展
   `wowtype-theme@gloridust.github.io` 给它换色，打开开关会顺带启用它。**第一次启用要注销重新登录一次**（GNOME 只在登录时加载新装的扩展）。
-  这个扩展同时画[语音浮条](#语音输入)，关掉绿色主题，语音提示也会回到候选框里的文字版。
+  这个扩展同时画[语音浮条](#语音输入)和按下键展开的候选面板（真正的 6×6 网格，只有当前词是绿的，点格子就选它；Input Method Panel 自己只会把光标所在的整行涂绿），关掉绿色主题，语音提示回到候选框里的文字版，展开面板回到 Input Method Panel 画的几行。
 
 主题文件在 `themes/`：`themes/fcitx5/` 是经典界面主题，图片由 `themes/src/*.svg` 经 `themes/render.sh` 生成；`themes/gnome-shell/` 是 GNOME 扩展。
 

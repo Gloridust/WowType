@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <utility>
 #include <cstddef>
+#include <functional>
 #include <future>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <fcitx-utils/dbus/objectvtable.h>
 #include <fcitx-utils/dbus/servicewatcher.h>
 #include <fcitx-utils/event.h>
+#include <fcitx-utils/handlertable.h>
 #include <fcitx-utils/key.h>
 #include <fcitx-utils/keysym.h>
 #include <fcitx-utils/trackableobject.h>
@@ -31,6 +33,7 @@
 
 namespace fcitx {
 class Instance;
+class Event;
 class InputContext;
 class InputContextEvent;
 class InputPanel;
@@ -595,8 +598,22 @@ private:
     /// done：识别完了（语音浮条显示「识别完成」再淡出），否则直接收起。
     void clearVoice(bool done = false);
     void cancelVoice();
-    /// GNOME 下由 WowType 扩展画语音浮条：插件经 D-Bus 把状态发给它。
-    void setupVoiceOverlay();
+    /// GNOME 下由 WowType 扩展画语音浮条、展开面板的网格：插件经 D-Bus 把状态发给它。
+    void setupOverlays();
+    /// 展开面板的网格（#270）：盯着扩展登记的名字，收回执和鼠标点的格子。
+    void setupGridOverlay();
+    /// 扩展在跑、而且没被认定画不出来：展开面板交给扩展画网格，kimpanel 只拿到一个空列表。
+    bool gridOverlay() const { return overlayBus_ && !gridOwner_.empty() && !gridBroken_; }
+    /// 把展开面板这一屏的格子发给扩展；header 是本来画在 kimpanel 上的提示和编辑区。
+    void sendGridOverlay(fcitx::InputContext *ic, WowtypeState *state, const std::string &header);
+    /// 让扩展收起网格（不再显示展开面板了）。
+    void hideGridOverlay();
+    /// 发出去的网格过了 kGridAckUsec 还没有回执：认定扩展画不出来，退回 kimpanel 画的列表。
+    void checkGridAck();
+    /// 扩展上点了一个格子（serial 是那一屏的编号，index 是全局下标）。
+    void selectGridCell(uint32_t serial, uint32_t index);
+    /// 输入框换了面板（收起、上屏、失去焦点）：网格跟着收起。
+    void onGridUiEvent(fcitx::Event &event);
     /// 在会话总线上登记 org.wowtype.Input（外部命令切模式）。
     void setupControl();
     /// 扩展在跑、而且没被认定画不出来（#170）：语音提示交给浮条。
@@ -763,6 +780,23 @@ private:
     uint64_t overlaySentAt_ = 0;
     bool overlayAcked_ = false;
     bool overlayBroken_ = false;
+
+    // 展开面板的网格（GNOME 扩展画，#270），和语音浮条共用 overlayBus_。
+    // 每发一屏 serial 加一，扩展画好了回 Ack(serial)；最早一个没回执的发出去的时刻是 gridPendingSince_，
+    // 等不到就把 gridBroken_ 置上、退回 kimpanel 的列表；之后迟到的回执（扩展只是慢）再把它清掉。
+    std::unique_ptr<fcitx::dbus::ServiceWatcherEntry> gridWatch_;
+    std::unique_ptr<fcitx::dbus::Slot> gridAckSlot_;
+    std::unique_ptr<fcitx::dbus::Slot> gridSelectSlot_;
+    std::string gridOwner_;
+    uint32_t gridSerial_ = 0;
+    uint32_t gridAckedSerial_ = 0;
+    uint64_t gridPendingSince_ = 0;
+    bool gridBroken_ = false;
+    /// 网格现在画在哪个输入框上（空：没在显示）。
+    fcitx::TrackableObjectReference<fcitx::InputContext> gridIc_;
+    std::unique_ptr<fcitx::EventSourceTime> gridAckTimer_;
+    std::vector<std::unique_ptr<fcitx::HandlerTableEntry<std::function<void(fcitx::Event &)>>>>
+        gridEventWatchers_;
 
     // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
     std::unique_ptr<fcitx::dbus::Bus> controlBus_;

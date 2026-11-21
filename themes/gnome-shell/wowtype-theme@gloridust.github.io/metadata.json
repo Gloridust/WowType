@@ -1,7 +1,7 @@
 {
   "uuid": "wowtype-theme@gloridust.github.io",
   "name": "WowType",
-  "description": "WowType 输入法的 GNOME 外观：把 Input Method Panel（kimpanel）画的候选框换成绿色主题（需要同时启用 Input Method Panel 扩展），按住语音键说话时在光标下面显示语音浮条。",
+  "description": "WowType 输入法的 GNOME 外观：把 Input Method Panel（kimpanel）画的候选框换成绿色主题（需要同时启用 Input Method Panel 扩展），按住语音键说话时在光标下面显示语音浮条，按下键展开的候选面板画成只高亮当前词的网格。",
   "shell-version": [
     "45",
     "46",
@@ -12,5 +12,5 @@
     "51"
   ],
   "url": "https://github.com/Gloridust/WowType",
-  "version": 2
+  "version": 3
 }

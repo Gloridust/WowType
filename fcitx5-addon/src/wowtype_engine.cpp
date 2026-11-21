@@ -205,6 +205,20 @@ constexpr uint32_t kOverlayDone = 3;
 constexpr uint32_t kOverlayError = 4;
 constexpr uint64_t kOverlayAckUsec = 800 * 1000;
 
+// 展开面板的网格（#270）：GNOME 下 kimpanel 只会把整行涂绿，看不出光标在哪个词上。
+// WowType 的扩展登记 kGridService，插件把这一屏的格子发给它画真正的 6×6 网格，只有光标处那一格高亮：
+//   插件 -> 扩展  Show(u serial, as 格子, u 第一格的全局下标, u 光标的全局下标, u 列数, u 第几屏, u 共几屏,
+//                      s 提示, i x, i y, i w, i h, b 相对窗口, d 缩放)
+//                 Hide(u serial)
+//   扩展 -> 插件  Ack(u serial)            画好了、显示出来了
+//                 Select(u serial, u 下标)  点了一格（全局下标）
+// 光标矩形和语音浮条、kimpanel 的一样。扩展回执期间 kimpanel 拿到的是一个空列表（提示、编辑区也挪进网格），
+// 它的候选框整个不画；扩展没登记这个名字（没装、停用了、只会画语音浮条的旧版）就照旧把网格拼成几行给 kimpanel，
+// 发了 kGridAckUsec 还没有回执也退回去。
+constexpr const char *kGridService = "io.github.gloridust.WowType.CandidateGrid";
+constexpr const char *kGridInterface = "io.github.gloridust.WowType.Grid1";
+constexpr uint64_t kGridAckUsec = 500 * 1000;
+
 /// 用户输入习惯（词的热度、词搭配）和用户词库放在同一个目录：history.tsv。
 std::string historyPathFor(const std::string &userDict) {
     if (const char *env = std::getenv("WOWTYPE_HISTORY"); env && *env) {
@@ -736,6 +750,10 @@ private:
     bool mirroring_ = false;
 };
 
+/// 展开面板交给 GNOME 扩展画网格时给 kimpanel 的列表（#270）：一项也没有，kimpanel 就不画候选框。
+/// 也是个记号：输入框上换成了别的列表，就是不再显示网格了，叫扩展收起。
+class WowtypeGridOverlayList final : public fcitx::CommonCandidateList {};
+
 /// 工具栏、表情面板、展开面板的列表：候选框上的翻页按钮、滚轮和直接调列表的，都和键盘上按
 /// Page Up / Page Down、上下键一样交给会话，再照会话的光标整个重画（WowtypeEngine::panelListKey）。
 /// 让 CommonCandidateList 自己翻的话只是换了显示的那一页，会话的光标还在原来那一页，接着按数字、
@@ -818,7 +836,7 @@ WowtypeEngine::WowtypeEngine(fcitx::Instance *instance)
         }
     }
     applyConfig();
-    setupVoiceOverlay();
+    setupOverlays();
     setupControl();
 }
 
@@ -894,9 +912,12 @@ bool WowtypeEngine::setModeByName(const std::string &mode) {
     return true;
 }
 
-void WowtypeEngine::setupVoiceOverlay() {
-    // WOWTYPE_VOICE_OVERLAY=0：不用 GNOME 扩展的浮条，一直用候选框里的文字提示
-    if (!envFlag("WOWTYPE_VOICE_OVERLAY", true)) {
+void WowtypeEngine::setupOverlays() {
+    // WOWTYPE_VOICE_OVERLAY=0：不用 GNOME 扩展的浮条，一直用候选框里的文字提示；
+    // WOWTYPE_GRID_OVERLAY=0：展开面板一直拼成几行交给 kimpanel
+    const bool voice = envFlag("WOWTYPE_VOICE_OVERLAY", true);
+    const bool grid = envFlag("WOWTYPE_GRID_OVERLAY", true);
+    if (!voice && !grid) {
         return;
     }
     try {
@@ -907,6 +928,12 @@ void WowtypeEngine::setupVoiceOverlay() {
         bus->attachEventLoop(&instance_->eventLoop());
         overlayBus_ = std::move(bus);
         overlayWatcher_ = std::make_unique<fcitx::dbus::ServiceWatcher>(*overlayBus_);
+        if (grid) {
+            setupGridOverlay();
+        }
+        if (!voice) {
+            return;
+        }
         overlayWatch_ = overlayWatcher_->watchService(
             kOverlayService,
             [this](const std::string &, const std::string &, const std::string &owner) {
@@ -934,6 +961,11 @@ void WowtypeEngine::setupVoiceOverlay() {
     } catch (const std::exception &e) {
         // 没有会话总线（比如测试里）：用文字提示
         WLOG_I() << "WowType: 连不上会话总线，语音用文字提示：" << e.what();
+        gridEventWatchers_.clear();
+        gridSelectSlot_.reset();
+        gridAckSlot_.reset();
+        gridWatch_.reset();
+        gridOwner_.clear();
         overlayAckSlot_.reset();
         overlayWatch_.reset();
         overlayWatcher_.reset();
@@ -941,27 +973,39 @@ void WowtypeEngine::setupVoiceOverlay() {
     }
 }
 
+namespace {
+/// 光标矩形，和 kimpanel 的 SetSpotRect / SetRelativeSpotRectV2 同一个意思（扩展照 kimpanel 的算法换成屏幕坐标）。
+struct OverlayCursor {
+    int32_t x = 0, y = 0, w = 0, h = 0;
+    bool relative = false;
+    double scale = 1.0;
+};
+
+OverlayCursor overlayCursor(fcitx::InputContext *ic) {
+    OverlayCursor out;
+    if (ic) {
+        const fcitx::Rect &rect = ic->cursorRect();
+        out.x = rect.left();
+        out.y = rect.top();
+        out.w = rect.width();
+        out.h = rect.height();
+        out.relative = ic->capabilityFlags().test(fcitx::CapabilityFlag::RelativeRect);
+        out.scale = ic->scaleFactor();
+    }
+    return out;
+}
+} // namespace
+
 void WowtypeEngine::sendVoiceOverlay(fcitx::InputContext *ic, uint32_t state,
                                      const std::string &label, int level) {
     if (!overlayBus_ || overlayOwner_.empty()) {
         return;
     }
-    int32_t x = 0, y = 0, w = 0, h = 0;
-    bool relative = false;
-    double scale = 1.0;
-    if (ic) {
-        const fcitx::Rect &rect = ic->cursorRect();
-        x = rect.left();
-        y = rect.top();
-        w = rect.width();
-        h = rect.height();
-        relative = ic->capabilityFlags().test(fcitx::CapabilityFlag::RelativeRect);
-        scale = ic->scaleFactor();
-    }
+    const OverlayCursor c = overlayCursor(ic);
     auto msg = overlayBus_->createSignal(kOverlayPath, kOverlayInterface, "State");
     msg.setDestination(overlayOwner_);
-    msg << state << label << static_cast<int32_t>(std::clamp(level, 0, 100)) << x << y << w << h
-        << relative << scale;
+    msg << state << label << static_cast<int32_t>(std::clamp(level, 0, 100)) << c.x << c.y << c.w
+        << c.h << c.relative << c.scale;
     msg.send();
     if (state != kOverlayHide && state != kOverlayDone && !overlaySentAt_) {
         overlaySentAt_ = fcitx::now(CLOCK_MONOTONIC);
@@ -980,6 +1024,154 @@ void WowtypeEngine::checkOverlayAck(fcitx::InputContext *ic) {
     if (voiceErrorUntil_ && !voiceErrorText_.empty()) {
         showVoice(ic, "🎙 " + voiceErrorText_, {});
     }
+}
+
+void WowtypeEngine::setupGridOverlay() {
+    gridWatch_ = overlayWatcher_->watchService(
+        kGridService, [this](const std::string &, const std::string &, const std::string &owner) {
+            if (owner == gridOwner_) {
+                return;
+            }
+            gridOwner_ = owner;
+            // 换了一个扩展实例（重新登录、扩展重载）：再给网格一次机会
+            gridBroken_ = false;
+            gridAckedSerial_ = gridSerial_;
+            gridPendingSince_ = 0;
+            WLOG_I() << "WowType: 展开面板的网格" << (owner.empty() ? "不在了，用 kimpanel 的列表" : "就绪");
+            // 正显示着网格时扩展没了（停用、重载）：马上照现在的样子重画，换回 kimpanel 的列表
+            if (auto *ic = gridIc_.get()) {
+                gridIc_.unwatch();
+                updateInputPanel(ic, ic->propertyFor(&factory_));
+            }
+        });
+    gridAckSlot_ = overlayBus_->addMatch(
+        fcitx::dbus::MatchRule(kGridService, kOverlayPath, kGridInterface, "Ack"),
+        [this](fcitx::dbus::Message &msg) {
+            uint32_t serial = 0;
+            msg >> serial;
+            if (msg.sender() != gridOwner_ || serial == 0 || serial > gridSerial_) {
+                return true;
+            }
+            if (gridBroken_) {
+                // 回执迟到了（扩展只是慢）：下一次展开照样交给它
+                gridBroken_ = false;
+                WLOG_I() << "WowType: 展开面板的网格回执迟到了，下次照样由扩展画";
+            }
+            gridAckedSerial_ = std::max(gridAckedSerial_, serial);
+            // 后面发的还没回执：从现在起再等一轮
+            gridPendingSince_ = gridAckedSerial_ >= gridSerial_ ? 0 : fcitx::now(CLOCK_MONOTONIC);
+            return true;
+        });
+    gridSelectSlot_ = overlayBus_->addMatch(
+        fcitx::dbus::MatchRule(kGridService, kOverlayPath, kGridInterface, "Select"),
+        [this](fcitx::dbus::Message &msg) {
+            uint32_t serial = 0;
+            uint32_t index = 0;
+            msg >> serial >> index;
+            if (msg && msg.sender() == gridOwner_) {
+                selectGridCell(serial, index);
+            }
+            return true;
+        });
+    for (const auto type :
+         {fcitx::EventType::InputContextUpdateUI, fcitx::EventType::InputContextFocusOut}) {
+        gridEventWatchers_.push_back(instance_->watchEvent(
+            type, fcitx::EventWatcherPhase::Default, [this](fcitx::Event &event) { onGridUiEvent(event); }));
+    }
+}
+
+void WowtypeEngine::sendGridOverlay(fcitx::InputContext *ic, WowtypeState *state,
+                                    const std::string &header) {
+    const auto &all = state->candidates_;
+    const std::size_t n = all.size();
+    const std::size_t cursor = std::min(state->gridCursor_, n - 1);
+    // 只发光标所在的这一屏（和 fillGridPanel 一样一屏 kGridRows 行）
+    constexpr std::size_t perScreen = kGridCols * kGridRows;
+    const std::size_t screen = cursor / perScreen;
+    const std::size_t first = screen * perScreen;
+    std::vector<std::string> cells;
+    for (std::size_t i = first; i < std::min(n, first + perScreen); ++i) {
+        cells.push_back(shownCandidate(all[i]).toString());
+    }
+    const OverlayCursor c = overlayCursor(ic);
+    ++gridSerial_;
+    auto msg = overlayBus_->createSignal(kOverlayPath, kGridInterface, "Show");
+    msg.setDestination(gridOwner_);
+    msg << gridSerial_ << cells << static_cast<uint32_t>(first) << static_cast<uint32_t>(cursor)
+        << static_cast<uint32_t>(kGridCols) << static_cast<uint32_t>(screen)
+        << static_cast<uint32_t>((n + perScreen - 1) / perScreen) << header << c.x << c.y << c.w << c.h
+        << c.relative << c.scale;
+    msg.send();
+    gridIc_ = ic->watch();
+    if (gridPendingSince_) {
+        return; // 前面发的还在等回执，定时器已经开着
+    }
+    gridPendingSince_ = fcitx::now(CLOCK_MONOTONIC);
+    if (!gridAckTimer_) {
+        gridAckTimer_ = instance_->eventLoop().addTimeEvent(
+            CLOCK_MONOTONIC, gridPendingSince_ + kGridAckUsec, kTimerAccuracyUsec,
+            [this](fcitx::EventSourceTime *, uint64_t) {
+                checkGridAck();
+                return true;
+            });
+    } else {
+        gridAckTimer_->setTime(gridPendingSince_ + kGridAckUsec);
+        gridAckTimer_->setOneShot();
+    }
+}
+
+void WowtypeEngine::hideGridOverlay() {
+    gridIc_.unwatch();
+    if (overlayBus_ && !gridOwner_.empty()) {
+        auto msg = overlayBus_->createSignal(kOverlayPath, kGridInterface, "Hide");
+        msg.setDestination(gridOwner_);
+        msg << gridSerial_;
+        msg.send();
+    }
+}
+
+void WowtypeEngine::checkGridAck() {
+    if (!gridPendingSince_ || gridBroken_) {
+        return;
+    }
+    if (const uint64_t due = gridPendingSince_ + kGridAckUsec; fcitx::now(CLOCK_MONOTONIC) < due) {
+        gridAckTimer_->setTime(due);
+        gridAckTimer_->setOneShot();
+        return;
+    }
+    gridBroken_ = true;
+    gridPendingSince_ = 0;
+    WLOG_W() << "WowType: 展开面板的网格没有回应（GNOME 扩展画的时候出错了？），改用 kimpanel 的列表";
+    // 扩展要是晚一步画出来了，叫它收起；正显示着的这一屏马上换成 kimpanel 的列表
+    auto *ic = gridIc_.get();
+    hideGridOverlay();
+    if (ic) {
+        updateInputPanel(ic, ic->propertyFor(&factory_));
+    }
+}
+
+void WowtypeEngine::selectGridCell(uint32_t serial, uint32_t index) {
+    auto *ic = gridIc_.get();
+    // 只认现在显示的这一屏上点的（点的时候面板已经变了的不算）
+    if (!ic || serial != gridSerial_) {
+        return;
+    }
+    commitCandidate(ic, ic->propertyFor(&factory_), index);
+}
+
+void WowtypeEngine::onGridUiEvent(fcitx::Event &event) {
+    auto *shown = gridIc_.get();
+    if (!shown || static_cast<fcitx::InputContextEvent &>(event).inputContext() != shown) {
+        return;
+    }
+    if (event.type() == fcitx::EventType::InputContextUpdateUI) {
+        const auto &update = static_cast<fcitx::InputContextUpdateUIEvent &>(event);
+        if (update.component() != fcitx::UserInterfaceComponent::InputPanel ||
+            dynamic_cast<WowtypeGridOverlayList *>(shown->inputPanel().candidateList().get())) {
+            return; // 还是网格（光标、这一屏变了的已经发过了）
+        }
+    }
+    hideGridOverlay();
 }
 
 void WowtypeEngine::setConfig(const fcitx::RawConfig &config) {
@@ -1337,6 +1529,10 @@ bool WowtypeEngine::canToggleMode() const {
 }
 
 WowtypeEngine::~WowtypeEngine() {
+    gridEventWatchers_.clear();
+    if (gridIc_.get()) {
+        hideGridOverlay();
+    }
     // 退出时不能无限等（#244：桌面会话结束时 fcitx5 卡在这里，等到被 SIGTERM）。后台还在载入词库的，
     // 最多等几秒；还没好就交给一个分离的线程等它载完再释放，这里不管了（进程反正要退出）
     if (loading_.valid()) {
@@ -2105,6 +2301,16 @@ void WowtypeEngine::fillGridPanel(fcitx::InputContext *ic, WowtypeState *state) 
     const auto &all = state->candidates_;
     const std::size_t n = all.size();
     state->gridCursor_ = std::min(state->gridCursor_, n - 1);
+    if (gridOverlay()) {
+        // GNOME 扩展画真正的网格，只有光标处那一格高亮、点格子选词（#270）。本来画在 kimpanel 候选框上的
+        // 提示和编辑区（应用自己不画编辑区时）挪到网格上面，kimpanel 什么都不画
+        auto &panel = ic->inputPanel();
+        sendGridOverlay(ic, state, panel.auxUp().toString() + panel.preedit().toString());
+        panel.setAuxUp(fcitx::Text());
+        panel.setPreedit(fcitx::Text());
+        panel.setCandidateList(std::make_unique<WowtypeGridOverlayList>());
+        return;
+    }
     const std::size_t rows = (n + kGridCols - 1) / kGridCols;
     const std::size_t cursorRow = state->gridCursor_ / kGridCols;
 

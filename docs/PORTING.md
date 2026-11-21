@@ -23,7 +23,7 @@
 | 语音 | `voice/`：wtlocal 推理（纯 Rust）+ cpal 采集 | 是（cpal 在 macOS 上走 CoreAudio） |
 | 输入行为 | `fcitx5-addon/src/wowtype_engine.cpp` | **否**，和 fcitx5 的类型绑死 |
 | 设置界面 | `settings/wowtype-config`（Python + GTK 4，读写 fcitx5 配置、D-Bus） | 否，macOS 要另写 |
-| GNOME 扩展 | `themes/gnome-shell/`（候选框主题、语音浮条） | 只有 Linux |
+| GNOME 扩展 | `themes/gnome-shell/`（候选框主题、语音浮条、展开面板的网格） | 只有 Linux |
 
 ## 会话接口（要挪进 core 的部分）
 
