@@ -758,6 +758,16 @@ private:
     bool overlayAcked_ = false;
     bool overlayBroken_ = false;
 
+    // 展开 6×6 候选面板（GNOME 扩展自绘网格，仅高亮当前词）
+    std::unique_ptr<fcitx::dbus::Slot> gridAckSlot_;
+    std::unique_ptr<fcitx::dbus::Slot> gridActionSlot_;
+    bool gridOverlayAcked_ = false;
+    bool gridOverlayShown_ = false;
+    std::size_t gridOverlayPageStart_ = 0;
+    fcitx::TrackableObjectReference<fcitx::InputContext> gridOverlayIc_;
+    void sendGridOverlay(fcitx::InputContext *ic, WowtypeState *state, bool visible);
+    void hideGridOverlay();
+
     // 外部命令切模式：单独一条会话总线连接。control_ 要先于总线析构，所以排在后面
     std::unique_ptr<fcitx::dbus::Bus> controlBus_;
     std::unique_ptr<WowtypeControl> control_;

@@ -4,15 +4,24 @@
 //   - voice.js 画语音输入浮条（按住语音键说话时出现在光标下面）。
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
+import {GridOverlay} from './grid.js';
 import {VoiceOverlay} from './voice.js';
 
 export default class WowTypeThemeExtension extends Extension {
     enable() {
         this._voice = new VoiceOverlay();
+        try {
+            this._grid = new GridOverlay();
+        } catch (e) {
+            console.error('WowType GridOverlay failed to initialize:', e);
+            this._grid = null;
+        }
     }
 
     disable() {
         this._voice?.destroy();
         this._voice = null;
+        this._grid?.destroy();
+        this._grid = null;
     }
 }
