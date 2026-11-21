@@ -147,7 +147,7 @@ const std::vector<Page> &pages() {
         {L"语音", {"Voice", "VoiceKey", "VoiceSilenceTimeout", "VoiceCopy"}},
         // TranslateLocal、TranslateBaseUrl、TranslateModel 不单独列：「翻译引擎」下拉框和它下面的框写它们
         // （translate::EngineChoice，和 Linux、macOS 一样）。本地模型的三项只在选了本地翻译时出现（isLocalTranslateKey）
-        {L"翻译", {"Translate", "TranslateModeKey", "TranslateTarget", "TranslateFormal", "TranslateLocalModel",
+        {L"翻译", {"Translate", "TranslateOneShot", "TranslateModeKey", "TranslateTarget", "TranslateFormal", "TranslateLocalModel",
                    "TranslateLlamaServer", "TranslateIdleMinutes"}},
     };
     return p;
@@ -217,6 +217,7 @@ const std::map<std::string, std::wstring> &labels() {
         {"VoiceSilenceTimeout", widen(kVoiceSilenceTitle)},
         {"VoiceCopy", L"识别结果也复制到剪贴板"},
         {"Translate", L"互译（Shift 在中 → 英 → 译之间切）"},
+        {"TranslateOneShot", L"双击 Shift 单次互译（单按 Shift 只切中英，翻完一句自动回来）"},
         {"TranslateModeKey", L"进出「译」的快捷键"},
         {"TranslateTarget", L"译成"},
         {"TranslateLocalModel", L"本地模型文件（留空用数据目录里的）"},

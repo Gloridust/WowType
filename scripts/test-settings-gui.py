@@ -339,6 +339,28 @@ def run(app):
         check(win.values["TranslateLocal"] == "True", "换回本地没写 TranslateLocal=True")
     step("翻译引擎", translate_engine)
 
+    def one_shot():
+        # 双击 Shift 单次互译（#191）：打开以后「互译」那一行说双击 Shift 翻一句（上面「开关」一步翻过它，先关上）
+        row = win.one_shot_row
+        row.set_active(False)
+        ready, conflicts = win.translate_ready, getattr(win, "shift_conflicts", [])
+        win.translate_ready = lambda: True
+        win.shift_conflicts = []
+        try:
+            row.set_active(True)
+            check(win.values["TranslateOneShot"] == "True", "单次互译没存上")
+            check(win.translate_row.get_subtitle() == "双击 Shift 翻一句，单按只切中英",
+                  f"互译那一行没跟着变：{win.translate_row.get_subtitle()}")
+            row.set_active(False)
+            check(win.values["TranslateOneShot"] == "False", "关掉单次互译没存上")
+            check(win.translate_row.get_subtitle() == "单按 Shift：中 → 英 → 译 → 中",
+                  f"关掉后互译那一行没变回来：{win.translate_row.get_subtitle()}")
+        finally:
+            win.translate_ready = ready
+            win.shift_conflicts = conflicts
+            win.refresh_translate_status()
+    step("双击 Shift 单次互译", one_shot)
+
     def dialog(name, action, answer=None):
         def go():
             for w in new_windows(win, action):

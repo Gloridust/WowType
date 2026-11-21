@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 16
+#define WOWTYPE_ABI_VERSION_MINOR 17
 
 #ifdef __cplusplus
 extern "C" {
@@ -394,7 +394,7 @@ typedef struct WowtypeSession WowtypeSession;
  * 在「译」里回中文；frame->mode_changed 为 1。开着工具栏、表情面板时别带（按键归面板）。 */
 #define WOWTYPE_KEY_ACTION_TOGGLE_MODE 6
 /* 1.10 起：进出「译」的快捷键（TranslateModeKey）：不在「译」里进「译」（打到一半的拼音带进去），
- * 在「译」里回到进来之前的模式。没有「译」（translate_mode 为 0）或者输入框带
+ * 在「译」里回到进来之前的模式（开着 translate_one_shot 时进的「译」只翻一句，1.17）。没有「译」（translate_mode 为 0）或者输入框带
  * WOWTYPE_KEY_HINT_NO_TRANSLATE 时 frame->handled 为 0，键交给应用。 */
 #define WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 7
 
@@ -427,7 +427,8 @@ typedef struct {
 
 /* 输入模式（1.10 起）。单按 Shift（Shift_L 0xffe1 / Shift_R 0xffe2 的按下、松开都交给会话）
  * 在中 → 英 →（WowtypeSessionConfig.translate_mode 时）译 → 中 之间切换，frame->mode_changed 为 1；
- * 设了 translate_key 时只在中 ↔ 英之间切（在「译」里回中文），「译」用 WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 进出。
+ * 设了 translate_key 时只在中 ↔ 英之间切（在「译」里回中文），「译」用 WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE 进出；
+ * 开着 translate_one_shot（1.17）时也只在中 ↔ 英之间切，双击 Shift 进「译」只翻一句。
  * 英文模式下会话只管字母、数字前的自动空格，别的键都交给应用。互译时的上屏还在外壳。 */
 #define WOWTYPE_MODE_CHINESE 0
 #define WOWTYPE_MODE_ENGLISH 1
@@ -502,6 +503,12 @@ typedef struct {
                            * 也算，这个键照切了以后的模式处理）、到了时间（tick）、第二下没算成单按时切，这几个
                            * frame 都可能带 mode_changed（和 commit：打到一半切英文）。按键没带 time_ms 时照旧立刻切。
                            * 默认 0：外壳要会这些才开 */
+    int translate_one_shot; /* 1.17 起：互译只翻一句（#191，translate_mode 时才起作用），默认 0：
+                             * 单按 Shift 只在中 ↔ 英之间切；双击 Shift（要开着 shift_double_tap，0.35 秒以内单按
+                             * 两下，不再两下都不算）、互译键（WOWTYPE_KEY_ACTION_TOGGLE_TRANSLATE）、_set_mode 进的
+                             * 「译」都只翻一句：译文上屏（按过回车、译好了才上屏的在 tick 的 frame 里）、Esc、
+                             * Shift+回车、单按 Shift、在「译」里再双击 / 按互译键都回到进来前的模式（中或英），
+                             * 这些 frame 带 mode_changed，外壳要跟上。打到一半双击：拼音带进「译」接着打 */
 } WowtypeSessionConfig;
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
@@ -530,7 +537,9 @@ typedef struct {
                              * 外壳攒够次数存一次用户词库；只上屏了标点、emoji、计算结果、日期时间是 0 */
     int mode;               /* 1.10 起：这次调用以后的输入模式，WOWTYPE_MODE_* */
     int mode_changed;       /* 1.10 起：这次调用切换了输入模式（单按 Shift、wowtype_session_set_mode；
-                             * 1.14 起开着 shift_double_tap 时也可能在 tick、OBSERVE 的 frame 里） */
+                             * 1.14 起开着 shift_double_tap 时也可能在 tick、OBSERVE 的 frame 里；
+                             * 1.17 起开着 translate_one_shot 时「译」里上屏译文、Esc 的 frame，
+                             * 和按过回车、译好了上屏的 tick 的 frame 里也可能有） */
     int translating;        /* 1.10 起：互译中（「译」、有翻译器、输入框能翻译）。上屏的字攒成原文，
                              * 不进 commit；下面四段字只在互译时有内容，否则是空串（不为 NULL） */
     const char *translate_source; /* 攒着的原文（编辑区里画在拼音前面） */

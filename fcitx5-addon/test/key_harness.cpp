@@ -3053,6 +3053,98 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
     s.push_back({"#253：再单按一下，定时器里切回中文",
                  [](HarnessInputContext *ic) { tapKey(ic, FcitxKey_Shift_R); },
                  [label](HarnessInputContext *ic) { return label(ic) == "中"; }});
+    // #191：互译只翻一句（TranslateOneShot）。双击判断开着（上面 #253 的几步打开的），单按要等定时器切
+    auto oneShotConfig = [c, addon, url](bool on) {
+        std::ofstream(c->configFile) << "Translate=True\nTranslateBaseUrl=" << url
+                                     << "\nTranslateModel=mock\nTranslateTarget=en\nTranslateOneShot="
+                                     << (on ? "True" : "False") << "\n";
+        addon->reloadConfig();
+    };
+    s.push_back({"#191：开着单次互译，双击 Shift 进「译」，打的字攒在原文框里",
+                 [reset, oneShotConfig, label, tappedLabel](HarnessInputContext *ic) {
+                     oneShotConfig(true);
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     *tappedLabel = label(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     check(*tappedLabel == "中" && label(ic) == "译",
+                           "#191：第一下先等着，第二下进「译」：" + *tappedLabel + " " + label(ic));
+                     type(ic, "zhongguo<sp>");
+                 },
+                 [label](HarnessInputContext *ic) {
+                     return ic->committed.empty() && !preedit(ic).empty() && label(ic) == "译" &&
+                            aux(ic).find("中→英") != std::string::npos;
+                 }});
+    s.push_back({"#191：没译好就按回车：译好了自动上屏，定时器里回到中文",
+                 [source](HarnessInputContext *ic) {
+                     *source = preedit(ic);
+                     type(ic, "<cr>");
+                 },
+                 [source, label](HarnessInputContext *ic) {
+                     return ic->committed == "EN:" + *source && label(ic) == "中" && preedit(ic).empty() &&
+                            inlineText(ic).empty();
+                 }});
+    s.push_back({"#191：单次互译开着，单按 Shift 只切中英（先到英文）",
+                 [reset](HarnessInputContext *ic) {
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                 },
+                 [label](HarnessInputContext *ic) { return label(ic) == "英"; }});
+    s.push_back({"#191：英文里双击进「译」，等译文出来",
+                 [label](HarnessInputContext *ic) {
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     check(label(ic) == "译", "#191：英文里双击进「译」：" + label(ic));
+                     type(ic, "nihao<sp>");
+                 },
+                 [label](HarnessInputContext *ic) { return inlineText(ic) == "EN:你好" && label(ic) == "译"; }});
+    s.push_back({"#191：回车上屏译文，回到英文",
+                 [](HarnessInputContext *ic) { type(ic, "<cr>"); },
+                 [label](HarnessInputContext *ic) {
+                     return ic->committed == "EN:你好" && label(ic) == "英" && preedit(ic).empty() &&
+                            inlineText(ic).empty();
+                 }});
+    s.push_back({"#191：Esc 放弃：不上屏，回到英文",
+                 [reset, label](HarnessInputContext *ic) {
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     type(ic, "nihao<sp>");
+                     check(label(ic) == "译", "#191：又双击进「译」：" + label(ic));
+                     type(ic, "<esc>");
+                 },
+                 [label](HarnessInputContext *ic) {
+                     return ic->committed.empty() && label(ic) == "英" && preedit(ic).empty() &&
+                            inlineText(ic).empty() && page(ic).empty();
+                 }});
+    s.push_back({"#191：再单按一下回中文",
+                 [](HarnessInputContext *ic) { tapKey(ic, FcitxKey_Shift_R); },
+                 [label](HarnessInputContext *ic) { return label(ic) == "中"; }});
+    s.push_back({"#191：拼音打到一半双击：拼音带进「译」接着打，什么都不上屏",
+                 [label](HarnessInputContext *ic) {
+                     type(ic, "ni");
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     check(label(ic) == "译" && ic->committed.empty(), "#191：打到一半双击进「译」：" + label(ic));
+                     type(ic, "hao<sp>");
+                 },
+                 [label](HarnessInputContext *ic) {
+                     return ic->committed.empty() && preedit(ic) == "你好" && label(ic) == "译";
+                 }});
+    s.push_back({"#191：「译」里单按 Shift 放弃：原文原样上屏，回到中文",
+                 [](HarnessInputContext *ic) { tapKey(ic, FcitxKey_Shift_R); },
+                 [label](HarnessInputContext *ic) { return ic->committed == "你好" && label(ic) == "中"; }});
+    s.push_back({"#191：关着单次互译：双击 Shift 照旧不切，过了间隔也不切",
+                 [reset, oneShotConfig, waitedFrom](HarnessInputContext *ic) {
+                     oneShotConfig(false);
+                     reset(ic);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     tapKey(ic, FcitxKey_Shift_R);
+                     *waitedFrom = now(CLOCK_MONOTONIC);
+                 },
+                 [label, waitedFrom](HarnessInputContext *ic) {
+                     return now(CLOCK_MONOTONIC) - *waitedFrom > 700000 && label(ic) == "中";
+                 }});
     s.push_back({"#253：测完关掉双击判断（别的用例连按不等）",
                  [addon, reset](HarnessInputContext *ic) {
                      ::setenv("WOWTYPE_SHIFT_DOUBLE_TAP", "0", 1);

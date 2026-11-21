@@ -188,8 +188,8 @@ private:
     void refreshTranslate(const WowtypeFrame *frame);
     std::optional<CandidatePage> candidatePage(const WowtypeFrame *frame);
     std::string translateSignature(const WowtypeFrame *frame) const;
-    std::string statsSource() const;
-    std::string statsScheme() const;
+    std::string statsSource(Mode mode) const;
+    std::string statsScheme(Mode mode) const;
     uint32_t previousCharacter();
     uint32_t reliablePreviousCharacter();
     uint64_t now() const;
@@ -200,6 +200,8 @@ private:
     WowtypeTranslator *translator_ = nullptr;
     Config config_;
     std::string translateDrawn_;
+    /// 上一次 applyFrame 以后的模式：离开「译」的 frame 里上屏的照「译」记统计
+    Mode appliedMode_ = Mode::Chinese;
     bool associationShown_ = false;
     bool pairing_ = false;
 };

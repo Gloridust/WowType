@@ -315,6 +315,8 @@ public final class Composer {
     }
     /// 现在画的是哪个结果（signature），结果变了才重画
     private var translateDrawn = ""
+    /// 上一次 apply 以后的模式：离开「译」的 frame 里上屏的照「译」记统计
+    private var appliedMode: Mode = .chinese
     /// 候选框上画着上屏以后的联想：会话关掉了联想、键又交给了应用时要收起来
     private var associationShown = false
     /// 会话的自动配对开着（设置里打开了、这个输入框现在能按位置改字）。变了才重新配会话（关掉时会话丢掉记着的配对）
@@ -676,6 +678,8 @@ public final class Composer {
         }
         config.translate_mode = translateAvailable ? 1 : 0
         config.translate_key = settings.translateModeKey == nil ? 0 : 1
+        // 互译只翻一句（#191）：双击 Shift 进「译」，翻完回去的 frame 可能在 pollTranslation 里，外壳比对模式跟上
+        config.translate_one_shot = settings.translateOneShot ? 1 : 0
         config.toolbar = settings.toolbar ? 1 : 0
         config.clipboard_history = settings.clipboardHistory ? 1 : 0
         config.shuangpin_keys = settings.shuangpinShowKeys ? 1 : 0
@@ -800,6 +804,9 @@ public final class Composer {
     /// 按会话给的 frame 上屏、更新编辑区和候选框。
     func apply(_ frame: UnsafePointer<WowtypeFrame>?) {
         let delta = frame.map { Int($0.pointee.size) >= MemoryLayout<WowtypeFrame>.size ? Int($0.pointee.cursor_delta) : 0 } ?? 0
+        // 离开「译」的那一下上屏的（只翻一句时的译文，原文原样上屏）照「译」记统计：会话已经切回去了（和 Linux 一样）
+        let statsMode = frame.map { $0.pointee.mode_changed != 0 } == true && appliedMode == .translate ? .translate : mode
+        appliedMode = mode
         var inserted = ""
         if let frame, let commit = frame.pointee.commit {
             // 会话已经补好了空格、记了上文；互译时上屏的是译文、原文
@@ -807,8 +814,8 @@ public final class Composer {
             inserted = text
             client?.insertText(text)
             // 打字统计（外壳按 TypingStats 决定记不记）：互译上屏的不是候选，位置记 0
-            onCommitStats?(text, statsSource, statsScheme,
-                           mode == .translate ? 0 : Int(frame.pointee.choice_index))
+            onCommitStats?(text, statsSource(statsMode), statsScheme(statsMode),
+                           statsMode == .translate ? 0 : Int(frame.pointee.choice_index))
             if frame.pointee.learned != 0 {
                 onCommit?(text)
             }
@@ -832,7 +839,7 @@ public final class Composer {
     }
 
     /// 统计用的输入模式：互译 / 英文 / 五笔 / 双拼 / 全拼。
-    private var statsSource: String {
+    private func statsSource(_ mode: Mode) -> String {
         if mode == .translate { return "translate" }
         if mode == .english { return "english" }
         if config.wubi { return "wubi" }
@@ -840,7 +847,7 @@ public final class Composer {
     }
 
     /// 双拼方案在统计里的名字（小写）；不是双拼时为空。
-    private var statsScheme: String {
+    private func statsScheme(_ mode: Mode) -> String {
         config.shuangpin && mode != .translate && mode != .english ? config.shuangpinScheme.lowercased() : ""
     }
 

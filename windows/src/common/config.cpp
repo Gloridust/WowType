@@ -175,6 +175,7 @@ const std::vector<SettingDef> &settingDefs() {
         {"TranslateBaseUrl", T::String, ""},
         {"TranslateModel", T::String, ""},
         {"TranslateFormal", T::Bool, "False"},
+        {"TranslateOneShot", T::Bool, "False"},
         {"TranslateLocal", T::Bool, "True"},
         {"TranslateLocalModel", T::String, ""},
         {"TranslateLlamaServer", T::String, ""},

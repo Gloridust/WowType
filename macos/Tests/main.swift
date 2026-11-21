@@ -1632,6 +1632,82 @@ do {
     check(same.c.handle(y) && same.c.mode == .translate, "同一个键：再按进「译」")
 }
 
+/// 在 at 秒双击 Shift（两下隔 0.25 秒），返回第二下切没切模式。
+func doubleTapShift(_ c: Composer, at: Double) -> Bool {
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: at)
+    _ = c.shiftChanged(down: false, otherModifiers: false, now: at + 0.08)
+    _ = c.shiftChanged(down: true, otherModifiers: false, now: at + 0.25)
+    return c.shiftChanged(down: false, otherModifiers: false, now: at + 0.33)
+}
+
+do {
+    // #191：互译只翻一句（TranslateOneShot），和 Linux、Windows 一样
+    check(!WowtypeConfig().translateOneShot, "默认不开单次互译")
+    check(WowtypeConfig.parse("TranslateOneShot=True").translateOneShot, "读出单次互译")
+    check(WowtypeConfig.template().contains("TranslateOneShot=False"), "模板里有单次互译")
+    let r = translateRig { $0.translateOneShot = true }
+    var seen: [String] = []
+    r.c.onCommitStats = { text, source, _, index in seen.append("\(text)|\(source)|\(index)") }
+    r.c.switchMode(to: .chinese)
+    // 单按只在中英之间切
+    tapShift(r.c)
+    check(r.c.mode == .english, "单次互译：单按 Shift 到英文")
+    tapShift(r.c)
+    check(r.c.mode == .chinese, "单次互译：再单按回中文，不经过「译」")
+    tapShift(r.c)
+    // 英文里双击进「译」，译文上屏后回到英文
+    r.clock.now = shiftClock + 10
+    check(doubleTapShift(r.c, at: r.clock.now) && r.c.mode == .translate, "英文里双击 Shift 进「译」", "\(r.c.mode)")
+    r.tick(1)
+    check(r.c.mode == .translate, "过了双击间隔也不再切")
+    type(r.c, "nihao ")
+    check(r.tick(0.6) && r.t.started == ["你好"], "停够 0.5 秒发请求", "\(r.t.started)")
+    r.t.finish("Hello")
+    check(r.c.handle(.key(Keysym.returnKey)) && r.client.committed == "Hello" && r.c.mode == .english,
+          "回车上屏译文，回到英文", "\(r.client.committed) \(r.c.mode)")
+    check(seen == ["Hello|translate|0"], "译文照「译」记统计", "\(seen)")
+    // 没译好就按回车：轮询里上屏、回去
+    r.client.committed = ""
+    r.clock.now += 10
+    check(doubleTapShift(r.c, at: r.clock.now) && r.c.mode == .translate, "又双击进「译」")
+    type(r.c, "shijie ")
+    let source = r.c.translateSource
+    _ = r.c.handle(.key(Keysym.returnKey))
+    check(r.client.committed.isEmpty && r.c.mode == .translate, "没译好先等着")
+    r.t.finish("World")
+    r.tick()
+    check(r.client.committed == "World" && r.c.mode == .english && !source.isEmpty, "译好了轮询里上屏，回到英文",
+          "\(r.client.committed) \(r.c.mode)")
+    // Esc 放弃
+    r.clock.now += 10
+    _ = doubleTapShift(r.c, at: r.clock.now)
+    type(r.c, "nihao ")
+    check(r.c.handle(.key(Keysym.escape)) && r.c.mode == .english && r.c.translateSource.isEmpty,
+          "Esc 放弃，回到英文")
+    // 打到一半双击：拼音带进「译」；单按放弃：原文原样上屏，回到中文
+    r.c.switchMode(to: .chinese)
+    r.client.committed = ""
+    type(r.c, "ni")
+    r.clock.now += 10
+    check(doubleTapShift(r.c, at: r.clock.now) && r.c.mode == .translate && r.c.input == "ni" && r.client.committed.isEmpty,
+          "打到一半双击：拼音带进「译」", r.c.input)
+    type(r.c, "hao ")
+    tapShift(r.c)
+    check(r.c.mode == .chinese && r.client.committed == "你好", "「译」里单按 Shift：原文原样上屏，回到中文",
+          "\(r.client.committed) \(r.c.mode)")
+
+    // 关着：双击两下都不算（#253），单按照旧 中 → 英 → 译
+    let off = translateRig()
+    off.c.switchMode(to: .chinese)
+    off.clock.now = shiftClock + 10
+    check(!doubleTapShift(off.c, at: off.clock.now) && off.c.mode == .chinese, "关着：双击 Shift 不切")
+    off.tick(1)
+    check(off.c.mode == .chinese, "关着：过了间隔也不切")
+    tapShift(off.c)
+    tapShift(off.c)
+    check(off.c.mode == .translate, "关着：单按照旧切到「译」")
+}
+
 withConfig({ $0.shiftToggle = .off; $0.translateModeKey = Shortcut(name: "Control+Shift+Y") }) { c, _ in
     // 关了 Shift、只设了互译键：英文回不来，换设置时拉回中文（互译键只进出「译」）
     c.switchMode(to: .english)

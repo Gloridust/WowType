@@ -1532,6 +1532,9 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                                                                       : WOWTYPE_SHIFT_TOGGLE_BOTH;
     config.translate_mode = translateAvailable() ? 1 : 0;
     config.translate_key = translateModeKey_.sym() != FcitxKey_None ? 1 : 0;
+    // 互译只翻一句（#191）：双击 Shift（handleShiftKey）、互译键进「译」；翻完回去在按键（applySessionFrame）、
+    // 定时器（tickTranslate）的 frame 里，都跟着 mode_changed
+    config.translate_one_shot = *config_.translateOneShot ? 1 : 0;
     config.toolbar = toolbar_ ? 1 : 0;
     config.clipboard_history = clipboardHistory_ ? 1 : 0;
     config.shuangpin_keys = shuangpinShowKeys_ ? 1 : 0;
@@ -1758,6 +1761,14 @@ void WowtypeEngine::applySessionFrame(fcitx::InputContext *ic, WowtypeState *sta
         // Ctrl+Delete 忘掉了学错的词：马上存，免得 fcitx5 退出前没存上、重启又回来
         ++unsavedCommits_;
         maybeSaveUserDict(true);
+    }
+    if (frame && frame->mode_changed) {
+        // 只翻一句的「译」（#191）：译文上屏、Esc、Shift+回车以后会话回到了进来前的模式，全局模式跟上、
+        // 弹提示（译文、原文在 frame 里，照「译」记统计）；候选框里的原文框收起来
+        followSessionMode(ic, state, frame);
+        translateDrawn_.clear();
+        updateInputPanel(ic, state);
+        return;
     }
     if (frame && frame->commit) {
         // 学没学到词看 frame->learned；选了 emoji 由会话记进最近用过。
@@ -3030,7 +3041,9 @@ uint32_t WowtypeEngine::tickTranslate() {
     }
     if (frame->mode_changed) {
         // 单按 Shift 等双击等到了时间（#253）：现在切，弹「中 / 英」提示（打到一半切英文时字母在 frame 里）
+        // 只翻一句的「译」按过回车、译好了（#191）：上屏译文，回到进来前的模式
         const uint32_t wake = frame->wake_after_ms;
+        translateDrawn_.clear();
         followSessionMode(ic, state, frame);
         return wake;
     }

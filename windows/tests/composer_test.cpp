@@ -988,6 +988,62 @@ int main(int argc, char **argv) {
               "第二下到时间也切");
     }
     {
+        // #191：互译只翻一句（TranslateOneShot）。翻译器填了地址和模型就算能翻（这里连不上，不等译文：
+        // 译文上屏以后回去在核心的会话测试、fcitx5 按键测试里测）
+        WowtypeTranslator *translator = wowtype_translate_new();
+        wowtype_translate_configure(translator, "http://127.0.0.1:9/v1", "mock", "en", 0, nullptr);
+        Config config;
+        config.setValue("Translate", "True");
+        config.setValue("TranslateOneShot", "True");
+        auto [c, client] = fresh(config);
+        c->setTranslator(translator);
+        std::vector<std::string> seen;
+        c->onCommitStats = [&](const std::string &text, const std::string &source, const std::string &, int index) {
+            seen.push_back(text + "|" + source + "|" + std::to_string(index));
+        };
+        using M = Composer::Mode;
+        const auto doubleTap = [&c = c](uint64_t at) {
+            c->shiftChanged(true, false, at, false);
+            c->shiftChanged(false, false, at + 80, false);
+            c->shiftChanged(true, false, at + 250, false);
+            return c->shiftChanged(false, false, at + 330, false);
+        };
+        c->shiftChanged(true, false, 1000, false);
+        c->shiftChanged(false, false, 1080, false);
+        check(settleShift(*c, 1500) && c->mode() == M::English, "#191：单按 Shift 先到英文");
+        check(doubleTap(2000) && c->mode() == M::Translate, "#191：英文里双击进「译」（这一下切了模式）");
+        check(!settleShift(*c, 3000) && c->mode() == M::Translate, "#191：过了间隔也不再切");
+        type(*c, "nihao ");
+        check(c->translateSource() == "你好" && client->committed.empty(), "#191：打的字攒成原文", c->translateSource());
+        check(c->handle(KeyInput::key(keysym::escape)) && c->mode() == M::English && client->committed.empty() &&
+                  c->translateSource().empty(),
+              "#191：Esc 放弃，回到英文", client->committed);
+        c->shiftChanged(true, false, 4000, false);
+        c->shiftChanged(false, false, 4080, false);
+        check(settleShift(*c, 4500) && c->mode() == M::Chinese, "#191：单按回中文（不经过「译」）");
+        // 打到一半双击：拼音带进「译」接着打；Shift+回车上屏原文，回到中文，照「译」记统计
+        type(*c, "ni");
+        check(doubleTap(5000) && c->mode() == M::Translate && c->isComposing() && client->committed.empty(),
+              "#191：打到一半双击，拼音带进「译」", client->committed);
+        type(*c, "hao ");
+        check(c->translateSource() == "你好", "#191：接着打完进原文", c->translateSource());
+        check(c->handle(KeyInput::key(keysym::returnKey, mod::shift)) && c->mode() == M::Chinese &&
+                  client->committed == "你好" && seen.size() == 1 && seen[0] == "你好|translate|0",
+              "#191：Shift+回车上屏原文，回到中文", client->committed + " " + join(seen));
+        // 「译」里再双击：回去
+        check(doubleTap(7000) && c->mode() == M::Translate, "#191：中文里双击进「译」");
+        check(doubleTap(8000) && c->mode() == M::Chinese, "#191：「译」里再双击回中文");
+        // 关着：双击两下都不算，单按照旧 中 → 英 → 译
+        config.setValue("TranslateOneShot", "False");
+        c->apply(config);
+        check(!doubleTap(9000) && !settleShift(*c, 10000) && c->mode() == M::Chinese, "#191：关着时双击 Shift 不切");
+        tapShift(*c);
+        tapShift(*c);
+        check(c->mode() == M::Translate, "#191：关着时单按照旧切到「译」");
+        c->setTranslator(nullptr);
+        wowtype_translate_free(translator);
+    }
+    {
         // 系统要结束组字：打的字母原样上屏，不带分音节的隔音符
         auto [c, client] = fresh();
         type(*c, "nihao");

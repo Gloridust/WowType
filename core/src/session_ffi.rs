@@ -247,6 +247,9 @@ pub struct WowtypeSessionConfig {
     /// 1.14 起：双击 Shift 不切换（单按先等一会儿再切，#253），默认 0（外壳要会按 `wake_after_ms` 调 tick、
     /// 跟着 tick 和 OBSERVE 的 frame 里的 `mode_changed` 才开）。
     pub shift_double_tap: c_int,
+    /// 1.17 起：互译只翻一句（#191），默认 0：双击 Shift（要开着 `shift_double_tap`）、互译键进的「译」翻完一句
+    /// 回到进来前的模式，单按 Shift 只在中 ↔ 英之间切。翻完回去可能在 tick 的 frame 里（按过回车、译好了才上屏）。
+    pub translate_one_shot: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -290,6 +293,7 @@ impl Default for WowtypeSessionConfig {
             association: c_int::from(config.association),
             auto_pair_punct: c_int::from(config.auto_pair_punct),
             shift_double_tap: c_int::from(config.shift_double_tap),
+            translate_one_shot: c_int::from(config.translate_one_shot),
         }
     }
 }
@@ -346,6 +350,7 @@ impl WowtypeSessionConfig {
             association: self.association != 0,
             auto_pair_punct: self.auto_pair_punct != 0,
             shift_double_tap: self.shift_double_tap != 0,
+            translate_one_shot: self.translate_one_shot != 0,
         }
     }
 }

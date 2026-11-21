@@ -239,6 +239,10 @@ private let keyboardSettingsURL = URL(string: "x-apple.systempreferences:com.app
 
 /// 两个快捷键行的说明，和 Linux 设置的一样（settings/wowtype-config 的 TOGGLE_KEY_INFO、TRANSLATE_MODE_KEY_INFO）
 private let toggleKeyInfo = "按它在中文、英文之间切（在「译」里按回到中文）。单按 Shift 照常能用。"
+/// 「翻译」页「双击 Shift 单次互译」的说明（和 Linux 设置的一样，#191）
+private let oneShotInfo = "打开后单按 Shift 只在中文、英文之间切；很快连按两下 Shift（或按互译的快捷键）进「译」，只翻这一句："
+    + "译文上屏、Esc、Shift+回车或单按 Shift 放弃以后，回到原来的中文或英文。拼音打到一半时连按两下，打的拼音带进「译」接着打。\n\n"
+    + "关着时和以前一样：单按 Shift 在 中 → 英 → 译 之间切，连按两下 Shift 不切换。"
 private let translateModeKeyInfo = "按它进「译」，在「译」里再按回到原来的模式。设了它，单按 Shift 就只在中文、英文之间切。\n\n"
     + "要先在「翻译」页打开互译；没打开、密码框里这个键交给应用。"
 private let systemKeyNote = "\n\n系统的快捷键（比如 Control+空格）先处理，设成它们 WowType 收不到。"
@@ -837,6 +841,9 @@ private struct TranslatePage: View {
                   + "回车用译文，Shift+回车用原文，Esc 取消。打的是外文就翻成中文。") {
             SwitchRow(title: "互译", subtitle: translateStatus, isOn: $model.config.translate)
             RowDivider()
+            SwitchRow(title: "双击 Shift 单次互译", subtitle: "单按 Shift 只切中英，翻完一句自动回来",
+                      info: oneShotInfo, isOn: $model.config.translateOneShot)
+            RowDivider()
             PickerRow(title: "翻译成", info: "中文翻成这种语言；这种语言（和别的外文）翻成中文。",
                       selection: $model.config.translateTarget, options: translateLanguages)
             RowDivider()
@@ -862,13 +869,14 @@ private struct TranslatePage: View {
         if !model.translateConfigured {
             return model.config.translateLocal ? "先在下面下载翻译模型" : "先在下面填好翻译服务"
         }
+        let oneShot = model.config.translateOneShot
         if let key = model.config.translateModeKey {
-            return "按 \(key.label) 进出「译」"
+            return "按 \(key.label) 进出「译」" + (oneShot && model.config.shiftToggle != .off ? "，双击 Shift 也行" : "")
         }
         if model.config.shiftToggle == .off {
             return "「输入」页关掉了 Shift 切换，切不到「译」；可以在那里设一个互译的快捷键"
         }
-        return "单按 Shift：中 → 英 → 译 → 中"
+        return oneShot ? "双击 Shift 翻一句，单按只切中英" : "单按 Shift：中 → 英 → 译 → 中"
     }
 
     private var serviceGroup: some View {
