@@ -1,0 +1,302 @@
+# 化学式静态表（WowType include_str! 编进二进制，不依赖词库，雾凇/万象通用）
+# 格式：拼音<TAB>化学式符号<TAB>中文名<TAB>来源
+# 拼音空格分音节、无声调、ü=v；来源 chem=化合物(万象 tips_show.txt)、element=118 元素、ion=常见离子
+# 打「拼音」直接出「化学式符号」候选（H₂SO₄、Fe³⁺ 这类 Unicode 上下标）。
+# 编译期读进 core/src/chem.rs 的 OnceLock，运行时零 IO。
+a	Ac	锕	chem
+ai	At	砹	chem
+ai	Es	锿	chem
+an gen	NH₄⁺	铵根	ion
+an qi	NH₃	氨气	chem
+an shui	NH₃·H₂O	氨水	chem
+ao	Og	鿫	chem
+ba	Pd	钯	chem
+bei	Ba	钡	chem
+bi	Bi	铋	chem
+bing tong	C₃H₆O	丙酮	chem
+bing wan	C₃H₈	丙烷	chem
+bo	Bh	𬭛	chem
+bo	Pt	铂	chem
+bu	Pu	钚	chem
+cao mu hui	K₂CO₃	草木灰	chem
+chun jian	Na₂CO₃	纯碱	chem
+cu suan	CH₃COOH	醋酸	chem
+da	Ds	𫟼	chem
+dan	N	氮	chem
+dan fan	CuSO₄·5H₂O	胆矾	chem
+dan hua gui	Si₃N₄	氮化硅	chem
+dan qi	N₂	氮气	chem
+de	Tc	锝	chem
+di	Dy	镝	chem
+di	Te	碲	chem
+dian	I	碘	chem
+dian li zi	I⁻	碘离子	ion
+ding wan	CH₃CH₂CH₂CH₃	丁烷	chem
+diu	Tm	铥	chem
+dong	Rn	氡	chem
+du	Db	𬭊	chem
+e	Os	锇	chem
+er	Er	铒	chem
+er liu hua mu	MoS₂	二硫化钼	chem
+er yang hua dan	NO₂	二氧化氮	chem
+er yang hua gui	SiO₂	二氧化硅	chem
+er yang hua liu	SO₂	二氧化硫	chem
+er yang hua meng	MnO₂	二氧化锰	chem
+er yang hua qing	H₂O₂	二氧化氢	chem
+er yang hua tai	TiO₂	二氧化钛	chem
+er yang hua tan	CO₂	二氧化碳	chem
+fan	V	钒	chem
+fang	Fr	钫	chem
+fei	Fm	镄	chem
+fu	F	氟	chem
+fu	Fl	𫓧	chem
+fu li zi	F⁻	氟离子	ion
+ga	Gd	钆	chem
+gai	Ca	钙	chem
+gai li zi	Ca²⁺	钙离子	ion
+gan bing	CO₂	干冰	chem
+gao	Zr	锆	chem
+gao meng suan gen	MnO₄⁻	高锰酸根	ion
+gao meng suan jia	KMnO₄	高锰酸钾	chem
+ge	Cd	镉	chem
+ge	Cn	鿔	chem
+ge	Cr	铬	chem
+gong	Hg	汞	chem
+gu	Co	钴	chem
+gui	Si	硅	chem
+guo yang hua qing	H₂O₂	过氧化氢	chem
+ha	Hf	铪	chem
+hai	He	氦	chem
+hai qi	He	氦气	chem
+hei	Hs	𬭶	chem
+huo	Ho	钬	chem
+jia	Ga	镓	chem
+jia	K	钾	chem
+jia chun	CH₃OH	甲醇	chem
+jia li zi	K⁺	钾离子	ion
+jia wan	CH₄	甲烷	chem
+jian shi tan suan tong	Cu₂(OH)₂CO₃	碱式碳酸铜	chem
+jin	Au	金	chem
+jin hong shi	TiO₂	金红石	chem
+jiu jing	C₂H₆O	酒精	chem
+ju	Cm	锔	chem
+kai	Cf	锎	chem
+kang	Sc	钪	chem
+ke	Kr	氪	chem
+kong que shi	Cu₂(OH)₂CO₃	孔雀石	chem
+lai	Re	铼	chem
+lan	La	镧	chem
+lan bao shi	Al₂O₃	蓝宝石	chem
+lan fan	CuSO₄·₅H₂O	蓝矾	chem
+lao	Lr	铹	chem
+lao	Rh	铑	chem
+lei	Ra	镭	chem
+li	Li	锂	chem
+li	Lv	𫟷	chem
+liao	Ru	钌	chem
+lin	P	磷	chem
+lin suan	H₃PO₄	磷酸	chem
+lin suan er qing jia	KH₂PO₄	磷酸二氢钾	chem
+lin suan er qing na	NaH₂PO₄	磷酸二氢钠	chem
+lin suan gai	Ca₃(PO₄)₂	磷酸钙	chem
+lin suan gen	PO₄³⁻	磷酸根	ion
+liu	S	硫	chem
+liu hua na	Na₂S	硫化钠	chem
+liu hua qing	H₂S	硫化氢	chem
+liu hua tong	CuS	硫化铜	chem
+liu li zi	S²⁻	硫离子	ion
+liu suan	H₂SO₄	硫酸	chem
+liu suan an	(NH₄)₂SO₄	硫酸铵	chem
+liu suan bei	BaSO₄	硫酸钡	chem
+liu suan gai	CaSO₄	硫酸钙	chem
+liu suan gen	SO₄²⁻	硫酸根	ion
+liu suan gen li zi	SO₄²⁻	硫酸根离子	ion
+liu suan jia	K₂SO₄	硫酸钾	chem
+liu suan lv	Al₂(SO₄)₃	硫酸铝	chem
+liu suan mei	MgSO₄	硫酸镁	chem
+liu suan na	Na₂SO₄	硫酸钠	chem
+liu suan qing jia	KHSO₄	硫酸氢钾	chem
+liu suan qing na	NaHSO₄	硫酸氢钠	chem
+liu suan tie	Fe₂(SO₄)₃	硫酸铁	chem
+liu suan tong	CuSO₄	硫酸铜	chem
+liu suan ya tie	FeSO₄	硫酸亚铁	chem
+lu	Lu	镥	chem
+lu	Rf	𬬻	chem
+lun	Rg	𬬭	chem
+lv	Al	铝	chem
+lv	Cl	氯	chem
+lv fan	FeSO₄·7H₂O	绿矾	chem
+lv hua an	NH₄Cl	氯化铵	chem
+lv hua bei	BaCl₂	氯化钡	chem
+lv hua gai	CaCl₂	氯化钙	chem
+lv hua jia	KCl	氯化钾	chem
+lv hua lv	AlCl₃	氯化铝	chem
+lv hua mei	MgCl₂	氯化镁	chem
+lv hua na	NaCl	氯化钠	chem
+lv hua qing	HCl	氯化氢	chem
+lv hua tie	FeCl₃	氯化铁	chem
+lv hua tong	CuCl₂	氯化铜	chem
+lv hua xin	ZnCl₂	氯化锌	chem
+lv hua ya tie	FeCl₂	氯化亚铁	chem
+lv hua yin	AgCl	氯化银	chem
+lv li zi	Al³⁺	铝离子	ion
+lv li zi	Cl⁻	氯离子	ion
+lv qi	Cl₂	氯气	chem
+lv suan jia	KClO₃	氯酸钾	chem
+mai	Mt	鿏	chem
+mei	Am	镅	chem
+mei	Mg	镁	chem
+mei li zi	Mg²⁺	镁离子	ion
+men	Md	钔	chem
+meng	Mn	锰	chem
+meng suan jia	K₂MnO₄	锰酸钾	chem
+ming fan	KAl(SO₄)₂·12H₂O	明矾	chem
+mo	Mc	镆	chem
+mu	Mo	钼	chem
+na	Na	钠	chem
+na	Np	镎	chem
+na li zi	Na⁺	钠离子	ion
+nai	Ne	氖	chem
+ni	Nb	铌	chem
+ni	Nh	鿭	chem
+niao su	CO(NH₂)₂	尿素	chem
+nie	Ni	镍	chem
+nuo	No	锘	chem
+nv	Nd	钕	chem
+pei	Bk	锫	chem
+peng	B	硼	chem
+pi	Be	铍	chem
+po	Pm	钷	chem
+po	Po	钋	chem
+pu	Pa	镤	chem
+pu	Pr	镨	chem
+pu tao tang	C₆H₁₂O₆	葡萄糖	chem
+qian	Pb	铅	chem
+qing	H	氢	chem
+qing li zi	H⁺	氢离子	ion
+qing qi	H₂	氢气	chem
+qing yang gen	OH⁻	氢氧根	ion
+qing yang gen li zi	OH⁻	氢氧根离子	ion
+qing yang hua an	NH₄OH	氢氧化铵	chem
+qing yang hua bei	Ba(OH)₂	氢氧化钡	chem
+qing yang hua gai	Ca(OH)₂	氢氧化钙	chem
+qing yang hua jia	KOH	氢氧化钾	chem
+qing yang hua li	LiOH	氢氧化锂	chem
+qing yang hua lv	Al(OH)₃	氢氧化铝	chem
+qing yang hua mei	Mg(OH)₂	氢氧化镁	chem
+qing yang hua na	NaOH	氢氧化钠	chem
+qing yang hua tie	Fe(OH)₃	氢氧化铁	chem
+qing yang hua tong	Cu(OH)₂	氢氧化铜	chem
+qing yang hua ya tie	Fe(OH)₂	氢氧化亚铁	chem
+ru	Rb	铷	chem
+san ju qing an	C₃H₆N₆	三聚氰胺	chem
+san yang hua er lv	Al₂O₃	三氧化二铝	chem
+san yang hua er tie	Fe₂O₃	三氧化二铁	chem
+san yang hua liu	SO₃	三氧化硫	chem
+san yang hua wu	WO₃	三氧化钨	chem
+se	Cs	铯	chem
+shan	Sm	钐	chem
+shao jian	NaOH	烧碱	chem
+shen	As	砷	chem
+shi	Ce	铈	chem
+shi cu	CH₃COOH	食醋	chem
+shi gao	CaSO₄·2H₂O	石膏	chem
+shi hui shi	CaCO₃	石灰石	chem
+shi hui shui	Ca(OH)₂	石灰水	chem
+shi yan	NaCl	食盐	chem
+shou shi gao	2CaSO₄·H₂O	熟石膏	chem
+shou shi hui	Ca(OH)₂	熟石灰	chem
+shui	H₂O	水	chem
+si	Sr	锶	chem
+si yang hua san tie	Fe₃O₄	四氧化三铁	chem
+ta	Tl	铊	chem
+tai	Ti	钛	chem
+tai suan bei	BaTiO₃	钛酸钡	chem
+tan	C	碳	chem
+tan	Ta	钽	chem
+tan hua gui	SiC	碳化硅	chem
+tan suan	H₂CO₃	碳酸	chem
+tan suan gai	CaCO₃	碳酸钙	chem
+tan suan gen	CO₃²⁻	碳酸根	ion
+tan suan jia	K₂CO₃	碳酸钾	chem
+tan suan mei	MgCO₃	碳酸镁	chem
+tan suan na	Na₂CO₃	碳酸钠	chem
+tan suan na jing ti	Na₂CO₃·10H₂O	碳酸钠晶体	chem
+tan suan qing an	NH₄HCO₃	碳酸氢铵	chem
+tan suan qing gen	HCO₃⁻	碳酸氢根	ion
+tan suan qing na	NaHCO₃	碳酸氢钠	chem
+te	Tb	铽	chem
+ti	Sb	锑	chem
+tian	Ts	鿬	chem
+tie	Fe	铁	chem
+tie fen	Fe	铁粉	chem
+tie li zi	Fe³⁺	铁离子	ion
+tong	Cu	铜	chem
+tong li zi	Cu²⁺	铜离子	ion
+tong lv	Cu₂(OH)₂CO₃	铜绿	chem
+tu	Th	钍	chem
+wu	W	钨	chem
+wu yang hua er lin	P₂O₅	五氧化二磷	chem
+wu yang hua er tan	Ta₂O₅	五氧化二钽	chem
+xi	Nh	鉨	element
+xi	Se	硒	chem
+xi	Sg	𬭳	chem
+xi	Sn	锡	chem
+xian	Xe	氙	chem
+xian wei su	(C₆H₁₀O₅)n	纤维素	chem
+xiao suan	HNO₃	硝酸	chem
+xiao suan an	NH₄NO₃	硝酸铵	chem
+xiao suan gai	Ca(NO₃)₂	硝酸钙	chem
+xiao suan gen	NO₃⁻	硝酸根	ion
+xiao suan jia	KNO₃	硝酸钾	chem
+xiao suan li	LiNO₃	硝酸锂	chem
+xiao suan mei	Mg(NO₃)₂	硝酸镁	chem
+xiao suan na	NaNO₃	硝酸钠	chem
+xiao suan qian	Pb(NO₃)₂	硝酸铅	chem
+xiao suan tong	Cu(NO₃)₂	硝酸铜	chem
+xiao suan xin	Zn(NO₃)₂	硝酸锌	chem
+xiao suan yin	AgNO₃	硝酸银	chem
+xin	Zn	锌	chem
+xin li zi	Zn²⁺	锌离子	ion
+xiu	Br	溴	chem
+xiu hua qing	HBr	溴化氢	chem
+xiu li zi	Br⁻	溴离子	ion
+ya	Ar	氩	chem
+ya liu suan	H₂SO₃	亚硫酸	chem
+ya liu suan na	NaSO₃	亚硫酸钠	chem
+ya qi	Ar	氩气	chem
+ya tie li zi	Fe²⁺	亚铁离子	ion
+ya xiao suan na	NaNO₂	亚硝酸钠	chem
+yan suan	HCl	盐酸	chem
+yang	O	氧	chem
+yang hua bei	BaO	氧化钡	chem
+yang hua gui	SiO₂	氧化硅	chem
+yang hua jia	Ga₂O₃	氧化镓	chem
+yang hua jia	K₂O	氧化钾	chem
+yang hua lv	Al₂O₃	氧化铝	chem
+yang hua mei	MgO	氧化镁	chem
+yang hua na	Na₂O	氧化钠	chem
+yang hua qian	PbO	氧化铅	chem
+yang hua tie	Fe₂O₃	氧化铁	chem
+yang hua tong	CuO	氧化铜	chem
+yang hua ya tie	FeO	氧化亚铁	chem
+yang hua ya tong	Cu₂O	氧化亚铜	chem
+yang hua yin	Ag₂O	氧化银	chem
+yang li zi	O²⁻	氧离子	ion
+yang qi	O₂	氧气	chem
+yi	Ir	铱	chem
+yi	Y	钇	chem
+yi	Yb	镱	chem
+yi chun	C₂H₆O	乙醇	chem
+yi que	C₂H₂	乙炔	chem
+yi suan	CH₃COOH	乙酸	chem
+yi yang hua dan	NO	一氧化氮	chem
+yi yang hua er qing	H₂O	一氧化二氢	chem
+yi yang hua tan	CO	一氧化碳	chem
+yin	Ag	银	chem
+yin	In	铟	chem
+yin li zi	Ag⁺	银离子	ion
+you	Eu	铕	chem
+you	U	铀	chem
+zhe	Ge	锗	chem
+zhe tang	C₁₂H₂₂O₁₁	蔗糖	chem

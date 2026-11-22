@@ -1,0 +1,239 @@
+# 错音错字提示（移植自雾凇拼音 lua/corrector.lua，236 条）
+# 格式：拼音<TAB>词<TAB>提示
+# 打出「拼音」得到「词」这个候选时，在它后面用注释显示正确读音/写法（不占上屏内容）。
+hun dun	馄饨	hún tun
+zhu jiao	主角	zhǔ jué
+jiao se	角色	jué sè
+chi pi sa	吃比萨	chī bǐ sà
+pi sa bing	比萨饼	bǐ sà bǐng
+shui fu	说服	shuō fú
+dao hang	道行	dào heng
+mo yang	模样	mú yàng
+you mo you yang	有模有样	yǒu mú yǒu yàng
+yi mo yi yang	一模一样	yī mú yī yàng
+zhuang mo zuo yang	装模作样	zhuāng mú zuò yàng
+ren mo gou yang	人模狗样	rén mú gǒu yàng
+mo ban	模板	mú bǎn
+a mi tuo fo	阿弥陀佛	ē mí tuó fó
+na mo a mi tuo fo	南无阿弥陀佛	nā mó ē mí tuó fó
+nan wu a mi tuo fo	南无阿弥陀佛	nā mó ē mí tuó fó
+nan wu e mi tuo fo	南无阿弥陀佛	nā mó ē mí tuó fó
+sha di li	刹帝利	chà dì lì
+gei yu	给予	jǐ yǔ
+bin lang	槟榔	bīng láng
+zhang bai zhi	张柏芝	zhāng bó zhī
+teng man	藤蔓	téng wàn
+nong tang	弄堂	lòng táng
+xin kuan ti pang	心宽体胖	xīn kuān tǐ pán
+mai yuan	埋怨	mán yuàn
+xu yu wei she	虚与委蛇	xū yǔ wēi yí
+mu na	木讷	mù nè
+gui lie	龟裂	jūn liè
+du le le	独乐乐	dú yuè lè
+zhong le le	众乐乐	zhòng yuè lè
+xun ma	荨麻	qián má
+qian ma zhen	荨麻疹	xún má zhěn
+mo ju	模具	mú jù
+cao zhi	草薙	cǎo tì
+cao zhi jing	草薙京	cǎo tì jīng
+cao zhi jian	草薙剑	cǎo tì jiàn
+jia ping ao	贾平凹	jiǎ píng wā
+xue fo lan	雪佛兰	xuě fú lán
+qiang jin	强劲	qiáng jìng
+tong ti	胴体	dòng tǐ
+li neng kang ding	力能扛鼎	lì néng gāng dǐng
+ya lv jiang	鸭绿江	yā lù jiāng
+da fu bian bian	大腹便便	dà fù pián pián
+ka bo zi	卡脖子	qiǎ bó zi
+zhi sheng	吱声	zī shēng
+chan he	掺和	chān huo
+can huo	掺和	chān huo
+can he	掺和	chān huo
+cheng zhi	称职	chèn zhí
+luo shi fen	螺蛳粉	luó sī fěn
+tiao huan	调换	diào huàn
+tai xing shan	太行山	tài háng shān
+jie si di li	歇斯底里	xiē sī dǐ lǐ
+fa xiao	发酵	fā jiào
+xiao mu jun	酵母菌	jiào mǔ jūn
+xiao mu	酵母	jiào mǔ
+yin hong	殷红	yān hóng
+nuan he	暖和	nuǎn huo
+mo ling liang ke	模棱两可	mó léng liǎng kě
+pan yang hu	鄱阳湖	鄱(pó)阳湖
+bo yang hu	鄱阳湖	鄱(pó)阳湖
+bo jing	脖颈	bó gěng
+bo jing er	脖颈儿	bó gěng er
+niu pi xian	牛皮癣	niú pí xuǎn
+hua ban xian	花斑癣	huā bān xuǎn
+ti xian	体癣	tǐ xuǎn
+gu xian	股癣	gǔ xuǎn
+jiao xian	脚癣	jiǎo xuǎn
+zu xian	足癣	zú xuǎn
+jie zha	结扎	jié zā
+hai shen wei	海参崴	hǎi shēn wǎi
+hou pu	厚朴	hòu pò 
+da wan ma	大宛马	dà yuān mǎ
+ci ya	龇牙	zī yá
+ci zhe ya	龇着牙	zī zhe yá
+ci ya lie zui	龇牙咧嘴	zī yá liě zuǐ
+tou pi xue	头皮屑	tóu pí xiè
+liu an shi	六安市	lù ān shì
+liu an xian	六安县	lù ān xiàn
+an hui sheng liu an shi	安徽省六安市	ān huī shěng lù ān shì
+an hui liu an	安徽六安	ān huī lù ān
+an hui liu an shi	安徽六安市	ān huī lù ān shì
+nan jing liu he	南京六合	nán jīng lù hé
+nan jing shi liu he	南京六合区	nán jīng lù hé qū
+nan jing shi liu he qu	南京市六合区	nán jīng shì lù hé qū
+nuo da	偌大	偌(ruò)大
+yin jiu zhi ke	饮鸩止渴	饮鸩(zhèn)止渴
+yin jiu jie ke	饮鸩解渴	饮鸩(zhèn)解渴
+gong shang jiao zhi yu	宫商角徵羽	宫商角(jué)徵羽
+shan qi deng	氙气灯	氙(xiān)气灯
+shan qi da deng	氙气大灯	氙(xiān)气大灯
+shan qi shou dian tong	氙气手电筒	氙(xiān)气手电筒
+yin gai	应该	应(yīng)该
+nian tie	粘贴	粘(zhān)贴
+nian yi nian	粘一粘	粘(zhān)
+shen tu	神荼	神荼(shū)
+yu lei	郁垒	郁垒(lǜ)
+shen tu yu lei	神荼郁垒	神荼(shū)郁垒(lǜ)
+yu lei shen tu	郁垒神荼	郁垒(lǜ)神荼(shū)
+tu fan	吐蕃	吐蕃(bō)
+tu gu hun	吐谷浑	吐谷(yù)浑
+gao ju li	高句丽	高句(gōu)丽
+jiao dou shi	角斗士	角(jué)斗士
+suo sha mi	缩砂密	缩(sù)砂密
+po ji pao	迫击炮	迫(pǎi)击炮
+feng chan	封禅	fēng shàn
+yuan sui	芫荽	yán suī
+wen bo	榅桲	wēn po
+bi ji	荸荠	bí qi
+rou yi	柔荑	róu tí
+rou yi hua xu	柔荑花序	柔荑(tí)花序
+shou ru rou yi	手如柔荑	手如柔荑(tí)
+wen ting jun	温庭筠	温庭筠(yún)
+zhu you tang	朱祐樘	朱祐樘(chēng)
+guan ka	关卡	guān qiǎ
+san wei zhen huo	三昧真火	三昧(mèi)真火
+qing ping zhi mo	青𬞟之末	青𬞟(pín)之末
+qi yu qing ping zhi mo	起于青𬞟之末	起于青𬞟(pín)之末
+feng qi yu qing ping zhi mo	风起于青𬞟之末	风起于青𬞟(pín)之末
+you hui juan	优惠券	优惠券(quàn)
+gong quan	拱券	gǒng xuàn
+pu ru	哺乳	bǔ rǔ
+nao zu zhong	脑卒中	nǎo cù zhòng
+fa zhi	阈值	yù zhí
+xie hu	潟湖	xì hú
+guo pu	果脯	guǒ fǔ
+rou pu	肉脯	ròu fǔ
+huo luo	饸饹	hé le
+pu an suan	脯氨酸	脯(fǔ)氨酸
+luo an suan	酪氨酸	酪(lào)氨酸
+mei shi zi	没食子	没(mò)食子
+shang feng die	裳凤蝶	裳(cháng)凤蝶
+bai qi tun	白𬶨豚	bái jì tún
+nao gu	桡骨	ráo gǔ
+bai zhe bu rao	百折不挠	百折不挠(náo)
+zhui xin qi xie	椎心泣血	椎(chuí)心泣血
+zhui xin qi xue	椎心泣血	椎(chuí)心泣血
+xia chi	挟持	挟(xié)持
+hao zhou	亳州	亳(bó)州
+niu jing	牛丼	牛丼(dǎn)
+niu jing fan	牛丼饭	牛丼(dǎn)饭
+an pou	安瓿	安瓿(bù)
+an pou ping	安瓿瓶	安瓿(bù)瓶
+jie pao	解剖	jiě pōu
+pao fen	剖分	pōu fēn
+pao fu chan	剖腹产	剖(pōu)腹产
+pao gong chan	剖宫产	剖(pōu)宫产
+jin kui	金匮	金匮(guì)
+qing ping le	清平乐	清平乐(yuè)
+ta sha xing	踏莎行	踏莎(suō)行
+sha cao	莎草	suō cǎo
+shan mu	杉木	shā mù
+ju mai cai	苣荬菜	qǔ mǎi cài
+li li	李悝	lǐ kuī
+gui bu	跬步	kuǐ bù
+dao zai shi ni	道在屎溺	道在屎溺(niào)
+bao lian tian wu	暴殄天物	暴殄(tiǎn)天物
+yi ji du ren	以己度人	以己度(duó)人
+yi yu cheng zhen	一语成谶	一语成谶(chèn)
+jing gao	甑糕	甑(zèng)糕
+zhao xiang	着想	着(zhuó)想
+ge zhi wo	胳肢窝	胳(gā)肢窝
+yu he	潏河	潏(jué)河
+xiao zheng	校正	校(jiào)正
+xiao dui	校对	校(jiào)对
+jie su	结束	结束(shù)
+zi yuan zi ai	自怨自艾	自怨自艾(yì)
+gua gua zhui di	呱呱坠地	呱(gū)呱坠地
+niu kou	拗口	拗(ào)口
+bang bu	蚌埠	蚌(bèng)埠
+mi lu	秘鲁	秘(bì)鲁
+zhi re	炽热	炽(chì)热
+pi yi	裨益	裨(bì)益
+gang fu zi yong	刚愎自用	刚愎(bì)自用
+ga ran er zhi	戛然而止	戛(jiá)然而止
+yi ye bian zhou	一叶扁舟	一叶扁(piān)舟
+bo wen qiang shi	博闻强识	博闻强识(zhì)
+ben lin	贲临	贲(bì)临
+qing zha	倾轧	倾轧(yà)
+ren chen	妊娠	妊娠(shēn)
+xin xin xue zi	莘莘学子	莘(shēn)莘学子
+tuo ben	拓本	拓(tà)本
+chui shou ke de	唾手可得	唾(tuò)手可得
+xi yun	吸吮	吸吮(shǔn)
+xin guang ti pang	心广体胖	心广体胖(pán)
+xing su	星宿	星宿(xiù)
+ying pin	赝品	赝(yàn)品
+yi bao shi han	一曝十寒	一曝(pù)十寒
+cu kuang	粗犷	粗犷(guǎng)
+xiang dao	巷道	巷(hàng)道
+tong xia	恫吓	dòng hè
+gui ju	诡谲	诡谲(jué)
+you shuo	游说	游说(shuì)
+yin li	阴霾	阴霾(mái)
+ju tou	噱头	噱(xué)头
+shang jia	商贾	商贾(gǔ)
+biao han	剽悍	剽(piāo)悍
+zong zong	淙淙	淙(cóng)淙
+zheng shang	整饬	整饬(chì)
+dao shang	捯饬	捯饬(chì)
+miao lun	谬论	谬(miù)论
+mian mian xiang xu	面面相觑	面面相觑(qù)
+ge shou	恪守	恪(kè)守
+jiao zhu	角逐	角(jué)逐
+ga li	蛤蜊	蛤(gé)蜊
+e fu	饿殍	饿殍(piǎo)
+ti an	堤岸	堤(dī)岸
+cu zao	粗糙	粗糙(cāo)
+si ye	肄业	肄(yì)业
+tang mu jie she	瞠目结舌	瞠(chēng)目结舌
+xian mei	谄媚	谄(chǎn)媚
+bu di	不啻	不啻(chì)
+bian da	鞭挞	鞭挞(tà)
+bian tai	鞭笞	鞭笞(chī)
+fu gu zhi qu	附骨之疽	附骨之疽(jū)
+pu jie	扑街	仆街
+pu gai	扑街	仆街
+pu jie zai	扑街仔	仆街仔
+pu gai zai	扑街仔	仆街仔
+ceng jin	曾今	曾经
+an nai	按耐	按捺(nà)
+an nai bu zhu	按耐不住	按捺(nà)不住
+bie jie	别介	别价(jie)
+beng jie	甭介	甭价(jie)
+xue mai pen zhang	血脉喷张	血脉贲(bēn)张 | 血脉偾(fèn)张
+qi ke fu	契科夫	契诃(hē)夫
+zhao cha	找茬	找碴
+zhao cha er	找茬儿	找碴儿
+da jia lai zhao cha	大家来找茬	大家来找碴
+da jia lai zhao cha er	大家来找茬儿	大家来找碴儿
+cou huo	凑活	凑合(he)
+ju hui	钜惠	巨惠
+mo xie zuo	魔蝎座	摩羯(jié)座
+pi sa	披萨	比(bǐ)萨
+geng quan	梗犬	㹴犬
+you mai cai	油麦菜	莜麦菜
