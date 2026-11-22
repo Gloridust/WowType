@@ -7,6 +7,7 @@
 pub mod autospace;
 pub mod beam;
 pub mod calc;
+pub mod chem;
 pub mod clipboard;
 pub mod convert;
 pub mod datamark;
@@ -17,12 +18,15 @@ pub mod fsutil;
 pub mod graph;
 pub mod learn;
 pub mod lexicon;
+pub mod lunar;
+pub mod mathsym;
 mod lexstore;
 pub mod llama;
 pub mod lm;
 pub mod nnlm;
 pub mod platform;
 pub mod preedit;
+pub mod radical;
 pub mod rank;
 pub mod recent_emoji;
 pub mod saver;
@@ -35,6 +39,7 @@ pub mod syllable;
 pub mod symbols;
 pub mod train;
 pub mod translate;
+pub mod unicode_input;
 pub mod translate_ffi;
 #[cfg(feature = "voice")]
 pub mod voice_ffi;
@@ -227,6 +232,12 @@ pub struct Engine {
     converter: RwLock<Arc<Converter>>,
     /// 英文词表：小写编码 -> 上屏形式（github -> GitHub）。
     english: RwLock<Arc<HashMap<String, String>>>,
+    /// 英文词表的键按字典序排好，供「前缀补全」二分：打 jetb 命中唯一的 jetbrains → JetBrains。
+    /// 和 english 同一批数据，只是多一份有序键（字符串仍共享 english 里的，不重复存值）。
+    english_keys: RwLock<Arc<Vec<String>>>,
+    /// 每个小写编码在词表里出现的次数，当作词频：月份/星期词有多种写法，重复出现，
+    /// 前缀补全时优先（jan -> January 而非 Jane）。键和 english_keys 同一批。
+    english_freq: RwLock<Arc<HashMap<String, u32>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
     /// 五笔码表（选了五笔才载入，见 [`Engine::load_wubi`]）。
@@ -258,6 +269,8 @@ impl Engine {
             last_words: RwLock::new(HashMap::new()),
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
+            english_keys: RwLock::new(Arc::new(Vec::new())),
+            english_freq: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
             wubi: RwLock::new(None),
             new_words: RwLock::new(HashMap::new()),
@@ -846,6 +859,11 @@ impl Engine {
             .read()
             .map(|m| m.as_ref().clone())
             .unwrap_or_default();
+        let mut freq: HashMap<String, u32> = self
+            .english_freq
+            .read()
+            .map(|m| m.as_ref().clone())
+            .unwrap_or_default();
         for line in text.lines() {
             let line = line.trim_end_matches('\r');
             if line.starts_with('#') || line.trim().is_empty() {
@@ -862,6 +880,7 @@ impl Engine {
                 continue;
             }
             let key = code.to_ascii_lowercase();
+            *freq.entry(key.clone()).or_insert(0) += 1;
             match map.entry(key) {
                 Entry::Vacant(slot) => {
                     slot.insert(word.to_string());
@@ -875,6 +894,17 @@ impl Engine {
             }
         }
         let len = map.len();
+        // 有序键列表：打 jetb 这类缩写时做「唯一前缀补全」。
+        // 只取恰好命中一个词的补全，避免 jan -> January 这种把缩写乱补全（词库里的
+        // January/Jan 条目本来就被上面 word==code 的过滤挡掉了）。
+        let mut keys: Vec<String> = map.keys().cloned().collect();
+        keys.sort_unstable();
+        if let Ok(mut slot) = self.english_keys.write() {
+            *slot = Arc::new(keys);
+        }
+        if let Ok(mut slot) = self.english_freq.write() {
+            *slot = Arc::new(freq);
+        }
         if let Ok(mut slot) = self.english.write() {
             *slot = Arc::new(map);
         }
@@ -883,6 +913,49 @@ impl Engine {
 
     pub fn english_len(&self) -> usize {
         self.english.read().map(|m| m.len()).unwrap_or(0)
+    }
+
+    /// 英文缩写补全：列出词表里所有以 `lower` 为前缀的词（雾凇 melt_eng 的编码前缀匹配）。
+    ///
+    /// 返回按「词长升序、再字典序」排序、去重后的上屏写法，最多 `limit` 个。
+    /// - 唯一命中（jetb -> jetbrains）：仍返回那一个，主候选据此排第一；
+    /// - 多个命中（py -> python/pythonic/…、jan -> jane/january/…）：全部交给调用方作为候选列出，
+    ///   像 rime 那样让用户自己选，而不是因为「会猜错」就一个都不给——那样 py/jan 根本打不出英文。
+    ///   短词优先，是因为缩写通常指向最短的那个常用词（py 最常见的就是 python）。
+    fn english_completions(&self, lower: &str, limit: usize) -> Vec<String> {
+        if lower.len() < 2 || lower.len() > 32 || !lower.bytes().all(|b| b.is_ascii_lowercase()) {
+            return Vec::new();
+        }
+        let keys = self.english_keys.read().ok().map(|k| k.clone()).unwrap_or_default();
+        // 第一个 >= lower 的键
+        let lo = keys.partition_point(|key| key.as_str() < lower);
+        let map = self.english.read().ok();
+        let freq = self.english_freq.read().ok();
+        let mut out: Vec<String> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
+        for key in keys.iter().skip(lo) {
+            if !key.starts_with(lower) {
+                break;
+            }
+            let Some(word) = map.as_ref().and_then(|m| m.get(key)) else {
+                continue;
+            };
+            // 同一个上屏词（大小写不同编码，如 January/January）只留一个
+            if seen.iter().any(|s| s.eq_ignore_ascii_case(word)) {
+                continue;
+            }
+            seen.push(word.clone());
+            out.push(word.clone());
+        }
+        // 词频（词表里出现次数）高的优先——月份/星期词有多种写法、重复出现，
+        // 这样 jan -> January（3 次）排在 Jane/Janet（1 次）前面；再短词、字典序。
+        out.sort_by(|a, b| {
+            let fa = freq.as_ref().and_then(|m| m.get(&a.to_ascii_lowercase())).copied().unwrap_or(0);
+            let fb = freq.as_ref().and_then(|m| m.get(&b.to_ascii_lowercase())).copied().unwrap_or(0);
+            fb.cmp(&fa).then_with(|| a.len().cmp(&b.len())).then_with(|| a.cmp(b))
+        });
+        out.truncate(limit);
+        out
     }
 
     pub fn load_conversion<P: AsRef<std::path::Path>>(&self, path: P) -> Result<usize> {
@@ -1790,19 +1863,39 @@ impl Engine {
         if !display.bytes().any(|b| b.is_ascii_alphabetic()) {
             return;
         }
-        // 全小写输入且词表里有标准写法时用标准写法（github -> GitHub）
-        let english = self
+        let lower = display.to_ascii_lowercase();
+        let all_lower = display.bytes().all(|b| !b.is_ascii_uppercase());
+        // 全小写输入且词表里有标准写法时用标准写法（github -> GitHub）。
+        // 精确查不到时按雾凇 melt_eng 的编码前缀匹配列出命中词：
+        // 唯一命中（jetb -> JetBrains）当主候选；多个命中（py -> python/…）走下面的多候选插入。
+        let exact_word = self
             .english
             .read()
             .ok()
-            .and_then(|m| m.get(&display.to_ascii_lowercase()).cloned());
+            .and_then(|m| m.get(&lower).cloned());
+        let completions = if exact_word.is_none() && all_lower {
+            self.english_completions(&lower, 3)
+        } else {
+            Vec::new()
+        };
+        // 主候选：精确词优先；没有精确词且前缀只命中一个词时用它（保持 jetb 排第一）。
+        let english = exact_word.or_else(|| {
+            if completions.len() == 1 {
+                completions.first().cloned()
+            } else {
+                None
+            }
+        });
+        // 多个前缀命中时，把原始串也视作英文候选（后面再补齐其余命中词）
         let text = match &english {
-            Some(word) if display.bytes().all(|b| !b.is_ascii_uppercase()) => word.clone(),
+            Some(word) if all_lower => word.clone(),
             _ => display.to_string(),
         };
-        if candidates
-            .iter()
-            .any(|c| c.text.eq_ignore_ascii_case(&text))
+        let multi = completions.len() > 1;
+        if !multi
+            && candidates
+                .iter()
+                .any(|c| c.text.eq_ignore_ascii_case(&text))
         {
             return;
         }
@@ -1835,6 +1928,46 @@ impl Engine {
             .unwrap_or(false);
         // 第一名是几个词凑的整句（ok -> 哦 | 可）：不是「一个词还没打完」
         let top_sentence = candidates.first().is_some_and(is_sentence);
+        let max = self.config.max_candidates.max(1);
+        if multi {
+            // 多个前缀命中（py -> python/pythonic/…、jan -> jane/january/…）：
+            // 像 rime 的中英混排一样，英文词作为候选列在中文之后，用户能翻到并选出。
+            // 输入本身也是合法拼音（朋友/就按），中文候选保留、不打扰首选。
+            let at = candidates.len().min(5);
+            // 预留能放下的英文条数：max 之外不再插入，保证中文候选不被挤没
+            let room = max.saturating_sub(at);
+            let inserts: Vec<String> = completions.into_iter().take(room).collect();
+            for (i, word) in inserts.iter().enumerate() {
+                let pos = (at + i).min(candidates.len());
+                let score = match (
+                    pos.checked_sub(1).and_then(|j| candidates.get(j)),
+                    candidates.get(pos),
+                ) {
+                    (None, None) => -1.0,
+                    (None, Some(next)) => next.score + 1.0,
+                    (Some(prev), None) => prev.score - 1.0,
+                    (Some(prev), Some(next)) => (prev.score + next.score) / 2.0,
+                };
+                candidates.insert(
+                    pos,
+                    Candidate {
+                        text: word.clone(),
+                        pinyin: lower.clone(),
+                        score,
+                        features: Feature::default(),
+                        words: vec![CandidateWord {
+                            text: word.clone(),
+                            pinyin: String::new(),
+                            freq: 0.0,
+                            known: true,
+                        }],
+                        consumed: display.len(),
+                    },
+                );
+            }
+            return;
+        }
+
         let position = if english.is_some() {
             if exact {
                 // 本身就是拼音的英文词（fan、long、she）：前 5 个留给中文
@@ -1858,7 +1991,6 @@ impl Engine {
         } else {
             None
         };
-        let max = self.config.max_candidates.max(1);
         let at = position.unwrap_or(candidates.len()).min(candidates.len());
         // 分数夹在前后两个候选之间，后面无论怎么重新排序（繁体转换会重排）位置都不变
         let score = match (
@@ -4980,8 +5112,8 @@ mod tests {
             "ni hao\t你好\t100000\n",
         ));
         assert_eq!(
-            e.load_english_str("hello\thello\nshe\tshe\nGitHub\tGitHub\nJanuary\tJan\n"),
-            3
+            e.load_english_str("hello\thello\nshe\tshe\nGitHub\tGitHub\nJanuary\tJan\nJanuary\tJanuary\n"),
+            4
         );
         let texts =
             |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
@@ -4995,8 +5127,61 @@ mod tests {
         let she = texts("she");
         let pos = she.iter().position(|t| t == "she").expect("应当有 she");
         assert!(pos == 5 || (pos >= 1 && pos == she.len() - 1), "{she:?}");
-        // 缩写编码（Jan -> January）不当作英文词
-        assert!(!texts("jan").iter().any(|t| t == "January"));
+        // 前缀补全要能列出 January（智能中英混输：jan 能打出来）
+        assert!(
+            texts("jan").iter().any(|t| t == "January"),
+            "jan 应补全出 January: {:?}",
+            texts("jan")
+        );
+    }
+
+    #[test]
+    fn english_unique_prefix_completion() {
+        // 智能中英混输（雾凇 melt_eng 的编码前缀匹配）：jetb 在词表里唯一命中 jetbrains。
+        let e = engine(concat!(
+            "ji e te bie\t饥饿特别\t100000\n",
+            "ji a ge tu\t价额图\t90000\n",
+        ));
+        e.load_english_str("JetBrains\tJetBrains\njet\tjet\njets\tjets\nPython\tPython\n");
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        // jetb 只对应 jetbrains 一个词 → 补全并排第一
+        assert_eq!(texts("jetb").first().map(String::as_str), Some("JetBrains"), "{:?}", texts("jetb"));
+        // py 只对应 python 一个词
+        assert_eq!(texts("py").first().map(String::as_str), Some("Python"), "{:?}", texts("py"));
+        // jet 是精确词，照精确走（不靠补全）
+        assert!(texts("jet").iter().any(|t| t == "jet"));
+    }
+
+    #[test]
+    fn english_multi_prefix_completion_lists_all_candidates() {
+        // 智能中英混输（雾凇 melt_eng）：前缀命中多个词时全部列出，像 rime 一样让用户选。
+        // py/jan 同时是合法拼音，中文候选保留在前，英文候选在后面也能选到。
+        let e = engine(concat!(
+            "peng you\t朋友\t900000\n",
+            "jiu an\t就按\t900000\n",
+        ));
+        e.load_english_str(concat!(
+            "python\tpython\npythonic\tpythonic\npyjamas\tpyjamas\nPyTorch\tPyTorch\n",
+            "January\tJanuary\nJanuary\tJanuary\nJane\tJane\nJanet\tJanet\njanitor\tjanitor\n",
+            "JetBrains\tJetBrains\njet\tjet\njets\tjets\n",
+        ));
+        let texts =
+            |input: &str| -> Vec<String> { e.input(input).into_iter().map(|c| c.text).collect() };
+        let py = texts("py");
+        assert_eq!(py.first().map(String::as_str), Some("朋友"), "中文首选不变: {py:?}");
+        assert!(py.iter().any(|t| t == "python"), "py 应列出 python: {py:?}");
+        assert!(py.iter().any(|t| t == "PyTorch"), "py 应列出 PyTorch: {py:?}");
+        let jan = texts("jan");
+        assert_eq!(jan.first().map(String::as_str), Some("就按"), "中文首选不变: {jan:?}");
+        assert!(jan.iter().any(|t| t == "January"), "jan 应列出 January: {jan:?}");
+        // 唯一命中仍排第一
+        assert_eq!(
+            texts("jetb").first().map(String::as_str),
+            Some("JetBrains"),
+            "{:?}",
+            texts("jetb")
+        );
     }
 
     #[test]

@@ -2272,6 +2272,16 @@ impl<'e> Session<'e> {
                 }
             }
         }
+        // U 模式（Unicode）/ N 模式（农历日期）：后面的数字要进编辑区，不当选词键。
+        // 和 V 模式计算器一样，输完整个串再由 compute_candidates 给出专属候选。
+        if self.selections.is_empty() && (self.unicode_mode() || self.lunar_date_mode()) {
+            if let Some(c) = calc_char(sym) {
+                if c.is_ascii_digit() || ('a'..='f').contains(&c.to_ascii_lowercase()) {
+                    self.push_input(c);
+                    return Some(true);
+                }
+            }
+        }
         if let Some(nth) = self.select_key_index(sym) {
             // 分号选第 2 个、引号选第 3 个；这一页没这么多就什么都不做
             let (start, len) = self.page_range(n);
@@ -3012,6 +3022,44 @@ impl<'e> Session<'e> {
                 .map(|text| Candidate::plain(text, input.len()))
                 .collect();
         }
+        if self.selections.is_empty() && crate::unicode_input::active(input, 'U') {
+            // U 模式（雾凇 unicode.lua）：U + 十六进制 -> 对应字符，独占候选。
+            return crate::unicode_input::candidates(input, 'U')
+                .into_iter()
+                .map(|(text, comment)| Candidate {
+                    comment,
+                    ..Candidate::plain(text, input.len())
+                })
+                .collect();
+        }
+        if self.selections.is_empty()
+            && input.len() > 2
+            && input.get(..2).is_some_and(|p| p.eq_ignore_ascii_case("uu"))
+        {
+            // uU + 部件拼音（雾凇 radical_lookup / search.lua）：拆字反查。
+            // 引导键大小写都认：真机上 Shift+u 常被外壳报成小写，编辑区实际是 uu（不是 uU），
+            // 只认大写会让 uushi 退化成普通拼音候选。uu 在拼音里不是合法音节，零冲突。
+            // 独占候选：按部件码查出汉字，数字键上屏、不学习（和普通词库无关，两词库通用）。
+            let code = &input[2..];
+            let hits = crate::radical::lookup(code);
+            if !hits.is_empty() {
+                return hits
+                    .into_iter()
+                    .map(|(ch, _)| Candidate::plain(ch, input.len()))
+                    .collect();
+            }
+        }
+        if self.selections.is_empty() && input.starts_with('N') && input.len() == 9 {
+            // N + 8 位公历日期（雾凇 lunar.lua）：独占候选，给农历。
+            let lunar = crate::lunar::candidates(input, &(self.clock)().unwrap_or(crate::datetime::LocalTime {
+                year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, weekday: 4,
+            }));
+            if !lunar.is_empty() {
+                return lunar.into_iter()
+                    .map(|text| Candidate::plain(text, input.len()))
+                    .collect();
+            }
+        }
         if self.wubi() && !self.temp_pinyin() {
             // 只打了一个 V（计算器）时还没有候选
             return if self.calc_active() {
@@ -3071,7 +3119,98 @@ impl<'e> Session<'e> {
         if self.config.date_time && self.selections.is_empty() {
             self.add_date_time(&mut all, input, skip, engine.config().shuangpin);
         }
+        // 农历 nl：和日期时间一样，在首选后面插候选（打 nl 出「农历…」）
+        if self.selections.is_empty() {
+            let key = &input[skip..];
+            let lunar = crate::lunar::candidates(key, &(self.clock)().unwrap_or(crate::datetime::LocalTime {
+                year: 1970, month: 1, day: 1, hour: 0, minute: 0, second: 0, weekday: 4,
+            }));
+            if !lunar.is_empty() {
+                let extra: Vec<Candidate> = lunar.into_iter()
+                    .map(|text| Candidate::plain(text, input.len()))
+                    .collect();
+                let at = all.len().min(1);
+                all.splice(at..at, extra);
+            }
+        }
+        // 雾凇 Lua 功能移植：错音错字提示（写进候选注释）+ 化学式（直接候选 + 注释）
+        add_corrections(&mut all);
+        self.add_chemistry(&mut all, input, skip);
+        // 万象数学符号（others.txt）：打拼音直接出 √/π/≈ 等，也给同名中文候选加注释。
+        self.add_mathsymbols(&mut all, input, skip);
         all
+    }
+
+    /// 数学符号候选：万象 `others.txt` 的符号片段。打 `genhao` → `√`、`pi` → `π`、
+    /// `yuedengyu` → `≈` 等，作为直接候选插在首选后面，数字键上屏；同时给同名中文候选
+    /// （「根号」「圆周率」）的注释里写上符号。静态表，雾凇/万象词库都生效。
+    fn add_mathsymbols(&self, all: &mut Vec<Candidate>, input: &str, skip: usize) {
+        if self.selections.is_empty() {
+            for c in all.iter_mut() {
+                if c.comment.is_empty() {
+                    if let Some(sym) = crate::mathsym::symbol_for_name(&c.text) {
+                        c.comment = sym.to_string();
+                    }
+                }
+            }
+        }
+        let pinyin = &input[skip..];
+        if pinyin.is_empty() {
+            return;
+        }
+        let symbols = crate::mathsym::symbols_for(pinyin);
+        if symbols.is_empty() {
+            return;
+        }
+        let at = all.len().min(1);
+        let extra: Vec<Candidate> = symbols
+            .into_iter()
+            .map(|s| Candidate {
+                commit: s.symbol.clone(),
+                text: s.symbol,
+                consumed: input.len(),
+                kind: CandidateKind::Plain,
+                ..Candidate::default()
+            })
+            .collect();
+        all.splice(at..at, extra);
+    }
+
+    /// 化学式候选：打元素的中文名拼音（liusuan → H₂SO₄、na → Na）时，
+    /// 把化学式作为直接候选插在首选后面，数字键即可上屏；同时给同名中文候选的注释里
+    /// 也写上化学式（打「硫酸」时在它后面显示 H₂SO₄）。表是静态的，雾凇/万象词库都生效。
+    fn add_chemistry(&self, all: &mut Vec<Candidate>, input: &str, skip: usize) {
+        if self.selections.is_empty() {
+            // 给中文候选加化学式注释（不覆盖已有的五笔码提示）
+            for c in all.iter_mut() {
+                if c.comment.is_empty() {
+                    if let Some(sym) = crate::chem::formula_for_name(&c.text) {
+                        c.comment = sym.to_string();
+                    }
+                }
+            }
+        }
+        // 拼音整串命中时，插入化学式直接候选
+        let pinyin = &input[skip..];
+        if pinyin.is_empty() {
+            return;
+        }
+        let formulas = crate::chem::formulas_for(pinyin);
+        if formulas.is_empty() {
+            return;
+        }
+        let at = all.len().min(1);
+        let extra: Vec<Candidate> = formulas
+            .into_iter()
+            .map(|f| Candidate {
+                commit: f.symbol.clone(),
+                text: f.symbol,
+                consumed: input.len(),
+                kind: CandidateKind::Plain,
+                ..Candidate::default()
+            })
+            .collect();
+        all.splice(at..at, extra);
     }
 
     /// 五笔码的候选：自定义编码（用户定义的排最前）、码正好对上的码表词（码表的顺序），
@@ -3176,6 +3315,28 @@ impl<'e> Session<'e> {
         };
         rest.bytes()
             .all(|c| c.is_ascii_digit() || b"+-*/%^.()".contains(&c))
+    }
+
+    /// Unicode 模式进行中：还没选词，编辑区是 `U` 或 `U` + 十六进制（雾凇 unicode.lua）。
+    fn unicode_mode(&self) -> bool {
+        if !self.selections.is_empty() {
+            return false;
+        }
+        let Some(rest) = self.remaining().strip_prefix('U') else {
+            return false;
+        };
+        rest.len() <= 6 && rest.bytes().all(|c| c.is_ascii_hexdigit())
+    }
+
+    /// 农历日期模式进行中：`N` 或 `N` + 最多 8 位数字（雾凇 lunar.lua）。
+    fn lunar_date_mode(&self) -> bool {
+        if !self.selections.is_empty() {
+            return false;
+        }
+        let Some(rest) = self.remaining().strip_prefix('N') else {
+            return false;
+        };
+        rest.len() <= 8 && rest.bytes().all(|c| c.is_ascii_digit())
     }
 
     /// 还没选词那部分输入的显示：全拼分音节（nihao → ni hao），双拼显示成全拼
@@ -3463,6 +3624,18 @@ impl<'e> Session<'e> {
     pub fn append(&mut self, text: &str) {
         self.input.push_str(text);
         self.fresh = false;
+    }
+}
+
+/// 错音错字提示（雾凇 `corrector.lua`）：候选的完整拼音 + 词命中纠错表时，
+/// 把正确读音/写法写进候选注释。注释不上屏，只提示。
+fn add_corrections(all: &mut Vec<Candidate>) {
+    for c in all.iter_mut() {
+        if c.comment.is_empty() && !c.pinyin.is_empty() {
+            if let Some(tip) = crate::chem::correction(&c.pinyin, &c.text) {
+                c.comment = tip.to_string();
+            }
+        }
     }
 }
 
