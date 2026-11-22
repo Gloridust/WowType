@@ -3887,3 +3887,31 @@ fn auto_pair_off_by_default_and_halfwidth() {
     assert!(!f.handled);
     assert_eq!(f.cursor_delta, 0);
 }
+
+#[test]
+fn punct_not_halved_by_lagging_surrounding() {
+    // Electron 类应用的周围文本上报滞后：词上屏以后还报着上屏前的 '1'，
+    // 别拿旧状态把句号定成半角（1:1复刻。）
+    use wowtype_core::session::key_hints::SURROUNDING;
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "1").handled, "数字原样交给应用");
+    assert_eq!(
+        type_keys(&mut session, "nihao<sp>").commit.as_deref(),
+        Some("你好"),
+        "上屏一个词"
+    );
+    // 应用带着 SURROUNDING 报 prev='1'：是上屏之前的旧状态（真实光标前是"好"）
+    let frame = session.key(&key_after('.', Some('1'), SURROUNDING));
+    assert_eq!(frame.commit.as_deref(), Some("。"), "滞后的 '1' 不该把句号定成半角");
+    // 对照：surrounding 如实报 prev='好' 时句号也是全角
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "1").handled);
+    assert_eq!(type_keys(&mut session, "nihao<sp>").commit.as_deref(), Some("你好"));
+    let frame = session.key(&key_after('.', Some('好'), SURROUNDING));
+    assert_eq!(frame.commit.as_deref(), Some("。"));
+    // 对照：光标真的在数字后面（会话自己记的上文也是数字，surrounding 一致）——保持半角
+    let mut session = with(engine());
+    assert!(!type_keys(&mut session, "3").handled);
+    let frame = session.key(&key_after('.', Some('3'), SURROUNDING));
+    assert!(!frame.handled, "数字后的点保持英文");
+}

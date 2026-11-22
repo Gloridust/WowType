@@ -907,10 +907,29 @@ impl<'e> Session<'e> {
             }
         }
         let surrounding = key.hints & key_hints::SURROUNDING != 0;
-        if key.prev_char.is_some() || surrounding {
+        // 应用报的光标前的字和会话自己记的上一个字对不上：多半是应用（Electron 系）的
+        // 周围文本上报滞后，还停在上屏之前的状态（上屏词以后句号被当成数字后面的半角）。
+        // 当作不知道；真是用户挪了光标，下一拍上报和记忆对上了就自动恢复
+        let lagging = surrounding
+            && !self.composing()
+            && key.prev_char.is_some_and(|reported| {
+                self.last_char.is_some_and(|own| own != reported)
+            });
+        let key = &if lagging {
+            Key {
+                prev_char: None,
+                hints: key.hints & !key_hints::SURROUNDING,
+                ..*key
+            }
+        } else {
+            *key
+        };
+        if lagging {
+            self.last_char = None;
+        } else if key.prev_char.is_some() || surrounding {
             self.last_char = key.prev_char;
         }
-        if surrounding {
+        if !lagging && surrounding {
             self.check_context(key.prev_char);
         }
         let handled = match self.association_key(key) {
