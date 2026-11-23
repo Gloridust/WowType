@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -192,7 +193,10 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         keyboard.setEnglish(globalMode == Session.MODE_ENGLISH);
         keyboard.setFeedback(Prefs.get(this).keySound(), Prefs.get(this).keyVibrate());
         keyboard.setSwipeHide(Prefs.get(this).swipeHide());
-        root.addView(keyboard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(238)));
+        int keyboardHeight = getResources().getConfiguration().orientation
+                == Configuration.ORIENTATION_LANDSCAPE ? 170 : 238;
+        root.addView(keyboard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(keyboardHeight)));
 
         // 手势导航条 / 导航栏会盖在输入法窗口底下：把底部内边距让出来，最下面一行才不被吃掉
         root.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -203,6 +207,14 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             return insets;
         });
         return root;
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // 横屏空间小：键盘降到 170dp，候选条和输入框才留得下
+        setInputView(onCreateInputView());
+        refresh();
     }
 
     @Override

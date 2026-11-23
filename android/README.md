@@ -48,6 +48,17 @@
 
 <p align="center"><img src="../docs/images/android-wechat-typing-light.jpg" width="320" alt="安卓版在微信里打 ni'hao：候选条第一页是 你好、拟好、👋、你、尼、泥、逆、拟、腻，下面是四行 QWERTY"><br><sub>微信里打 ni'hao 的候选（早期版本，还没有工具条）</sub></p>
 
+### 模拟器补测
+
+横屏和浏览器这两项还没在真机上跑，先用模拟器补：
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="../docs/images/android-emulator-landscape.png" width="320" alt="模拟器横屏 640×320：打 hao，候选 好、号、毫、豪…；键盘在横屏降到 170dp，输入框和候选条都留得下"><br><sub>横屏 640×320：键盘 170dp，输入框和候选条都在</sub></td>
+<td align="center" width="50%"><img src="../docs/images/android-emulator-browser.png" width="320" alt="模拟器 Android WebView shell 的页面输入框：打 ni'hao，候选 你好、拟好…，页面提示已输入 6 个字符"><br><sub>浏览器（WebView shell）页面输入框打 ni'hao</sub></td>
+</tr>
+</table>
+
 输入设置原来是 1080×6117 的滚动长截图，按小节切成 5 张（也可以看[完整长图](../docs/images/android-settings-full.jpg)）：
 
 <table>
