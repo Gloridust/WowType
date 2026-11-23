@@ -11,6 +11,7 @@
     <string name="setup_choose">选择输入法</string>
     <string name="setup_load">载入词库</string>
     <string name="setup_settings">输入设置</string>
+    <string name="setup_check_update">检查更新</string>
     <string name="setup_loading">正在载入词库…</string>
     <string name="setup_usage">用法：拼音候选在键盘上方，点候选上屏；空格选第一个，回车把拼音原样上屏；「中/英」切输入模式；逗号句号在中文模式上屏全角标点。词库和语言模型都在安装包里，第一次载入要几秒，之后就快了。</string>
 </resources>

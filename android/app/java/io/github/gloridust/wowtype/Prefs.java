@@ -203,6 +203,18 @@ final class Prefs {
         return bool("Toolbar", true);
     }
 
+    boolean checkUpdate() {
+        return bool("CheckUpdate", true);
+    }
+
+    boolean betaUpdates() {
+        return bool("BetaUpdates", false);
+    }
+
+    boolean typingStats() {
+        return bool("TypingStats", false);
+    }
+
     boolean clipboardHistory() {
         return bool("ClipboardHistory", false);
     }

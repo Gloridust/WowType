@@ -77,6 +77,12 @@ final class Native {
     /** 载入五笔 86 码表（wubi86.tsv）。 */
     static native void loadWubi(long engine, String path);
 
+    /** 重新读自定义词（custom.tsv）。 */
+    static native void loadCustomWords(long engine, String path);
+
+    /** 自定义词列表（custom.tsv 的顺序）。 */
+    static native String[] customPhrases(long engine);
+
     static native void saveState(long engine, String userDict, String history);
 
     static native void freeEngine(long engine);
@@ -110,4 +116,20 @@ final class Native {
     static native int mode(long session);
 
     static native String input(long session);
+
+    /* 打字统计（默认关，设置里打开） */
+    static native long statsNew(String path);
+
+    static native void statsFree(long stats);
+
+    static native void statsSetEnabled(long stats, int enabled);
+
+    static native void statsKey(long stats, int code, int down, int flags, long nowMs);
+
+    static native void statsCommit(long stats, String text, String source, String scheme,
+                                   int candidate, int flags, long nowMs);
+
+    static native void statsFlush(long stats, long nowMs);
+
+    static native int statsClear(String path);
 }

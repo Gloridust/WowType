@@ -92,6 +92,9 @@ final class EngineHost {
                         if (paths.wubi.isFile()) {
                             Native.loadWubi(created, paths.wubi.getAbsolutePath());
                         }
+                        if (paths.custom.isFile()) {
+                            Native.loadCustomWords(created, paths.custom.getAbsolutePath());
+                        }
                     }
                     handle = created;
                     applySettings();
@@ -125,6 +128,26 @@ final class EngineHost {
             Native.setTypo(engine, prefs.typo() ? 1 : 0);
             Native.setRareExt(engine, prefs.rareExtChars() ? 1 : 0);
             Native.setTraditional(engine, prefs.traditional() && conversionLoaded ? 1 : 0);
+        }
+    }
+
+    /** 自定义词文件改过：重新读一遍（custom.tsv）。 */
+    void reloadCustom() {
+        long engine = handle;
+        Context ctx = appContext;
+        if (engine == 0 || ctx == null) return;
+        synchronized (Session.ENGINE_LOCK) {
+            Native.loadCustomWords(engine, DataFiles.paths(ctx).custom.getAbsolutePath());
+        }
+    }
+
+    /** 自定义词列表（custom.tsv 的顺序）；引擎没好时是空数组。 */
+    String[] customPhrases() {
+        long engine = handle;
+        if (engine == 0) return new String[0];
+        synchronized (Session.ENGINE_LOCK) {
+            String[] words = Native.customPhrases(engine);
+            return words == null ? new String[0] : words;
         }
     }
 

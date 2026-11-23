@@ -2,6 +2,7 @@ package io.github.gloridust.wowtype;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -120,6 +121,12 @@ public final class SettingsActivity extends Activity {
         toggle("打字推荐 emoji", "EmojiSuggest", true, false);
         toggle("工具栏（v + 空格）", "Toolbar", true, false);
         toggle("剪贴板历史（最近 20 条，只在内存）", "ClipboardHistory", false, false);
+        toggle("打字统计（只记本机聚合计数）", "TypingStats", false, false);
+        toggle("检查更新", "CheckUpdate", true, false);
+        toggle("测试版更新", "BetaUpdates", false, false);
+        button("查看统计", "打开", () -> startActivity(new Intent(this, StatsActivity.class)));
+        button("管理自定义词", "打开",
+                () -> startActivity(new Intent(this, CustomWordsActivity.class)));
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(column);

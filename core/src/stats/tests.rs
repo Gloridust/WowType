@@ -495,3 +495,17 @@ fn macos_presses_count_every_time() {
     let document = saved(&mut recorder, &path, now);
     assert_eq!(document.days[&local_day(now)].keys["KeyA"], 2);
 }
+
+#[test]
+fn android_key_codes_use_the_same_heatmap_names() {
+    // android.view.KeyEvent：A=29、0=7、Space=62、Enter=66、Backspace=67
+    assert_eq!(super::key_id(3, 29), Some("KeyA"));
+    assert_eq!(super::key_id(3, 54), Some("KeyZ"));
+    assert_eq!(super::key_id(3, 7), Some("Digit0"));
+    assert_eq!(super::key_id(3, 62), Some("Space"));
+    assert_eq!(super::key_id(3, 66), Some("Enter"));
+    assert_eq!(super::key_id(3, 67), Some("Backspace"));
+    assert_eq!(super::key_id(3, 111), Some("Escape"));
+    assert_eq!(super::key_id(3, 19), Some("ArrowUp"));
+    assert_eq!(super::key_id(3, 999), None);
+}

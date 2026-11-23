@@ -39,17 +39,19 @@ final class DataFiles {
         final File english;
         final File conversion;
         final File wubi;
+        final File custom;
         final File userDict;
         final File history;
         final File recentEmoji;
 
-        Paths(File lexicon, File wordsLm, File english, File conversion, File wubi, File userDict,
-              File history, File recentEmoji) {
+        Paths(File lexicon, File wordsLm, File english, File conversion, File wubi, File custom,
+              File userDict, File history, File recentEmoji) {
             this.lexicon = lexicon;
             this.wordsLm = wordsLm;
             this.english = english;
             this.conversion = conversion;
             this.wubi = wubi;
+            this.custom = custom;
             this.userDict = userDict;
             this.history = history;
             this.recentEmoji = recentEmoji;
@@ -71,6 +73,7 @@ final class DataFiles {
                 new File(root, "english.txt"),
                 new File(root, "s2t.tsv"),
                 new File(root, "wubi86.tsv"),
+                new File(root, "custom.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));
@@ -85,6 +88,7 @@ final class DataFiles {
                 new File(root, "english.txt"),
                 new File(root, "s2t.tsv"),
                 new File(root, "wubi86.tsv"),
+                new File(root, "custom.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));

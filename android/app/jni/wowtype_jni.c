@@ -234,6 +234,33 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_saveState(
     free(hist);
 }
 
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_loadCustomWords(
+    JNIEnv *env, jclass cls, jlong engine, jstring path) {
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e == NULL) return;
+    char *p = dup_utf8(env, path);
+    if (p != NULL && p[0] != 0) wowtype_engine_load_custom_words(e, p);
+    free(p);
+}
+
+JNIEXPORT jobjectArray JNICALL Java_io_github_gloridust_wowtype_Native_customPhrases(
+    JNIEnv *env, jclass cls, jlong engine) {
+    (void)cls;
+    WowtypeCandidates *candidates = wowtype_engine_custom_phrases(engine_of(engine));
+    size_t n = candidates == NULL ? 0 : wowtype_candidates_len(candidates);
+    jobjectArray out = (*env)->NewObjectArray(env, (jsize)n, g_string, NULL);
+    for (size_t i = 0; i < n && out != NULL; i++) {
+        jstring text = u8_to_jstring(env, wowtype_candidates_text(candidates, i));
+        if (text != NULL) {
+            (*env)->SetObjectArrayElement(env, out, (jsize)i, text);
+            (*env)->DeleteLocalRef(env, text);
+        }
+    }
+    if (candidates != NULL) wowtype_candidates_free(candidates);
+    return out;
+}
+
 JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_freeEngine(JNIEnv *env, jclass cls, jlong engine) {
     (void)env;
     (void)cls;
@@ -461,6 +488,79 @@ JNIEXPORT jint JNICALL Java_io_github_gloridust_wowtype_Native_mode(
     (void)cls;
     WowtypeSession *s = session_of(session);
     return s == NULL ? 0 : wowtype_session_mode(s);
+}
+
+JNIEXPORT jlong JNICALL Java_io_github_gloridust_wowtype_Native_statsNew(
+    JNIEnv *env, jclass cls, jstring path) {
+    (void)cls;
+    char *p = dup_utf8(env, path);
+    if (p == NULL || p[0] == 0) {
+        free(p);
+        return 0;
+    }
+    WowtypeStats *stats = wowtype_stats_new(p);
+    free(p);
+    return (jlong)(intptr_t)stats;
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_statsFree(
+    JNIEnv *env, jclass cls, jlong stats) {
+    (void)env;
+    (void)cls;
+    if (stats != 0) wowtype_stats_free((WowtypeStats *)(intptr_t)stats);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_statsSetEnabled(
+    JNIEnv *env, jclass cls, jlong stats, jint enabled) {
+    (void)env;
+    (void)cls;
+    if (stats != 0) wowtype_stats_set_enabled((WowtypeStats *)(intptr_t)stats, enabled);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_statsKey(
+    JNIEnv *env, jclass cls, jlong stats, jint code, jint down, jint flags, jlong now_ms) {
+    (void)env;
+    (void)cls;
+    if (stats != 0) {
+        wowtype_stats_key((WowtypeStats *)(intptr_t)stats, 3, (unsigned int)code, down,
+                          (unsigned int)flags, (int64_t)now_ms);
+    }
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_statsCommit(
+    JNIEnv *env, jclass cls, jlong stats, jstring text, jstring source, jstring scheme,
+    jint candidate, jint flags, jlong now_ms) {
+    (void)cls;
+    if (stats == 0 || text == NULL) return;
+    char *t = dup_utf8(env, text);
+    char *src = dup_utf8(env, source);
+    char *sch = dup_utf8(env, scheme);
+    if (t != NULL) {
+        wowtype_stats_commit((WowtypeStats *)(intptr_t)stats, t,
+                             src != NULL && src[0] != 0 ? src : NULL,
+                             sch != NULL && sch[0] != 0 ? sch : NULL,
+                             candidate, (unsigned int)flags, (int64_t)now_ms);
+    }
+    free(t);
+    free(src);
+    free(sch);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_statsFlush(
+    JNIEnv *env, jclass cls, jlong stats, jlong now_ms) {
+    (void)env;
+    (void)cls;
+    if (stats != 0) wowtype_stats_flush((WowtypeStats *)(intptr_t)stats, (int64_t)now_ms);
+}
+
+JNIEXPORT jint JNICALL Java_io_github_gloridust_wowtype_Native_statsClear(
+    JNIEnv *env, jclass cls, jstring path) {
+    (void)cls;
+    char *p = dup_utf8(env, path);
+    int rc = -1;
+    if (p != NULL && p[0] != 0) rc = wowtype_stats_clear(p);
+    free(p);
+    return rc;
 }
 
 JNIEXPORT jstring JNICALL Java_io_github_gloridust_wowtype_Native_input(

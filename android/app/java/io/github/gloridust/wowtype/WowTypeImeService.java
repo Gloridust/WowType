@@ -35,6 +35,8 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     /** 光标前一个字（Unicode 码位）；hasSurrounding 为 true 时才是应用告诉的。 */
     private int prevChar;
     private boolean hasSurrounding;
+    /** 这次上屏是点第几个候选（1 起），不是点候选就是 0。打字统计用。 */
+    private int lastCandidateIndex;
 
     /** 设置页改了东西：引擎选项、会话配置、候选排列马上跟上。 */
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
@@ -44,6 +46,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 if (bar != null) bar.setHorizontal(prefs.horizontal());
                 if (session != null) {
                     session.configure(prefs.sessionConfig());
+                }
+                if ("TypingStats".equals(key)) {
+                    StatsHost.get().applyEnabled();
                 }
                 if ("SettingsTheme".equals(key)) {
                     // 键盘和候选条的颜色是建 View 时取的，换主题要重建输入视图
@@ -56,6 +61,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         @Override
         public void onPick(int index) {
             if (session == null) return;
+            lastCandidateIndex = index + 1;
             render(session.select(index));
         }
 
@@ -76,6 +82,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         Prefs prefs = Prefs.get(this);
         globalMode = prefs.initialMode();
         prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
+        StatsHost.get().start(this);
         EngineHost.get().start(this, engineListener);
     }
 
@@ -87,6 +94,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             session.close();
             session = null;
         }
+        StatsHost.get().flush();
         super.onDestroy();
     }
 
@@ -162,6 +170,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             session.close();
             session = null;
         }
+        StatsHost.get().flush();
         if (bar != null) bar.clear();
         super.onFinishInput();
     }
@@ -279,6 +288,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         InputConnection conn = getCurrentInputConnection();
         if (conn != null) {
             if (frame.commit != null && !frame.commit.isEmpty()) {
+                StatsHost.get().commit(frame.commit, statsSource(), statsScheme(),
+                        lastCandidateIndex, (hints & Session.HINT_NO_LEARN) != 0);
+                lastCandidateIndex = 0;
                 conn.commitText(frame.commit, 1);
                 afterTyped(frame.commit);
             }
@@ -300,6 +312,21 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         }
         if (bar != null) bar.setFrame(frame);
         if (frame.learned || frame.forgot) EngineHost.get().save();
+    }
+
+    /** 打字统计的上屏来源。 */
+    private String statsSource() {
+        Prefs prefs = Prefs.get(this);
+        if (prefs.wubi()) return "wubi";
+        if (prefs.shuangpin()) return "shuangpin";
+        if (session != null && session.mode() == Session.MODE_TRANSLATE) return "translate";
+        if (session != null && session.mode() == Session.MODE_ENGLISH) return "english";
+        return "quanpin";
+    }
+
+    private String statsScheme() {
+        Prefs prefs = Prefs.get(this);
+        return prefs.shuangpin() ? prefs.shuangpinScheme() : "";
     }
 
     /** 重新画（引擎载入完了、输入框换了）：编辑区可能从原始输入变成了分好音节的拼音。 */
@@ -340,7 +367,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         } else if (cls == InputType.TYPE_CLASS_NUMBER) {
             password = variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD;
         }
-        return password ? Session.HINT_NO_AUTO_SPACE | Session.HINT_NO_TRANSLATE : 0;
+        return password
+                ? Session.HINT_NO_AUTO_SPACE | Session.HINT_NO_TRANSLATE | Session.HINT_NO_LEARN
+                : 0;
     }
 
     // ---- 硬件键盘（外接键盘、Chromebook、桌面模式） ----
@@ -349,6 +378,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (session == null) return super.onKeyDown(keyCode, event);
         // 桌面版的 Super + . 开表情面板
+        if (event.getRepeatCount() == 0) {
+            StatsHost.get().key(keyCode, (hints & Session.HINT_NO_LEARN) != 0);
+        }
         if (keyCode == KeyEvent.KEYCODE_PERIOD && event.isMetaPressed()) {
             render(session.toggleEmoji());
             return true;

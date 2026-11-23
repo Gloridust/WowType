@@ -1,6 +1,7 @@
 package io.github.gloridust.wowtype;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -14,6 +15,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 /**
  * 设置 / 启用页。输入法本身没有配置项：这里只做三件事——告诉用户怎么启用、
@@ -73,6 +75,8 @@ public final class SetupActivity extends Activity {
         }), margins(0, dp(10), 0, 0));
         column.addView(button(R.string.setup_settings, v ->
                 startActivity(new Intent(this, SettingsActivity.class))), margins(0, dp(10), 0, 0));
+        column.addView(button(R.string.setup_check_update, v -> checkUpdate(true)),
+                margins(0, dp(10), 0, 0));
 
         TextView usage = new TextView(this);
         usage.setText(R.string.setup_usage);
@@ -86,6 +90,7 @@ public final class SetupActivity extends Activity {
         setContentView(scroll);
 
         EngineHost.get().start(this, engineListener);
+        checkUpdate(false);
     }
 
     @Override
@@ -98,6 +103,37 @@ public final class SetupActivity extends Activity {
     protected void onDestroy() {
         EngineHost.get().removeListener(engineListener);
         super.onDestroy();
+    }
+
+    /** 检查更新：默认每天最多一次；手动点按钮时不管开关和间隔。 */
+    private void checkUpdate(boolean manual) {
+        Prefs prefs = Prefs.get(this);
+        long now = System.currentTimeMillis();
+        if (!manual) {
+            if (!prefs.checkUpdate()) return;
+            if (now - prefs.raw().getLong("LastUpdateCheckMs", 0L) < 24 * 3600 * 1000L) return;
+            prefs.raw().edit().putLong("LastUpdateCheckMs", now).apply();
+        }
+        UpdateCheck.check(this, prefs.betaUpdates(), (version, url) -> {
+            if (version == null) {
+                if (manual) Toast.makeText(this, "已经是最新版本", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("发现新版本 " + version)
+                    .setMessage("当前版本 " + versionName())
+                    .setPositiveButton("打开下载页", (dialog, which) -> UpdateCheck.open(this, url))
+                    .setNegativeButton("以后", null)
+                    .show();
+        });
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     private void updateStatus() {

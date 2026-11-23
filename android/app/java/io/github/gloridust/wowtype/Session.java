@@ -23,6 +23,7 @@ public final class Session implements AutoCloseable {
     public static final int HINT_NO_AUTO_SPACE = 1;
     public static final int HINT_NO_TRANSLATE = 1 << 2;
     public static final int HINT_SURROUNDING = 1 << 3;
+    public static final int HINT_NO_LEARN = 1 << 4;
 
     /* WOWTYPE_MODE_*（1.10 起） */
     public static final int MODE_CHINESE = 0;
