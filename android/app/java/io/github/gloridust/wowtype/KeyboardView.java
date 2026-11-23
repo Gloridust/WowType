@@ -3,13 +3,17 @@ package io.github.gloridust.wowtype;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.accessibility.AccessibilityEvent;
 import android.view.View;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityNodeProvider;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,6 +60,55 @@ public final class KeyboardView extends View {
     private final Paint specialTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF scratch = new RectF();
     private final List<Hit> hits = new ArrayList<>();
+
+    /** 自绘键盘的无障碍：每个键是一个虚拟节点，TalkBack 能逐个读、双击等于点一下。 */
+    private final AccessibilityNodeProvider nodes = new AccessibilityNodeProvider() {
+        @Override
+        public AccessibilityNodeInfo createAccessibilityNodeInfo(int id) {
+            if (id == AccessibilityNodeProvider.HOST_VIEW_ID) {
+                AccessibilityNodeInfo host = AccessibilityNodeInfo.obtain(KeyboardView.this);
+                onInitializeAccessibilityNodeInfo(host);
+                for (int i = 0; i < hits.size(); i++) {
+                    host.addChild(KeyboardView.this, i);
+                }
+                return host;
+            }
+            if (id < 0 || id >= hits.size()) return null;
+            Hit hit = hits.get(id);
+            AccessibilityNodeInfo node = AccessibilityNodeInfo.obtain();
+            node.setPackageName(getContext().getPackageName());
+            node.setClassName("android.widget.Button");
+            CharSequence label = hit.kind == KIND_SPACE ? "空格" : hit.label;
+            node.setText(label);
+            node.setContentDescription(label);
+            Rect rect = new Rect();
+            hit.rect.round(rect);
+            node.setBoundsInParent(rect);
+            node.setVisibleToUser(true);
+            node.setEnabled(true);
+            node.setFocusable(true);
+            node.setClickable(true);
+            node.setParent(KeyboardView.this);
+            node.setSource(KeyboardView.this, id);
+            node.addAction(AccessibilityNodeInfo.ACTION_CLICK);
+            return node;
+        }
+
+        @Override
+        public boolean performAction(int id, int action, android.os.Bundle arguments) {
+            if (action == AccessibilityNodeInfo.ACTION_CLICK && id >= 0 && id < hits.size()) {
+                fire(hits.get(id));
+                sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+                return true;
+            }
+            return false;
+        }
+    };
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        return nodes;
+    }
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable repeat = new Runnable() {
         @Override
