@@ -913,12 +913,25 @@ impl Engine {
             return None;
         }
         let scheme = self.config.shuangpin_scheme;
-        if crate::shuangpin::decode(scheme, input).is_empty() {
+        let decoded_empty = if self.config.fuzzy {
+            crate::shuangpin::decode_fuzzy(scheme, input, self.config.fuzzy_groups).is_empty()
+        } else {
+            crate::shuangpin::decode(scheme, input).is_empty()
+        };
+        if decoded_empty {
             if let Some(abbrev) = self.shuangpin_abbrev_reading(input) {
                 return Some(abbrev.pinyin);
             }
         }
-        Some(crate::shuangpin::display(scheme, input))
+        if self.config.fuzzy {
+            Some(crate::shuangpin::display_fuzzy(
+                scheme,
+                input,
+                self.config.fuzzy_groups,
+            ))
+        } else {
+            Some(crate::shuangpin::display(scheme, input))
+        }
     }
 
     /// 开关繁体输出。
@@ -1371,7 +1384,11 @@ impl Engine {
         let display = raw.trim();
         let leading = raw.len() - raw.trim_start().len();
         let scheme = self.config.shuangpin_scheme;
-        let variants = crate::shuangpin::decode(scheme, display);
+        let variants = if self.config.fuzzy {
+            crate::shuangpin::decode_fuzzy(scheme, display, self.config.fuzzy_groups)
+        } else {
+            crate::shuangpin::decode(scheme, display)
+        };
         let abbrev = self.shuangpin_abbrev_reading(display);
         let Some(first) = variants.first() else {
             if let Some(abbrev) = &abbrev {

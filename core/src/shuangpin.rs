@@ -522,6 +522,50 @@ pub fn decode_all(scheme: Scheme, a: u8, b: u8) -> &'static [&'static str] {
         .unwrap_or(&[])
 }
 
+const LETTERS: [&str; 26] = [
+    "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+    "s", "t", "u", "v", "w", "x", "y", "z",
+];
+
+/// 双拼键对没有合法音节时，按前后鼻音分组把韵母补成 `ing` / `ang` / `eng` 等
+/// （小鹤 `db` = d + in -> ding，`tb` -> ting；#306）。
+fn fuzzy_pair_options(scheme: Scheme, a: u8, b: u8, groups: u32) -> Vec<&'static str> {
+    let layout = scheme.layout();
+    let initial = match a {
+        key if key == layout.zh => "zh",
+        key if key == layout.ch => "ch",
+        key if key == layout.sh => "sh",
+        b'a'..=b'z' if !matches!(a, b'a' | b'e' | b'o' | b'i' | b'u' | b'v') => {
+            LETTERS[(a - b'a') as usize]
+        }
+        _ => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for &(final_, key) in layout.finals {
+        if key != b {
+            continue;
+        }
+        let (group, completed_final) = match final_ {
+            "in" => (crate::syllable::fuzzy::IN, "ing"),
+            "an" => (crate::syllable::fuzzy::AN, "ang"),
+            "en" => (crate::syllable::fuzzy::EN, "eng"),
+            "ian" => (crate::syllable::fuzzy::IAN, "iang"),
+            "uan" => (crate::syllable::fuzzy::UAN, "uang"),
+            _ => continue,
+        };
+        if groups & group == 0 {
+            continue;
+        }
+        let completed = format!("{initial}{completed_final}");
+        if let Some(syllable) = crate::syllable::Syllable::from_text(&completed) {
+            if !out.contains(&syllable.text) {
+                out.push(syllable.text);
+            }
+        }
+    }
+    out
+}
+
 /// 最后单出来的一个键当声母：自然码的 v -> zh，b -> b，a -> a。
 pub fn trailing_initial(scheme: Scheme, key: u8) -> Option<&'static str> {
     let layout = scheme.layout();
@@ -575,6 +619,16 @@ impl Decoded {
 /// 把双拼输入翻成全拼。有重码时给出几种（最多 [`MAX_VARIANTS`]）；
 /// 有一对键对不上任何音节时返回空。用户打的隔音符跳过。
 pub fn decode(scheme: Scheme, input: &str) -> Vec<Decoded> {
+    decode_with_fuzzy(scheme, input, None)
+}
+
+/// 和 [`decode`] 一样，但双拼键对不出来合法音节时，按打开的前后鼻音分组补一个
+/// （小鹤 `db` = d + in -> ding，`tb` -> ting；#306）。
+pub fn decode_fuzzy(scheme: Scheme, input: &str, groups: u32) -> Vec<Decoded> {
+    decode_with_fuzzy(scheme, input, Some(groups))
+}
+
+fn decode_with_fuzzy(scheme: Scheme, input: &str, fuzzy_groups: Option<u32>) -> Vec<Decoded> {
     // (键, 这个键之后在原始输入里的字节位置，含紧跟着的隔音符)
     let bytes = input.as_bytes();
     let mut keys: Vec<(u8, usize)> = Vec::new();
@@ -605,13 +659,18 @@ pub fn decode(scheme: Scheme, input: &str) -> Vec<Decoded> {
     for p in 0..pairs {
         let (a, _) = keys[2 * p];
         let (b, end) = keys[2 * p + 1];
-        let options = decode_all(scheme, a, b);
+        let mut options = decode_all(scheme, a, b).to_vec();
         if options.is_empty() {
-            return Vec::new();
+            if let Some(groups) = fuzzy_groups {
+                options = fuzzy_pair_options(scheme, a, b, groups);
+            }
+            if options.is_empty() {
+                return Vec::new();
+            }
         }
         let mut next = Vec::new();
         for prefix in &variants {
-            for syllable in options {
+            for syllable in &options {
                 if next.len() >= MAX_VARIANTS {
                     break;
                 }
@@ -695,7 +754,20 @@ pub fn abbrev(scheme: Scheme, input: &str) -> Option<Decoded> {
 /// 编辑区显示：`vsgo` -> `zhong'guo`，打了一半 `vsg` -> `zhong'g`。
 /// 翻不了的照原样显示。
 pub fn display(scheme: Scheme, input: &str) -> String {
-    match decode(scheme, input).into_iter().next() {
+    display_with_fuzzy(scheme, input, None)
+}
+
+/// 和 [`display`] 一样；模糊音打开时把 `db` 显示成 `ding`（#306）。
+pub fn display_fuzzy(scheme: Scheme, input: &str, groups: u32) -> String {
+    display_with_fuzzy(scheme, input, Some(groups))
+}
+
+fn display_with_fuzzy(scheme: Scheme, input: &str, fuzzy_groups: Option<u32>) -> String {
+    let decoded = match fuzzy_groups {
+        Some(groups) => decode_fuzzy(scheme, input, groups),
+        None => decode(scheme, input),
+    };
+    match decoded.into_iter().next() {
         Some(d) => {
             let used = d.ends.last().map(|&(_, r)| r).unwrap_or(0);
             let mut shown = d.pinyin;
@@ -812,6 +884,22 @@ mod tests {
         // 分号只在用它的方案里算键
         assert_eq!(decode(Scheme::Microsoft, "m;")[0].pinyin, "ming");
         assert!(decode(Scheme::Ziranma, "m;").is_empty());
+    }
+
+    #[test]
+    fn fuzzy_fills_in_ing_for_shuangpin() {
+        use crate::syllable::fuzzy;
+        // 小鹤：d + b = din（不是合法音节），打开 in=ing 以后应该按 ding 走
+        let d = decode_fuzzy(Scheme::Xiaohe, "db", fuzzy::IN);
+        assert_eq!(d.first().map(|d| d.pinyin.as_str()), Some("ding"));
+        let d = decode_fuzzy(Scheme::Xiaohe, "tb", fuzzy::IN);
+        assert_eq!(d.first().map(|d| d.pinyin.as_str()), Some("ting"));
+        assert_eq!(display_fuzzy(Scheme::Xiaohe, "db", fuzzy::IN), "ding");
+        // 没开 in=ing 就还是原来的简拼读法
+        assert!(decode_fuzzy(Scheme::Xiaohe, "db", fuzzy::AN).is_empty());
+        assert!(decode(Scheme::Xiaohe, "db").is_empty());
+        // 本来就合法的音节不受影响
+        assert_eq!(decode_fuzzy(Scheme::Xiaohe, "vs", fuzzy::IN)[0].pinyin, "zhong");
     }
 
     #[test]
