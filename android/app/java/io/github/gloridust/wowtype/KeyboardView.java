@@ -38,12 +38,7 @@ public final class KeyboardView extends View {
     private static final int KIND_SHIFT = 5;
     private static final int KIND_MODE = 6;
 
-    private static final int BG = 0xFFE7EAEE;
-    private static final int KEY = 0xFFFFFFFF;
-    private static final int KEY_SPECIAL = 0xFFD2D7DD;
-    private static final int KEY_PRESSED = 0xFFC2C8CF;
-    private static final int TEXT = 0xFF1F2328;
-    private static final int ACCENT = 0xFF0EAF76;
+    private final Theme theme;
 
     private static final class Hit {
         RectF rect;
@@ -80,19 +75,20 @@ public final class KeyboardView extends View {
     public KeyboardView(Context context) {
         super(context);
         density = getResources().getDisplayMetrics().density;
+        theme = Theme.get(context);
         gap = 4 * density;
         padding = 4 * density;
         keyPaint.setStyle(Paint.Style.FILL);
-        textPaint.setColor(TEXT);
+        textPaint.setColor(theme.text);
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         textPaint.setTextSize(23 * density);
-        specialTextPaint.setColor(TEXT);
+        specialTextPaint.setColor(theme.text);
         specialTextPaint.setTextAlign(Paint.Align.CENTER);
         specialTextPaint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
         specialTextPaint.setTextSize(15 * density);
         setFocusable(false);
-        setBackgroundColor(BG);
+        setBackgroundColor(theme.background);
         setContentDescription("WowType 键盘");
     }
 
@@ -201,15 +197,15 @@ public final class KeyboardView extends View {
             boolean isPressed = hit == pressed;
             int fill;
             if (isPressed) {
-                fill = KEY_PRESSED;
+                fill = theme.keyPressed;
             } else if (hit.kind == KIND_SHIFT && shift) {
-                fill = ACCENT;
+                fill = theme.accent;
             } else if (hit.kind == KIND_MODE) {
-                fill = english ? KEY_SPECIAL : ACCENT;
+                fill = english ? theme.keySpecial : theme.accent;
             } else if (hit.kind == KIND_LETTER || hit.kind == KIND_SPACE) {
-                fill = KEY;
+                fill = theme.key;
             } else {
-                fill = KEY_SPECIAL;
+                fill = theme.keySpecial;
             }
             keyPaint.setColor(fill);
             scratch.set(hit.rect);
@@ -219,7 +215,7 @@ public final class KeyboardView extends View {
             boolean big = hit.kind == KIND_LETTER;
             Paint paint = big ? textPaint : specialTextPaint;
             paint.setColor(hit.kind == KIND_MODE && !english ? 0xFFFFFFFF
-                    : hit.kind == KIND_SHIFT && shift ? 0xFFFFFFFF : TEXT);
+                    : hit.kind == KIND_SHIFT && shift ? 0xFFFFFFFF : theme.text);
             if (big) paint.setTextSize(23 * density);
             float centerY = hit.rect.centerY() - (paint.descent() + paint.ascent()) / 2;
             canvas.drawText(hit.label, hit.rect.centerX(), centerY, paint);

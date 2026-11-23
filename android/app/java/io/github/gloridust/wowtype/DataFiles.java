@@ -24,10 +24,11 @@ final class DataFiles {
     private static final String ASSET_DIR = "wowtype";
     private static final Charset UTF8 = Charset.forName("UTF-8");
     /** 解包格式改过（加文件、换编码）时加一，升级后会重新解一次，不用改词库版本。 */
-    private static final int DATA_REVISION = 2;
+    private static final int DATA_REVISION = 3;
     /** 一起解出来的文件；words.lm 可以没有，词库不行。 */
     private static final String[] FILES = {
-            "lexicon.tsv", "english.txt", "words.lm", "s2t.tsv", "LICENSE", "SOURCE.txt",
+            "lexicon.tsv", "english.txt", "words.lm", "s2t.tsv", "wubi86.tsv",
+            "WUBI-LICENSE", "WUBI-SOURCE.txt", "WUBI-AUTHORS", "LICENSE", "SOURCE.txt",
     };
 
     private DataFiles() {}
@@ -37,16 +38,18 @@ final class DataFiles {
         final File wordsLm;
         final File english;
         final File conversion;
+        final File wubi;
         final File userDict;
         final File history;
         final File recentEmoji;
 
-        Paths(File lexicon, File wordsLm, File english, File conversion, File userDict, File history,
-              File recentEmoji) {
+        Paths(File lexicon, File wordsLm, File english, File conversion, File wubi, File userDict,
+              File history, File recentEmoji) {
             this.lexicon = lexicon;
             this.wordsLm = wordsLm;
             this.english = english;
             this.conversion = conversion;
+            this.wubi = wubi;
             this.userDict = userDict;
             this.history = history;
             this.recentEmoji = recentEmoji;
@@ -67,6 +70,7 @@ final class DataFiles {
                 new File(root, "words.lm"),
                 new File(root, "english.txt"),
                 new File(root, "s2t.tsv"),
+                new File(root, "wubi86.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));
@@ -80,6 +84,7 @@ final class DataFiles {
                 new File(root, "words.lm"),
                 new File(root, "english.txt"),
                 new File(root, "s2t.tsv"),
+                new File(root, "wubi86.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));
@@ -104,7 +109,8 @@ final class DataFiles {
                 int n;
                 while ((n = in.read(buffer)) > 0) os.write(buffer, 0, n);
             } catch (IOException e) {
-                if ("words.lm".equals(name) || "s2t.tsv".equals(name)) {
+                if ("words.lm".equals(name) || "s2t.tsv".equals(name)
+                        || "wubi86.tsv".equals(name) || name.startsWith("WUBI-")) {
                     Log.w(TAG, "APK 里没有 " + name + "，跳过", e);
                     continue;
                 }

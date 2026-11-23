@@ -65,6 +65,11 @@ cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$DATA/words.lm" "$DATA/LICENSE" "$DA
    "$DATA/VERSION" "$work/assets/wowtype/"
 # 繁简转换（繁体设置用）和它的许可证
 cp core/data/s2t.tsv core/data/OPENCC-LICENSE "$work/assets/wowtype/"
+# 五笔 86（有就用；make-wubi.sh 生成）
+if [[ -f "$DATA/wubi86.tsv" ]]; then
+  cp "$DATA/wubi86.tsv" "$DATA/WUBI-LICENSE" "$DATA/WUBI-SOURCE.txt" "$DATA/WUBI-AUTHORS" \
+     "$work/assets/wowtype/"
+fi
 
 # ---- 资源、R.java、manifest ----
 "$AAPT2" compile --dir "$APP/res" -o "$work/res.zip"

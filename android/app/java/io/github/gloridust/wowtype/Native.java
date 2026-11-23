@@ -74,6 +74,9 @@ final class Native {
     /** 载入繁简转换表（s2t.tsv）；没载入时繁体开关不生效。 */
     static native void loadConversion(long engine, String path);
 
+    /** 载入五笔 86 码表（wubi86.tsv）。 */
+    static native void loadWubi(long engine, String path);
+
     static native void saveState(long engine, String userDict, String history);
 
     static native void freeEngine(long engine);
@@ -81,6 +84,12 @@ final class Native {
     static native long newSession(long engine, int[] config);
 
     static native void configureSession(long session, int[] config);
+
+    /** 读系统剪贴板后交给核心（工具栏「剪贴板」页）。 */
+    static native void clipboardRemember(String text);
+
+    /** Super + . 的表情面板。 */
+    static native Object[] toggleEmoji(long session);
 
     static native void freeSession(long session);
 

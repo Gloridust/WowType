@@ -20,9 +20,7 @@ import android.widget.TextView;
  * 帮忙打开系统选择器、提前把词库解出来并载入（第一次要几秒，别等到打字时才发现）。
  */
 public final class SetupActivity extends Activity {
-    private static final int ACCENT = 0xFF0EAF76;
-    private static final int TEXT = 0xFF1F2328;
-    private static final int MUTED = 0xFF6B7280;
+    private Theme theme;
 
     private final EngineHost.Listener engineListener = this::updateStatus;
     private TextView state;
@@ -31,35 +29,36 @@ public final class SetupActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        theme = Theme.get(this);
 
         int pad = dp(20);
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
         column.setPadding(pad, pad, pad, pad);
-        column.setBackgroundColor(0xFFFFFFFF);
+        column.setBackgroundColor(theme.background);
 
         TextView title = new TextView(this);
         title.setText(R.string.app_name);
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setTextColor(TEXT);
+        title.setTextColor(theme.text);
         column.addView(title);
 
         TextView intro = new TextView(this);
         intro.setText(R.string.setup_intro);
         intro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        intro.setTextColor(TEXT);
+        intro.setTextColor(theme.text);
         intro.setLineSpacing(dp(4), 1f);
         column.addView(intro, margins(0, dp(10), 0, 0));
 
         state = new TextView(this);
         state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        state.setTextColor(ACCENT);
+        state.setTextColor(theme.accent);
         column.addView(state, margins(0, dp(18), 0, 0));
 
         engineState = new TextView(this);
         engineState.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        engineState.setTextColor(MUTED);
+        engineState.setTextColor(theme.muted);
         column.addView(engineState, margins(0, dp(6), 0, 0));
 
         column.addView(button(R.string.setup_enable, v ->
@@ -78,7 +77,7 @@ public final class SetupActivity extends Activity {
         TextView usage = new TextView(this);
         usage.setText(R.string.setup_usage);
         usage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        usage.setTextColor(MUTED);
+        usage.setTextColor(theme.muted);
         usage.setLineSpacing(dp(4), 1f);
         column.addView(usage, margins(0, dp(24), 0, 0));
 
@@ -105,12 +104,12 @@ public final class SetupActivity extends Activity {
         try {
             boolean enabled = isEnabled();
             state.setText(enabled ? R.string.setup_enabled : R.string.setup_disabled);
-            state.setTextColor(enabled ? ACCENT : MUTED);
+            state.setTextColor(enabled ? theme.accent : theme.muted);
             engineState.setText(EngineHost.get().status() + "（ABI " + Native.versionText() + "）");
         } catch (Throwable t) {
             // 引导页是唯一入口：状态探测怎么失败都不能让 onResume 抛出去
             state.setText("状态读取失败：" + t);
-            state.setTextColor(MUTED);
+            state.setTextColor(theme.muted);
         }
     }
 
@@ -144,7 +143,7 @@ public final class SetupActivity extends Activity {
         button.setText(text);
         button.setAllCaps(false);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackgroundColor(ACCENT);
+        button.setBackgroundColor(theme.accent);
         button.setOnClickListener(onClick);
         return button;
     }

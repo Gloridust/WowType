@@ -200,8 +200,7 @@ final class Prefs {
     }
 
     boolean toolbar() {
-        // 工具栏面板还没有画（表情、剪贴板也还没有），先别让 v + 空格开出来
-        return bool("Toolbar", false);
+        return bool("Toolbar", true);
     }
 
     boolean clipboardHistory() {

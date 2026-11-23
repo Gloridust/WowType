@@ -87,6 +87,14 @@ public final class Session implements AutoCloseable {
         }
     }
 
+    /** 打开 / 关上表情面板（桌面是 Super + .）。 */
+    public Frame toggleEmoji() {
+        if (ptr == 0) return Frame.empty();
+        synchronized (ENGINE_LOCK) {
+            return Frame.from(Native.toggleEmoji(ptr));
+        }
+    }
+
     public Frame frame() {
         if (ptr == 0) return Frame.empty();
         synchronized (ENGINE_LOCK) {

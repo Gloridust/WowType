@@ -31,11 +31,7 @@ public final class CandidateBar extends FrameLayout {
         void onNextPage();
     }
 
-    private static final int BG = 0xFFFFFFFF;
-    private static final int TEXT = 0xFF1F2328;
-    private static final int MUTED = 0xFF6B7280;
-    private static final int HIGHLIGHT_BG = 0xFFDDF4EA;
-    private static final int ACCENT = 0xFF0B8A5C;
+    private final Theme theme;
 
     /** 横排高度（和原来一样）。 */
     private static final int HORIZONTAL_HEIGHT_DP = 46;
@@ -55,6 +51,7 @@ public final class CandidateBar extends FrameLayout {
 
     public CandidateBar(Context context) {
         super(context);
+        theme = Theme.get(context);
         pad = dp(10);
 
         horizontalRow = new LinearLayout(context);
@@ -80,7 +77,7 @@ public final class CandidateBar extends FrameLayout {
         addView(verticalScroll,
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         verticalScroll.setVisibility(GONE);
-        setBackgroundColor(BG);
+        setBackgroundColor(theme.candidate);
         setMinimumHeight(dp(HORIZONTAL_HEIGHT_DP));
     }
 
@@ -143,7 +140,7 @@ public final class CandidateBar extends FrameLayout {
                 TextView text = new TextView(getContext());
                 text.setText(hint);
                 text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-                text.setTextColor(MUTED);
+                text.setTextColor(theme.muted);
                 text.setPadding(pad, 0, pad, 0);
                 text.setGravity(Gravity.CENTER_VERTICAL);
                 text.setSingleLine(true);
@@ -191,11 +188,11 @@ public final class CandidateBar extends FrameLayout {
         if (!comment.isEmpty()) {
             int start = label.length() + 1;
             span.setSpan(new RelativeSizeSpan(0.7f), start, span.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            span.setSpan(new ForegroundColorSpan(MUTED), start, span.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            span.setSpan(new ForegroundColorSpan(theme.muted), start, span.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         }
         text.setText(span);
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        text.setTextColor(index == frame.candCursor ? ACCENT : TEXT);
+        text.setTextColor(index == frame.candCursor ? theme.accent : theme.text);
         text.setTypeface(null, index == frame.candCursor ? android.graphics.Typeface.BOLD
                 : android.graphics.Typeface.NORMAL);
         text.setGravity(vertical ? (Gravity.CENTER_VERTICAL | Gravity.START) : Gravity.CENTER);
@@ -203,7 +200,7 @@ public final class CandidateBar extends FrameLayout {
         text.setSingleLine(true);
         if (index == frame.candCursor) {
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(HIGHLIGHT_BG);
+            bg.setColor(theme.highlight);
             bg.setCornerRadius(dp(4));
             text.setBackground(bg);
         }
@@ -218,7 +215,7 @@ public final class CandidateBar extends FrameLayout {
         TextView text = new TextView(getContext());
         text.setText(label);
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        text.setTextColor(MUTED);
+        text.setTextColor(theme.muted);
         text.setGravity(Gravity.CENTER);
         text.setPadding(pad, 0, pad, 0);
         text.setOnClickListener(v -> {

@@ -89,6 +89,9 @@ final class EngineHost {
                             Native.loadConversion(created, paths.conversion.getAbsolutePath());
                             conversionLoaded = true;
                         }
+                        if (paths.wubi.isFile()) {
+                            Native.loadWubi(created, paths.wubi.getAbsolutePath());
+                        }
                     }
                     handle = created;
                     applySettings();
@@ -116,8 +119,9 @@ final class EngineHost {
         Prefs prefs = Prefs.get(ctx);
         synchronized (Session.ENGINE_LOCK) {
             Native.setFuzzy(engine, prefs.fuzzy() ? 1 : 0, prefs.fuzzyGroups());
-            Native.setShuangpin(engine, prefs.shuangpin() ? 1 : 0, prefs.shuangpinScheme(),
-                    prefs.shuangpinAbbrev() ? 1 : 0);
+            // 五笔时引擎的双拼必须关着，否则字母会被当双拼键位
+            Native.setShuangpin(engine, !prefs.wubi() && prefs.shuangpin() ? 1 : 0,
+                    prefs.shuangpinScheme(), prefs.shuangpinAbbrev() ? 1 : 0);
             Native.setTypo(engine, prefs.typo() ? 1 : 0);
             Native.setRareExt(engine, prefs.rareExtChars() ? 1 : 0);
             Native.setTraditional(engine, prefs.traditional() && conversionLoaded ? 1 : 0);

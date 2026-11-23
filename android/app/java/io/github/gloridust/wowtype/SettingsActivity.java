@@ -21,9 +21,7 @@ import android.widget.TextView;
  * 全部用代码搭界面（和 SetupActivity 一样，不引 layout XML）。
  */
 public final class SettingsActivity extends Activity {
-    private static final int TEXT = 0xFF1F2328;
-    private static final int MUTED = 0xFF6B7280;
-    private static final int ACCENT = 0xFF0EAF76;
+    private Theme theme;
 
     private Prefs prefs;
     private LinearLayout column;
@@ -50,23 +48,28 @@ public final class SettingsActivity extends Activity {
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = Prefs.get(this);
+        theme = Theme.get(this);
 
         column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(20);
         column.setPadding(pad, pad, pad, pad);
-        column.setBackgroundColor(0xFFFFFFFF);
+        column.setBackgroundColor(theme.background);
 
         TextView title = new TextView(this);
         title.setText("输入设置");
         title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
-        title.setTextColor(TEXT);
+        title.setTextColor(theme.text);
         title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         column.addView(title);
 
+        section("外观");
+        choice("颜色", new String[]{"跟随系统", "浅色", "深色"},
+                new String[]{"System", "Light", "Dark"}, "SettingsTheme", "System", false);
+
         section("输入方案");
-        choice("输入方案", new String[]{"全拼", "双拼"},
-                new String[]{"Quanpin", "Shuangpin"}, "InputScheme", "Quanpin", true);
+        choice("输入方案", new String[]{"全拼", "双拼", "五笔 86"},
+                new String[]{"Quanpin", "Shuangpin", "Wubi"}, "InputScheme", "Quanpin", true);
         choice("双拼方案", Prefs.SHUANGPIN_NAMES, Prefs.SHUANGPIN_SCHEMES,
                 "ShuangpinScheme", "ziranma", true);
         toggle("双拼时编辑区显示按键", "ShuangpinShowKeys", false, false);
@@ -115,6 +118,8 @@ public final class SettingsActivity extends Activity {
         toggle("日期时间候选", "DateTime", true, false);
         toggle("计算器（v1+2*3）", "Calculator", true, false);
         toggle("打字推荐 emoji", "EmojiSuggest", true, false);
+        toggle("工具栏（v + 空格）", "Toolbar", true, false);
+        toggle("剪贴板历史（最近 20 条，只在内存）", "ClipboardHistory", false, false);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(column);
@@ -127,7 +132,7 @@ public final class SettingsActivity extends Activity {
         TextView text = new TextView(this);
         text.setText(label);
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        text.setTextColor(ACCENT);
+        text.setTextColor(theme.accent);
         text.setPadding(0, dp(22), 0, dp(4));
         column.addView(text);
     }
@@ -178,6 +183,7 @@ public final class SettingsActivity extends Activity {
                 if (values[position].equals(prefs.string(key, fallback))) return;
                 prefs.set(key, values[position]);
                 if (engineLevel) EngineHost.get().applySettings();
+                if ("SettingsTheme".equals(key)) recreate();
             }
 
             @Override
@@ -194,7 +200,7 @@ public final class SettingsActivity extends Activity {
         button.setAllCaps(false);
         button.setText(label + "：" + summary);
         button.setTextColor(0xFFFFFFFF);
-        button.setBackgroundColor(ACCENT);
+        button.setBackgroundColor(theme.accent);
         button.setOnClickListener(v -> onClick.run());
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -207,7 +213,7 @@ public final class SettingsActivity extends Activity {
         TextView text = new TextView(this);
         text.setText(label);
         text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        text.setTextColor(TEXT);
+        text.setTextColor(theme.text);
         text.setPadding(0, dp(8), dp(8), dp(8));
         return text;
     }

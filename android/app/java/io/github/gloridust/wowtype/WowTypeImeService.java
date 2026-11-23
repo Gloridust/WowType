@@ -1,5 +1,7 @@
 package io.github.gloridust.wowtype;
 
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.SharedPreferences;
 import android.text.InputType;
 import android.view.KeyEvent;
@@ -42,8 +44,12 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 if (bar != null) bar.setHorizontal(prefs.horizontal());
                 if (session != null) {
                     session.configure(prefs.sessionConfig());
-                    refresh();
                 }
+                if ("SettingsTheme".equals(key)) {
+                    // 键盘和候选条的颜色是建 View 时取的，换主题要重建输入视图
+                    setInputView(onCreateInputView());
+                }
+                refresh();
             };
 
     private final CandidateBar.Listener candidateListener = new CandidateBar.Listener() {
@@ -132,6 +138,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             return;
         }
         session = new Session(EngineHost.get().handle(), Prefs.get(this).sessionConfig());
+        rememberClipboard();
         hints = hintsFor(attribute);
         refreshSurrounding();
         if (globalMode != Session.MODE_CHINESE) {
@@ -172,6 +179,23 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         if (candidatesStart < 0) {
             // 组字的时候光标前的字是拼音，不是上屏的内容：只在没组字时读
             refreshSurrounding();
+        }
+    }
+
+    /** 打开工具栏之前把系统剪贴板交一份给核心（桌面版也是这样，最近 20 条只在内存里）。 */
+    private void rememberClipboard() {
+        if (!Prefs.get(this).clipboardHistory()) return;
+        try {
+            ClipboardManager manager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (manager == null || !manager.hasPrimaryClip()) return;
+            ClipData clip = manager.getPrimaryClip();
+            if (clip == null || clip.getItemCount() == 0) return;
+            CharSequence text = clip.getItemAt(0).coerceToText(this);
+            if (text != null && text.length() > 0 && text.length() <= 4000) {
+                Native.clipboardRemember(text.toString());
+            }
+        } catch (Throwable ignored) {
+            // Android 10 起剪贴板读取可能被系统拒绝：拿不到就算了
         }
     }
 
@@ -262,6 +286,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             if (!preedit.isEmpty()) {
                 conn.setComposingText(preedit, 1);
             } else {
+                // 先清空再 finish：直接 finishComposingText 会把最后一段拼音（v、ni'hao）上屏，
+                // 工具栏、Esc、表情面板这些「丢掉编辑区」的路径就会留下 v
+                conn.setComposingText("", 1);
                 conn.finishComposingText();
             }
         }
@@ -321,6 +348,11 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (session == null) return super.onKeyDown(keyCode, event);
+        // 桌面版的 Super + . 开表情面板
+        if (keyCode == KeyEvent.KEYCODE_PERIOD && event.isMetaPressed()) {
+            render(session.toggleEmoji());
+            return true;
+        }
         int keysym = keysymFor(keyCode, event);
         if (keysym == 0) return super.onKeyDown(keyCode, event);
         int fieldHints = hints | (hasSurrounding ? Session.HINT_SURROUNDING : 0);

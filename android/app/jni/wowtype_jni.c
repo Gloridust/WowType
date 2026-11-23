@@ -348,6 +348,16 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setTraditional(
     if (e != NULL) wowtype_engine_set_traditional(e, on);
 }
 
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_loadWubi(
+    JNIEnv *env, jclass cls, jlong engine, jstring path) {
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e == NULL) return;
+    char *p = dup_utf8(env, path);
+    if (p != NULL && p[0] != 0) wowtype_engine_load_wubi(e, p);
+    free(p);
+}
+
 JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_loadConversion(
     JNIEnv *env, jclass cls, jlong engine, jstring path) {
     (void)cls;
@@ -363,6 +373,24 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_freeSession(
     (void)env;
     (void)cls;
     if (session != 0) wowtype_session_free(session_of(session));
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_clipboardRemember(
+    JNIEnv *env, jclass cls, jstring text) {
+    (void)cls;
+    char *s = dup_utf8(env, text);
+    if (s != NULL) {
+        wowtype_clipboard_remember(s);
+        free(s);
+    }
+}
+
+JNIEXPORT jobject JNICALL Java_io_github_gloridust_wowtype_Native_toggleEmoji(
+    JNIEnv *env, jclass cls, jlong session) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return empty_frame(env);
+    return frame_to_java(env, s, wowtype_session_toggle_emoji_panel(s));
 }
 
 JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setEngine(
