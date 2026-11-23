@@ -78,7 +78,6 @@ public final class CandidateBar extends FrameLayout {
                 new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         verticalScroll.setVisibility(GONE);
         setBackgroundColor(theme.candidate);
-        setMinimumHeight(dp(HORIZONTAL_HEIGHT_DP));
     }
 
     public void setListener(Listener listener) {
@@ -92,7 +91,7 @@ public final class CandidateBar extends FrameLayout {
         lastSignature = "";
         horizontalScroll.setVisibility(horizontal ? VISIBLE : GONE);
         verticalScroll.setVisibility(horizontal ? GONE : VISIBLE);
-        updateHeight(0, false, false);
+        updateHeight(0, false, false, false);
     }
 
     /** 照 frame 重画。同一帧不重复建 View（按住退格时每 50 毫秒来一次）。 */
@@ -133,10 +132,12 @@ public final class CandidateBar extends FrameLayout {
             }
         }
 
+        boolean hasHint = false;
         if (frame.candCount == 0) {
             String hint = frame.aux;
             if (hint == null || hint.isEmpty()) hint = frame.preedit;
             if (hint != null && !hint.isEmpty()) {
+                hasHint = true;
                 TextView text = new TextView(getContext());
                 text.setText(hint);
                 text.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
@@ -154,7 +155,7 @@ public final class CandidateBar extends FrameLayout {
 
         if (horizontal) horizontalScroll.scrollTo(0, 0);
         else verticalScroll.scrollTo(0, 0);
-        updateHeight(frame.candCount, frame.hasPrev, frame.hasNext);
+        updateHeight(frame.candCount, frame.hasPrev, frame.hasNext, hasHint);
     }
 
     public void clear() {
@@ -167,9 +168,11 @@ public final class CandidateBar extends FrameLayout {
         return new LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(VERTICAL_ROW_DP));
     }
 
-    private void updateHeight(int candidates, boolean hasPrev, boolean hasNext) {
+    private void updateHeight(int candidates, boolean hasPrev, boolean hasNext, boolean hasHint) {
         int height;
-        if (horizontal || candidates == 0) {
+        if (candidates == 0 && !hasHint) {
+            height = 0; // 没在打字、没有提示：别空占一条
+        } else if (horizontal || candidates == 0) {
             height = dp(HORIZONTAL_HEIGHT_DP);
         } else {
             int rows = candidates + (hasPrev ? 1 : 0) + (hasNext ? 1 : 0);
