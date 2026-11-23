@@ -474,6 +474,14 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_clipboardRemember
     }
 }
 
+JNIEXPORT jobject JNICALL Java_io_github_gloridust_wowtype_Native_openTool(
+    JNIEnv *env, jclass cls, jlong session, jint tool) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return empty_frame(env);
+    return frame_to_java(env, s, wowtype_session_open_tool(s, tool));
+}
+
 JNIEXPORT jobject JNICALL Java_io_github_gloridust_wowtype_Native_toggleEmoji(
     JNIEnv *env, jclass cls, jlong session) {
     (void)cls;

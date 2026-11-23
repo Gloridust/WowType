@@ -97,6 +97,9 @@ final class Native {
     /** Super + . 的表情面板。 */
     static native Object[] toggleEmoji(long session);
 
+    /** 工具栏的一页（WOWTYPE_TOOL_*）。 */
+    static native Object[] openTool(long session, int tool);
+
     /** 「译」的 Java 翻译器；null 表示关掉。用 Object 是为了主机 JVM 测试不用编 TranslateHost。 */
     static native void setTranslateBackend(long session, Object host);
 

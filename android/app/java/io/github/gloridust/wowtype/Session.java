@@ -30,6 +30,14 @@ public final class Session implements AutoCloseable {
     public static final int MODE_ENGLISH = 1;
     public static final int MODE_TRANSLATE = 2;
 
+    /* WOWTYPE_TOOL_* */
+    public static final int TOOL_NONE = 0;
+    public static final int TOOL_MENU = 1;
+    public static final int TOOL_CLIPBOARD = 2;
+    public static final int TOOL_PHRASES = 3;
+    public static final int TOOL_SYMBOLS = 4;
+    public static final int TOOL_EMOJI = 5;
+
     /* XKB keysym 里用到的几个（和桌面外壳翻出来的一样） */
     public static final int KEY_SPACE = 0x20;
     public static final int KEY_APOSTROPHE = 0x27;
@@ -85,6 +93,14 @@ public final class Session implements AutoCloseable {
         synchronized (ENGINE_LOCK) {
             return Frame.from(Native.key(ptr, keysym, modifiers, false, prevChar, action, hints, code,
                     repeat, System.currentTimeMillis()));
+        }
+    }
+
+    /** 打开工具栏的一页或表情面板（WOWTYPE_TOOL_*）；NONE 关上。 */
+    public Frame openTool(int tool) {
+        if (ptr == 0) return Frame.empty();
+        synchronized (ENGINE_LOCK) {
+            return Frame.from(Native.openTool(ptr, tool));
         }
     }
 

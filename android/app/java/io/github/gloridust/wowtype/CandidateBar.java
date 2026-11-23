@@ -144,7 +144,11 @@ public final class CandidateBar extends FrameLayout {
                 text.setPadding(pad, 0, pad, 0);
                 text.setGravity(Gravity.CENTER_VERTICAL);
                 text.setSingleLine(true);
-                row.addView(text, horizontal ? null : rowParams());
+                if (horizontal) {
+                    row.addView(text);
+                } else {
+                    row.addView(text, rowParams());
+                }
             }
         }
 

@@ -42,6 +42,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     private SpeechRecognizer recognizer;
     private KeyboardView keyboard;
     private CandidateBar bar;
+    private ToolbarView toolbar;
 
     /** 输入框的情况（密码框不自动空格、不翻译）。 */
     private int hints;
@@ -148,6 +149,37 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         bar.setHorizontal(Prefs.get(this).horizontal());
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        toolbar = new ToolbarView(this);
+        toolbar.setListener(new ToolbarView.Listener() {
+            @Override
+            public void onEmoji() {
+                if (session != null) render(session.toggleEmoji());
+            }
+
+            @Override
+            public void onClipboard() {
+                rememberClipboard();
+                if (session != null) render(session.openTool(Session.TOOL_CLIPBOARD));
+            }
+
+            @Override
+            public void onMenu() {
+                if (session != null) render(session.openTool(Session.TOOL_MENU));
+            }
+
+            @Override
+            public void onSettings() {
+                startActivity(new Intent(WowTypeImeService.this, SettingsActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            }
+
+            @Override
+            public void onHide() {
+                requestHideSelf(0);
+            }
+        });
+        root.addView(toolbar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
 
         keyboard = new KeyboardView(this);
         keyboard.setListener(this);
