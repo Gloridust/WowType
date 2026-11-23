@@ -7,11 +7,53 @@ package io.github.gloridust.wowtype;
  * 一一对应，改一边要改另一边；{@code android/test.sh} 在主机 JVM 上把这一层跑一遍。
  */
 final class Native {
+    /**
+     * 原生库没装上（ABI 不对、16 KB 页对齐不对、APK 里缺 .so）时记下原因。
+     *
+     * 以前这里直接 System.loadLibrary，类初始化失败以后 {@code Native.version()} 在设置页主线程上
+     * 抛 UnsatisfiedLinkError，App 一打开就闪退，什么也看不到。现在捕获下来，设置页把原因显示出来，
+     * 用户截图就能看到具体是 dlopen 失败还是找不到库。
+     */
+    private static Throwable loadError;
+
     static {
-        System.loadLibrary("wowtype");
+        try {
+            System.loadLibrary("wowtype");
+        } catch (Throwable t) {
+            loadError = t;
+            t.printStackTrace();
+        }
     }
 
     private Native() {}
+
+    /** 原生库加载失败的原因；成功是 null。 */
+    static Throwable loadError() {
+        return loadError;
+    }
+
+    /** 原生库可用（加载成功）。 */
+    static boolean available() {
+        return loadError == null;
+    }
+
+    /** 设置页状态行用：成功是 ABI 号，失败是原因；不会抛 UnsatisfiedLinkError。 */
+    static String versionText() {
+        if (loadError != null) return "原生库加载失败：" + describe(loadError);
+        try {
+            return Integer.toString(version());
+        } catch (Throwable t) {
+            return "原生库加载失败：" + describe(t);
+        }
+    }
+
+    private static String describe(Throwable t) {
+        StringBuilder text = new StringBuilder(t.toString());
+        for (Throwable cause = t.getCause(); cause != null; cause = cause.getCause()) {
+            text.append(" / ").append(cause);
+        }
+        return text.toString();
+    }
 
     static native int version();
 

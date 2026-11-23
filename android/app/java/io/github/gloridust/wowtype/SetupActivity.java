@@ -102,7 +102,7 @@ public final class SetupActivity extends Activity {
         boolean enabled = isEnabled();
         state.setText(enabled ? R.string.setup_enabled : R.string.setup_disabled);
         state.setTextColor(enabled ? ACCENT : MUTED);
-        engineState.setText(EngineHost.get().status() + "（ABI " + Native.version() + "）");
+        engineState.setText(EngineHost.get().status() + "（ABI " + Native.versionText() + "）");
     }
 
     /** 系统输入法列表里有没有我们：Settings.Secure 里记的是 {@code 包名/.类名}。 */

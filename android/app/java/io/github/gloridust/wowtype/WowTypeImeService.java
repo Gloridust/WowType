@@ -7,6 +7,7 @@ import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.LinearLayout;
+import android.widget.Toast;
 
 /**
  * Android 输入法外壳：软键盘的按键 → 核心的输入会话（{@code wowtype_session_*}）→ 编辑区和候选。
@@ -67,6 +68,11 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
     @Override
     public View onCreateInputView() {
+        // 原生库没装上时，设置页和这里都直接说原因，别只留一个打不开的键盘
+        if (!Native.available()) {
+            Toast.makeText(this, "WowType 原生库加载失败：" + Native.loadError(),
+                    Toast.LENGTH_LONG).show();
+        }
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
 
@@ -100,6 +106,11 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     public void onStartInput(EditorInfo attribute, boolean restarting) {
         super.onStartInput(attribute, restarting);
         if (session != null) session.close();
+        // 原生库没装上：不建会话，免得在输入框里闪退（设置页会显示具体原因）
+        if (!Native.available()) {
+            session = null;
+            return;
+        }
         session = new Session(EngineHost.get().handle());
         hints = hintsFor(attribute);
         refreshSurrounding();
