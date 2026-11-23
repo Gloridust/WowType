@@ -1,7 +1,7 @@
 # 安卓输入法外壳
 
 > 状态（2026-11）：第一版，**arm64 优先**。拼音、候选、整句、纠错、学习中英文都在核心里，
-> 这里是一个新外壳（和 `fcitx5-addon/`、`macos/` 平级）。没有在真机上跑过之前按测试版看待。
+> 这里是一个新外壳（和 `fcitx5-addon/`、`macos/` 平级）。已在真机上跑过（截图见下），仍按测试版看待。
 
 ## 做出来的东西
 
@@ -36,6 +36,16 @@
 - 互译：设置里填 OpenAI 格式接口（地址、模型、API Key）或直接用默认的哔哩哔哩 Index-Translate
   （不用 Key）。「中/英/译」键循环到「译」，照常打中文，停一下译文出现在编辑区，回车/上屏。
   桌面版用系统 curl，安卓用系统 HTTPS 请求；Key 存在应用私有 SharedPreferences 里。
+
+## 真机截图
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="../docs/images/android-keyboard-dark.jpg" width="260" alt="安卓版在微信对话框里的深色键盘：候选条、工具条（表情 / 剪贴板 / 更多 / 设置 / 收起键盘）和四行 QWERTY"><br><sub>微信里的深色键盘和工具条</sub></td>
+<td align="center" width="33%"><img src="../docs/images/android-settings.jpg" width="260" alt="安卓版输入设置：外观、键盘（按键震动 / 按键声音 / 下滑收起）、输入方案、候选、拼音"><br><sub>输入设置（上半部分）</sub></td>
+<td align="center" width="33%"><img src="../docs/images/android-setup-dark.jpg" width="260" alt="安卓版启动页：启用 WowType、选择输入法、载入词库、输入设置、检查更新"><br><sub>启用 WowType、载入词库</sub></td>
+</tr>
+</table>
 
 ## 这一版没有的
 

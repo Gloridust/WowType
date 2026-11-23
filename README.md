@@ -194,8 +194,10 @@ Android 7.0（API 24）或更新，**优先 arm64（arm64-v8a）**；也有 x86_
 点「启用 WowType」在系统设置里打开它，再在任何输入框里长按地球键选 WowType。
 词库和语言模型都在 APK 里，第一次载入要几秒；不联网，输入内容不离开手机。
 
-这一版没有语音、互译、工具栏和表情面板，也还没有双拼 / 五笔 / 模糊音的设置入口，见 [android/README.md](android/README.md)。
-安装包是自签名的（没有上架应用商店）。
+<p align="center"><img src="docs/images/android-keyboard-dark.jpg" width="300" alt="安卓版在微信对话框里的深色键盘：候选条、工具条（表情 / 剪贴板 / 更多 / 设置 / 收起键盘）和四行 QWERTY"><br><sub>安卓版：微信里的深色键盘和工具条</sub></p>
+
+语音、互译、工具栏、表情面板、双拼 / 五笔 / 模糊音等都在设置里；和桌面版还不一样的地方见
+[android/README.md](android/README.md)。安装包是自签名的（没有上架应用商店）。
 
 ### 手动安装
 
