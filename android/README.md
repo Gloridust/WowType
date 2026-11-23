@@ -41,9 +41,23 @@
 
 <table>
 <tr>
-<td align="center" width="33%"><img src="../docs/images/android-keyboard-dark.jpg" width="260" alt="安卓版在微信对话框里的深色键盘：候选条、工具条（表情 / 剪贴板 / 更多 / 设置 / 收起键盘）和四行 QWERTY"><br><sub>微信里的深色键盘和工具条</sub></td>
-<td align="center" width="33%"><img src="../docs/images/android-settings.jpg" width="260" alt="安卓版输入设置：外观、键盘（按键震动 / 按键声音 / 下滑收起）、输入方案、候选、拼音"><br><sub>输入设置（上半部分）</sub></td>
-<td align="center" width="33%"><img src="../docs/images/android-setup-dark.jpg" width="260" alt="安卓版启动页：启用 WowType、选择输入法、载入词库、输入设置、检查更新"><br><sub>启用 WowType、载入词库</sub></td>
+<td align="center" width="50%"><img src="../docs/images/android-keyboard-dark.jpg" width="320" alt="安卓版在微信对话框里的深色键盘：候选条、工具条（表情 / 剪贴板 / 更多 / 设置 / 收起键盘）和四行 QWERTY"><br><sub>微信里的深色键盘和工具条</sub></td>
+<td align="center" width="50%"><img src="../docs/images/android-setup-dark.jpg" width="320" alt="安卓版启动页：启用 WowType、选择输入法、载入词库、输入设置、检查更新"><br><sub>启用 WowType、载入词库</sub></td>
+</tr>
+</table>
+
+输入设置原来是 1080×6117 的滚动长截图，按小节切成 5 张（也可以看[完整长图](../docs/images/android-settings-full.jpg)）：
+
+<table>
+<tr>
+<td align="center" width="33%"><img src="../docs/images/android-settings-1-appearance-keyboard.jpg" width="260" alt="输入设置：外观（颜色、强调色）、键盘（按键震动、按键声音、下滑收起）、输入方案（双拼、小鹤双拼、简拼、五笔）"><br><sub>外观、键盘、输入方案</sub></td>
+<td align="center" width="33%"><img src="../docs/images/android-settings-2-candidates-pinyin.jpg" width="260" alt="输入设置：候选排列、每页候选数、以词定字、联想、自动配对；拼音模糊音、纠错、生僻字"><br><sub>候选、拼音</sub></td>
+<td align="center" width="33%"><img src="../docs/images/android-settings-3-punctuation-lexicon.jpg" width="260" alt="输入设置：标点全角/半角、自动空格、翻页键、分号选词；词库导入和恢复"><br><sub>标点与空格、词库</sub></td>
+</tr>
+<tr>
+<td align="center" width="33%"><img src="../docs/images/android-settings-4-translate.jpg" width="260" alt="输入设置：互译开关、目标语言、接口地址、模型、API Key、正式语气、只翻一句；Shift 切换、默认模式、繁体"><br><sub>互译、模式</sub></td>
+<td align="center" width="33%"><img src="../docs/images/android-settings-5-modes-features.jpg" width="260" alt="输入设置：日期时间、计算器、emoji、语音、工具栏、剪贴板历史、统计、检查更新、测试版更新、查看统计、管理自定义词"><br><sub>功能</sub></td>
+<td align="center" width="33%"></td>
 </tr>
 </table>
 
