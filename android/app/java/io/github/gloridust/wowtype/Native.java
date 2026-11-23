@@ -112,6 +112,9 @@ final class Native {
 
     static native Object[] tick(long session, long nowMs);
 
+    /** 语音识别结果之类的原文上屏（互译时进原文）。 */
+    static native Object[] commitText(long session, String text, int prevChar);
+
     static native Object[] select(long session, int index);
 
     static native Object[] reset(long session, boolean commitPending);

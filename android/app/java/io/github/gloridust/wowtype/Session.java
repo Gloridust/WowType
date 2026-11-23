@@ -121,6 +121,14 @@ public final class Session implements AutoCloseable {
         }
     }
 
+    /** 一段和拼音无关的原文上屏（语音识别结果）：互译时进原文，否则补空格上屏。 */
+    public Frame commitText(String text, int prevChar) {
+        if (ptr == 0 || text == null || text.isEmpty()) return Frame.empty();
+        synchronized (ENGINE_LOCK) {
+            return Frame.from(Native.commitText(ptr, text, prevChar));
+        }
+    }
+
     public Frame frame() {
         if (ptr == 0) return Frame.empty();
         synchronized (ENGINE_LOCK) {

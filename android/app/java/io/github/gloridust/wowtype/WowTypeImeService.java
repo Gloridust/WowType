@@ -1,10 +1,17 @@
 package io.github.gloridust.wowtype;
 
+import android.Manifest;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.speech.RecognitionListener;
+import android.speech.RecognizerIntent;
+import android.speech.SpeechRecognizer;
 import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
@@ -13,6 +20,8 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.LinearLayout;
 import android.widget.Toast;
+
+import java.util.ArrayList;
 
 /**
  * Android 输入法外壳：软键盘的按键 → 核心的输入会话（{@code wowtype_session_*}）→ 编辑区和候选。
@@ -30,6 +39,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
     private Session session;
     private TranslateHost translate;
+    private SpeechRecognizer recognizer;
     private KeyboardView keyboard;
     private CandidateBar bar;
 
@@ -110,6 +120,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         }
         StatsHost.get().flush();
         ticker.removeCallbacks(tickRunnable);
+        stopVoice();
         super.onDestroy();
     }
 
@@ -188,6 +199,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             session = null;
         }
         StatsHost.get().flush();
+        stopVoice();
         if (bar != null) bar.clear();
         super.onFinishInput();
     }
@@ -236,6 +248,91 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     @Override
     public void onKey(int keysym, int modifiers) {
         handleKey(keysym, modifiers, false);
+    }
+
+    /** 语音键：用系统的语音识别（可能联网），结果走 core 的 commit_text。 */
+    @Override
+    public void onVoice() {
+        Prefs prefs = Prefs.get(this);
+        if (!prefs.voice()) {
+            Toast.makeText(this, "先在设置里打开「语音输入」", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "没有麦克风权限：在设置里关掉再打开「语音输入」授权",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Toast.makeText(this, "系统没有可用的语音识别服务", Toast.LENGTH_LONG).show();
+            return;
+        }
+        stopVoice();
+        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+        recognizer.setRecognitionListener(voiceListener);
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN");
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1);
+        recognizer.startListening(intent);
+        Toast.makeText(this, "正在听…", Toast.LENGTH_SHORT).show();
+    }
+
+    private final RecognitionListener voiceListener = new RecognitionListener() {
+        @Override
+        public void onReadyForSpeech(Bundle params) {
+        }
+
+        @Override
+        public void onBeginningOfSpeech() {
+        }
+
+        @Override
+        public void onRmsChanged(float rmsdB) {
+        }
+
+        @Override
+        public void onBufferReceived(byte[] buffer) {
+        }
+
+        @Override
+        public void onEndOfSpeech() {
+        }
+
+        @Override
+        public void onError(int error) {
+            Toast.makeText(WowTypeImeService.this, "没听清，再试一次", Toast.LENGTH_SHORT).show();
+            stopVoice();
+        }
+
+        @Override
+        public void onResults(Bundle results) {
+            ArrayList<String> list = results == null ? null
+                    : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+            if (list != null && !list.isEmpty() && session != null) {
+                render(session.commitText(list.get(0), prevChar));
+            }
+            stopVoice();
+        }
+
+        @Override
+        public void onPartialResults(Bundle partialResults) {
+        }
+
+        @Override
+        public void onEvent(int eventType, Bundle params) {
+        }
+    };
+
+    private void stopVoice() {
+        if (recognizer != null) {
+            recognizer.cancel();
+            recognizer.destroy();
+            recognizer = null;
+        }
     }
 
     @Override

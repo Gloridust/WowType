@@ -1,10 +1,12 @@
 package io.github.gloridust.wowtype;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -132,6 +134,7 @@ public final class SettingsActivity extends Activity {
         toggle("日期时间候选", "DateTime", true, false);
         toggle("计算器（v1+2*3）", "Calculator", true, false);
         toggle("打字推荐 emoji", "EmojiSuggest", true, false);
+        toggle("语音输入（系统识别，可能联网）", "Voice", false, false);
         toggle("工具栏（v + 空格）", "Toolbar", true, false);
         toggle("剪贴板历史（最近 20 条，只在内存）", "ClipboardHistory", false, false);
         toggle("打字统计（只记本机聚合计数）", "TypingStats", false, false);
@@ -171,6 +174,11 @@ public final class SettingsActivity extends Activity {
         toggle.setOnCheckedChangeListener((button, checked) -> {
             prefs.set(key, checked);
             if (engineLevel) EngineHost.get().applySettings();
+            if ("Voice".equals(key) && checked
+                    && checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1);
+            }
         });
         row.addView(toggle);
         column.addView(row);
@@ -255,6 +263,16 @@ public final class SettingsActivity extends Activity {
         row.addView(input, new LinearLayout.LayoutParams(dp(190),
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         column.addView(row);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] granted) {
+        super.onRequestPermissionsResult(requestCode, permissions, granted);
+        if (requestCode == 1 && (granted.length == 0
+                || granted[0] != PackageManager.PERMISSION_GRANTED)) {
+            prefs.set("Voice", false);
+            recreate();
+        }
     }
 
     private TextView rowLabel(String label) {

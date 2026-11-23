@@ -751,6 +751,19 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setTranslateBacke
     wowtype_session_set_translate_backend(s, &g_translate_backend);
 }
 
+JNIEXPORT jobject JNICALL Java_io_github_gloridust_wowtype_Native_commitText(
+    JNIEnv *env, jclass cls, jlong session, jstring text, jint prev_char) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return empty_frame(env);
+    char *input = dup_utf8(env, text);
+    if (input == NULL) return empty_frame(env);
+    jobject frame = frame_to_java(env, s,
+                                  wowtype_session_commit_text(s, input, (uint32_t)prev_char));
+    free(input);
+    return frame;
+}
+
 JNIEXPORT jstring JNICALL Java_io_github_gloridust_wowtype_Native_input(
     JNIEnv *env, jclass cls, jlong session) {
     (void)cls;

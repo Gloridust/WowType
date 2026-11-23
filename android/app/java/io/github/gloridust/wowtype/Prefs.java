@@ -240,6 +240,10 @@ final class Prefs {
         return bool("BetaUpdates", false);
     }
 
+    boolean voice() {
+        return bool("Voice", false);
+    }
+
     boolean typingStats() {
         return bool("TypingStats", false);
     }

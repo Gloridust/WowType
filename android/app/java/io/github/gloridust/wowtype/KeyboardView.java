@@ -26,8 +26,11 @@ public final class KeyboardView extends View {
         /** keysym 是 XKB 的一个子集（见 core/include/wowtype_core.h）；modifiers 是 Session.MOD_*。 */
         void onKey(int keysym, int modifiers);
 
-        /** 「中/英」键：会话切中 → 英 → 中。 */
+        /** 「中/英」键：会话切中 → 英 → 译 → 中。 */
         void onToggleMode();
+
+        /** 语音键。 */
+        void onVoice();
     }
 
     private static final int KIND_LETTER = 0;
@@ -37,6 +40,7 @@ public final class KeyboardView extends View {
     private static final int KIND_BACKSPACE = 4;
     private static final int KIND_SHIFT = 5;
     private static final int KIND_MODE = 6;
+    private static final int KIND_VOICE = 7;
 
     private final Theme theme;
 
@@ -186,7 +190,7 @@ public final class KeyboardView extends View {
     private void buildRow3(float rowHeight, float gap) {
         float top = padding + 3 * rowHeight + gap / 2;
         float bottom = padding + 4 * rowHeight - gap / 2;
-        float unit = (getWidth() - padding * 2 - gap * 4) / 9.5f;
+        float unit = (getWidth() - padding * 2 - gap * 5) / 9.5f;
         float x = padding;
 
         String modeLabel = mode == Session.MODE_TRANSLATE ? "译" : english ? "英" : "中";
@@ -194,8 +198,10 @@ public final class KeyboardView extends View {
         x += unit * 1.5f + gap;
         add(x, top, x + unit, bottom, KIND_PUNCT, english ? "," : "，", ',');
         x += unit + gap;
-        add(x, top, x + unit * 4.5f, bottom, KIND_SPACE, english ? "space" : "空格", Session.KEY_SPACE);
-        x += unit * 4.5f + gap;
+        add(x, top, x + unit * 3.5f, bottom, KIND_SPACE, english ? "space" : "空格", Session.KEY_SPACE);
+        x += unit * 3.5f + gap;
+        add(x, top, x + unit, bottom, KIND_VOICE, "说", 0);
+        x += unit + gap;
         add(x, top, x + unit, bottom, KIND_PUNCT, english ? "." : "。", '.');
         x += unit + gap;
         add(x, top, x + unit * 1.5f, bottom, KIND_ENTER, "↵", Session.KEY_RETURN);
@@ -293,6 +299,9 @@ public final class KeyboardView extends View {
                 break;
             case KIND_MODE:
                 listener.onToggleMode();
+                break;
+            case KIND_VOICE:
+                listener.onVoice();
                 break;
             case KIND_BACKSPACE:
                 listener.onKey(Session.KEY_BACKSPACE, 0);
