@@ -90,10 +90,16 @@ build_native() {
   local lib="$work/lib/$abi"
   mkdir -p "$lib"
   local link_bin=$TOOLCHAIN/$clang
+  # 16 KB 页：Android 15 起有 16 KB 页的设备，64 位 native 库的 LOAD 段要按 16 KB 对齐
+  #（NDK r28 起默认；r27 要自己给）。32 位 armeabi-v7a 仍是 4 KB，不加。
+  local page=()
+  case $abi in
+    arm64-v8a|x86_64) page=(-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384) ;;
+  esac
   env "$linker_var=$link_bin" \
     cargo build --release --locked -p wowtype-core --no-default-features \
       --target "$rust" --target-dir target/android
-  "$link_bin" -shared -fPIC -O2 -o "$lib/libwowtype.so" \
+  "$link_bin" -shared -fPIC -O2 "${page[@]}" -o "$lib/libwowtype.so" \
     -I core/include "$APP/jni/wowtype_jni.c" \
     "target/android/$rust/release/libwowtype_core.a" \
     -llog -ldl -lm
@@ -130,7 +136,8 @@ for abi in $ABIS; do
   cp "$work/dex/classes.dex" "$work/apk/classes.dex"
   cp "$work/lib/$abi/libwowtype.so" "$work/apk/lib/$abi/"
   ( cd "$work/apk" && zip -q -X "$work/unsigned.apk" classes.dex "lib/$abi/libwowtype.so" )
-  "$ZIPALIGN" -f -p 4 "$work/unsigned.apk" "$work/aligned.apk"
+  # -P 16：zip 里 .so 的存放位置按 16 KB 页对齐（16 KB 页设备装载更省事）
+  "$ZIPALIGN" -f -P 16 4 "$work/unsigned.apk" "$work/aligned.apk"
   rm -f "$apk"
   "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" \
     --ks-pass "pass:$STORE_PASS" --key-pass "pass:$KEY_PASS" \
