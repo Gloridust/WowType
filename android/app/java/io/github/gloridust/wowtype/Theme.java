@@ -18,7 +18,29 @@ final class Theme {
     final int highlight;
     final int accent;
 
-    private Theme(boolean dark) {
+    private Theme(boolean dark, String accentName) {
+        int lightAccent = 0xFF0EAF76;
+        int darkAccent = 0xFF3DDC97;
+        switch (accentName) {
+            case "Blue":
+                lightAccent = 0xFF1A73E8;
+                darkAccent = 0xFF6EA8FE;
+                break;
+            case "Purple":
+                lightAccent = 0xFF7C4DFF;
+                darkAccent = 0xFFB39DFF;
+                break;
+            case "Orange":
+                lightAccent = 0xFFE8710A;
+                darkAccent = 0xFFFFB077;
+                break;
+            case "Pink":
+                lightAccent = 0xFFD81B60;
+                darkAccent = 0xFFF48FB1;
+                break;
+            default:
+                break;
+        }
         if (dark) {
             background = 0xFF1B1D1F;
             text = 0xFFE6E8EA;
@@ -28,7 +50,7 @@ final class Theme {
             keyPressed = 0xFF485058;
             candidate = 0xFF1B1D1F;
             highlight = 0xFF234238;
-            accent = 0xFF3DDC97;
+            accent = darkAccent;
         } else {
             background = 0xFFE7EAEE;
             text = 0xFF1F2328;
@@ -38,7 +60,7 @@ final class Theme {
             keyPressed = 0xFFC2C8CF;
             candidate = 0xFFFFFFFF;
             highlight = 0xFFDDF4EA;
-            accent = 0xFF0EAF76;
+            accent = lightAccent;
         }
     }
 
@@ -54,6 +76,6 @@ final class Theme {
                     & Configuration.UI_MODE_NIGHT_MASK;
             dark = ui == Configuration.UI_MODE_NIGHT_YES;
         }
-        return new Theme(dark);
+        return new Theme(dark, Prefs.get(context).string("SettingsAccent", "Green"));
     }
 }

@@ -81,6 +81,9 @@ public final class SettingsActivity extends Activity {
         section("外观");
         choice("颜色", new String[]{"跟随系统", "浅色", "深色"},
                 new String[]{"System", "Light", "Dark"}, "SettingsTheme", "System", false);
+        choice("强调色", new String[]{"绿", "蓝", "紫", "橙", "粉"},
+                new String[]{"Green", "Blue", "Purple", "Orange", "Pink"},
+                "SettingsAccent", "Green", false);
 
         section("输入方案");
         choice("输入方案", new String[]{"全拼", "双拼", "五笔 86"},
@@ -227,7 +230,7 @@ public final class SettingsActivity extends Activity {
                 if (values[position].equals(prefs.string(key, fallback))) return;
                 prefs.set(key, values[position]);
                 if (engineLevel) EngineHost.get().applySettings();
-                if ("SettingsTheme".equals(key)) recreate();
+                if ("SettingsTheme".equals(key) || "SettingsAccent".equals(key)) recreate();
             }
 
             @Override

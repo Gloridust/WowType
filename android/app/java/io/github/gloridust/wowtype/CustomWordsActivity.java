@@ -1,7 +1,9 @@
 package io.github.gloridust.wowtype;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.app.AlertDialog;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.util.TypedValue;
@@ -26,6 +28,9 @@ import java.util.List;
  * 改完立刻让引擎重新读，不用重启输入法。
  */
 public final class CustomWordsActivity extends Activity {
+    private static final int PICK_IMPORT = 3;
+    private static final int PICK_EXPORT = 4;
+
     private Theme theme;
     private LinearLayout list;
     private TextView hint;
@@ -55,6 +60,8 @@ public final class CustomWordsActivity extends Activity {
         column.addView(hint);
 
         column.addView(button("添加自定义词", this::addDialog));
+        column.addView(button("导入 custom.tsv", this::pickImport));
+        column.addView(button("导出 custom.tsv", this::pickExport));
         list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         column.addView(list);
@@ -95,6 +102,54 @@ public final class CustomWordsActivity extends Activity {
             });
             row.addView(delete);
             list.addView(row);
+        }
+    }
+
+    private void pickImport() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_IMPORT);
+    }
+
+    private void pickExport() {
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/tab-separated-values");
+        intent.putExtra(Intent.EXTRA_TITLE, "custom.tsv");
+        startActivityForResult(intent, PICK_EXPORT);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (requestCode == PICK_IMPORT) {
+            try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+                 java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream()) {
+                if (in == null) return;
+                byte[] chunk = new byte[16 * 1024];
+                int n;
+                while ((n = in.read(chunk)) > 0) buffer.write(chunk, 0, n);
+                List<String> all = lines();
+                for (String line : new String(buffer.toByteArray(), "UTF-8").split("\n")) {
+                    if (!line.trim().isEmpty() && !all.contains(line)) all.add(line);
+                }
+                write(all);
+                EngineHost.get().reloadCustom();
+                reload();
+            } catch (Throwable ignored) {
+            }
+        } else if (requestCode == PICK_EXPORT) {
+            try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
+                if (out == null) return;
+                for (String line : lines()) {
+                    out.write(line.getBytes("UTF-8"));
+                    out.write('\n');
+                }
+            } catch (Throwable ignored) {
+            }
         }
     }
 
