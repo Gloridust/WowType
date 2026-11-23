@@ -3,6 +3,7 @@ package io.github.gloridust.wowtype;
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.media.AudioManager;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
@@ -35,6 +36,9 @@ public final class KeyboardView extends View {
 
         /** 语音键。 */
         void onVoice();
+
+        /** 在键盘上往下滑：收起键盘。 */
+        void onHideKeyboard();
     }
 
     private static final int KIND_LETTER = 0;
@@ -121,6 +125,13 @@ public final class KeyboardView extends View {
 
     private Listener listener;
     private boolean shift;
+    private boolean sound;
+    private boolean vibrate;
+    private boolean swipeHide = true;
+    private final AudioManager audio;
+    private float swipeDownY;
+    private float swipeDownX;
+    private boolean swipedAway;
     private boolean english;
     /** 会话模式：0 中文、1 英文、2 译。只影响「中/英/译」键的显示。 */
     private int mode;
@@ -134,6 +145,7 @@ public final class KeyboardView extends View {
     public KeyboardView(Context context) {
         super(context);
         density = getResources().getDisplayMetrics().density;
+        audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         theme = Theme.get(context);
         gap = 4 * density;
         padding = 4 * density;
@@ -153,6 +165,17 @@ public final class KeyboardView extends View {
 
     public void setListener(Listener listener) {
         this.listener = listener;
+    }
+
+    /** 按键声音 / 震动（设置里的开关）。 */
+    public void setFeedback(boolean sound, boolean vibrate) {
+        this.sound = sound;
+        this.vibrate = vibrate;
+    }
+
+    /** 下滑收起键盘是否启用。 */
+    public void setSwipeHide(boolean enabled) {
+        swipeHide = enabled;
     }
 
     /** 中/英：影响「中/英」键、逗号句号的显示（中文模式下上屏的是全角）。 */
@@ -298,16 +321,33 @@ public final class KeyboardView extends View {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 activePointer = event.getPointerId(0);
+                swipeDownX = event.getX();
+                swipeDownY = event.getY();
+                swipedAway = false;
                 pressed = hitAt(event.getX(), event.getY());
                 if (pressed == null) return false;
                 invalidate();
-                performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (vibrate) performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+                if (sound && audio != null) {
+                    audio.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.6f);
+                }
                 if (pressed.kind == KIND_BACKSPACE) {
                     handler.postDelayed(repeat, 400);
                 }
                 return true;
             }
             case MotionEvent.ACTION_MOVE: {
+                // 往下滑一段就收起键盘：当成手势，不算按键
+                if (swipeHide && !swipedAway && event.getY() - swipeDownY > 80 * density
+                        && Math.abs(event.getX() - swipeDownX) < 24 * density) {
+                    swipedAway = true;
+                    pressed = null;
+                    handler.removeCallbacks(repeat);
+                    invalidate();
+                    if (listener != null) listener.onHideKeyboard();
+                    return true;
+                }
+                if (swipedAway) return true;
                 if (pressed == null) return false;
                 int index = event.findPointerIndex(activePointer);
                 if (index < 0) return false;
@@ -319,6 +359,11 @@ public final class KeyboardView extends View {
                 return true;
             }
             case MotionEvent.ACTION_UP: {
+                if (swipedAway) {
+                    swipedAway = false;
+                    activePointer = -1;
+                    return true;
+                }
                 if (pressed == null) return false;
                 int index = event.findPointerIndex(activePointer);
                 Hit up = index < 0 ? null : hitAt(event.getX(index), event.getY(index));

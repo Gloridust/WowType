@@ -261,6 +261,18 @@ final class Prefs {
         return bool("BetaUpdates", false);
     }
 
+    boolean keyVibrate() {
+        return bool("KeyVibrate", true);
+    }
+
+    boolean keySound() {
+        return bool("KeySound", false);
+    }
+
+    boolean swipeHide() {
+        return bool("SwipeHide", true);
+    }
+
     boolean voice() {
         return bool("Voice", false);
     }

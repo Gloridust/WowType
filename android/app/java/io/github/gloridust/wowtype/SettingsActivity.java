@@ -85,6 +85,11 @@ public final class SettingsActivity extends Activity {
                 new String[]{"Green", "Blue", "Purple", "Orange", "Pink"},
                 "SettingsAccent", "Green", false);
 
+        section("键盘");
+        toggle("按键震动", "KeyVibrate", true, false);
+        toggle("按键声音", "KeySound", false, false);
+        toggle("在键盘上往下滑收起键盘", "SwipeHide", true, false);
+
         section("输入方案");
         choice("输入方案", new String[]{"全拼", "双拼", "五笔 86"},
                 new String[]{"Quanpin", "Shuangpin", "Wubi"}, "InputScheme", "Quanpin", true);

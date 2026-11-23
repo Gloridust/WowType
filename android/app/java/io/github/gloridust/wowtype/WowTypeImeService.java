@@ -63,6 +63,12 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 Prefs prefs = Prefs.get(this);
                 EngineHost.get().applySettings();
                 if (bar != null) bar.setHorizontal(prefs.horizontal());
+                if (keyboard != null && ("KeySound".equals(key) || "KeyVibrate".equals(key))) {
+                    keyboard.setFeedback(prefs.keySound(), prefs.keyVibrate());
+                }
+                if (keyboard != null && "SwipeHide".equals(key)) {
+                    keyboard.setSwipeHide(prefs.swipeHide());
+                }
                 if (session != null) {
                     session.configure(prefs.sessionConfig());
                 }
@@ -184,6 +190,8 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         keyboard = new KeyboardView(this);
         keyboard.setListener(this);
         keyboard.setEnglish(globalMode == Session.MODE_ENGLISH);
+        keyboard.setFeedback(Prefs.get(this).keySound(), Prefs.get(this).keyVibrate());
+        keyboard.setSwipeHide(Prefs.get(this).swipeHide());
         root.addView(keyboard, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(238)));
 
         // 手势导航条 / 导航栏会盖在输入法窗口底下：把底部内边距让出来，最下面一行才不被吃掉
@@ -293,6 +301,11 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     @Override
     public void onKey(int keysym, int modifiers) {
         handleKey(keysym, modifiers, false);
+    }
+
+    @Override
+    public void onHideKeyboard() {
+        requestHideSelf(0);
     }
 
     /** 语音键：用系统的语音识别（可能联网），结果走 core 的 commit_text。 */
