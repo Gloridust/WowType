@@ -135,7 +135,9 @@ for abi in $ABIS; do
   mkdir -p "$work/apk/lib/$abi"
   cp "$work/dex/classes.dex" "$work/apk/classes.dex"
   cp "$work/lib/$abi/libwowtype.so" "$work/apk/lib/$abi/"
-  ( cd "$work/apk" && zip -q -X "$work/unsigned.apk" classes.dex "lib/$abi/libwowtype.so" )
+  # manifest 里 extractNativeLibs=false：.so 必须不压缩地放进 APK，再按页对齐（-P 16）
+  ( cd "$work/apk" && zip -q -X "$work/unsigned.apk" classes.dex \
+      && zip -q -X -0 "$work/unsigned.apk" "lib/$abi/libwowtype.so" )
   # -P 16：zip 里 .so 的存放位置按 16 KB 页对齐（16 KB 页设备装载更省事）
   "$ZIPALIGN" -f -P 16 4 "$work/unsigned.apk" "$work/aligned.apk"
   rm -f "$apk"

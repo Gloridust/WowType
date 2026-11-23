@@ -477,7 +477,11 @@ jobs:
           if unzip -l "$apk" | grep -Ei 'wtlocal|nnlm|gguf|HY-MT|wetype'; then
             echo "APK 里有不能分发的模型"; exit 1
           fi
-          # 16 KB 页（Android 15 起有这类设备）：ELF 的 LOAD 段和 zip 里 .so 的位置都要按 16 KB 对齐
+          # 16 KB 页（Android 15 起有这类设备）：manifest 用 extractNativeLibs=false，
+          # .so 不压缩地放、ELF 的 LOAD 段和 zip 里的位置都按 16 KB 对齐
+          "$ANDROID_HOME/build-tools/35.0.0/aapt2" dump xmltree --file AndroidManifest.xml "$apk" \
+            | grep -q 'extractNativeLibs.*=false'
+          unzip -v "$apk" | awk '$8 == "lib/arm64-v8a/libwowtype.so" { print $2 }' | grep -qx Stored
           unzip -p "$apk" lib/arm64-v8a/libwowtype.so > "$RUNNER_TEMP/libwowtype.so"
           readelf -lW "$RUNNER_TEMP/libwowtype.so" | awk '$1 == "LOAD" { print $NF }' | sort -u | grep -qx '0x4000'
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 "$apk" > /dev/null
