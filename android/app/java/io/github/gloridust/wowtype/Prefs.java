@@ -237,6 +237,22 @@ final class Prefs {
         return string("LexiconPath", "");
     }
 
+    boolean wubiAutoCommit() {
+        return bool("WubiAutoCommit", true);
+    }
+
+    boolean wubiHint() {
+        return bool("WubiHint", true);
+    }
+
+    boolean shiftDoubleTap() {
+        return bool("ShiftDoubleTap", false);
+    }
+
+    boolean translateOneShot() {
+        return bool("TranslateOneShot", false);
+    }
+
     boolean checkUpdate() {
         return bool("CheckUpdate", true);
     }
@@ -283,13 +299,13 @@ final class Prefs {
                 shuangpinShowKeys() ? 1 : 0,
                 0, // arrow_keys：候选
                 wubi() ? 1 : 0,
-                1, // wubi_auto_commit
-                1, // wubi_hint
+                wubiAutoCommit() ? 1 : 0,
+                wubiHint() ? 1 : 0,
                 0, // translate_key
                 association() ? 1 : 0,
                 autoPairPunct() ? 1 : 0,
-                0, // shift_double_tap
-                0, // translate_one_shot
+                shiftDoubleTap() ? 1 : 0,
+                translateOneShot() ? 1 : 0,
         };
     }
 }

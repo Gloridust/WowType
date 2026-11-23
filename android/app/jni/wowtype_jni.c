@@ -21,7 +21,7 @@
 
 #include "wowtype_core.h"
 
-#define FRAME_FIELDS 22
+#define FRAME_FIELDS 24
 
 static jclass g_integer = NULL;
 static jclass g_boolean = NULL;
@@ -182,6 +182,8 @@ static jobject empty_frame(JNIEnv *env) {
     set_slot(env, arr, 19, u8_to_jstring(env, ""));
     set_slot(env, arr, 20, u8_to_jstring(env, ""));
     set_bool(env, arr, 21, JNI_FALSE);
+    set_int(env, arr, 22, 0);
+    set_int(env, arr, 23, 0);
     return arr;
 }
 
@@ -223,6 +225,8 @@ static jobject frame_to_java(JNIEnv *env, WowtypeSession *session, const Wowtype
     set_slot(env, arr, 19, u8_to_jstring(env, f->translate_title));
     set_slot(env, arr, 20, u8_to_jstring(env, f->translate_status));
     set_bool(env, arr, 21, f->translate_done ? JNI_TRUE : JNI_FALSE);
+    set_int(env, arr, 22, f->cursor_delta);
+    set_int(env, arr, 23, f->delete_next);
     return arr;
 }
 

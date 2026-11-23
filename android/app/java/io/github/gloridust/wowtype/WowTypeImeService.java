@@ -380,6 +380,10 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             render(frame);
         } else {
             passThrough(keysym, modifiers);
+            // 自动配对：成对删除时退格删左边，再删补好的右边
+            if (frame.deleteNext != 0) {
+                sendDownUpKeyEvents(KeyEvent.KEYCODE_FORWARD_DEL);
+            }
         }
     }
 
@@ -431,6 +435,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 lastCandidateIndex = 0;
                 conn.commitText(frame.commit, 1);
                 afterTyped(frame.commit);
+                if (frame.cursorDelta != 0) moveCaret(conn, frame.cursorDelta);
             }
             String preedit = frame.preedit == null ? "" : frame.preedit;
             // 「译」里编辑区显示译文（还没有译文时先显示攒着的原文），和桌面版一样边译边看
@@ -460,6 +465,15 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         ticker.removeCallbacks(tickRunnable);
         if (frame.wakeAfterMs > 0) {
             ticker.postDelayed(tickRunnable, frame.wakeAfterMs);
+        }
+    }
+
+    /** 自动配对：上屏「（）」以后把光标挪到中间。 */
+    private void moveCaret(InputConnection conn, int delta) {
+        int code = delta < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
+        for (int i = 0; i < Math.abs(delta); i++) {
+            conn.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, code));
+            conn.sendKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, code));
         }
     }
 

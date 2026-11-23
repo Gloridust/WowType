@@ -33,12 +33,15 @@ public final class Frame {
     public final String translateTitle;
     public final String translateStatus;
     public final boolean translateDone;
+    /** 自动配对：上屏后把光标挪几格（负左正右） / 退格时还要删掉光标后的右标点。 */
+    public final int cursorDelta;
+    public final int deleteNext;
 
     Frame(boolean handled, String commit, String preedit, int preeditCursor, String aux, int panel,
           int candCount, int candCursor, boolean hasPrev, boolean hasNext, int mode,
           boolean modeChanged, boolean learned, boolean forgot, String[] candidates, String[] comments,
           int wakeAfterMs, String translateSource, String translateText, String translateTitle,
-          String translateStatus, boolean translateDone) {
+          String translateStatus, boolean translateDone, int cursorDelta, int deleteNext) {
         this.handled = handled;
         this.commit = commit;
         this.preedit = preedit;
@@ -61,15 +64,17 @@ public final class Frame {
         this.translateTitle = translateTitle;
         this.translateStatus = translateStatus;
         this.translateDone = translateDone;
+        this.cursorDelta = cursorDelta;
+        this.deleteNext = deleteNext;
     }
 
     static Frame empty() {
         return new Frame(false, null, "", 0, null, 0, 0, -1, false, false, 0, false, false, false,
-                new String[0], new String[0], 0, "", "", "", "", false);
+                new String[0], new String[0], 0, "", "", "", "", false, 0, 0);
     }
 
     static Frame from(Object[] a) {
-        if (a == null || a.length < 22) return empty();
+        if (a == null || a.length < 24) return empty();
         String[] candidates = (String[]) a[14];
         String[] comments = (String[]) a[15];
         return new Frame(
@@ -94,7 +99,9 @@ public final class Frame {
                 a[18] == null ? "" : (String) a[18],
                 a[19] == null ? "" : (String) a[19],
                 a[20] == null ? "" : (String) a[20],
-                ((Boolean) a[21]));
+                ((Boolean) a[21]),
+                ((Integer) a[22]),
+                ((Integer) a[23]));
     }
 
     public boolean isComposing() {

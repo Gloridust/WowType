@@ -92,6 +92,8 @@ public final class SettingsActivity extends Activity {
                 "ShuangpinScheme", "ziranma", true);
         toggle("双拼时编辑区显示按键", "ShuangpinShowKeys", false, false);
         toggle("双拼简拼", "ShuangpinAbbrev", true, true);
+        toggle("五笔四码唯一自动上屏", "WubiAutoCommit", true, false);
+        toggle("五笔逐码提示", "WubiHint", true, false);
 
         section("候选");
         choice("候选排列", new String[]{"横排", "竖排"},
@@ -106,6 +108,7 @@ public final class SettingsActivity extends Activity {
         choice("每页候选数", sizes, sizeValues, "PageSize", String.valueOf(pageSize), false);
         toggle("以词定字（[ ]）", "PickChar", true, false);
         toggle("上屏后联想", "Association", false, false);
+        toggle("中文标点自动配对（）「」", "AutoPairPunct", false, false);
 
         section("拼音");
         toggle("模糊音", "Fuzzy", false, true);
@@ -141,6 +144,7 @@ public final class SettingsActivity extends Activity {
         edit("模型", "TranslateModel", "Index-Translate-2B");
         edit("API Key（哔哩哔哩不用）", "TranslateApiKey", "");
         toggle("正式语气", "TranslateFormal", false, false);
+        toggle("互译只翻一句（双击 Shift 进出）", "TranslateOneShot", false, false);
 
         section("模式");
         choice("单按 Shift", new String[]{"两边", "左 Shift", "右 Shift", "关"},
@@ -148,6 +152,7 @@ public final class SettingsActivity extends Activity {
         choice("默认模式", new String[]{"中文", "英文"},
                 new String[]{"Chinese", "English"}, "InitialMode", "Chinese", false);
         toggle("繁体输出", "Traditional", false, true);
+        toggle("双击 Shift 不切换", "ShiftDoubleTap", false, false);
 
         section("功能");
         toggle("日期时间候选", "DateTime", true, false);
