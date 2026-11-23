@@ -72,6 +72,8 @@ public final class SetupActivity extends Activity {
             engineState.setText(R.string.setup_loading);
             EngineHost.get().start(this, engineListener);
         }), margins(0, dp(10), 0, 0));
+        column.addView(button(R.string.setup_settings, v ->
+                startActivity(new Intent(this, SettingsActivity.class))), margins(0, dp(10), 0, 0));
 
         TextView usage = new TextView(this);
         usage.setText(R.string.setup_usage);

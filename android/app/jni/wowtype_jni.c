@@ -240,30 +240,122 @@ JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_freeEngine(JNIEnv
     if (engine != 0) wowtype_engine_free(engine_of(engine));
 }
 
+/* 会话设置数组的一项；数组短了（旧 Java）或没有数组就用默认值。
+ * 顺序和 Prefs.sessionConfig() 一致，改一边要改另一边。 */
+static jint cfg_int(JNIEnv *env, jintArray arr, jsize len, jsize i, jint fallback) {
+    if (arr == NULL || i >= len) return fallback;
+    jint v = 0;
+    (*env)->GetIntArrayRegion(env, arr, i, 1, &v);
+    return v;
+}
+
+static void fill_session_config(JNIEnv *env, jintArray arr, WowtypeSessionConfig *cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->size = sizeof(*cfg);
+    jsize len = arr == NULL ? 0 : (*env)->GetArrayLength(env, arr);
+    cfg->page_size = (uint32_t)cfg_int(env, arr, len, 0, 9);
+    cfg->calculator = cfg_int(env, arr, len, 1, 1);
+    cfg->date_time = cfg_int(env, arr, len, 2, 1);
+    cfg->emoji_suggest = cfg_int(env, arr, len, 3, 1);
+    cfg->horizontal = cfg_int(env, arr, len, 4, 1);
+    cfg->page_keys = (uint32_t)cfg_int(env, arr, len, 5, WOWTYPE_PAGE_KEYS_MINUS);
+    cfg->select_keys = cfg_int(env, arr, len, 6, WOWTYPE_SELECT_KEYS_OFF);
+    cfg->pick_char = cfg_int(env, arr, len, 7, 1);
+    cfg->punct_style = cfg_int(env, arr, len, 8, 0);
+    cfg->auto_space = (uint32_t)cfg_int(env, arr, len, 9, 0);
+    cfg->shift_toggle = cfg_int(env, arr, len, 10, WOWTYPE_SHIFT_TOGGLE_OFF);
+    cfg->translate_mode = cfg_int(env, arr, len, 11, 0);
+    cfg->toolbar = cfg_int(env, arr, len, 12, 0);
+    cfg->clipboard_history = cfg_int(env, arr, len, 13, 0);
+    cfg->shuangpin_keys = cfg_int(env, arr, len, 14, 0);
+    cfg->arrow_keys = cfg_int(env, arr, len, 15, WOWTYPE_ARROW_KEYS_CANDIDATES);
+    cfg->wubi = cfg_int(env, arr, len, 16, 0);
+    cfg->wubi_auto_commit = cfg_int(env, arr, len, 17, 1);
+    cfg->wubi_hint = cfg_int(env, arr, len, 18, 1);
+    cfg->translate_key = cfg_int(env, arr, len, 19, 0);
+    cfg->association = cfg_int(env, arr, len, 20, 0);
+    cfg->auto_pair_punct = cfg_int(env, arr, len, 21, 0);
+    cfg->shift_double_tap = cfg_int(env, arr, len, 22, 0);
+    cfg->translate_one_shot = cfg_int(env, arr, len, 23, 0);
+}
+
 JNIEXPORT jlong JNICALL Java_io_github_gloridust_wowtype_Native_newSession(
-    JNIEnv *env, jclass cls, jlong engine) {
-    (void)env;
+    JNIEnv *env, jclass cls, jlong engine, jintArray config) {
     (void)cls;
     WowtypeSessionConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.size = sizeof(cfg);
-    cfg.page_size = 9;
-    cfg.calculator = 1;
-    cfg.date_time = 1;
-    cfg.emoji_suggest = 1;
-    cfg.horizontal = 1;
-    cfg.pick_char = 1;
-    cfg.punct_style = 0; /* 全角中文标点，和桌面版默认一致 */
-    cfg.auto_space = 0;
-    /* 软键盘上的 Shift 只管大小写，不切中英文；切模式用专门的「中/英」键
-     * （WOWTYPE_KEY_ACTION_TOGGLE_MODE）。 */
-    cfg.shift_toggle = WOWTYPE_SHIFT_TOGGLE_OFF;
-    cfg.translate_mode = 0;
-    cfg.toolbar = 0; /* 安卓外壳还没有工具栏和表情面板，别让 v + 空格开出一个看不见的面板 */
-    cfg.clipboard_history = 0;
-    cfg.arrow_keys = WOWTYPE_ARROW_KEYS_CANDIDATES;
+    fill_session_config(env, config, &cfg);
     WowtypeSession *session = wowtype_session_new(engine_of(engine), &cfg);
     return (jlong)(intptr_t)session;
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_configureSession(
+    JNIEnv *env, jclass cls, jlong session, jintArray config) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return;
+    WowtypeSessionConfig cfg;
+    fill_session_config(env, config, &cfg);
+    wowtype_session_configure(s, &cfg);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setFuzzy(
+    JNIEnv *env, jclass cls, jlong engine, jint on, jint groups) {
+    (void)env;
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e == NULL) return;
+    wowtype_engine_set_fuzzy(e, on);
+    wowtype_engine_set_fuzzy_groups(e, (unsigned int)groups);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setShuangpin(
+    JNIEnv *env, jclass cls, jlong engine, jint on, jstring scheme, jint abbrev) {
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e == NULL) return;
+    wowtype_engine_set_shuangpin(e, on);
+    if (on) {
+        char *name = dup_utf8(env, scheme);
+        if (name == NULL || name[0] == 0 || wowtype_engine_set_shuangpin_scheme(e, name) != 0) {
+            wowtype_engine_set_shuangpin_scheme(e, "ziranma");
+        }
+        free(name);
+        wowtype_engine_set_shuangpin_abbrev(e, abbrev);
+    }
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setTypo(
+    JNIEnv *env, jclass cls, jlong engine, jint on) {
+    (void)env;
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e != NULL) wowtype_engine_set_typo_correction(e, on);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setRareExt(
+    JNIEnv *env, jclass cls, jlong engine, jint on) {
+    (void)env;
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e != NULL) wowtype_engine_set_rare_ext_chars(e, on);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setTraditional(
+    JNIEnv *env, jclass cls, jlong engine, jint on) {
+    (void)env;
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e != NULL) wowtype_engine_set_traditional(e, on);
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_loadConversion(
+    JNIEnv *env, jclass cls, jlong engine, jstring path) {
+    (void)cls;
+    WowtypeEngineHandle *e = engine_of(engine);
+    if (e == NULL) return;
+    char *p = dup_utf8(env, path);
+    if (p != NULL && p[0] != 0) wowtype_engine_load_conversion(e, p);
+    free(p);
 }
 
 JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_freeSession(

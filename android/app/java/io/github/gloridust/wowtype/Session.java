@@ -45,8 +45,21 @@ public final class Session implements AutoCloseable {
     static final Object ENGINE_LOCK = new Object();
 
     public Session(long engine) {
+        this(engine, null);
+    }
+
+    /** config 是 {@link Prefs#sessionConfig()} 的数组；null 用默认值。 */
+    public Session(long engine, int[] config) {
         synchronized (ENGINE_LOCK) {
-            ptr = Native.newSession(engine);
+            ptr = Native.newSession(engine, config);
+        }
+    }
+
+    /** 设置改了：把新的会话配置应用到这个会话（编辑区不丢）。 */
+    public void configure(int[] config) {
+        if (ptr == 0) return;
+        synchronized (ENGINE_LOCK) {
+            Native.configureSession(ptr, config);
         }
     }
 

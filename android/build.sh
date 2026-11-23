@@ -63,6 +63,8 @@ mkdir -p "$OUT" "$work/assets/wowtype" "$work/lib" "$work/gen" "$work/classes" "
 # APK 里带的词库：就是安装包里那一份，许可证和来源一起带上
 cp "$DATA/lexicon.tsv" "$DATA/english.txt" "$DATA/words.lm" "$DATA/LICENSE" "$DATA/SOURCE.txt" \
    "$DATA/VERSION" "$work/assets/wowtype/"
+# 繁简转换（繁体设置用）和它的许可证
+cp core/data/s2t.tsv core/data/OPENCC-LICENSE "$work/assets/wowtype/"
 
 # ---- 资源、R.java、manifest ----
 "$AAPT2" compile --dir "$APP/res" -o "$work/res.zip"

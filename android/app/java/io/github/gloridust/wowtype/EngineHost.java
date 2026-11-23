@@ -40,6 +40,7 @@ final class EngineHost {
     private volatile boolean loading;
     private volatile boolean failed;
     private volatile String failure = "";
+    private volatile boolean conversionLoaded;
     private Context appContext;
 
     private EngineHost() {}
@@ -83,7 +84,14 @@ final class EngineHost {
                     failed = true;
                     failure = "引擎没建起来（词库文件坏了？）";
                 } else {
+                    synchronized (Session.ENGINE_LOCK) {
+                        if (paths.conversion.isFile()) {
+                            Native.loadConversion(created, paths.conversion.getAbsolutePath());
+                            conversionLoaded = true;
+                        }
+                    }
                     handle = created;
+                    applySettings();
                     Log.i(TAG, "词库载入完成，ABI " + Native.version());
                 }
             } catch (Throwable t) {
@@ -95,6 +103,25 @@ final class EngineHost {
                 main.post(this::notifyReady);
             }
         });
+    }
+
+    /**
+     * 把设置页里的引擎级选项设到引擎上（双拼、模糊音、纠错、生僻扩展字、繁体）。
+     * 会话级的选项在 {@link Session} 创建/configure 时给。
+     */
+    void applySettings() {
+        Context ctx = appContext;
+        long engine = handle;
+        if (ctx == null || engine == 0) return;
+        Prefs prefs = Prefs.get(ctx);
+        synchronized (Session.ENGINE_LOCK) {
+            Native.setFuzzy(engine, prefs.fuzzy() ? 1 : 0, prefs.fuzzyGroups());
+            Native.setShuangpin(engine, prefs.shuangpin() ? 1 : 0, prefs.shuangpinScheme(),
+                    prefs.shuangpinAbbrev() ? 1 : 0);
+            Native.setTypo(engine, prefs.typo() ? 1 : 0);
+            Native.setRareExt(engine, prefs.rareExtChars() ? 1 : 0);
+            Native.setTraditional(engine, prefs.traditional() && conversionLoaded ? 1 : 0);
+        }
     }
 
     private void notifyReady() {

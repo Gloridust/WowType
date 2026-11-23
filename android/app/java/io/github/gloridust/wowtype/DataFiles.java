@@ -23,9 +23,11 @@ final class DataFiles {
     private static final String TAG = "WowType";
     private static final String ASSET_DIR = "wowtype";
     private static final Charset UTF8 = Charset.forName("UTF-8");
+    /** 解包格式改过（加文件、换编码）时加一，升级后会重新解一次，不用改词库版本。 */
+    private static final int DATA_REVISION = 2;
     /** 一起解出来的文件；words.lm 可以没有，词库不行。 */
     private static final String[] FILES = {
-            "lexicon.tsv", "english.txt", "words.lm", "LICENSE", "SOURCE.txt",
+            "lexicon.tsv", "english.txt", "words.lm", "s2t.tsv", "LICENSE", "SOURCE.txt",
     };
 
     private DataFiles() {}
@@ -34,14 +36,17 @@ final class DataFiles {
         final File lexicon;
         final File wordsLm;
         final File english;
+        final File conversion;
         final File userDict;
         final File history;
         final File recentEmoji;
 
-        Paths(File lexicon, File wordsLm, File english, File userDict, File history, File recentEmoji) {
+        Paths(File lexicon, File wordsLm, File english, File conversion, File userDict, File history,
+              File recentEmoji) {
             this.lexicon = lexicon;
             this.wordsLm = wordsLm;
             this.english = english;
+            this.conversion = conversion;
             this.userDict = userDict;
             this.history = history;
             this.recentEmoji = recentEmoji;
@@ -51,7 +56,7 @@ final class DataFiles {
     static Paths ensure(Context context) throws IOException {
         File root = new File(context.getFilesDir(), "wowtype");
         File versionFile = new File(root, ".version");
-        String want = readAssetVersion(context);
+        String want = readAssetVersion(context) + "/" + DATA_REVISION;
         if (!root.isDirectory() || !versionFile.isFile() || !want.equals(readString(versionFile))) {
             if (!root.isDirectory() && !root.mkdirs()) throw new IOException("建不了目录 " + root);
             extract(context.getAssets(), root);
@@ -61,6 +66,7 @@ final class DataFiles {
                 new File(root, "lexicon.tsv"),
                 new File(root, "words.lm"),
                 new File(root, "english.txt"),
+                new File(root, "s2t.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));
@@ -73,6 +79,7 @@ final class DataFiles {
                 new File(root, "lexicon.tsv"),
                 new File(root, "words.lm"),
                 new File(root, "english.txt"),
+                new File(root, "s2t.tsv"),
                 new File(root, "userdict.tsv"),
                 new File(root, "history.tsv"),
                 new File(root, "recent-emoji.txt"));
@@ -97,8 +104,8 @@ final class DataFiles {
                 int n;
                 while ((n = in.read(buffer)) > 0) os.write(buffer, 0, n);
             } catch (IOException e) {
-                if ("words.lm".equals(name)) {
-                    Log.w(TAG, "APK 里没有 words.lm，只用词库", e);
+                if ("words.lm".equals(name) || "s2t.tsv".equals(name)) {
+                    Log.w(TAG, "APK 里没有 " + name + "，跳过", e);
                     continue;
                 }
                 throw e;
@@ -109,7 +116,8 @@ final class DataFiles {
         }
         // 和 assets 里的 VERSION 比对，换了词库才重解
         try (InputStream in = assets.open(ASSET_DIR + "/VERSION")) {
-            writeString(new File(root, "VERSION"), new String(readAll(in), UTF8));
+            writeString(new File(root, "VERSION"),
+                    new String(readAll(in), UTF8).trim() + "/" + DATA_REVISION);
         }
     }
 

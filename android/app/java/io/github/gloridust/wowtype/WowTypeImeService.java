@@ -1,5 +1,6 @@
 package io.github.gloridust.wowtype;
 
+import android.content.SharedPreferences;
 import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
@@ -22,6 +23,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
     private final EngineHost.Listener engineListener = this::onEngineReady;
 
+
     private Session session;
     private KeyboardView keyboard;
     private CandidateBar bar;
@@ -31,6 +33,18 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     /** 光标前一个字（Unicode 码位）；hasSurrounding 为 true 时才是应用告诉的。 */
     private int prevChar;
     private boolean hasSurrounding;
+
+    /** 设置页改了东西：引擎选项、会话配置、候选排列马上跟上。 */
+    private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
+            (sharedPreferences, key) -> {
+                Prefs prefs = Prefs.get(this);
+                EngineHost.get().applySettings();
+                if (bar != null) bar.setHorizontal(prefs.horizontal());
+                if (session != null) {
+                    session.configure(prefs.sessionConfig());
+                    refresh();
+                }
+            };
 
     private final CandidateBar.Listener candidateListener = new CandidateBar.Listener() {
         @Override
@@ -53,11 +67,15 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     @Override
     public void onCreate() {
         super.onCreate();
+        Prefs prefs = Prefs.get(this);
+        globalMode = prefs.initialMode();
+        prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
         EngineHost.get().start(this, engineListener);
     }
 
     @Override
     public void onDestroy() {
+        Prefs.get(this).raw().unregisterOnSharedPreferenceChangeListener(prefListener);
         EngineHost.get().removeListener(engineListener);
         if (session != null) {
             session.close();
@@ -78,7 +96,9 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
         bar = new CandidateBar(this);
         bar.setListener(candidateListener);
-        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)));
+        bar.setHorizontal(Prefs.get(this).horizontal());
+        root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
 
         keyboard = new KeyboardView(this);
         keyboard.setListener(this);
@@ -111,7 +131,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             session = null;
             return;
         }
-        session = new Session(EngineHost.get().handle());
+        session = new Session(EngineHost.get().handle(), Prefs.get(this).sessionConfig());
         hints = hintsFor(attribute);
         refreshSurrounding();
         if (globalMode != Session.MODE_CHINESE) {

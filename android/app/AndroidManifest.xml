@@ -23,6 +23,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="@string/setup_settings" />
+
         <service
             android:name=".WowTypeImeService"
             android:exported="true"

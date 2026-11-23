@@ -60,11 +60,27 @@ final class Native {
     static native long newEngine(String lexicon, String bigram, String english,
                                  String userDict, String history, String recentEmoji);
 
+    /* 引擎设置（和在桌面外壳里设的是同一组 C 函数） */
+    static native void setFuzzy(long engine, int on, int groups);
+
+    static native void setShuangpin(long engine, int on, String scheme, int abbrev);
+
+    static native void setTypo(long engine, int on);
+
+    static native void setRareExt(long engine, int on);
+
+    static native void setTraditional(long engine, int on);
+
+    /** 载入繁简转换表（s2t.tsv）；没载入时繁体开关不生效。 */
+    static native void loadConversion(long engine, String path);
+
     static native void saveState(long engine, String userDict, String history);
 
     static native void freeEngine(long engine);
 
-    static native long newSession(long engine);
+    static native long newSession(long engine, int[] config);
+
+    static native void configureSession(long session, int[] config);
 
     static native void freeSession(long session);
 
