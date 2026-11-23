@@ -361,6 +361,7 @@ DEFAULTS = {
     "WindowMode": "Same",
     "Traditional": "False",
     "PunctuationStyle": "Fullwidth",
+    "QuoteStyle": "Curly",
     "SelectKeys": "Off",
     "PickChar": "True",
     "Association": "False",
@@ -507,6 +508,11 @@ PUNCT_STYLES = [
     ("半角 , .", "Halfwidth"),
 ]
 
+QUOTE_STYLES = [
+    ("弯引号 “ ” ‘ ’", "Curly"),
+    ("直角引号 「 」 『 』", "Corner"),
+]
+
 SHIFT_TOGGLES = [
     ("左右 Shift 都行", "Both"),
     ("左 Shift", "Left"),
@@ -560,6 +566,7 @@ ENUMS = {
     "InitialMode": tuple(value for _label, value in INITIAL_MODES),
     "WindowMode": tuple(value for _label, value in WINDOW_MODES),
     "PunctuationStyle": tuple(value for _label, value in PUNCT_STYLES),
+    "QuoteStyle": tuple(value for _label, value in QUOTE_STYLES),
     "SelectKeys": tuple(value for _label, value in SELECT_KEYS),
     "TranslateTarget": tuple(code for _label, code, _english in TRANSLATE_LANGUAGES),
     "SettingsTheme": tuple(value for _label, value in SETTINGS_THEMES),
@@ -6223,6 +6230,19 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.punct_row.connect("notify::selected", lambda row, _p: self.set_value(
             "PunctuationStyle", self.punct_names[row.get_selected()]))
         defaults.add(self.punct_row)
+        self.quote_names = [name for _, name in QUOTE_STYLES]
+        self.quote_row = Adw.ComboRow(
+            title="引号样式",
+            subtitle="全角标点下引号用哪一套",
+            model=Gtk.StringList.new([label for label, _ in QUOTE_STYLES]))
+        self.add_info(self.quote_row, "只影响全角标点，半角不受影响；"
+                                      "左右交替和数字后面保持半角的规则两套一样。")
+        current = self.values.get("QuoteStyle", "Curly")
+        self.quote_row.set_selected(
+            self.quote_names.index(current) if current in self.quote_names else 0)
+        self.quote_row.connect("notify::selected", lambda row, _p: self.set_value(
+            "QuoteStyle", self.quote_names[row.get_selected()]))
+        defaults.add(self.quote_row)
         page.add(defaults)
 
         switch = Adw.PreferencesGroup(title="中英文切换")

@@ -21,7 +21,7 @@
 //! [`Session::choose`]，表情面板往编辑区加搜索词用 [`Session::append`]，这些过渡用法挪完以后会删掉。
 
 use crate::datetime::LocalTime;
-pub use crate::symbols::PunctStyle;
+pub use crate::symbols::{PunctStyle, QuoteStyle};
 use crate::translate::JobState;
 use crate::Engine;
 
@@ -523,6 +523,8 @@ pub struct Config {
     pub pick_char: bool,
     /// 标点样式：全角（中文标点）或半角（原样交给应用）。
     pub punct_style: PunctStyle,
+    /// 全角样式下引号用哪一套：弯引号（“”‘’，默认）或直角引号（「」『』）。
+    pub quote_style: QuoteStyle,
     /// 中英文之间自动补空格，[`crate::autospace`] 的 `LETTERS | DIGITS` 位掩码，0 是关。
     pub auto_space: u32,
     /// 用哪边的 Shift 单按切换中英文。
@@ -577,6 +579,7 @@ impl Default for Config {
             select_keys: SelectKeys::Off,
             pick_char: true,
             punct_style: PunctStyle::Fullwidth,
+            quote_style: QuoteStyle::Curly,
             auto_space: 0,
             shift_toggle: ShiftToggle::Both,
             shift_tap_ms: 500,
@@ -2039,7 +2042,7 @@ impl<'e> Session<'e> {
             return false;
         }
         if let Some(top) = self.pairs.last().copied() {
-            if crate::symbols::closing_punct(c) == Some(top.close) {
+            if crate::symbols::closing_punct_with(c, self.config.quote_style) == Some(top.close) {
                 if self.hints & key_hints::NEXT_CHAR == 0 || self.next_char == Some(top.close) {
                     self.skip_pair(top);
                     return true;
@@ -2051,7 +2054,7 @@ impl<'e> Session<'e> {
         if prev.is_some_and(|p| p.is_ascii_digit()) && crate::symbols::numeric_punct(c) {
             return false;
         }
-        let Some((open, close)) = crate::symbols::auto_pair(c) else {
+        let Some((open, close)) = crate::symbols::auto_pair_with(c, self.config.quote_style) else {
             return false;
         };
         self.emit(&format!("{open}{close}"));
@@ -2139,7 +2142,14 @@ impl<'e> Session<'e> {
 
     /// c 在全角样式下换成的中文标点；半角样式、数字写法里的符号、没有中文标点的是 None。
     fn punct_text(&mut self, c: char, prev: Option<char>) -> Option<String> {
-        crate::symbols::punct_with(c, self.config.punct_style, prev, &mut self.quotes).map(str::to_owned)
+        crate::symbols::punct_with_quotes(
+            c,
+            self.config.punct_style,
+            self.config.quote_style,
+            prev,
+            &mut self.quotes,
+        )
+        .map(str::to_owned)
     }
 
     /// 上屏 text 之前要不要补一个空格（汉字和字母、数字之间，设置里的 AutoSpace）。

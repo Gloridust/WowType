@@ -1606,6 +1606,41 @@ void runCases(Instance &instance) {
               join(page(ic.get())));
     fresh(ic.get());
 
+    // QuoteStyle：全角标点下引号用直角引号（#303）
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "QuoteStyle=Corner\n";
+    }
+    addon->reloadConfig();
+    fresh(ic.get());
+    type(ic.get(), "\"\"");
+    check(ic->committed == "「」", "QuoteStyle=Corner：两次引号键给「」，实际 " + ic->committed);
+    fresh(ic.get());
+    type(ic.get(), "''");
+    check(ic->committed == "『』", "QuoteStyle=Corner：两次单引号键给『』，实际 " + ic->committed);
+    fresh(ic.get());
+    // 半角标点时不换成直角引号
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "QuoteStyle=Corner\nPunctuationStyle=Halfwidth\n";
+    }
+    addon->reloadConfig();
+    fresh(ic.get());
+    type(ic.get(), "\"");
+    check(ic->committed.empty() && ic->passed == "\"", "半角标点下引号原样，实际 上屏「" +
+                                                          ic->committed + "」交给应用「" + ic->passed + "」");
+    // 默认（弯引号）不能变
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "QuoteStyle=Curly\n";
+    }
+    addon->reloadConfig();
+    fresh(ic.get());
+    type(ic.get(), "\"\"");
+    check(ic->committed == "“”", "QuoteStyle=Curly：两次引号键给“”，实际 " + ic->committed);
+    {
+        std::ofstream(configDir + "/wowtype.conf") << "";
+    }
+    addon->reloadConfig();
+    fresh(ic.get());
+
     // #129：「方向键」设成左右键移动光标：左键把光标移进拼音，字母插在光标处，退格删光标前一个；
     // 右键到了末尾不去挑候选，上下键选词
     {

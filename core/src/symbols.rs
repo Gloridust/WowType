@@ -110,26 +110,48 @@ pub fn fullwidth_punct(ascii: char) -> Option<&'static str> {
 
 /// 自动配对：左标点的 ASCII 键给出的 `(左半边, 右半边)`，和 [`fullwidth_punct`] 一致。
 pub fn auto_pair(ascii: char) -> Option<(char, char)> {
+    auto_pair_with(ascii, QuoteStyle::default())
+}
+
+/// 同 [`auto_pair`]，引号按 `style` 取（括号两种样式一样）。
+pub fn auto_pair_with(ascii: char, style: QuoteStyle) -> Option<(char, char)> {
     Some(match ascii {
         '(' => ('（', '）'),
         '[' => ('【', '】'),
         '<' => ('《', '》'),
         '{' => ('「', '」'),
-        '"' => ('“', '”'),
-        '\'' => ('‘', '’'),
+        '"' => match style {
+            QuoteStyle::Curly => ('“', '”'),
+            QuoteStyle::Corner => ('「', '」'),
+        },
+        '\'' => match style {
+            QuoteStyle::Curly => ('‘', '’'),
+            QuoteStyle::Corner => ('『', '』'),
+        },
         _ => return None,
     })
 }
 
 /// 自动配对：右标点的 ASCII 键对应的右半边（跳过补好的那个时比对）。引号左右是同一个键。
 pub fn closing_punct(ascii: char) -> Option<char> {
+    closing_punct_with(ascii, QuoteStyle::default())
+}
+
+/// 同 [`closing_punct`]，引号按 `style` 取。
+pub fn closing_punct_with(ascii: char, style: QuoteStyle) -> Option<char> {
     Some(match ascii {
         ')' => '）',
         ']' => '】',
         '>' => '》',
         '}' => '」',
-        '"' => '”',
-        '\'' => '’',
+        '"' => match style {
+            QuoteStyle::Curly => '”',
+            QuoteStyle::Corner => '」',
+        },
+        '\'' => match style {
+            QuoteStyle::Curly => '’',
+            QuoteStyle::Corner => '』',
+        },
         _ => return None,
     })
 }
@@ -139,6 +161,19 @@ pub fn closing_punct(ascii: char) -> Option<char> {
 pub enum PunctStyle {
     Fullwidth,
     Halfwidth,
+}
+
+/// 全角样式下双引号、单引号上屏成什么。
+///
+/// 弯引号（“”‘’）是 GB/T 15834 的写法；直角引号（「」『』）是繁体中文和部分
+/// 排版规范的习惯。两套都有人用，让用户自己选，默认弯引号保持原有行为。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuoteStyle {
+    /// “ ” ‘ ’（默认）
+    #[default]
+    Curly,
+    /// 「 」 『 』
+    Corner,
 }
 
 /// 按样式和光标前一个字符决定标点。返回 `None` 表示原样上屏这个 ASCII 字符。
@@ -178,6 +213,17 @@ pub fn punct_with(
     prev: Option<char>,
     quotes: &mut [bool; 2],
 ) -> Option<&'static str> {
+    punct_with_quotes(ascii, style, crate::symbols::QuoteStyle::default(), prev, quotes)
+}
+
+/// 同 [`punct_with`]，另指定引号样式。
+pub fn punct_with_quotes(
+    ascii: char,
+    style: PunctStyle,
+    quote_style: QuoteStyle,
+    prev: Option<char>,
+    quotes: &mut [bool; 2],
+) -> Option<&'static str> {
     if style == PunctStyle::Halfwidth {
         return None;
     }
@@ -185,7 +231,7 @@ pub fn punct_with(
         return None;
     }
     if ascii == '"' || ascii == '\'' {
-        return Some(quote(ascii, prev, quotes));
+        return Some(quote(ascii, quote_style, prev, quotes));
     }
     fullwidth_punct(ascii)
 }
@@ -195,15 +241,18 @@ thread_local! {
     static QUOTE_OPEN: std::cell::Cell<[bool; 2]> = const { std::cell::Cell::new([false; 2]) };
 }
 
-/// 引号左右交替：“……” ‘……’。光标前是空白或左括号时一定给左引号。
-fn quote(ascii: char, prev: Option<char>, quotes: &mut [bool; 2]) -> &'static str {
-    let (slot, open, close) = if ascii == '"' {
-        (0, "“", "”")
-    } else {
-        (1, "‘", "’")
+/// 引号左右交替：“……” ‘……’ 或 「……」『……』。光标前是空白或左括号时一定给左引号。
+fn quote(ascii: char, style: QuoteStyle, prev: Option<char>, quotes: &mut [bool; 2]) -> &'static str {
+    let (slot, open, close) = match (ascii, style) {
+        ('"', QuoteStyle::Curly) => (0, "“", "”"),
+        ('"', QuoteStyle::Corner) => (0, "「", "」"),
+        (_, QuoteStyle::Curly) => (1, "‘", "’"),
+        (_, QuoteStyle::Corner) => (1, "『", "』"),
     };
+    // 列表里只放括号类字符，不放「『：它们是 Corner 样式下引号自己上屏的字符，
+    // 放进来会让连着按第二个引号键又被当成"前面跟的是左括号"，一直给左引号。
     let want_open =
-        prev.is_some_and(|c| c.is_whitespace() || "(（[【<《{「『".contains(c)) || !quotes[slot];
+        prev.is_some_and(|c| c.is_whitespace() || "(（[【<《{".contains(c)) || !quotes[slot];
     quotes[slot] = want_open;
     if want_open {
         open
@@ -321,6 +370,50 @@ mod tests {
         assert_eq!(punct('"', Fullwidth, Some(' ')), Some("“"));
         assert_eq!(punct('"', Fullwidth, Some('（')), Some("“"));
         assert_eq!(punct('"', Halfwidth, None), None);
+    }
+
+    #[test]
+    fn corner_quote_style_uses_corner_brackets() {
+        use PunctStyle::*;
+        let mut q = [false; 2];
+        // 双引号：先左后右
+        assert_eq!(
+            punct_with_quotes('"', Fullwidth, QuoteStyle::Corner, None, &mut q),
+            Some("「")
+        );
+        assert_eq!(
+            punct_with_quotes('"', Fullwidth, QuoteStyle::Corner, Some('好'), &mut q),
+            Some("」")
+        );
+        // 单引号单独计数
+        assert_eq!(
+            punct_with_quotes('\'', Fullwidth, QuoteStyle::Corner, Some('好'), &mut q),
+            Some("『")
+        );
+        assert_eq!(
+            punct_with_quotes('\'', Fullwidth, QuoteStyle::Corner, Some('好'), &mut q),
+            Some("』")
+        );
+        // 打完左引号紧跟着再按同一个键，仍然是右引号（「 不在"前面是左括号"那张表里）
+        let mut q = [false; 2];
+        assert_eq!(
+            punct_with_quotes('"', Fullwidth, QuoteStyle::Corner, None, &mut q),
+            Some("「")
+        );
+        assert_eq!(
+            punct_with_quotes('"', Fullwidth, QuoteStyle::Corner, Some('「'), &mut q),
+            Some("」")
+        );
+        // 半角样式下不换成引号
+        assert_eq!(
+            punct_with_quotes('"', Halfwidth, QuoteStyle::Corner, None, &mut q),
+            None
+        );
+        // 默认仍给弯引号
+        assert_eq!(
+            punct_with_quotes('"', Fullwidth, QuoteStyle::default(), None, &mut q),
+            Some("“")
+        );
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::panic;
 use std::ptr;
 
 use crate::ffi::{set_last_error, WowtypeEngineHandle};
-use crate::symbols::PunctStyle;
+use crate::symbols::{PunctStyle, QuoteStyle};
 use crate::session::{
     ArrowKeys, Candidate, CandidateKind, Config, Frame, Key, KeyAction, Mode, Panel, SelectKeys,
     Session, ShiftToggle, Tool,
@@ -196,6 +196,10 @@ pub const WOWTYPE_SELECT_KEYS_SEMICOLON_QUOTE: c_int = 2;
 pub const WOWTYPE_ARROW_KEYS_CANDIDATES: c_int = 0;
 pub const WOWTYPE_ARROW_KEYS_CARET: c_int = 1;
 
+/// 全角标点下引号的样式（1.15 起）。
+pub const WOWTYPE_QUOTE_STYLE_CURLY: c_int = 0;
+pub const WOWTYPE_QUOTE_STYLE_CORNER: c_int = 1;
+
 /// 会话的设置（C 布局）。外壳没填的字段（size 比我们认识的短）用默认值。
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -247,6 +251,9 @@ pub struct WowtypeSessionConfig {
     /// 1.14 起：双击 Shift 不切换（单按先等一会儿再切，#253），默认 0（外壳要会按 `wake_after_ms` 调 tick、
     /// 跟着 tick 和 OBSERVE 的 frame 里的 `mode_changed` 才开）。
     pub shift_double_tap: c_int,
+    /// 1.15 起：全角样式下引号用哪一套，`WOWTYPE_QUOTE_STYLE_*`，默认弯引号（旧外壳给的结构体短，
+    /// 这一项保持 Default 的值，就是原来的行为）。
+    pub quote_style: c_int,
 }
 
 impl Default for WowtypeSessionConfig {
@@ -290,6 +297,10 @@ impl Default for WowtypeSessionConfig {
             association: c_int::from(config.association),
             auto_pair_punct: c_int::from(config.auto_pair_punct),
             shift_double_tap: c_int::from(config.shift_double_tap),
+            quote_style: match config.quote_style {
+                QuoteStyle::Curly => WOWTYPE_QUOTE_STYLE_CURLY,
+                QuoteStyle::Corner => WOWTYPE_QUOTE_STYLE_CORNER,
+            },
         }
     }
 }
@@ -317,6 +328,11 @@ impl WowtypeSessionConfig {
                 PunctStyle::Halfwidth
             } else {
                 PunctStyle::Fullwidth
+            },
+            quote_style: if self.quote_style == WOWTYPE_QUOTE_STYLE_CORNER {
+                QuoteStyle::Corner
+            } else {
+                QuoteStyle::Curly
             },
             auto_space: self.auto_space,
             shift_toggle: match self.shift_toggle {
