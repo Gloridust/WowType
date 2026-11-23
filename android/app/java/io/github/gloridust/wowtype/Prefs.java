@@ -232,6 +232,11 @@ final class Prefs {
         return translate() && !translateBaseUrl().trim().isEmpty();
     }
 
+    /** 自定义词库路径（导入的 lexicon.tsv）；空串用 APK 自带。 */
+    String lexiconPath() {
+        return string("LexiconPath", "");
+    }
+
     boolean checkUpdate() {
         return bool("CheckUpdate", true);
     }

@@ -68,6 +68,15 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 if ("TypingStats".equals(key)) {
                     StatsHost.get().applyEnabled();
                 }
+                if ("LexiconPath".equals(key)) {
+                    if (session != null) {
+                        session.setTranslateBackend(null);
+                        session.close();
+                        session = null;
+                    }
+                    EngineHost.get().restart();
+                    Toast.makeText(this, "正在切换词库…", Toast.LENGTH_SHORT).show();
+                }
                 if (key != null && key.startsWith("Translate") && session != null) {
                     session.setTranslateBackend(
                             translate != null && prefs.translateReady() ? translate : null);
@@ -238,10 +247,14 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     }
 
     private void onEngineReady() {
-        if (session == null) return;
         long handle = EngineHost.get().handle();
         if (handle == 0) return;
-        session.setEngine(handle);
+        if (session == null) {
+            session = new Session(handle, Prefs.get(this).sessionConfig());
+            session.setTranslateBackend(translate != null && translate.ready() ? translate : null);
+        } else {
+            session.setEngine(handle);
+        }
         refresh();
     }
 

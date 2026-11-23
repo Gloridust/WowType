@@ -7,6 +7,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -19,6 +20,12 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 /**
  * 输入设置。桌面版设置窗口里的输入相关项在这里都有对应；改完马上写进 SharedPreferences，
@@ -27,6 +34,8 @@ import android.widget.TextView;
  * 全部用代码搭界面（和 SetupActivity 一样，不引 layout XML）。
  */
 public final class SettingsActivity extends Activity {
+    private static final int PICK_LEXICON = 2;
+
     private Theme theme;
 
     private Prefs prefs;
@@ -112,6 +121,13 @@ public final class SettingsActivity extends Activity {
                 summary(prefs.pageKeys(), PAGE_KEY_BITS, "个"), this::pickPageKeys);
         choice("分号 / 引号选词", new String[]{"关", "分号选第 2 个", "分号 + 引号"},
                 new String[]{"0", "1", "2"}, "SelectKeys", "0", false);
+
+        section("词库");
+        button("导入词库（lexicon.tsv）", "选择文件", this::pickLexicon);
+        button("恢复默认词库", "APK 自带", () -> {
+            prefs.set("LexiconPath", "");
+            Toast.makeText(this, "已恢复默认词库", Toast.LENGTH_SHORT).show();
+        });
 
         section("互译");
         toggle("启用互译（单按 Shift / 中英键进「译」）", "Translate", false, false);
@@ -325,6 +341,39 @@ public final class SettingsActivity extends Activity {
                 })
                 .setNegativeButton("取消", null)
                 .show();
+    }
+
+    private void pickLexicon() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, PICK_LEXICON);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_LEXICON || resultCode != RESULT_OK || data == null) return;
+        Uri uri = data.getData();
+        if (uri == null) return;
+        File dir = new File(getFilesDir(), "wowtype");
+        if (!dir.isDirectory() && !dir.mkdirs()) return;
+        File target = new File(dir, "lexicon-import.tsv");
+        File tmp = new File(dir, "lexicon-import.tsv.tmp");
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             OutputStream out = new FileOutputStream(tmp)) {
+            if (in == null) return;
+            byte[] buffer = new byte[256 * 1024];
+            int n;
+            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
+        } catch (Throwable t) {
+            Toast.makeText(this, "导入失败：" + t, Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (target.exists() && !target.delete()) return;
+        if (!tmp.renameTo(target)) return;
+        prefs.set("LexiconPath", target.getAbsolutePath());
+        Toast.makeText(this, "已导入，输入法正在切换词库", Toast.LENGTH_SHORT).show();
     }
 
     private int dp(int value) {

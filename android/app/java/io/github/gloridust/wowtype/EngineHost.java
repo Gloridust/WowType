@@ -73,8 +73,13 @@ final class EngineHost {
         worker.execute(() -> {
             try {
                 DataFiles.Paths paths = DataFiles.ensure(ctx);
+                Prefs prefs = Prefs.get(ctx);
+                String lexicon = prefs.lexiconPath();
+                if (!lexicon.isEmpty() && !new java.io.File(lexicon).isFile()) {
+                    lexicon = "";
+                }
                 long created = Native.newEngine(
-                        paths.lexicon.getAbsolutePath(),
+                        lexicon.isEmpty() ? paths.lexicon.getAbsolutePath() : lexicon,
                         paths.wordsLm.exists() ? paths.wordsLm.getAbsolutePath() : null,
                         paths.english.getAbsolutePath(),
                         paths.userDict.getAbsolutePath(),
@@ -129,6 +134,26 @@ final class EngineHost {
             Native.setRareExt(engine, prefs.rareExtChars() ? 1 : 0);
             Native.setTraditional(engine, prefs.traditional() && conversionLoaded ? 1 : 0);
         }
+    }
+
+    /**
+     * 换词库：先把学习数据写回、释放旧引擎，再用新词库重建。调用方要先关掉所有会话。
+     * LexiconPath 为空时回到 APK 自带的词库。
+     */
+    void restart() {
+        Context ctx = appContext;
+        long old = handle;
+        handle = 0;
+        failed = false;
+        loading = false;
+        if (old != 0 && ctx != null) {
+            DataFiles.Paths paths = DataFiles.paths(ctx);
+            synchronized (Session.ENGINE_LOCK) {
+                Native.saveState(old, paths.userDict.getAbsolutePath(), paths.history.getAbsolutePath());
+                Native.freeEngine(old);
+            }
+        }
+        if (ctx != null) start(ctx, null);
     }
 
     /** 自定义词文件改过：重新读一遍（custom.tsv）。 */
