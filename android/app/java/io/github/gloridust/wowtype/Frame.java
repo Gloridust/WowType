@@ -25,10 +25,20 @@ public final class Frame {
     public final boolean forgot;
     public final String[] candidates;
     public final String[] comments;
+    /** >0：这么久以后调一次 {@link Session#tick()}（互译等译文、单按 Shift 等双击）。 */
+    public final int wakeAfterMs;
+    /** 互译：攒着的原文、译文、方向标签、状态行。不是「译」时都是空串。 */
+    public final String translateSource;
+    public final String translateText;
+    public final String translateTitle;
+    public final String translateStatus;
+    public final boolean translateDone;
 
     Frame(boolean handled, String commit, String preedit, int preeditCursor, String aux, int panel,
           int candCount, int candCursor, boolean hasPrev, boolean hasNext, int mode,
-          boolean modeChanged, boolean learned, boolean forgot, String[] candidates, String[] comments) {
+          boolean modeChanged, boolean learned, boolean forgot, String[] candidates, String[] comments,
+          int wakeAfterMs, String translateSource, String translateText, String translateTitle,
+          String translateStatus, boolean translateDone) {
         this.handled = handled;
         this.commit = commit;
         this.preedit = preedit;
@@ -45,15 +55,21 @@ public final class Frame {
         this.forgot = forgot;
         this.candidates = candidates;
         this.comments = comments;
+        this.wakeAfterMs = wakeAfterMs;
+        this.translateSource = translateSource;
+        this.translateText = translateText;
+        this.translateTitle = translateTitle;
+        this.translateStatus = translateStatus;
+        this.translateDone = translateDone;
     }
 
     static Frame empty() {
         return new Frame(false, null, "", 0, null, 0, 0, -1, false, false, 0, false, false, false,
-                new String[0], new String[0]);
+                new String[0], new String[0], 0, "", "", "", "", false);
     }
 
     static Frame from(Object[] a) {
-        if (a == null || a.length < 16) return empty();
+        if (a == null || a.length < 22) return empty();
         String[] candidates = (String[]) a[14];
         String[] comments = (String[]) a[15];
         return new Frame(
@@ -72,7 +88,13 @@ public final class Frame {
                 ((Boolean) a[12]),
                 ((Boolean) a[13]),
                 candidates == null ? new String[0] : candidates,
-                comments == null ? new String[0] : comments);
+                comments == null ? new String[0] : comments,
+                ((Integer) a[16]),
+                a[17] == null ? "" : (String) a[17],
+                a[18] == null ? "" : (String) a[18],
+                a[19] == null ? "" : (String) a[19],
+                a[20] == null ? "" : (String) a[20],
+                ((Boolean) a[21]));
     }
 
     public boolean isComposing() {

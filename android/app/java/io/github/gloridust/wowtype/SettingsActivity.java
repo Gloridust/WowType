@@ -2,6 +2,8 @@ package io.github.gloridust.wowtype;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.content.Intent;
 import android.os.Bundle;
 import android.util.TypedValue;
@@ -9,6 +11,7 @@ import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
@@ -107,6 +110,16 @@ public final class SettingsActivity extends Activity {
                 summary(prefs.pageKeys(), PAGE_KEY_BITS, "个"), this::pickPageKeys);
         choice("分号 / 引号选词", new String[]{"关", "分号选第 2 个", "分号 + 引号"},
                 new String[]{"0", "1", "2"}, "SelectKeys", "0", false);
+
+        section("互译");
+        toggle("启用互译（单按 Shift / 中英键进「译」）", "Translate", false, false);
+        String[] targets = TranslateHost.languageNames();
+        String[] targetCodes = TranslateHost.languageCodes();
+        choice("目标语言", targets, targetCodes, "TranslateTarget", "en", false);
+        edit("接口地址", "TranslateBaseUrl", "https://index-translate.bilibili.com/v1");
+        edit("模型", "TranslateModel", "Index-Translate-2B");
+        edit("API Key（哔哩哔哩不用）", "TranslateApiKey", "");
+        toggle("正式语气", "TranslateFormal", false, false);
 
         section("模式");
         choice("单按 Shift", new String[]{"两边", "左 Shift", "右 Shift", "关"},
@@ -214,6 +227,34 @@ public final class SettingsActivity extends Activity {
         params.setMargins(0, dp(8), 0, dp(8));
         column.addView(button, params);
         return button;
+    }
+
+    private void edit(String label, String key, String fallback) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(rowLabel(label), new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        EditText input = new EditText(this);
+        input.setText(prefs.string(key, fallback));
+        input.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+        input.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                prefs.set(key, s.toString());
+            }
+        });
+        row.addView(input, new LinearLayout.LayoutParams(dp(190),
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        column.addView(row);
     }
 
     private TextView rowLabel(String label) {

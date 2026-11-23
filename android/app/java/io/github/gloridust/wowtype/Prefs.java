@@ -203,6 +203,35 @@ final class Prefs {
         return bool("Toolbar", true);
     }
 
+    boolean translate() {
+        return bool("Translate", false);
+    }
+
+    String translateTarget() {
+        return string("TranslateTarget", "en");
+    }
+
+    String translateBaseUrl() {
+        return string("TranslateBaseUrl", "https://index-translate.bilibili.com/v1");
+    }
+
+    String translateModel() {
+        return string("TranslateModel", "Index-Translate-2B");
+    }
+
+    String translateKey() {
+        return string("TranslateApiKey", "");
+    }
+
+    boolean translateFormal() {
+        return bool("TranslateFormal", false);
+    }
+
+    /** 配好了才让会话进「译」。 */
+    boolean translateReady() {
+        return translate() && !translateBaseUrl().trim().isEmpty();
+    }
+
     boolean checkUpdate() {
         return bool("CheckUpdate", true);
     }
@@ -239,7 +268,7 @@ final class Prefs {
                 halfwidthPunct() ? 1 : 0,
                 autoSpace(),
                 shiftToggle(),
-                0, // translate_mode：互译接好以后再开
+                translateReady() ? 1 : 0,
                 toolbar() ? 1 : 0,
                 clipboardHistory() ? 1 : 0,
                 shuangpinShowKeys() ? 1 : 0,

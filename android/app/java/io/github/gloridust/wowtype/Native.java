@@ -97,6 +97,9 @@ final class Native {
     /** Super + . 的表情面板。 */
     static native Object[] toggleEmoji(long session);
 
+    /** 「译」的 Java 翻译器；null 表示关掉。用 Object 是为了主机 JVM 测试不用编 TranslateHost。 */
+    static native void setTranslateBackend(long session, Object host);
+
     static native void freeSession(long session);
 
     static native void setEngine(long session, long engine);
@@ -106,6 +109,8 @@ final class Native {
                                long timeMs);
 
     static native Object[] frame(long session);
+
+    static native Object[] tick(long session, long nowMs);
 
     static native Object[] select(long session, int index);
 

@@ -5,6 +5,9 @@
     <!-- minSdk 24：getSurroundingText 和向量图标都从这里开始有 -->
     <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="35" />
 
+    <!-- 互译、检查更新 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="true"
         android:extractNativeLibs="false"

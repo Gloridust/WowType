@@ -3,6 +3,8 @@ package io.github.gloridust.wowtype;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
@@ -27,6 +29,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
 
     private Session session;
+    private TranslateHost translate;
     private KeyboardView keyboard;
     private CandidateBar bar;
 
@@ -37,6 +40,11 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     private boolean hasSurrounding;
     /** 这次上屏是点第几个候选（1 起），不是点候选就是 0。打字统计用。 */
     private int lastCandidateIndex;
+    /** 会话说「过一会儿再叫我」（互译出结果、单按 Shift 等双击）。 */
+    private final Handler ticker = new Handler(Looper.getMainLooper());
+    private final Runnable tickRunnable = () -> {
+        if (session != null) render(session.tick());
+    };
 
     /** 设置页改了东西：引擎选项、会话配置、候选排列马上跟上。 */
     private final SharedPreferences.OnSharedPreferenceChangeListener prefListener =
@@ -49,6 +57,10 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 }
                 if ("TypingStats".equals(key)) {
                     StatsHost.get().applyEnabled();
+                }
+                if (key != null && key.startsWith("Translate") && session != null) {
+                    session.setTranslateBackend(
+                            translate != null && prefs.translateReady() ? translate : null);
                 }
                 if ("SettingsTheme".equals(key)) {
                     // 键盘和候选条的颜色是建 View 时取的，换主题要重建输入视图
@@ -83,6 +95,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         globalMode = prefs.initialMode();
         prefs.raw().registerOnSharedPreferenceChangeListener(prefListener);
         StatsHost.get().start(this);
+        translate = new TranslateHost(this);
         EngineHost.get().start(this, engineListener);
     }
 
@@ -91,10 +104,12 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         Prefs.get(this).raw().unregisterOnSharedPreferenceChangeListener(prefListener);
         EngineHost.get().removeListener(engineListener);
         if (session != null) {
+            session.setTranslateBackend(null);
             session.close();
             session = null;
         }
         StatsHost.get().flush();
+        ticker.removeCallbacks(tickRunnable);
         super.onDestroy();
     }
 
@@ -146,6 +161,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             return;
         }
         session = new Session(EngineHost.get().handle(), Prefs.get(this).sessionConfig());
+        session.setTranslateBackend(translate != null && translate.ready() ? translate : null);
         rememberClipboard();
         hints = hintsFor(attribute);
         refreshSurrounding();
@@ -167,6 +183,7 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
         if (session != null) {
             // 失去焦点：打到一半的丢掉（不往下一个输入框里塞拼音）
             session.reset(false);
+            session.setTranslateBackend(null);
             session.close();
             session = null;
         }
@@ -224,8 +241,19 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
     @Override
     public void onToggleMode() {
         if (session == null) return;
-        Frame frame = session.tap(Session.ACTION_TOGGLE_MODE, 0);
-        if (frame.handled) render(frame);
+        // 和桌面单按 Shift 一样循环：中 → 英 →（配好互译时）译 → 中。
+        // ACTION_TOGGLE_MODE 在核心里只切中↔英，所以这里自己算下一档。
+        int mode = session.mode();
+        int next;
+        if (mode == Session.MODE_CHINESE) {
+            next = Session.MODE_ENGLISH;
+        } else if (mode == Session.MODE_ENGLISH
+                && Prefs.get(this).translateReady()) {
+            next = Session.MODE_TRANSLATE;
+        } else {
+            next = Session.MODE_CHINESE;
+        }
+        render(session.setMode(next));
     }
 
     /** 软键盘按键和硬件键盘都走这里。handled 为 0 时由外壳把字原样打进去（英文模式）。 */
@@ -295,6 +323,14 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
                 afterTyped(frame.commit);
             }
             String preedit = frame.preedit == null ? "" : frame.preedit;
+            // 「译」里编辑区显示译文（还没有译文时先显示攒着的原文），和桌面版一样边译边看
+            if (frame.mode == Session.MODE_TRANSLATE) {
+                if (!frame.translateText.isEmpty()) {
+                    preedit = frame.translateText;
+                } else if (!frame.translateSource.isEmpty()) {
+                    preedit = frame.translateSource;
+                }
+            }
             if (!preedit.isEmpty()) {
                 conn.setComposingText(preedit, 1);
             } else {
@@ -307,11 +343,14 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
         if (frame.modeChanged) globalMode = frame.mode;
         if (session != null) {
-            boolean english = session.mode() == Session.MODE_ENGLISH;
-            if (keyboard != null) keyboard.setEnglish(english);
+            if (keyboard != null) keyboard.setMode(session.mode());
         }
         if (bar != null) bar.setFrame(frame);
         if (frame.learned || frame.forgot) EngineHost.get().save();
+        ticker.removeCallbacks(tickRunnable);
+        if (frame.wakeAfterMs > 0) {
+            ticker.postDelayed(tickRunnable, frame.wakeAfterMs);
+        }
     }
 
     /** 打字统计的上屏来源。 */
@@ -399,7 +438,17 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        // 松开事件不需要交给会话：会话只在 Shift 上用，而软键盘的 Shift 只管大小写
+        // 单按 Shift 切中/英/译：松开要交给会话（软键盘的 Shift 只管大小写，不走这里）
+        int keysym = keysymFor(keyCode, event);
+        if (keysym == 0xffe1 || keysym == 0xffe2) {
+            if (session != null) {
+                Frame frame = session.release(keysym, modifiersFor(event), keyCode);
+                if (frame.handled) {
+                    render(frame);
+                    return true;
+                }
+            }
+        }
         return super.onKeyUp(keyCode, event);
     }
 
@@ -433,6 +482,8 @@ public final class WowTypeImeService extends android.inputmethodservice.InputMet
             case KeyEvent.KEYCODE_PAGE_UP: return 0xff55;
             case KeyEvent.KEYCODE_PAGE_DOWN: return 0xff56;
             case KeyEvent.KEYCODE_TAB: return 0xff09;
+            case KeyEvent.KEYCODE_SHIFT_LEFT: return 0xffe1;
+            case KeyEvent.KEYCODE_SHIFT_RIGHT: return 0xffe2;
             default: return 0;
         }
     }

@@ -17,10 +17,11 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "wowtype_core.h"
 
-#define FRAME_FIELDS 16
+#define FRAME_FIELDS 22
 
 static jclass g_integer = NULL;
 static jclass g_boolean = NULL;
@@ -28,11 +29,13 @@ static jclass g_string = NULL;
 static jclass g_object = NULL;
 static jmethodID g_integer_init = NULL;
 static jmethodID g_boolean_init = NULL;
+static JavaVM *g_vm = NULL;
 
 JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)reserved;
     JNIEnv *env = NULL;
     if ((*vm)->GetEnv(vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return JNI_ERR;
+    g_vm = vm;
 
     g_integer = (*env)->FindClass(env, "java/lang/Integer");
     g_boolean = (*env)->FindClass(env, "java/lang/Boolean");
@@ -96,6 +99,49 @@ static jstring u8_to_jstring(JNIEnv *env, const char *s) {
     return result;
 }
 
+/* jstring（UTF-16）-> 标准 UTF-8。GetStringUTFChars 给的是 modified UTF-8，emoji 会坏。 */
+static char *jstring_to_utf8(JNIEnv *env, jstring s) {
+    if (s == NULL) return NULL;
+    jsize n = (*env)->GetStringLength(env, s);
+    const jchar *u = (*env)->GetStringChars(env, s, NULL);
+    if (u == NULL) return NULL;
+    size_t cap = (size_t)n * 4 + 1;
+    char *out = (char *)malloc(cap);
+    if (out == NULL) {
+        (*env)->ReleaseStringChars(env, s, u);
+        return NULL;
+    }
+    size_t at = 0;
+    for (jsize i = 0; i < n; i++) {
+        uint32_t cp = u[i];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n) {
+            uint32_t low = u[i + 1];
+            if (low >= 0xDC00 && low <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                i++;
+            }
+        }
+        if (cp < 0x80) {
+            out[at++] = (char)cp;
+        } else if (cp < 0x800) {
+            out[at++] = (char)(0xC0 | (cp >> 6));
+            out[at++] = (char)(0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            out[at++] = (char)(0xE0 | (cp >> 12));
+            out[at++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[at++] = (char)(0x80 | (cp & 0x3F));
+        } else {
+            out[at++] = (char)(0xF0 | (cp >> 18));
+            out[at++] = (char)(0x80 | ((cp >> 12) & 0x3F));
+            out[at++] = (char)(0x80 | ((cp >> 6) & 0x3F));
+            out[at++] = (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    out[at] = 0;
+    (*env)->ReleaseStringChars(env, s, u);
+    return out;
+}
+
 static void set_slot(JNIEnv *env, jobjectArray arr, jsize i, jobject value) {
     if (value != NULL) {
         (*env)->SetObjectArrayElement(env, arr, i, value);
@@ -130,6 +176,12 @@ static jobject empty_frame(JNIEnv *env) {
     set_bool(env, arr, 13, JNI_FALSE);
     set_slot(env, arr, 14, (*env)->NewObjectArray(env, 0, g_string, NULL));
     set_slot(env, arr, 15, (*env)->NewObjectArray(env, 0, g_string, NULL));
+    set_int(env, arr, 16, 0);
+    set_slot(env, arr, 17, u8_to_jstring(env, ""));
+    set_slot(env, arr, 18, u8_to_jstring(env, ""));
+    set_slot(env, arr, 19, u8_to_jstring(env, ""));
+    set_slot(env, arr, 20, u8_to_jstring(env, ""));
+    set_bool(env, arr, 21, JNI_FALSE);
     return arr;
 }
 
@@ -165,6 +217,12 @@ static jobject frame_to_java(JNIEnv *env, WowtypeSession *session, const Wowtype
     }
     set_slot(env, arr, 14, texts);
     set_slot(env, arr, 15, comments);
+    set_int(env, arr, 16, (jint)f->wake_after_ms);
+    set_slot(env, arr, 17, u8_to_jstring(env, f->translate_source));
+    set_slot(env, arr, 18, u8_to_jstring(env, f->translate_text));
+    set_slot(env, arr, 19, u8_to_jstring(env, f->translate_title));
+    set_slot(env, arr, 20, u8_to_jstring(env, f->translate_status));
+    set_bool(env, arr, 21, f->translate_done ? JNI_TRUE : JNI_FALSE);
     return arr;
 }
 
@@ -561,6 +619,136 @@ JNIEXPORT jint JNICALL Java_io_github_gloridust_wowtype_Native_statsClear(
     if (p != NULL && p[0] != 0) rc = wowtype_stats_clear(p);
     free(p);
     return rc;
+}
+
+JNIEXPORT jobject JNICALL Java_io_github_gloridust_wowtype_Native_tick(
+    JNIEnv *env, jclass cls, jlong session, jlong now_ms) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return empty_frame(env);
+    return frame_to_java(env, s, wowtype_session_tick(s, (uint64_t)now_ms));
+}
+
+/* ---------------- 互译：Java TranslateHost 的函数表 ---------------- */
+
+typedef struct {
+    jobject host;
+    jmethodID start, cancel, poll, text, source, error, tag;
+    char *buf_source, *buf_text, *buf_error, *buf_tag;
+} TranslateUser;
+
+static TranslateUser g_translate;
+static jclass g_translate_class = NULL;
+static WowtypeTranslateBackend g_translate_backend;
+
+static JNIEnv *translate_env(void) {
+    if (g_vm == NULL) return NULL;
+    JNIEnv *env = NULL;
+    if ((*g_vm)->GetEnv(g_vm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) return NULL;
+    return env;
+}
+
+static void translate_replace(JNIEnv *env, char **slot, jstring value) {
+    free(*slot);
+    *slot = value == NULL ? NULL : jstring_to_utf8(env, value);
+}
+
+static void translate_start(void *user, const char *text) {
+    TranslateUser *u = (TranslateUser *)user;
+    JNIEnv *env = translate_env();
+    if (env == NULL || u->host == NULL) return;
+    jstring input = u8_to_jstring(env, text);
+    (*env)->CallVoidMethod(env, u->host, u->start, input);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    if (input != NULL) (*env)->DeleteLocalRef(env, input);
+}
+
+static void translate_cancel(void *user) {
+    TranslateUser *u = (TranslateUser *)user;
+    JNIEnv *env = translate_env();
+    if (env == NULL || u->host == NULL) return;
+    (*env)->CallVoidMethod(env, u->host, u->cancel);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+}
+
+static int translate_poll(void *user, const char **source, const char **text, const char **error) {
+    TranslateUser *u = (TranslateUser *)user;
+    JNIEnv *env = translate_env();
+    if (env == NULL || u->host == NULL) {
+        *source = "";
+        *text = "";
+        *error = "";
+        return 0;
+    }
+    int status = (*env)->CallIntMethod(env, u->host, u->poll);
+    jstring s = (jstring)(*env)->CallObjectMethod(env, u->host, u->source);
+    translate_replace(env, &u->buf_source, s);
+    if (s != NULL) (*env)->DeleteLocalRef(env, s);
+    jstring t = (jstring)(*env)->CallObjectMethod(env, u->host, u->text);
+    translate_replace(env, &u->buf_text, t);
+    if (t != NULL) (*env)->DeleteLocalRef(env, t);
+    jstring e = (jstring)(*env)->CallObjectMethod(env, u->host, u->error);
+    translate_replace(env, &u->buf_error, e);
+    if (e != NULL) (*env)->DeleteLocalRef(env, e);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    *source = u->buf_source == NULL ? "" : u->buf_source;
+    *text = u->buf_text == NULL ? "" : u->buf_text;
+    *error = u->buf_error == NULL ? "" : u->buf_error;
+    return status;
+}
+
+static const char *translate_tag(void *user, const char *text) {
+    TranslateUser *u = (TranslateUser *)user;
+    JNIEnv *env = translate_env();
+    if (env == NULL || u->host == NULL) return "译";
+    jstring input = u8_to_jstring(env, text);
+    jstring tag = (jstring)(*env)->CallObjectMethod(env, u->host, u->tag, input);
+    if (input != NULL) (*env)->DeleteLocalRef(env, input);
+    translate_replace(env, &u->buf_tag, tag);
+    if (tag != NULL) (*env)->DeleteLocalRef(env, tag);
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    return u->buf_tag == NULL ? "译" : u->buf_tag;
+}
+
+JNIEXPORT void JNICALL Java_io_github_gloridust_wowtype_Native_setTranslateBackend(
+    JNIEnv *env, jclass cls, jlong session, jobject host) {
+    (void)cls;
+    WowtypeSession *s = session_of(session);
+    if (s == NULL) return;
+    if (host == NULL) {
+        wowtype_session_set_translate_backend(s, NULL);
+        if (g_translate.host != NULL) {
+            (*env)->DeleteGlobalRef(env, g_translate.host);
+            g_translate.host = NULL;
+        }
+        return;
+    }
+    if (g_translate_class == NULL) {
+        jclass local = (*env)->FindClass(env, "io/github/gloridust/wowtype/TranslateHost");
+        if (local == NULL) return;
+        g_translate_class = (jclass)(*env)->NewGlobalRef(env, local);
+        (*env)->DeleteLocalRef(env, local);
+    }
+    if (g_translate.host != NULL) (*env)->DeleteGlobalRef(env, g_translate.host);
+    memset(&g_translate, 0, sizeof(g_translate));
+    g_translate.host = (*env)->NewGlobalRef(env, host);
+    g_translate.start = (*env)->GetMethodID(env, g_translate_class, "start", "(Ljava/lang/String;)V");
+    g_translate.cancel = (*env)->GetMethodID(env, g_translate_class, "cancel", "()V");
+    g_translate.poll = (*env)->GetMethodID(env, g_translate_class, "poll", "()I");
+    g_translate.text = (*env)->GetMethodID(env, g_translate_class, "text", "()Ljava/lang/String;");
+    g_translate.source = (*env)->GetMethodID(env, g_translate_class, "source", "()Ljava/lang/String;");
+    g_translate.error = (*env)->GetMethodID(env, g_translate_class, "error", "()Ljava/lang/String;");
+    g_translate.tag = (*env)->GetMethodID(env, g_translate_class, "tagFor",
+                                          "(Ljava/lang/String;)Ljava/lang/String;");
+    if (g_translate.start == NULL || g_translate.poll == NULL || g_translate.text == NULL) return;
+    memset(&g_translate_backend, 0, sizeof(g_translate_backend));
+    g_translate_backend.size = sizeof(g_translate_backend);
+    g_translate_backend.user = &g_translate;
+    g_translate_backend.start = translate_start;
+    g_translate_backend.cancel = translate_cancel;
+    g_translate_backend.poll = translate_poll;
+    g_translate_backend.tag = translate_tag;
+    wowtype_session_set_translate_backend(s, &g_translate_backend);
 }
 
 JNIEXPORT jstring JNICALL Java_io_github_gloridust_wowtype_Native_input(

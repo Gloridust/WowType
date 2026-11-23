@@ -96,6 +96,31 @@ public final class Session implements AutoCloseable {
         }
     }
 
+    /** frame 里的 wakeAfterMs 到了：让会话往前走（互译出结果、单按 Shift 等双击）。 */
+    public Frame tick() {
+        if (ptr == 0) return Frame.empty();
+        synchronized (ENGINE_LOCK) {
+            return Frame.from(Native.tick(ptr, System.currentTimeMillis()));
+        }
+    }
+
+    /** 挂上 Java 翻译器（null 关掉）。 */
+    public void setTranslateBackend(Object host) {
+        if (ptr == 0) return;
+        synchronized (ENGINE_LOCK) {
+            Native.setTranslateBackend(ptr, host);
+        }
+    }
+
+    /** 松开：目前只有 Shift 用（单按切中/英/译）。 */
+    public Frame release(int keysym, int modifiers, int code) {
+        if (ptr == 0) return Frame.empty();
+        synchronized (ENGINE_LOCK) {
+            return Frame.from(Native.key(ptr, keysym, modifiers, true, 0, ACTION_NONE, 0, code,
+                    false, System.currentTimeMillis()));
+        }
+    }
+
     public Frame frame() {
         if (ptr == 0) return Frame.empty();
         synchronized (ENGINE_LOCK) {

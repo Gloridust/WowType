@@ -65,6 +65,8 @@ public final class KeyboardView extends View {
     private Listener listener;
     private boolean shift;
     private boolean english;
+    /** 会话模式：0 中文、1 英文、2 译。只影响「中/英/译」键的显示。 */
+    private int mode;
     private Hit pressed;
     private int activePointer = -1;
 
@@ -100,6 +102,15 @@ public final class KeyboardView extends View {
     public void setEnglish(boolean english) {
         if (this.english == english) return;
         this.english = english;
+        layoutKeys();
+        invalidate();
+    }
+
+    /** 0 中文 / 1 英文 / 2 译（{@link Session#MODE_CHINESE} 等）。 */
+    public void setMode(int mode) {
+        if (this.mode == mode) return;
+        this.mode = mode;
+        this.english = mode == Session.MODE_ENGLISH;
         layoutKeys();
         invalidate();
     }
@@ -178,7 +189,8 @@ public final class KeyboardView extends View {
         float unit = (getWidth() - padding * 2 - gap * 4) / 9.5f;
         float x = padding;
 
-        add(x, top, x + unit * 1.5f, bottom, KIND_MODE, english ? "英" : "中", 0);
+        String modeLabel = mode == Session.MODE_TRANSLATE ? "译" : english ? "英" : "中";
+        add(x, top, x + unit * 1.5f, bottom, KIND_MODE, modeLabel, 0);
         x += unit * 1.5f + gap;
         add(x, top, x + unit, bottom, KIND_PUNCT, english ? "," : "，", ',');
         x += unit + gap;
