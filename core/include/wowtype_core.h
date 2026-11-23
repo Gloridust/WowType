@@ -498,7 +498,14 @@ typedef struct {
                            * 也算，这个键照切了以后的模式处理）、到了时间（tick）、第二下没算成单按时切，这几个
                            * frame 都可能带 mode_changed（和 commit：打到一半切英文）。按键没带 time_ms 时照旧立刻切。
                            * 默认 0：外壳要会这些才开 */
+    int quote_style;     /* 1.15 起：全角标点（punct_style 为 0）下双引号、单引号上屏成哪一套，
+                          * WOWTYPE_QUOTE_STYLE_*。默认 CURLY（“”‘’）；CORNER 是「」『』，
+                          * 左右交替和数字后面保持半角的规则两套一样 */
 } WowtypeSessionConfig;
+
+/* quote_style 的取值（1.15 起）。 */
+#define WOWTYPE_QUOTE_STYLE_CURLY 0  /* “ ” ‘ ’（默认） */
+#define WOWTYPE_QUOTE_STYLE_CORNER 1 /* 「 」 『 』 */
 
 /* 一次调用之后外壳要做的事。归会话所有，和里面的字符串一起在同一个会话的下一次调用前有效。
  * 读 size 之外的字段前先看 size（旧核心给的结构体短）。 */

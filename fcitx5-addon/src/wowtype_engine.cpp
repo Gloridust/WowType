@@ -1161,6 +1161,12 @@ void WowtypeEngine::applyConfig() {
         punctStyle_ = name == "half" || name == "halfwidth" ? WowtypePunctStyle::Halfwidth
                                                             : WowtypePunctStyle::Fullwidth;
     }
+    quoteStyle_ = *config_.quoteStyle;
+    if (const char *env = std::getenv("WOWTYPE_QUOTE_STYLE"); env && *env) {
+        const std::string name = env;
+        quoteStyle_ = name == "corner" || name == "cornerBracket" ? WowtypeQuoteStyle::Corner
+                                                                  : WowtypeQuoteStyle::Curly;
+    }
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
     emojiKey_ = *config_.emojiKey;
@@ -1521,6 +1527,8 @@ void WowtypeEngine::syncSession(WowtypeState *state) {
                              : WOWTYPE_SELECT_KEYS_OFF;
     config.pick_char = pickChar_ ? 1 : 0;
     config.punct_style = punctStyle_ == WowtypePunctStyle::Halfwidth ? 1 : 0;
+    config.quote_style = quoteStyle_ == WowtypeQuoteStyle::Corner ? WOWTYPE_QUOTE_STYLE_CORNER
+                                                                  : WOWTYPE_QUOTE_STYLE_CURLY;
     config.auto_space = static_cast<uint32_t>(autoSpaceFlags_);
     config.shift_toggle = shiftToggle_ == WowtypeShiftToggle::Left    ? WOWTYPE_SHIFT_TOGGLE_LEFT
                           : shiftToggle_ == WowtypeShiftToggle::Right ? WOWTYPE_SHIFT_TOGGLE_RIGHT

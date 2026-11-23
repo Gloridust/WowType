@@ -126,6 +126,19 @@ struct WowtypePunctStyleAnnotation {
     }
 };
 
+/// 全角标点下引号用哪一套。
+enum class WowtypeQuoteStyle { Curly, Corner };
+FCITX_CONFIG_ENUM_NAME(WowtypeQuoteStyle, "Curly", "Corner");
+
+struct WowtypeQuoteStyleAnnotation {
+    bool skipDescription() const { return false; }
+    bool skipSave() const { return false; }
+    void dumpDescription(fcitx::RawConfig &config) const {
+        config.setValueByPath("EnumI18n/0", "弯引号 “ ” ‘ ’");
+        config.setValueByPath("EnumI18n/1", "直角引号 「 」 『 』");
+    }
+};
+
 /// 单按哪个 Shift 切换中英文。
 enum class WowtypeShiftToggle { Both, Left, Right, Off };
 FCITX_CONFIG_ENUM_NAME(WowtypeShiftToggle, "Both", "Left", "Right", "Off");
@@ -246,6 +259,9 @@ FCITX_CONFIGURATION(
     fcitx::Option<WowtypePunctStyle, fcitx::NoConstrain<WowtypePunctStyle>,
                   fcitx::DefaultMarshaller<WowtypePunctStyle>, WowtypePunctStyleAnnotation>
         punctStyle{this, "PunctuationStyle", "标点样式", WowtypePunctStyle::Fullwidth};
+    fcitx::Option<WowtypeQuoteStyle, fcitx::NoConstrain<WowtypeQuoteStyle>,
+                  fcitx::DefaultMarshaller<WowtypeQuoteStyle>, WowtypeQuoteStyleAnnotation>
+        quoteStyle{this, "QuoteStyle", "引号样式", WowtypeQuoteStyle::Curly};
     fcitx::Option<WowtypeSelectKeys, fcitx::NoConstrain<WowtypeSelectKeys>,
                   fcitx::DefaultMarshaller<WowtypeSelectKeys>, WowtypeSelectKeysAnnotation>
         selectKeys{this, "SelectKeys", "分号、引号选词", WowtypeSelectKeys::Off};
@@ -661,6 +677,7 @@ private:
     /// 启动后还没切到过 WowType：第一次切过来（包括 WowType 是默认输入法时第一次获得焦点）按 InitialMode 定模式
     bool initialModeApplied_ = false;
     WowtypePunctStyle punctStyle_ = WowtypePunctStyle::Fullwidth;
+    WowtypeQuoteStyle quoteStyle_ = WowtypeQuoteStyle::Curly;
     /// 打开的翻页键组（Page Up/Down、方向键、fcitx 全局翻页键一直可用）
     bool pageMinus_ = true;
     bool pageBracket_ = false;
