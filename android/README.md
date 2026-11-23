@@ -46,6 +46,8 @@
 </tr>
 </table>
 
+<p align="center"><img src="../docs/images/android-wechat-typing-light.jpg" width="320" alt="安卓版在微信里打 ni'hao：候选条第一页是 你好、拟好、👋、你、尼、泥、逆、拟、腻，下面是四行 QWERTY"><br><sub>微信里打 ni'hao 的候选（早期版本，还没有工具条）</sub></p>
+
 输入设置原来是 1080×6117 的滚动长截图，按小节切成 5 张（也可以看[完整长图](../docs/images/android-settings-full.jpg)）：
 
 <table>
