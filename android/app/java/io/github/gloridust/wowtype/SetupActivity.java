@@ -8,6 +8,7 @@ import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -99,17 +100,41 @@ public final class SetupActivity extends Activity {
     }
 
     private void updateStatus() {
-        boolean enabled = isEnabled();
-        state.setText(enabled ? R.string.setup_enabled : R.string.setup_disabled);
-        state.setTextColor(enabled ? ACCENT : MUTED);
-        engineState.setText(EngineHost.get().status() + "（ABI " + Native.versionText() + "）");
+        try {
+            boolean enabled = isEnabled();
+            state.setText(enabled ? R.string.setup_enabled : R.string.setup_disabled);
+            state.setTextColor(enabled ? ACCENT : MUTED);
+            engineState.setText(EngineHost.get().status() + "（ABI " + Native.versionText() + "）");
+        } catch (Throwable t) {
+            // 引导页是唯一入口：状态探测怎么失败都不能让 onResume 抛出去
+            state.setText("状态读取失败：" + t);
+            state.setTextColor(MUTED);
+        }
     }
 
-    /** 系统输入法列表里有没有我们：Settings.Secure 里记的是 {@code 包名/.类名}。 */
+    /**
+     * 系统启用的输入法里有没有我们。
+     *
+     * 不能读 {@code Settings.Secure.ENABLED_INPUT_METHODS}：Android 14 起这个 key 只允许
+     * targetSdk ≤ 33 的应用读，targetSdk 35 会抛 SecurityException，一进 onResume 就闪退
+     *（OPPO Android 17 上实测 122 次崩溃都是这个）。{@link InputMethodManager} 的公开 API
+     * 不需要权限，语义一样。
+     */
     private boolean isEnabled() {
-        String enabled = Settings.Secure.getString(getContentResolver(),
-                Settings.Secure.ENABLED_INPUT_METHODS);
-        return enabled != null && enabled.contains(getPackageName() + "/.");
+        try {
+            InputMethodManager imm = getSystemService(InputMethodManager.class);
+            if (imm == null) return false;
+            // InputMethodInfo.getId() 有的版本写全类名，有的写 ".类名"（API 24 就是后者）
+            String fullId = getPackageName() + "/" + WowTypeImeService.class.getName();
+            String shortId = getPackageName() + "/." + WowTypeImeService.class.getSimpleName();
+            for (InputMethodInfo info : imm.getEnabledInputMethodList()) {
+                String id = info.getId();
+                if (fullId.equals(id) || shortId.equals(id)) return true;
+            }
+        } catch (Throwable ignored) {
+            // OEM 的输入法服务异常时按未启用处理
+        }
+        return false;
     }
 
     private Button button(int text, android.view.View.OnClickListener onClick) {
