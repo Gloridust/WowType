@@ -67,9 +67,9 @@ github_hint() { # <curl / wget 的退出码>
 
 download() { # <地址> <保存到>
   if command -v curl >/dev/null; then
-    curl -fL --retry 3 --progress-bar -o "$2" "$1"
+    curl -fL --retry 3 -C - --progress-bar -o "$2" "$1"
   else
-    wget -q --show-progress -O "$2" "$1"
+    wget -q -c --show-progress -O "$2" "$1"
   fi
 }
 
@@ -220,9 +220,12 @@ macos_install() { # <只打印计划：0 / 1>
   expected=$(manifest_hash "$package" "$tmp/SHA256SUMS") ||
     die "WowType $version 没有 macOS 安装包（${package}）；发布页：https://github.com/$REPO/releases"
   say "下载并校验 $package"
-  fetch "$base/$package" "$tmp/$package"
-  actual=$(shasum -a 256 "$tmp/$package")
-  [[ "${actual%% *}" == "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]] || die "$package 校验和对不上，请重新下载"
+  while true; do
+      fetch "$base/$package" "$tmp/$package"
+      actual=$(shasum -a 256 "$tmp/$package")
+      [[ "${actual%% *}" == "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]] && break
+      say "$package 校验和对不上，请重新下载"
+  done
 
   say "安装到 ~/Library/Input Methods（只装给当前用户）"
   installer -pkg "$tmp/$package" -target CurrentUserHomeDirectory
@@ -559,9 +562,12 @@ main() {
   for f in "${files[@]}"; do
     expected=$(manifest_hash "$f" "$tmp/SHA256SUMS") || die "$f 缺少唯一且有效的 SHA256"
     say "下载并校验 $f"
-    fetch "$base/$f" "$tmp/$f"
-    actual=$(sha256sum "$tmp/$f")
-    [[ "${actual%% *}" == "${expected,,}" ]] || die "$f 校验和对不上，请重新下载"
+    while true; do
+        fetch "$base/$f" "$tmp/$f"
+        actual=$(sha256sum "$tmp/$f")
+        [[ "${actual%% *}" == "${expected,,}" ]] && break
+        say "$f 校验和对不上，请重新下载"
+    done
     chmod 644 "$tmp/$f"
   done
 
