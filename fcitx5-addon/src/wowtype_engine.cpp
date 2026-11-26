@@ -2730,10 +2730,23 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         return;
     }
     auto *state = ic->propertyFor(&factory_);
-    const fcitx::Key key = event.key();
+    // fcitx5 的 key() 是规整过的键：Key::normalize() 会去掉 CapsLock（只留 Ctrl/Alt/Shift/Super/Mod3）。
+    // 会话靠 CAPS 位区分“大写锁定”和 Shift + 字母（两者规整后都是大写 keysym、没有 Shift），
+    // 所以从原始键里把 CapsLock 补回来（#271）
+    const fcitx::KeyStates caps =
+        (event.rawKey().states() | event.origKey().states()) & fcitx::KeyState::CapsLock;
+    const fcitx::Key key(event.key().sym(), event.key().states() | caps, event.key().code());
     const auto sym = key.sym();
     if (sync_ && syncEnabled_) {
         wowtype_sync_touch(sync_);
+    }
+    // 别的键报上来的原始状态里带着大写锁定：跟它对齐（外接键盘、系统设置里改过也能跟上）
+    if (sym != FcitxKey_Caps_Lock) {
+        const bool capsOn = caps.test(fcitx::KeyState::CapsLock);
+        if (capsLockOn_ != capsOn) {
+            capsLockOn_ = capsOn;
+            ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
+        }
     }
     // 上屏后还没发的挪光标（自动配对）先发：应用要先把光标放好，再收到这个键或这个键上屏的字。
     // 这时应用报的周围文字还是挪之前的
@@ -2760,6 +2773,19 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
     // 单按 Shift 切中英文（WowType 自己的英文模式），由会话判断。fcitx 的「临时切换输入法」热键
     // （默认左 Shift）生效时 fcitx 会先把 Shift 吃掉，这里就收不到，两者不会重复切换。
     if (handleShiftKey(ic, state, event)) {
+        return;
+    }
+    // CapsLock：开着时提示 EN；打字途中按下先把编辑区原样上屏，再照常交给应用切换大写锁定（#271）
+    if (sym == FcitxKey_Caps_Lock) {
+        const bool repeat = event.rawKey().states().test(fcitx::KeyState::Repeat);
+        if (!event.isRelease() && !repeat) {
+            capsLockOn_ = !capsLockOn_;
+            if (state->composing()) {
+                commitInput(ic, state);
+                updateInputPanel(ic, state);
+            }
+            showCapsLockInformation(ic);
+        }
         return;
     }
     if (event.isRelease()) {
@@ -2990,11 +3016,29 @@ void WowtypeEngine::reset(const fcitx::InputMethodEntry & /*entry*/,
 }
 
 const char *WowtypeEngine::modeTitle() const {
+    if (capsLockOn_) {
+        return "大写英文";
+    }
     return translateMode_ ? "互译" : asciiMode_ ? "英文" : "中文";
 }
 
 const char *WowtypeEngine::modeLabel() const {
+    if (capsLockOn_) {
+        return "EN";
+    }
     return translateMode_ ? "译" : asciiMode_ ? "英" : "中";
+}
+
+void WowtypeEngine::showCapsLockInformation(fcitx::InputContext *ic) {
+    if (!ic) {
+        return;
+    }
+#ifdef WOWTYPE_HAVE_CUSTOM_IM_INFO
+    instance_->showCustomInputMethodInformation(ic, modeLabel());
+#else
+    instance_->showInputMethodInformation(ic);
+#endif
+    ic->updateUserInterface(fcitx::UserInterfaceComponent::StatusArea);
 }
 
 std::string WowtypeEngine::subMode(const fcitx::InputMethodEntry & /*entry*/,

@@ -1449,6 +1449,15 @@ impl<'e> Session<'e> {
             }
         }
         let sym = key.keysym;
+        // 开着大写锁定、没在打字、也不在「译」里攒原文：字母、数字、标点都按英文半角直接给应用，
+        // 不进拼音、不换成中文标点（#271）。打字途中照旧进编辑区；Shift + 字母不受影响
+        if key.modifiers & modifier::CAPS != 0
+            && !self.composing()
+            && !self.translating()
+            && char::from_u32(sym).is_some_and(|c| c.is_ascii_graphic())
+        {
+            return self.english_key(key);
+        }
         // 打拼音途中的隔音符（xi'an）下面单独处理；打五笔码时它是标点
         if let Some(c) = visible_symbol(sym).filter(|&c| !(c == '\'' && self.composing() && !self.wubi_code())) {
             return self.symbol_key(c, key);
@@ -1456,11 +1465,6 @@ impl<'e> Session<'e> {
         if (u32::from(b'a')..=u32::from(b'z')).contains(&sym)
             || (u32::from(b'A')..=u32::from(b'Z')).contains(&sym)
         {
-            // 开着大写锁定、没在打字时，字母照英文直接上屏（API、HTTP），不进拼音（#271、#264，和主流输入法一样）。
-            // 打字途中照旧进编辑区；Shift + 字母（Hello、iPhone）不受影响
-            if key.modifiers & modifier::CAPS != 0 && !self.composing() {
-                return self.english_key(key);
-            }
             let c = char::from(sym as u8);
             if self.wubi() && !self.temp_pinyin() {
                 self.wubi_letter(c);
@@ -4130,6 +4134,27 @@ mod tests {
         session.key(&caps_a);
         assert_eq!(session.input(), "niA");
         assert_eq!(typed("Hello").input(), "Hello");
+    }
+
+    #[test]
+    fn caps_lock_punctuation_goes_straight_to_the_app() {
+        // #271：开着大写锁定打 API_KEY、HTTP:，标点也要按英文半角给应用，不能换成中文标点
+        let mut session = Session::new();
+        for c in ['_', ':', ',', '.'] {
+            let caps = Key {
+                keysym: u32::from(c),
+                modifiers: modifier::CAPS,
+                ..Key::default()
+            };
+            let frame = session.key(&caps);
+            assert!(!frame.handled, "{c} 被吃掉了: {frame:?}");
+            assert_eq!(frame.commit, None, "{c} 上屏了: {frame:?}");
+            assert!(!session.composing(), "{c} 进了编辑区");
+        }
+        // 没开大写锁定时标点照旧换成中文标点
+        let mut session = Session::new();
+        let frame = session.key(&Key::char(','));
+        assert_eq!(frame.commit.as_deref(), Some("，"), "{frame:?}");
     }
 
     #[test]

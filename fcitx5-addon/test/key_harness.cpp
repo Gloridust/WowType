@@ -300,6 +300,40 @@ void runCases(Instance &instance) {
     type(ic.get(), "Hello<sp>");
     check(ic->committed == "Hello", "大写保留 Hello，实际 " + ic->committed);
 
+    // #271：fcitx5 的 KeyEvent::key() 会去掉 CapsLock，插件要从 rawKey/origKey 补回来。
+    // 没在打字时开着大写锁定按 A/P/I 直接交给应用，不进编辑区
+    fresh(ic.get());
+    {
+        std::string eaten;
+        for (const char c : {'A', 'P', 'I'}) {
+            KeyEvent press(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), false);
+            if (ic->keyEvent(press)) {
+                eaten += c;
+            }
+            KeyEvent release(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), true);
+            ic->keyEvent(release);
+        }
+        check(eaten.empty() && preedit(ic.get()).empty() && page(ic.get()).empty() && ic->committed.empty(),
+              "大写锁定下 API 直接交给应用，实际 编辑区「" + preedit(ic.get()) + "」上屏「" + ic->committed +
+                  "」被吃掉「" + eaten + "」");
+    }
+    // 大写锁定下标点也按英文半角交给应用（API_KEY）
+    fresh(ic.get());
+    {
+        std::string eaten;
+        for (const char c : {'_', ':', ',', '.'}) {
+            KeyEvent press(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), false);
+            if (ic->keyEvent(press)) {
+                eaten += c;
+            }
+            KeyEvent release(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), true);
+            ic->keyEvent(release);
+        }
+        check(eaten.empty() && preedit(ic.get()).empty() && page(ic.get()).empty() && ic->committed.empty(),
+              "大写锁定下标点直接交给应用，实际 编辑区「" + preedit(ic.get()) + "」上屏「" + ic->committed +
+                  "」被吃掉「" + eaten + "」");
+    }
+
     // 打全了的拼音正好是一个词：它排第一，不被高频补全（重点）、单字（看）换掉
     fresh(ic.get());
     type(ic.get(), "zhongdi<sp>");
@@ -441,6 +475,31 @@ void runCases(Instance &instance) {
                 std::string(Instance::version()).c_str());
 #endif
 
+    // #271：打字途中按 CapsLock 先把编辑区原样上屏，再交给应用；提示显示 EN，再按一次回到当前模式
+    fresh(ic.get());
+    type(ic.get(), "nihao");
+    {
+        const std::string modeBefore = instance.inputMethodLabel(ic.get());
+        check(!preedit(ic.get()).empty(), "CapsLock 前编辑区有拼音：" + preedit(ic.get()));
+        KeyEvent press(ic.get(), Key(FcitxKey_Caps_Lock), false);
+        const bool taken = ic->keyEvent(press);
+        check(!taken, "CapsLock 按下交给应用");
+        check(ic->committed == "nihao", "CapsLock 先把编辑区的 nihao 原样上屏，实际 " + ic->committed);
+        check(preedit(ic.get()).empty() && page(ic.get()).empty(),
+              "上屏后编辑区和候选清空，实际 " + preedit(ic.get()));
+        check(instance.inputMethodLabel(ic.get()) == "EN",
+              "CapsLock 开着提示 EN，实际 " + instance.inputMethodLabel(ic.get()));
+        KeyEvent release(ic.get(), Key(FcitxKey_Caps_Lock, KeyState::CapsLock), true);
+        ic->keyEvent(release);
+        KeyEvent off(ic.get(), Key(FcitxKey_Caps_Lock, KeyState::CapsLock), false);
+        const bool offTaken = ic->keyEvent(off);
+        check(!offTaken, "关闭 CapsLock 也交给应用");
+        KeyEvent offRelease(ic.get(), Key(FcitxKey_Caps_Lock), true);
+        ic->keyEvent(offRelease);
+        check(instance.inputMethodLabel(ic.get()) == modeBefore,
+              "关闭 CapsLock 后提示回到当前模式，实际 " + instance.inputMethodLabel(ic.get()));
+    }
+
     // 打字途中会话不管的键（小键盘的 + - * / .、F 键、Insert、不是 ASCII 的键……）都吃掉：
     // 交给应用的话，小键盘的 + 先到应用、上屏后成了「+你好」，F5 把网页刷新掉
     fresh(ic.get());
@@ -469,9 +528,10 @@ void runCases(Instance &instance) {
                   ic->passed.empty(),
               "吃掉以后编辑区和候选不动：" + preedit(ic.get()) + " 上屏「" + ic->committed + "」");
         // 修饰键、锁定键本身，松开的键，带 Ctrl / Alt / Super 的组合键照常交给应用
+        // （CapsLock 另有上屏和 EN 提示，前面单独测）
         std::string eaten;
         for (const KeySym sym : {FcitxKey_Control_L, FcitxKey_Alt_L, FcitxKey_Super_L,
-                                 FcitxKey_Caps_Lock, FcitxKey_Num_Lock, FcitxKey_ISO_Level3_Shift}) {
+                                 FcitxKey_Num_Lock, FcitxKey_ISO_Level3_Shift}) {
             KeyEvent press(ic.get(), Key(sym), false);
             if (ic->keyEvent(press)) {
                 eaten += Key(sym).toString() + " ";
