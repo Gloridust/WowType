@@ -4570,3 +4570,23 @@ fn trace_stays_out_of_password_fields() {
     session.set_trace(false);
     assert!(session.take_trace().is_empty());
 }
+
+#[test]
+fn toolbar_empty_page_still_swallows_keys() {
+    // #314：进了空的「常用语」页，再按数字、字母都归工具栏，不能打进应用
+    let mut session = with(engine());
+    type_keys(&mut session, "v<sp>");
+    let frame = type_keys(&mut session, "2");
+    assert!(frame.handled);
+    assert_eq!(frame.aux, "常用语：还没有，在设置的「自定义词」里添加");
+    for key in ["1", "d", "3"] {
+        let frame = type_keys(&mut session, key);
+        assert!(frame.handled, "{key} 漏给了应用");
+        assert_eq!(frame.commit, None);
+        assert!(session.open_panel().is_some());
+    }
+    // 空格：空的一页直接关上（也不打进应用）
+    let frame = type_keys(&mut session, "<sp>");
+    assert!(frame.handled);
+    assert_eq!(session.open_panel(), None);
+}
