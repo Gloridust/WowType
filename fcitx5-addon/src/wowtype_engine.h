@@ -266,8 +266,12 @@ FCITX_CONFIGURATION(
                                 "v + 空格打开工具栏（剪贴板、常用语、符号、表情；双拼、五笔时不开）",
                                 true};
     // 默认关：fcitx5 的 clipboard 插件不告诉我们哪条是密码管理器复制的密码
-    fcitx::Option<bool> clipboardHistory{this, "ClipboardHistory",
-                                         "记录剪贴板历史（只在内存里，最多 20 条）", false};
+    fcitx::Option<bool> clipboardHistory{
+        this, "ClipboardHistory",
+        "记录剪贴板历史（存在本机，最多 200 条；在 WowType 设置里查看、删除）", false};
+    fcitx::Option<int, fcitx::IntConstrain> clipboardHistoryDays{
+        this, "ClipboardHistoryDays", "剪贴板历史留几天（0：不按时间删）", 7,
+        fcitx::IntConstrain(0, 365)};
     // 跨设备复制粘贴：一台设备上复制的文字，在配过对的另一台上直接粘贴。默认关（和剪贴板历史一样，
     // clipboard 插件不告诉我们哪条是密码管理器复制的密码）；配对在 WowType 设置里做
     fcitx::Option<bool> clipboardSync{this, "ClipboardSync",
@@ -405,6 +409,7 @@ inline void loadWowtypeConfig(WowtypeConfig &config, const fcitx::RawConfig &fil
     clampWowtypeInt(config.pageSize, raw, 3, 9);
     clampWowtypeInt(config.translateIdleMinutes, raw, 0, 240);
     clampWowtypeInt(config.voiceSilenceTimeout, raw, 0, 60000);
+    clampWowtypeInt(config.clipboardHistoryDays, raw, 0, 365);
     if (!raw.valueByPath("TranslateLocal") &&
         (*config.translateBaseUrl).find_first_not_of(" \t\r\n") != std::string::npos) {
         config.translateLocal.setValue(false);
@@ -584,6 +589,10 @@ private:
     void applySync();
     /// 每秒一次：把本机剪贴板交给核心，取别的设备复制过来的。
     void tickSync();
+    /// 剪贴板历史存在哪（数据目录里的 clipboard-history.json；WOWTYPE_CLIPBOARD_HISTORY_FILE 可以换）。
+    std::string clipboardHistoryFile() const;
+    /// 剪贴板历史或跨设备复制粘贴开着时每秒看一次剪贴板，都关了就停。
+    void applyClipboardTimer();
 
 public:
 
@@ -710,7 +719,8 @@ private:
     bool syncEnabled_ = false;
     /// 收到的也放进系统剪贴板
     bool syncPaste_ = true;
-    std::unique_ptr<fcitx::EventSourceTime> syncTimer_;
+    /// 每秒一次：记剪贴板历史、跨设备收发（applyClipboardTimer）
+    std::unique_ptr<fcitx::EventSourceTime> clipboardTimer_;
     /// 双拼时编辑区显示打的键（#122）
     bool shuangpinShowKeys_ = false;
     /// 双拼的简拼：每个键都是声母时也当简拼（sm -> 什么，#268）

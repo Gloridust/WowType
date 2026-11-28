@@ -103,6 +103,7 @@ struct SettingsView: View {
         case .voice: VoicePage(model: model)
         case .translate: TranslatePage(model: model)
         case .words: WordsPage(model: model)
+        case .clipboard: ClipboardPage(model: model)
         case .stats: StatsPage(model: model)
         }
     }
@@ -579,11 +580,7 @@ private struct InputPage: View {
                                     set: { model.config.toolbar = $0 }))
                 .disabled(schemeName != nil)
             RowDivider()
-            SwitchRow(title: "记录剪贴板历史", subtitle: "复制的密码也可能被记下",
-                      info: "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
-                          + "密码管理器标了「不要记」的不记，没标的密码会被记下并显示出来。",
-                      isOn: $model.config.clipboardHistory)
-            RowDivider()
+            // 剪贴板历史的开关和记录在「剪贴板」页
             PickerRow(title: "分号、引号选词", info: "用引号选词后，引号不能再用来隔开拼音（xi'an）。",
                       selection: $model.config.selectKeys,
                       options: [("不用", .off), ("分号选第 2 个", .semicolon), ("分号选第 2 个、引号选第 3 个", .semicolonQuote)])
@@ -1389,6 +1386,181 @@ private struct WordRow: View {
                     .foregroundColor(.secondary)
             }
             Spacer(minLength: 12)
+            IconButton(symbol: "trash", help: "删除", action: remove)
+        }
+        .rowPadding()
+    }
+}
+
+/// 剪贴板历史（docs/CONFIG.md「剪贴板历史」，和 Linux 设置的「剪贴板」页一样）：开关（打开、有记录时关掉都要先确认）、
+/// 保留多久、记录（搜索、复制回剪贴板、删一条、全部清空）。记录是输入法进程写的文件，这里经核心读、删；
+/// 开着这一页时每 2 秒看一眼文件变没变。
+private struct ClipboardPage: View {
+    @ObservedObject var model: SettingsModel
+    @State private var entries: [ClipboardEntry] = []
+    @State private var search = ""
+    @State private var confirmOn = false
+    @State private var confirmOff = false
+    @State private var confirmClear = false
+    @State private var stamp: FileStamp?
+    private let tick = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+    private var path: String {
+        model.supportDir.appendingPathComponent(ClipboardHistory.fileName).path
+    }
+
+    private var dayOptions: [(String, Int)] {
+        let current = model.config.clipboardHistoryDays
+        if ClipboardHistory.keepChoices.contains(where: { $0.1 == current }) {
+            return ClipboardHistory.keepChoices
+        }
+        return ClipboardHistory.keepChoices + [("\(current) 天", current)]
+    }
+
+    private var shown: [ClipboardEntry] {
+        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return entries }
+        return entries.filter { $0.text.lowercased().contains(query) || $0.source.lowercased().contains(query) }
+    }
+
+    var body: some View {
+        PrefGroup("剪贴板历史", info: ClipboardHistory.info) {
+            SwitchRow(title: "记录剪贴板历史", subtitle: "复制过的文字存在本机，打 v 再按空格也能选",
+                      isOn: Binding(get: { model.config.clipboardHistory },
+                                    set: { on in
+                                        if on {
+                                            // 先不打开：点了「打开」才真的打开
+                                            confirmOn = true
+                                        } else if entries.isEmpty {
+                                            turnOff()
+                                        } else {
+                                            confirmOff = true
+                                        }
+                                    }))
+                .alert("打开剪贴板历史？", isPresented: $confirmOn) {
+                    Button("打开") {
+                        model.config.clipboardHistory = true
+                        reload(force: true)
+                    }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text(ClipboardHistory.warning)
+                }
+            RowDivider()
+            PickerRow(title: "保留多久", subtitle: "更早的自动删掉",
+                      selection: Binding(get: { model.config.clipboardHistoryDays },
+                                         set: { days in
+                                             model.config.clipboardHistoryDays = days
+                                             reload(force: true)
+                                         }),
+                      options: dayOptions)
+                .disabled(!model.config.clipboardHistory)
+                // 和上面「打开」的确认框分开挂：同一个视图上挂两个 alert，老的 SwiftUI 只认最后一个
+                .alert("关掉剪贴板历史？", isPresented: $confirmOff) {
+                    Button("关掉并删除", role: .destructive) { turnOff() }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text("已经记下的 \(entries.count) 条会全部删掉，不能恢复。")
+                }
+        }
+
+        PrefGroup(entries.isEmpty ? "记录" : "记录（\(entries.count)）") {
+            let rows = shown
+            if rows.isEmpty {
+                ActionRow(title: !model.config.clipboardHistory ? "剪贴板历史关着：打开以后，复制过的文字会出现在这里"
+                              : entries.isEmpty ? "还没有记录：复制一段文字试试" : "没找到",
+                          dim: true)
+            } else {
+                let now = Date()
+                ForEach(rows.indices, id: \.self) { i in
+                    if i > 0 { RowDivider() }
+                    ClipboardRow(entry: rows[i], now: now, copy: { copy(rows[i]) }, remove: { remove(rows[i]) })
+                }
+            }
+        } trailing: {
+            HStack(spacing: 6) {
+                if entries.count > 5 {
+                    SearchField(text: $search)
+                        .frame(width: 160)
+                }
+                if !entries.isEmpty {
+                    Button("全部清空", role: .destructive) { confirmClear = true }
+                }
+            }
+            .confirmationDialog("清空剪贴板历史？", isPresented: $confirmClear) {
+                Button("清空", role: .destructive) { clear() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("已经记下的 \(entries.count) 条都会删掉，不能恢复。之后复制的照常记。")
+            }
+        }
+        .onAppear { reload(force: true) }
+        .onReceive(tick) { _ in reload() }
+    }
+
+    /// 文件变了（输入法记了新的、别处删了）才重新读。关着时不读、不列。
+    private func reload(force: Bool = false) {
+        let now = FileStamp(path)
+        guard force || now != stamp else { return }
+        stamp = now
+        guard model.config.clipboardHistory else {
+            entries = []
+            return
+        }
+        ClipboardHistory.configure(path: path, keepDays: model.config.clipboardHistoryDays)
+        entries = ClipboardHistory.entries
+    }
+
+    private func turnOff() {
+        model.config.clipboardHistory = false
+        // 这个进程配过这个文件：核心连文件一起删掉；没配过（还没打开过这一页）就直接删
+        ClipboardHistory.configure(path: nil, keepDays: model.config.clipboardHistoryDays)
+        try? FileManager.default.removeItem(atPath: path)
+        reload(force: true)
+    }
+
+    private func copy(_ entry: ClipboardEntry) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(entry.text, forType: .string)
+        model.showToast("已复制，按 Command+V 粘贴")
+    }
+
+    private func remove(_ entry: ClipboardEntry) {
+        ClipboardHistory.configure(path: path, keepDays: model.config.clipboardHistoryDays)
+        if ClipboardHistory.forget(entry.text) {
+            model.showToast("已删除这一条")
+        }
+        reload(force: true)
+    }
+
+    private func clear() {
+        ClipboardHistory.configure(path: path, keepDays: model.config.clipboardHistoryDays)
+        ClipboardHistory.clear()
+        model.showToast("剪贴板历史已清空")
+        reload(force: true)
+    }
+}
+
+private struct ClipboardRow: View {
+    let entry: ClipboardEntry
+    let now: Date
+    let copy: () -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ClipboardHistory.preview(entry.text))
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                Text([ClipboardHistory.when(entry.time, now: now), entry.source].filter { !$0.isEmpty }
+                    .joined(separator: "　·　"))
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            Spacer(minLength: 12)
+            IconButton(symbol: "doc.on.doc", help: "复制", action: copy)
             IconButton(symbol: "trash", help: "删除", action: remove)
         }
         .rowPadding()

@@ -62,9 +62,6 @@ public:
     /// 发布页上有比现在装的新的版本：返回版本号（任务栏菜单多一项「有新版本…」）。
     std::optional<std::string> availableUpdate();
 
-    /// 剪贴板历史（设置里 ClipboardHistory 开着时）：看一眼系统剪贴板，有新的交给核心。
-    void sampleClipboard();
-
     /// 打字统计（设置里 TypingStats 开着时，默认关）：只在本机按天记计数，不记打的内容。
     /// code 是扫描码（扩展键或上 0xE000）；密码框里的不算。统计关着时什么都不做。
     void recordKey(uint32_t code, bool sensitive);
@@ -107,8 +104,6 @@ private:
     ULONGLONG lastSave_ = 0;
     bool updateChecking_ = false;
     ULONGLONG nextUpdateLook_ = 0;
-    DWORD clipboardSequence_ = 0;
-    std::string lastClipboard_;
 };
 
 /// 文件的修改时间；不在时全 0。

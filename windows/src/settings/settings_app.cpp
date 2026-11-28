@@ -35,6 +35,7 @@
 #include <vector>
 
 #include "app_update.h"
+#include "clipboard_history.h"
 #include "config.h"
 #include "custom_words.h"
 #include "json.h"
@@ -109,7 +110,13 @@ constexpr int kIdSyncToken = 132;
 constexpr int kIdSyncPing = 133;
 constexpr int kIdDevlogExport = 134;
 constexpr int kIdDevlogClear = 135;
+constexpr int kIdClipboardView = 136;
 /// 勾上「开发者模式」时问一句（三端一样，Linux 是 DEVLOG_WARNING）。
+constexpr wchar_t kClipboardWarning[] =
+    L"打开以后，WowType 在后台听剪贴板，把复制过的文字存在这台电脑上（数据目录的 clipboard-history.json，"
+    L"最多 200 条），打 v 再按空格、或者在设置的「剪贴板」页里能找回来。\n\n"
+    L"密码管理器标了「不要记」的不记；没标的密码会被记下并显示出来，可以到「查看剪贴板历史」里删掉那一条。\n\n"
+    L"记录不上传。取消勾选并保存时全部删掉。";
 constexpr wchar_t kDeveloperWarning[] =
     L"打开以后，WowType 会把你打的字明文记在这台电脑上：每次上屏的拼音、光标前的几个字、当时的候选、"
     L"选了第几个，还有在哪个应用里打的。\n\n"
@@ -176,7 +183,9 @@ const std::vector<Page> &pages() {
         {L"模糊音", {"Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL", "FuzzyAn", "FuzzyEn",
                      "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn", "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong",
                      "FuzzyEngOng"}},
-        {L"标点与表情", {"AutoPairPunct", "EmojiKey", "Toolbar", "ClipboardHistory"}},
+        {L"标点与表情", {"AutoPairPunct", "EmojiKey", "Toolbar"}},
+        // 「查看剪贴板历史…」按钮在这一页下面（showClipboardHistory）
+        {L"剪贴板", {"ClipboardHistory", "ClipboardHistoryDays"}},
         // 配对、访问口令、测试中转服务在这一页下面（refreshSync）
         {L"跨设备", {"ClipboardSync", "ClipboardSyncLan", "ClipboardSyncRelayUrl", "ClipboardSyncDeviceName"}},
         {L"语音", {"Voice", "VoiceKey", "VoiceSilenceTimeout", "VoiceCopy"}},
@@ -248,7 +257,8 @@ const std::map<std::string, std::wstring> &labels() {
         {"AutoPairPunct", L"中文标点自动配对"},
         {"EmojiKey", L"表情面板快捷键"},
         {"Toolbar", L"v + 空格打开工具栏"},
-        {"ClipboardHistory", L"记剪贴板历史（只在内存里）"},
+        {"ClipboardHistory", L"记录剪贴板历史（复制过的文字存在本机，最多 200 条；v + 空格里也能选）"},
+        {"ClipboardHistoryDays", L"剪贴板历史留几天（0–365，0 不按时间删）"},
         {"ClipboardSync", L"跨设备复制粘贴（一台电脑上复制，另一台上直接粘贴）"},
         {"ClipboardSyncLan", L"同一个局域网里直接传"},
         {"ClipboardSyncRelayUrl", L"中转服务地址（https://…，不用就留空）"},
@@ -500,6 +510,354 @@ bool isLocalTranslateKey(const std::string &key) {
     return key == "TranslateLocalModel" || key == "TranslateLlamaServer" || key == "TranslateIdleMinutes";
 }
 
+// ---- 剪贴板历史的窗口（「剪贴板」页的「查看剪贴板历史…」，和 Linux、macOS 设置的「剪贴板」页一样）
+//
+// 记录是后台进程写进数据目录 clipboard-history.json 的，这里经核心读、删（wowtype_clipboard_*）：搜索、复制回
+// 剪贴板、删一条、全部清空。开着时每 2 秒看一眼文件变没变。模态的：开着时设置窗口点不了。
+
+std::wstring clipboardHistoryFile() { return dataDir() + L"\\clipboard-history.json"; }
+
+constexpr wchar_t kClipboardViewerClass[] = L"WowTypeClipboardHistory";
+constexpr int kIdClipSearch = 101;
+constexpr int kIdClipList = 102;
+constexpr int kIdClipCopy = 103;
+constexpr int kIdClipRemove = 104;
+constexpr int kIdClipClear = 105;
+constexpr int kIdClipClose = 106;
+constexpr UINT_PTR kClipTimer = 1;
+
+struct ClipboardViewer {
+    HWND hwnd = nullptr;
+    HWND search = nullptr;
+    HWND list = nullptr;
+    HWND copy = nullptr;
+    HWND remove = nullptr;
+    HWND clear = nullptr;
+    HWND close = nullptr;
+    HWND note = nullptr;
+    HFONT font = nullptr;
+    UINT dpi = 96;
+    int keepDays = 7;
+    std::string file;
+    std::vector<clipboard::Entry> all;
+    std::vector<clipboard::Entry> shown;
+    /// 上次读的时候文件的 (修改时间, 大小)；变了才重新读
+    ULONGLONG stamp = 0;
+    bool loaded = false;
+
+    int scale(int dip) const { return MulDiv(dip, static_cast<int>(dpi), 96); }
+};
+
+ULONGLONG clipboardFileStamp(const std::wstring &path) {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) {
+        return 0;
+    }
+    return (static_cast<ULONGLONG>(data.ftLastWriteTime.dwHighDateTime) << 32 | data.ftLastWriteTime.dwLowDateTime) ^
+           data.nFileSizeLow;
+}
+
+std::string lowerAscii(std::string text) {
+    for (char &c : text) {
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<char>(c - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
+int selectedClipboardRow(const ClipboardViewer &v) {
+    return static_cast<int>(SendMessageW(v.list, LVM_GETNEXTITEM, static_cast<WPARAM>(-1), LVNI_SELECTED));
+}
+
+void updateClipboardButtons(ClipboardViewer &v) {
+    const int selected = selectedClipboardRow(v);
+    const bool has = selected >= 0 && selected < static_cast<int>(v.shown.size());
+    EnableWindow(v.copy, has);
+    EnableWindow(v.remove, has);
+    EnableWindow(v.clear, !v.all.empty());
+}
+
+/// 按搜索框筛一遍，重填列表（时间、来源、内容）。
+void fillClipboardList(ClipboardViewer &v) {
+    wchar_t buffer[256] = {};
+    GetWindowTextW(v.search, buffer, 256);
+    const std::string query = lowerAscii(narrow(buffer));
+    v.shown.clear();
+    for (const auto &e : v.all) {
+        if (query.empty() || lowerAscii(e.text).find(query) != std::string::npos ||
+            lowerAscii(e.source()).find(query) != std::string::npos) {
+            v.shown.push_back(e);
+        }
+    }
+    SendMessageW(v.list, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(v.list, LVM_DELETEALLITEMS, 0, 0);
+    const auto now = static_cast<int64_t>(std::time(nullptr));
+    for (std::size_t i = 0; i < v.shown.size(); ++i) {
+        const auto &e = v.shown[i];
+        const std::wstring cells[] = {widen(clipboard::when(e.time, now)), widen(e.source()),
+                                      widen(clipboard::preview(e.text))};
+        LVITEMW item{};
+        item.mask = LVIF_TEXT;
+        item.iItem = static_cast<int>(i);
+        item.pszText = const_cast<wchar_t *>(cells[0].c_str());
+        SendMessageW(v.list, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
+        for (int column = 1; column < 3; ++column) {
+            item.iSubItem = column;
+            item.pszText = const_cast<wchar_t *>(cells[column].c_str());
+            SendMessageW(v.list, LVM_SETITEMTEXTW, i, reinterpret_cast<LPARAM>(&item));
+        }
+    }
+    SendMessageW(v.list, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(v.list, nullptr, TRUE);
+    std::wstring note;
+    if (v.all.empty()) {
+        note = L"还没有记录：复制一段文字试试（后台进程在听剪贴板）";
+    } else if (v.shown.empty()) {
+        note = L"没找到";
+    } else {
+        note = L"共 " + std::to_wstring(v.all.size()) + L" 条，最新的在前。双击一条复制，Delete 删掉";
+    }
+    SetWindowTextW(v.note, note.c_str());
+    updateClipboardButtons(v);
+}
+
+/// 文件变了（后台进程记了新的、别处删了）才重新读；force 时总是读。
+void reloadClipboardViewer(ClipboardViewer &v, bool force) {
+    const ULONGLONG stamp = clipboardFileStamp(widen(v.file));
+    if (!force && v.loaded && stamp == v.stamp) {
+        return;
+    }
+    v.loaded = true;
+    v.stamp = stamp;
+    wowtype_clipboard_configure(v.file.c_str(), v.keepDays);
+    const char *json = wowtype_clipboard_entries_json();
+    v.all = clipboard::parseEntries(json ? json : "");
+    fillClipboardList(v);
+}
+
+bool copyClipboardText(HWND owner, const std::string &text) {
+    const std::wstring wide = widen(text);
+    const SIZE_T bytes = (wide.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (!memory) {
+        return false;
+    }
+    if (auto *target = static_cast<wchar_t *>(GlobalLock(memory))) {
+        std::memcpy(target, wide.c_str(), bytes);
+        GlobalUnlock(memory);
+    }
+    if (!OpenClipboard(owner)) {
+        GlobalFree(memory);
+        return false;
+    }
+    EmptyClipboard();
+    const bool placed = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+    if (!placed) {
+        GlobalFree(memory);
+    }
+    CloseClipboard();
+    return placed;
+}
+
+void layoutClipboardViewer(ClipboardViewer &v) {
+    RECT rc{};
+    GetClientRect(v.hwnd, &rc);
+    const int margin = v.scale(12);
+    const int width = rc.right - margin * 2;
+    const int button = v.scale(28);
+    MoveWindow(v.search, margin, margin, width, v.scale(24), TRUE);
+    const int listTop = margin + v.scale(32);
+    const int bottom = rc.bottom - margin - button;
+    MoveWindow(v.list, margin, listTop, width, bottom - v.scale(30) - listTop, TRUE);
+    MoveWindow(v.note, margin, bottom - v.scale(24), width, v.scale(20), TRUE);
+    int x = margin;
+    for (HWND h : {v.copy, v.remove, v.clear}) {
+        MoveWindow(h, x, bottom, v.scale(96), button, TRUE);
+        x += v.scale(104);
+    }
+    MoveWindow(v.close, rc.right - margin - v.scale(96), bottom, v.scale(96), button, TRUE);
+    // 内容一列占剩下的宽
+    const int content = std::max(v.scale(120), width - v.scale(120) - v.scale(130) - v.scale(24));
+    SendMessageW(v.list, LVM_SETCOLUMNWIDTH, 2, content);
+}
+
+HWND clipboardChild(ClipboardViewer &v, const wchar_t *cls, const wchar_t *text, DWORD style, int id) {
+    HWND h = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, 0, 0, 10, 10, v.hwnd,
+                             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+    SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(v.font), TRUE);
+    return h;
+}
+
+LRESULT CALLBACK clipboardViewerProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto *v = reinterpret_cast<ClipboardViewer *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (message) {
+    case WM_CREATE: {
+        v = static_cast<ClipboardViewer *>(reinterpret_cast<CREATESTRUCTW *>(lParam)->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(v));
+        v->hwnd = hwnd;
+        v->search = clipboardChild(*v, L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | WS_TABSTOP, kIdClipSearch);
+        SendMessageW(v->search, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"搜索"));
+        v->list = clipboardChild(*v, WC_LISTVIEWW, L"",
+                                 WS_BORDER | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_TABSTOP, kIdClipList);
+        SendMessageW(v->list, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
+        const wchar_t *titles[] = {L"时间", L"来源", L"内容"};
+        const int widths[] = {v->scale(120), v->scale(130), v->scale(400)};
+        for (int i = 0; i < 3; ++i) {
+            LVCOLUMNW column{};
+            column.mask = LVCF_TEXT | LVCF_WIDTH;
+            column.pszText = const_cast<wchar_t *>(titles[i]);
+            column.cx = widths[i];
+            SendMessageW(v->list, LVM_INSERTCOLUMNW, i, reinterpret_cast<LPARAM>(&column));
+        }
+        v->note = clipboardChild(*v, L"STATIC", L"", SS_LEFT, 0);
+        v->copy = clipboardChild(*v, L"BUTTON", L"复制", BS_PUSHBUTTON | WS_TABSTOP, kIdClipCopy);
+        v->remove = clipboardChild(*v, L"BUTTON", L"删除", BS_PUSHBUTTON | WS_TABSTOP, kIdClipRemove);
+        v->clear = clipboardChild(*v, L"BUTTON", L"全部清空", BS_PUSHBUTTON | WS_TABSTOP, kIdClipClear);
+        v->close = clipboardChild(*v, L"BUTTON", L"关闭", BS_PUSHBUTTON | WS_TABSTOP, kIdClipClose);
+        layoutClipboardViewer(*v);
+        reloadClipboardViewer(*v, true);
+        SetTimer(hwnd, kClipTimer, 2000, nullptr);
+        SetFocus(v->search);
+        return 0;
+    }
+    case WM_SIZE:
+        if (v) {
+            layoutClipboardViewer(*v);
+        }
+        return 0;
+    case WM_TIMER:
+        if (v && wParam == kClipTimer) {
+            reloadClipboardViewer(*v, false);
+        }
+        return 0;
+    case WM_COMMAND: {
+        if (!v) {
+            break;
+        }
+        const int selected = selectedClipboardRow(*v);
+        const bool has = selected >= 0 && selected < static_cast<int>(v->shown.size());
+        switch (LOWORD(wParam)) {
+        case kIdClipSearch:
+            if (HIWORD(wParam) == EN_CHANGE) {
+                fillClipboardList(*v);
+            }
+            return 0;
+        case kIdClipCopy:
+            if (has) {
+                SetWindowTextW(v->note, copyClipboardText(hwnd, v->shown[selected].text)
+                                            ? L"已复制，按 Ctrl+V 粘贴"
+                                            : L"复制失败：剪贴板正被别的程序占着，过一会儿再试");
+            }
+            return 0;
+        case kIdClipRemove:
+            if (has) {
+                wowtype_clipboard_configure(v->file.c_str(), v->keepDays);
+                wowtype_clipboard_forget(v->shown[selected].text.c_str());
+                reloadClipboardViewer(*v, true);
+                const int count = static_cast<int>(v->shown.size());
+                if (count > 0) {
+                    const int next = std::min(selected, count - 1);
+                    ListView_SetItemState(v->list, next, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+                }
+            }
+            return 0;
+        case kIdClipClear: {
+            const std::wstring body = L"已经记下的 " + std::to_wstring(v->all.size()) +
+                                      L" 条都会删掉，不能恢复。之后复制的照常记。";
+            if (MessageBoxW(hwnd, body.c_str(), L"清空剪贴板历史？", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) ==
+                IDOK) {
+                wowtype_clipboard_configure(v->file.c_str(), v->keepDays);
+                wowtype_clipboard_clear();
+                reloadClipboardViewer(*v, true);
+            }
+            return 0;
+        }
+        case kIdClipClose:
+        case IDCANCEL:
+            DestroyWindow(hwnd);
+            return 0;
+        default:
+            break;
+        }
+        break;
+    }
+    case WM_NOTIFY: {
+        const auto *header = reinterpret_cast<const NMHDR *>(lParam);
+        if (v && header->hwndFrom == v->list) {
+            if (header->code == LVN_ITEMCHANGED) {
+                updateClipboardButtons(*v);
+            } else if (header->code == NM_DBLCLK) {
+                SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(kIdClipCopy, BN_CLICKED), 0);
+            } else if (header->code == LVN_KEYDOWN &&
+                       reinterpret_cast<const NMLVKEYDOWN *>(lParam)->wVKey == VK_DELETE) {
+                SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(kIdClipRemove, BN_CLICKED), 0);
+            }
+        }
+        return 0;
+    }
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        KillTimer(hwnd, kClipTimer);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+/// 打开「剪贴板历史」窗口，关上了才返回（开着时 owner 点不了）。
+void showClipboardHistory(HWND owner, HFONT font, int keepDays) {
+    static bool registered = false;
+    HINSTANCE instance = GetModuleHandleW(nullptr);
+    if (!registered) {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof wc;
+        wc.lpfnWndProc = clipboardViewerProc;
+        wc.hInstance = instance;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+        wc.lpszClassName = kClipboardViewerClass;
+        wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(101));
+        registered = RegisterClassExW(&wc) != 0;
+    }
+    ClipboardViewer v;
+    v.font = font;
+    v.dpi = GetDpiForWindow(owner);
+    v.keepDays = keepDays;
+    v.file = narrow(clipboardHistoryFile());
+    RECT rc{};
+    GetWindowRect(owner, &rc);
+    const int width = v.scale(760);
+    const int height = v.scale(520);
+    HWND hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, kClipboardViewerClass, L"剪贴板历史",
+                                WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_VISIBLE,
+                                rc.left + (rc.right - rc.left - width) / 2, rc.top + (rc.bottom - rc.top - height) / 2,
+                                width, height, owner, nullptr, instance, &v);
+    if (!hwnd) {
+        return;
+    }
+    EnableWindow(owner, FALSE);
+    MSG msg;
+    while (IsWindow(hwnd)) {
+        const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
+        if (got <= 0) {
+            if (got == 0) {
+                PostQuitMessage(static_cast<int>(msg.wParam)); // 留给外面的消息循环
+            }
+            break;
+        }
+        if (!IsDialogMessageW(hwnd, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    EnableWindow(owner, TRUE);
+    SetForegroundWindow(owner);
+}
+
 /// 数字项里用下拉框选的（VoiceSilenceTimeout）：选项见 config.h，和 Linux、macOS 的设置一样
 bool isChoiceKey(const std::string &key) { return key == "VoiceSilenceTimeout"; }
 
@@ -634,6 +992,8 @@ private:
     /// 开发者模式的打字记录（数据目录的 devlog.jsonl）：导出、清空
     HWND devlogExport_ = nullptr;
     HWND devlogClear_ = nullptr;
+    /// 「剪贴板」页：打开剪贴板历史的窗口
+    HWND clipboardView_ = nullptr;
     HWND statsText_ = nullptr;
     HWND statsChart_ = nullptr;
     HWND statsRefresh_ = nullptr;
@@ -860,6 +1220,7 @@ void SettingsWindow::build() {
     nnlm_ = child(L"BUTTON", L"导入整句增强模型（微信输入法的 nlrgpt2_nnlm.bin）…", BS_PUSHBUTTON | WS_TABSTOP, kIdNnlm);
     devlogExport_ = child(L"BUTTON", L"导出打字记录（开发者模式记的，明文）…", BS_PUSHBUTTON | WS_TABSTOP, kIdDevlogExport);
     devlogClear_ = child(L"BUTTON", L"清空打字记录", BS_PUSHBUTTON | WS_TABSTOP, kIdDevlogClear);
+    clipboardView_ = child(L"BUTTON", L"查看剪贴板历史（搜索、复制、删除）…", BS_PUSHBUTTON | WS_TABSTOP, kIdClipboardView);
     voiceModel_ = child(L"BUTTON", L"导入语音模型（含 .xnet 和 dict.decoder.utf8.txt 的文件夹）…",
                         BS_PUSHBUTTON | WS_TABSTOP, kIdVoiceModel);
     dataDirButton_ = child(L"BUTTON", L"打开数据目录", BS_PUSHBUTTON | WS_VISIBLE | WS_TABSTOP, kIdDataDir);
@@ -971,6 +1332,7 @@ void SettingsWindow::layout() {
     using ButtonOnPage = std::pair<HWND, const wchar_t *>;
     for (const auto &[button, title] :
          {ButtonOnPage{nnlm_, L"输入"}, ButtonOnPage{devlogExport_, L"输入"}, ButtonOnPage{devlogClear_, L"输入"},
+          ButtonOnPage{clipboardView_, L"剪贴板"},
           ButtonOnPage{voiceDownload_, L"语音"}, ButtonOnPage{voiceModel_, L"语音"},
           ButtonOnPage{updateCheck_, L"常规"}, ButtonOnPage{updateInstall_, L"常规"}, ButtonOnPage{diagnostics_, L"常规"}}) {
         const auto page = static_cast<std::size_t>(pageNamed(title));
@@ -1063,6 +1425,7 @@ void SettingsWindow::showPage(int page) {
     ShowWindow(nnlm_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
     ShowWindow(devlogExport_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
     ShowWindow(devlogClear_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
+    ShowWindow(clipboardView_, page == pageNamed(L"剪贴板") ? SW_SHOW : SW_HIDE);
     for (HWND h : {syncStatus_, syncHost_, syncCodeLabel_, syncCode_, syncJoin_, syncUnpair_, syncTokenLabel_,
                    syncToken_, syncPing_}) {
         ShowWindow(h, page == pageNamed(L"跨设备") ? SW_SHOW : SW_HIDE);
@@ -1348,8 +1711,12 @@ bool SettingsWindow::save() {
     }
     // 读回来：写进去的就是窗口里的（数字夹到范围里、写错的快捷键保持原样）
     load();
-    // 跨设备复制粘贴开着：后台进程要在（登录时自己起）；关了：不再自己起，开着的那个看到设置变了会退
-    setSyncAgent(base_.flag("ClipboardSync"));
+    // 剪贴板历史关着：记录删掉（后台进程、输入法读到设置时核心也会删，没在跑的时候靠这里）
+    if (!base_.flag("ClipboardHistory")) {
+        DeleteFileW(clipboardHistoryFile().c_str());
+    }
+    // 剪贴板历史或跨设备复制粘贴开着：后台进程要在（登录时自己起）；都关了：不再自己起，开着的那个看到设置变了会退
+    setSyncAgent(base_.flag("ClipboardSync") || base_.flag("ClipboardHistory"));
     SetWindowTextW(status_, L"已保存，下一次按键时生效");
     return true;
 }
@@ -2429,6 +2796,15 @@ LRESULT SettingsWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
         case kIdDevlogClear:
             clearDevlog();
             return 0;
+        case kIdClipboardView:
+            // 看的是存好的设置：刚勾上还没保存时，后台进程还没开始记
+            if (!base_.flag("ClipboardHistory")) {
+                MessageBoxW(hwnd_, L"剪贴板历史还没打开：勾上「记录剪贴板历史」并保存以后，复制过的文字会记在这里。",
+                            L"剪贴板历史", MB_OK | MB_ICONINFORMATION);
+            } else {
+                showClipboardHistory(hwnd_, font_, base_.number("ClipboardHistoryDays"));
+            }
+            return 0;
         case kIdDiagnostics:
             copyDiagnostics();
             return 0;
@@ -2531,6 +2907,18 @@ LRESULT SettingsWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
                         MessageBoxW(hwnd_, kDeveloperWarning, L"打开开发者模式？",
                                     MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
                         SendMessageW(row.control, BM_SETCHECK, BST_UNCHECKED, 0);
+                    }
+                    // 剪贴板历史：勾上先说清楚记什么；存好的是开着的、要取消勾选时说清楚保存以后记录会删掉
+                    if (row.control == reinterpret_cast<HWND>(lParam) && std::string(row.def->key) == "ClipboardHistory") {
+                        const bool on = SendMessageW(row.control, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        if (on && MessageBoxW(hwnd_, kClipboardWarning, L"打开剪贴板历史？",
+                                              MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+                            SendMessageW(row.control, BM_SETCHECK, BST_UNCHECKED, 0);
+                        } else if (!on && base_.flag("ClipboardHistory") &&
+                                   MessageBoxW(hwnd_, L"点「保存」以后，已经记下的剪贴板历史会全部删掉，不能恢复。",
+                                               L"关掉剪贴板历史？", MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+                            SendMessageW(row.control, BM_SETCHECK, BST_CHECKED, 0);
+                        }
                     }
                 }
             }
@@ -2654,16 +3042,20 @@ LRESULT SettingsWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
 /// 把 WowType 加进（或移出）当前用户的键盘列表（「设置 → 时间和语言 → 语言」里中文下面的键盘），没有中文就连中文一起加。
 /// 安装程序装完、卸载前以原来的用户身份调（--enable-input / --disable-input），和 macOS 装完加进输入法、Linux 加进 fcitx5 一样。
 /// 用系统 input.dll 的 InstallLayoutOrTip（Windows 文档里给输入法安装程序用的）。
-// ---- 跨设备复制粘贴的后台进程
+// ---- 剪贴板的后台进程（剪贴板历史、跨设备复制粘贴）
 //
-// wowtype-settings.exe --sync-agent：一个不显示的窗口，听剪贴板变化，把复制的文字交给核心发出去；别的设备
-// 复制过来的放进系统剪贴板（Ctrl+V 就能贴，输入法的剪贴板历史也看得到）。开了「跨设备复制粘贴」并保存时由设置
-// 窗口起，以后登录时自己起（HKCU 的 Run）；设置里关掉以后它下一秒自己退。同一时间只有一个。
+// wowtype-settings.exe --sync-agent：一个不显示的窗口，听剪贴板变化。开着剪贴板历史时把复制的文字记进数据目录的
+// clipboard-history.json（输入法 DLL 和设置窗口读同一个文件）；开着跨设备复制粘贴时交给核心发出去，别的设备
+// 复制过来的放进系统剪贴板（Ctrl+V 就能贴，剪贴板历史里也有）。输入法是加载进每个应用进程的 DLL，所以这些在
+// 一个后台进程里做。打开其中一个并保存时由设置窗口起，以后登录时自己起（HKCU 的 Run）；两个都关掉以后它下一秒
+// 自己退。同一时间只有一个。
 
 namespace {
 
 struct SyncAgent {
     WowtypeSync *sync = nullptr;
+    /// 剪贴板历史开着：剪贴板一变就记
+    bool history = false;
     /// 剪贴板上现在的文字。nullopt：现在读不了，或者复制它的程序说了别拿走（密码管理器）
     std::optional<std::string> text;
     /// 上次看到的 wowtype.conf 原文（变了才重新配置）
@@ -2759,7 +3151,38 @@ bool writeClipboardText(HWND owner, const std::string &text) {
     return placed;
 }
 
-/// 读设置、照着配核心。设置里关掉了返回 false（后台进程该退了）。
+/// 现在在前台的程序的 exe 名（剪贴板历史里记「从哪复制的」）；拿不到是空串。
+std::string foregroundExeName() {
+    DWORD pid = 0;
+    if (HWND window = GetForegroundWindow()) {
+        GetWindowThreadProcessId(window, &pid);
+    }
+    if (!pid) {
+        return {};
+    }
+    std::string name;
+    if (HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        wchar_t path[MAX_PATH] = {};
+        DWORD size = MAX_PATH;
+        if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+            std::wstring full(path, size);
+            const size_t slash = full.find_last_of(L"\\/");
+            name = narrow(slash == std::wstring::npos ? full : full.substr(slash + 1));
+        }
+        CloseHandle(process);
+    }
+    return name;
+}
+
+/// 剪贴板上换了东西：开着剪贴板历史就记下（核心看和上次的一样不一样；空串是复制了图片、文件）。
+/// 读不了、密码管理器标了别拿走（nullopt）的不记。
+void recordClipboard(const SyncAgent &agent) {
+    if (agent.history && agent.text) {
+        wowtype_clipboard_observe(agent.text->c_str(), foregroundExeName().c_str());
+    }
+}
+
+/// 读设置、照着配核心。剪贴板历史和跨设备复制粘贴都关了返回 false（后台进程该退了）。
 bool configureSyncAgent(SyncAgent &agent) {
     const auto text = readFile(dataDir() + L"\\wowtype.conf");
     if (agent.configured && text == agent.configText) {
@@ -2768,14 +3191,22 @@ bool configureSyncAgent(SyncAgent &agent) {
     agent.configText = text;
     agent.configured = true;
     const Config config = text ? Config::parse(*text) : Config();
+    // 剪贴板历史：开着存进文件；关掉时核心把文件删掉
+    agent.history = config.flag("ClipboardHistory");
+    const std::string historyFile = narrow(dataDir() + L"\\clipboard-history.json");
+    wowtype_clipboard_configure(agent.history ? historyFile.c_str() : nullptr, config.number("ClipboardHistoryDays"));
     if (!config.flag("ClipboardSync")) {
-        return false;
+        if (agent.sync) {
+            wowtype_sync_free(agent.sync);
+            agent.sync = nullptr;
+        }
+        return agent.history;
     }
     if (!agent.sync) {
         agent.sync = wowtype_sync_new();
     }
     if (!agent.sync) {
-        return false; // 核心没带同步
+        return agent.history; // 核心没带同步
     }
     const std::string state = narrow(syncStateFile());
     const std::string key = narrow(syncRelayKeyFile());
@@ -2794,9 +3225,16 @@ bool configureSyncAgent(SyncAgent &agent) {
 }
 
 void tickSyncAgent(HWND hwnd, SyncAgent &agent) {
+    const bool historyBefore = agent.history;
     if (!configureSyncAgent(agent)) {
         DestroyWindow(hwnd);
         return;
+    }
+    if (agent.history && !historyBefore) {
+        recordClipboard(agent); // 刚打开剪贴板历史：现在剪贴板上的先记下
+    }
+    if (!agent.sync) {
+        return; // 只开着剪贴板历史
     }
     // 没变也照报同一段（空的也报）：核心重新起来以后（刚配好对、换了设置）靠它认出「没变」，
     // 第一次报的只当基准
@@ -2824,6 +3262,7 @@ LRESULT CALLBACK syncAgentProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lP
     case WM_CLIPBOARDUPDATE:
         if (syncAgent) {
             syncAgent->text = readClipboardText(hwnd);
+            recordClipboard(*syncAgent);
         }
         return 0;
     case WM_TIMER:
@@ -2867,7 +3306,7 @@ int runSyncAgent(HINSTANCE instance) {
     cls.lpszClassName = kSyncAgentClass;
     RegisterClassExW(&cls);
     // 一个从不显示的普通窗口（不是只收消息的窗口）：安装程序换新版本时要找得到它、叫它退
-    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kSyncAgentClass, L"WowType 跨设备复制粘贴", WS_POPUP, 0, 0, 0, 0,
+    HWND hwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kSyncAgentClass, L"WowType 剪贴板", WS_POPUP, 0, 0, 0, 0,
                                 nullptr, nullptr, instance, nullptr);
     if (!hwnd) {
         return 1;
@@ -2876,6 +3315,7 @@ int runSyncAgent(HINSTANCE instance) {
     // 安装程序换完新版本以后把它再起起来
     RegisterApplicationRestart(L"--sync-agent", 0);
     agent.text = readClipboardText(hwnd);
+    recordClipboard(agent);
     AddClipboardFormatListener(hwnd);
     SetTimer(hwnd, 1, 1000, nullptr);
     MSG msg;

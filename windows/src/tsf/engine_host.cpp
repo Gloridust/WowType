@@ -135,6 +135,14 @@ void EngineHost::loadConfig() {
         } else {
             wowtype_devlog_configure(nullptr, 0);
         }
+        // 剪贴板历史（默认关）：后台进程（wowtype-settings.exe --sync-agent）听剪贴板变化，记进数据目录的
+        // clipboard-history.json；这里只读（工具栏的「剪贴板」页）、删（Ctrl+Delete）。几个应用进程和设置窗口
+        // 共用这个文件，核心每次读之前看文件变没变。关掉时核心把文件删掉
+        {
+            const std::string history = narrow(dataDir() + L"\\clipboard-history.json");
+            wowtype_clipboard_configure(config_.flag("ClipboardHistory") ? history.c_str() : nullptr,
+                                        config_.number("ClipboardHistoryDays"));
+        }
         if (WowtypeEngineHandle *engine = engine_.load()) {
             applyEngineSettings(engine);
         }
@@ -447,33 +455,6 @@ std::optional<std::string> EngineHost::availableUpdate() {
         return latest;
     }
     return std::nullopt;
-}
-
-void EngineHost::sampleClipboard() {
-    if (!config_.flag("ClipboardHistory")) {
-        return;
-    }
-    // 序号没变就是没复制过新东西，不去开剪贴板
-    const DWORD sequence = GetClipboardSequenceNumber();
-    if (sequence == clipboardSequence_) {
-        return;
-    }
-    clipboardSequence_ = sequence;
-    if (!IsClipboardFormatAvailable(CF_UNICODETEXT) || !OpenClipboard(nullptr)) {
-        return;
-    }
-    std::string text;
-    if (HANDLE data = GetClipboardData(CF_UNICODETEXT)) {
-        if (const auto *chars = static_cast<const wchar_t *>(GlobalLock(data))) {
-            text = narrow(chars);
-            GlobalUnlock(data);
-        }
-    }
-    CloseClipboard();
-    if (!text.empty() && text != lastClipboard_) {
-        lastClipboard_ = text;
-        wowtype_clipboard_remember(text.c_str());
-    }
 }
 
 } // namespace wowtype::tsf

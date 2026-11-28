@@ -10,6 +10,7 @@ import Glibc
 #else
 import Darwin
 #endif
+import Foundation
 
 final class FakeClient: TextClient {
     var committed = ""
@@ -961,6 +962,7 @@ do {
     all.translateLocalModel = "/Users/me/模型/HY-MT.gguf"
     all.translateLlamaServer = "/opt/homebrew/bin/llama-server"
     all.translateIdleMinutes = 30
+    all.clipboardHistoryDays = 30
     all.clipboardSyncRelayUrl = "https://relay.example.workers.dev"
     all.clipboardSyncDeviceName = "书房的 Mac"
     all.initialMode = .last
@@ -2975,6 +2977,49 @@ func checkDevLog() {
     rmdir(dir)
 }
 checkDevLog()
+
+/// 剪贴板历史存进文件（docs/CONFIG.md「剪贴板历史」）：设置窗口读出来、删一条、按天数删、关掉删文件；
+/// 列表里的一行和时间怎么显示（和 Linux 设置界面的一样）。
+func checkClipboardHistoryFile() {
+    check(!WowtypeConfig().clipboardHistory && WowtypeConfig().clipboardHistoryDays == 7, "剪贴板历史默认关、留 7 天")
+    check(WowtypeConfig.parse("ClipboardHistoryDays=999\n").clipboardHistoryDays == 365
+          && WowtypeConfig.parse("ClipboardHistoryDays=0\n").clipboardHistoryDays == 0, "ClipboardHistoryDays 夹在 0–365")
+    let dir = "/tmp/wowtype-clipboard-\(getpid())"
+    mkdir(dir, 0o700)
+    let path = dir + "/" + ClipboardHistory.fileName
+    ClipboardHistory.configure(path: nil, keepDays: 7)
+    ClipboardHistory.clear()
+    check(ClipboardHistory.configure(path: path, keepDays: 7) == 0, "新文件是空的")
+    check(ClipboardHistory.observe("第一条", app: "TextEdit"), "记下第一条")
+    check(!ClipboardHistory.observe("第一条", app: "TextEdit"), "剪贴板没变不记")
+    check(ClipboardHistory.observe("第二条\n两行"), "记下第二条")
+    let entries = ClipboardHistory.entries
+    check(entries.map(\.text) == ["第二条\n两行", "第一条"] && entries[1].app == "TextEdit"
+          && entries[1].source == "TextEdit" && entries[0].time > 0, "读出全部记录", "\(entries)")
+    var info = stat()
+    check(stat(path, &info) == 0 && info.st_mode & 0o777 == 0o600, "文件只有自己能读")
+    check(ClipboardHistory.forget("第一条") && !ClipboardHistory.forget("第一条")
+          && ClipboardHistory.items == ["第二条\n两行"], "删一条")
+    // 关掉：文件删掉
+    ClipboardHistory.configure(path: nil, keepDays: 7)
+    check(stat(path, &info) != 0 && ClipboardHistory.items.isEmpty, "关掉以后文件删掉")
+    rmdir(dir)
+
+    check(ClipboardEntry(text: "a", time: 0, device: "MacBook").source == "来自 MacBook", "别的设备的来源")
+    check(ClipboardHistory.preview("  a\n\tb  ") == "a ⏎ b", "一行预览", ClipboardHistory.preview("  a\n\tb  "))
+    let long = ClipboardHistory.preview(String(repeating: "x", count: 200))
+    check(long.count == 120 && long.hasSuffix("…"), "太长的截断")
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+    let now = utc.date(from: DateComponents(year: 2026, month: 11, day: 28, hour: 15))!
+    let t = Int(now.timeIntervalSince1970)
+    let shown = [10, 300, 3 * 3600, 8 * 3600, 86400, 8 * 86400, 400 * 86400].map {
+        ClipboardHistory.when(t - $0, now: now, calendar: utc)
+    }
+    check(shown == ["刚才", "5 分钟前", "3 小时前", "07:00", "昨天 15:00", "11月20日 15:00", "2025年10月24日"],
+          "时间的写法", "\(shown)")
+}
+checkClipboardHistoryFile()
 
 checkConfigContract()
 checkLexiconPackContract()

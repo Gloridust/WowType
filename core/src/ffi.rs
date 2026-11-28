@@ -866,8 +866,8 @@ pub extern "C" fn wowtype_symbol_list() -> *mut WowtypeCandidates {
     Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
 }
 
-/// 记下一条剪贴板文字（ABI 1.2 起；只在内存里，最多 20 条，最新的在前，重复的挪到最前）。
-/// 空白、超过 16 KB 的不记。记下返回 1，否则 0。
+/// 外壳看到的剪贴板文字（ABI 1.2 起）：等于 `wowtype_clipboard_observe(text, NULL)`。
+/// 1.21 起和上次报的一样就不记（每秒报一次也不会把时间刷新），见 docs/ABI.md。记下返回 1，否则 0。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_clipboard_remember(text: *const c_char) -> c_int {
     match unsafe { cstr_to_str(text) } {
@@ -876,7 +876,7 @@ pub unsafe extern "C" fn wowtype_clipboard_remember(text: *const c_char) -> c_in
     }
 }
 
-/// 剪贴板历史（ABI 1.2 起），最新的在前。
+/// 剪贴板历史（ABI 1.2 起），最新的在前。存在文件里时先看别的进程改过没有。
 #[no_mangle]
 pub extern "C" fn wowtype_clipboard_history() -> *mut WowtypeCandidates {
     let texts: Vec<CString> = crate::clipboard::history()
@@ -887,10 +887,57 @@ pub extern "C" fn wowtype_clipboard_history() -> *mut WowtypeCandidates {
     Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
 }
 
-/// 清空剪贴板历史（ABI 1.2 起）。
+/// 清空剪贴板历史（ABI 1.2 起）。1.21 起存在文件里时文件也清空（留一个空的）。
 #[no_mangle]
 pub extern "C" fn wowtype_clipboard_clear() {
     crate::clipboard::clear();
+}
+
+/// 剪贴板历史存在哪、留几天（ABI 1.21 起）。path 是数据目录里的 `clipboard-history.json`，
+/// NULL 或空串：只记在内存里（原来存在文件里的连文件一起删掉，就是设置里关掉了）。
+/// keep_days 是 0：不按时间删；负数当 0。返回现在有几条。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_clipboard_configure(path: *const c_char, keep_days: c_int) -> c_int {
+    let path = unsafe { cstr_to_str(path) }.unwrap_or("");
+    let days = u32::try_from(keep_days).unwrap_or(0);
+    c_int::try_from(crate::clipboard::configure(path, days)).unwrap_or(c_int::MAX)
+}
+
+/// 外壳看到系统剪贴板现在是 text（ABI 1.21 起；复制的不是文字时传空串）。和上次报的一样就什么也不做，
+/// 所以每秒报一次就行；不一样就记下，挪到最前。app 是现在在用的应用（程序名、bundle id、exe 名），
+/// 不知道传 NULL。空白、超过 16 KB 的不记。记下返回 1，否则 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_clipboard_observe(text: *const c_char, app: *const c_char) -> c_int {
+    let Some(text) = (unsafe { cstr_to_str(text) }) else {
+        return 0;
+    };
+    let app = unsafe { cstr_to_str(app) }.unwrap_or("");
+    c_int::from(crate::clipboard::observe(text, app))
+}
+
+thread_local! {
+    static CLIPBOARD_JSON: std::cell::RefCell<CString> = std::cell::RefCell::new(CString::default());
+}
+
+/// 全部记录（ABI 1.21 起，设置界面的「剪贴板历史」用），一行 JSON：
+/// `{"items":[{"text":…,"time":Unix 秒,"app":…,"device":…}]}`，最新的在前。
+/// 返回的字符串归核心，在同一个线程下一次调用它之前有效。
+#[no_mangle]
+pub extern "C" fn wowtype_clipboard_entries_json() -> *const c_char {
+    let text = CString::new(crate::clipboard::entries_json()).unwrap_or_default();
+    CLIPBOARD_JSON.with(|cell| {
+        *cell.borrow_mut() = text;
+        cell.borrow().as_ptr()
+    })
+}
+
+/// 删掉文字是 text 的那一条（ABI 1.21 起）。删掉了返回 1，没有这一条返回 0。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_clipboard_forget(text: *const c_char) -> c_int {
+    match unsafe { cstr_to_str(text) } {
+        Some(text) => c_int::from(crate::clipboard::forget(text)),
+        None => 0,
+    }
 }
 
 /// 自定义词（常用语）按 custom.tsv 里的顺序（ABI 1.2 起）。text 是词（`\n` 等转义原样显示），
@@ -1245,7 +1292,7 @@ pub extern "C" fn wowtype_abi_version() -> c_int {
 
 /// C 接口版本，和 `wowtype_core.h` 里的 `WOWTYPE_ABI_VERSION_*` 一致（测试会比对）。
 pub const ABI_VERSION_MAJOR: c_int = 1;
-pub const ABI_VERSION_MINOR: c_int = 20;
+pub const ABI_VERSION_MINOR: c_int = 21;
 
 /// WowType 版本号字符串。
 #[no_mangle]
@@ -1302,7 +1349,7 @@ mod tests {
         };
         assert_eq!(read("WOWTYPE_ABI_VERSION_MAJOR"), ABI_VERSION_MAJOR);
         assert_eq!(read("WOWTYPE_ABI_VERSION_MINOR"), ABI_VERSION_MINOR);
-        assert_eq!(wowtype_abi_version(), 1020);
+        assert_eq!(wowtype_abi_version(), 1021);
     }
 
     #[test]
@@ -1367,7 +1414,7 @@ mod toolbar_tests {
         let _guard = crate::clipboard::TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        wowtype_clipboard_clear();
+        crate::clipboard::reset_for_test();
         let a = CString::new("第一条").unwrap();
         let b = CString::new("second").unwrap();
         assert_eq!(unsafe { wowtype_clipboard_remember(a.as_ptr()) }, 1);
@@ -1380,6 +1427,28 @@ mod toolbar_tests {
         assert_eq!(got, vec!["second", "第一条"]);
         wowtype_clipboard_clear();
         assert!(unsafe { texts(wowtype_clipboard_history()) }.is_empty());
+
+        // 存进文件、带应用名、JSON 读出来、删一条
+        let dir = std::env::temp_dir().join(format!("wowtype-ffi-clipboard-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = CString::new(dir.join("clipboard-history.json").to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { wowtype_clipboard_configure(path.as_ptr(), 7) }, 0);
+        let app = CString::new("gedit").unwrap();
+        assert_eq!(unsafe { wowtype_clipboard_observe(a.as_ptr(), app.as_ptr()) }, 1);
+        assert_eq!(unsafe { wowtype_clipboard_observe(a.as_ptr(), app.as_ptr()) }, 0, "没变不记");
+        assert_eq!(unsafe { wowtype_clipboard_observe(b.as_ptr(), ptr::null()) }, 1);
+        let json = unsafe { CStr::from_ptr(wowtype_clipboard_entries_json()) }.to_str().unwrap().to_owned();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["items"][0]["text"], "second");
+        assert_eq!(value["items"][1]["app"], "gedit");
+        assert_eq!(unsafe { wowtype_clipboard_forget(b.as_ptr()) }, 1);
+        assert_eq!(unsafe { wowtype_clipboard_forget(b.as_ptr()) }, 0);
+        assert!(dir.join("clipboard-history.json").exists());
+        // 关掉：文件删掉
+        assert_eq!(unsafe { wowtype_clipboard_configure(ptr::null(), 7) }, 0);
+        assert!(!dir.join("clipboard-history.json").exists());
+        crate::clipboard::reset_for_test();
+        let _ = std::fs::remove_dir_all(&dir);
 
         let symbols = unsafe { texts(wowtype_symbol_list()) };
         assert_eq!(symbols.len(), crate::symbols::SYMBOLS.len());

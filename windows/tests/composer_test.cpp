@@ -21,6 +21,7 @@
 #include "composer.h"
 #include "config.h"
 #include "app_update.h"
+#include "clipboard_history.h"
 #include "custom_words.h"
 #include "stats_view.h"
 #include "keys.h"
@@ -1355,6 +1356,43 @@ int main(int argc, char **argv) {
         check(lines().size() == 1, "开发者模式关掉以后不再记");
         check(wowtype_devlog_clear(devlog.c_str()) == 0 && lines().empty(), "清空打字记录");
         wowtype_devlog_set_app(nullptr);
+    }
+
+    // ---------------------------------------------------------------- 剪贴板历史（docs/CONFIG.md「剪贴板历史」）
+    {
+        check(!Config().flag("ClipboardHistory") && Config().number("ClipboardHistoryDays") == 7 &&
+                  Config::parse("ClipboardHistoryDays=999\n").number("ClipboardHistoryDays") == 365,
+              "剪贴板历史默认关、留 7 天，天数夹在 0–365");
+        // 后台进程记、设置窗口读：经核心存进同一个文件
+        const std::string file = (dir / "clipboard-history.json").string();
+        check(wowtype_clipboard_configure(file.c_str(), 7) == 0, "剪贴板历史：新文件是空的");
+        check(wowtype_clipboard_observe("第一条", "notepad.exe") == 1 && wowtype_clipboard_observe("第一条", "x") == 0 &&
+                  wowtype_clipboard_observe("从别处\r\n两行", nullptr) == 1,
+              "剪贴板历史：变了才记");
+        auto entries = clipboard::parseEntries(wowtype_clipboard_entries_json());
+        check(entries.size() == 2 && entries[0].text == "从别处\r\n两行" && entries[1].app == "notepad.exe" &&
+                  entries[1].source() == "notepad.exe" && entries[0].time > 0,
+              "剪贴板历史：读出全部记录", std::to_string(entries.size()));
+        check(clipboard::preview(entries[0].text) == "从别处 ⏎ 两行", "剪贴板历史：一行预览", clipboard::preview(entries[0].text));
+        check(wowtype_clipboard_forget("第一条") == 1 && clipboard::parseEntries(wowtype_clipboard_entries_json()).size() == 1,
+              "剪贴板历史：删一条");
+        wowtype_clipboard_configure(nullptr, 7);
+        check(!std::filesystem::exists(file), "剪贴板历史：关掉以后文件删掉");
+        check(clipboard::parseEntries("not json").empty() &&
+                  clipboard::parseEntries("{\"items\":[{\"text\":1},{\"text\":\"好\",\"device\":\"MacBook\"}]}")[0].source() ==
+                      "来自 MacBook",
+              "剪贴板历史：坏的 JSON、来源");
+        const std::string longText(200, 'x');
+        const std::string cut = clipboard::preview(longText);
+        check(cut.size() == 119 + 3 && cut.substr(119) == "…", "剪贴板历史：太长的截断");
+        check(clipboard::preview("  中\t\t文  ", 2) == "中…", "剪贴板历史：按字数截断，不切开汉字", clipboard::preview("  中\t\t文  ", 2));
+        // 2026-11-28 15:00 UTC
+        const int64_t now = 1795878000;
+        std::string shown;
+        for (int64_t ago : {10, 300, 3 * 3600, 8 * 3600, 86400, 8 * 86400, 400 * 86400}) {
+            shown += clipboard::when(now - ago, now, true) + "|";
+        }
+        check(shown == "刚才|5 分钟前|3 小时前|07:00|昨天 15:00|11月20日 15:00|2025年10月24日|", "剪贴板历史：时间的写法", shown);
     }
 
     wowtype_engine_free(engine);

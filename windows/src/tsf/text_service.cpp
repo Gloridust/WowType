@@ -288,7 +288,6 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr *threadMgr, TfClientId clientI
                                       int index) {
         EngineHost::instance().recordCommit(text, source, scheme, index, around_.password);
     };
-    composer_->sampleClipboard = [] { EngineHost::instance().sampleClipboard(); };
     composer_->onTranslatePoll = [this](uint32_t) {
         if (window_) {
             window_->setTimer(kTranslateTimer, kTranslatePollMs);
@@ -317,8 +316,6 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr *threadMgr, TfClientId clientI
     }
     // 记下现在的窗口：切到 WowType 的这一下按上面的 InitialMode，之后换了窗口、应用再按 WindowMode（#254）
     lastWindow_ = topLevelWindow(focus.Get());
-    // 剪贴板历史（设置里打开时）：切到输入法时看一眼（和另两端一样）
-    host.sampleClipboard();
     // 每天最多查一次有没有新版本（后台，有新版时任务栏菜单里多一项），和 macOS 一样
     host.checkUpdateIfDue();
     return S_OK;
@@ -1087,7 +1084,6 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr *focus, ITfDocumentMgr *) {
     lastInserted_ = 0;
     pendingDown_.reset();
     handledUp_.reset();
-    EngineHost::instance().sampleClipboard();
     // 换到别的窗口：设了「默认中/英文」就定一次（WindowMode，#254；同一个窗口里换输入框不算）
     if (focus) {
         noteWindow(topLevelWindow(focus), false);

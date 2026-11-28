@@ -141,7 +141,7 @@ pub unsafe extern "C" fn wowtype_sync_poll(sync: *mut WowtypeSync) -> *const c_c
         return std::ptr::null();
     };
     // 工具栏的「剪贴板」里看得到，输入法自己就能贴，不依赖系统剪贴板写不写得进去
-    crate::clipboard::remember(&received.text);
+    crate::clipboard::add_received(&received.text, &received.from);
     sync.text = c_string(&received.text);
     sync.from = c_string(&received.from);
     sync.text.as_ptr()
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn two_handles_sync_and_fill_the_clipboard_history() {
         let _clipboard = crate::clipboard::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        crate::clipboard::clear();
+        crate::clipboard::reset_for_test();
         let dir = std::env::temp_dir().join(format!("wowtype-sync-ffi-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -468,6 +468,7 @@ mod tests {
                 vec!["跨设备的一句".to_string()],
                 "收到的记进剪贴板历史"
             );
+            assert_eq!(crate::clipboard::entries()[0].device, "书房", "记着是哪台设备复制的");
             // 外壳把它写进系统剪贴板再报回来：不往回发
             assert_eq!(wowtype_sync_observe(handles[1], c("原有的 b").as_ptr()), 0);
             assert_eq!(wowtype_sync_observe(handles[1], c("跨设备的一句").as_ptr()), 0);
@@ -476,7 +477,7 @@ mod tests {
                 wowtype_sync_free(handle);
             }
         }
-        crate::clipboard::clear();
+        crate::clipboard::reset_for_test();
         let _ = std::fs::remove_dir_all(&dir);
     }
 

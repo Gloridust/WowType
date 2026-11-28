@@ -10,13 +10,19 @@ use anyhow::{Context, Result};
 /// 临时文件名带进程号：升级时新旧两个输入法进程、或者自检和输入法同时存，不会写进同一个临时文件。
 /// 写失败时 `path` 原来的内容不动，临时文件删掉。成功以后顺手删掉以前被杀的进程留下的旧临时文件。
 pub fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
-    write(path, contents, true)
+    write(path, contents, true, false)
 }
 
 /// 和 [`write_atomic`] 一样不会留下写了一半的文件，但不等刷到盘上：丢了也无所谓的小文件
 /// （最近用过的 emoji）用，免得在按键的线程上等磁盘。
 pub fn write_replace(path: &Path, contents: &[u8]) -> Result<()> {
-    write(path, contents, false)
+    write(path, contents, false, false)
+}
+
+/// 和 [`write_replace`] 一样，但文件只有自己能读写（Unix 上是 0600，临时文件一建出来就是）：
+/// 剪贴板历史这类别人不该看到的。Windows 上数据目录本来就只有自己能进。
+pub fn write_private(path: &Path, contents: &[u8]) -> Result<()> {
+    write(path, contents, false, true)
 }
 
 /// 把学习数据（一行一条的 TSV）读成一行一行的文本，返回这些行、丢掉了几行。
@@ -49,10 +55,19 @@ pub fn read_lines_lossy(path: &Path) -> std::io::Result<(Vec<String>, usize)> {
     Ok((lines, bad))
 }
 
-fn write(path: &Path, contents: &[u8], sync: bool) -> Result<()> {
+fn write(path: &Path, contents: &[u8], sync: bool, private: bool) -> Result<()> {
     let tmp = temp_path(path);
     let written = (|| -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut file = options.open(&tmp)?;
         file.write_all(contents)?;
         if sync {
             file.sync_all()?;
@@ -181,6 +196,24 @@ mod tests {
         std::fs::write(&path, "旧的很长很长的内容\n").unwrap();
         write_replace(&path, "😀\n".as_bytes()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "😀\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_private_is_only_readable_by_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("wowtype-fsutil-private-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("clipboard-history.json");
+        // 原来的文件谁都能读：换掉以后只有自己能读
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&path, b"{}").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

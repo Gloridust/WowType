@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 20
+#define WOWTYPE_ABI_VERSION_MINOR 21
 
 #ifdef __cplusplus
 extern "C" {
@@ -116,12 +116,24 @@ int wowtype_autospace(int prev_codepoint, int next_codepoint, int flags);
 /* 全部内置符号（ABI 1.2 起），结果用 wowtype_candidates_* 读取并释放。 */
 WowtypeCandidates *wowtype_symbol_list(void);
 
-/* 剪贴板历史（ABI 1.2 起）：只在内存里，最多 20 条，最新的在前，重复的挪到最前。
- * remember 记下一条（空白、超过 16 KB 的不记），记下返回 1；history 用 wowtype_candidates_*
- * 读取并释放。输入法自己拿不到系统剪贴板，由外壳把看到的文字交进来。 */
+/* 剪贴板历史（ABI 1.2 起；1.21 起能存进文件，见 docs/CONFIG.md「剪贴板历史」）：最多 200 条，
+ * 最新的在前，重复的挪到最前。输入法自己拿不到系统剪贴板，由外壳把看到的文字交进来。
+ * remember 等于 observe(text, NULL)；history 用 wowtype_candidates_* 读取并释放；
+ * clear 全部删掉（存在文件里时留一个空文件）。 */
 int wowtype_clipboard_remember(const char *text);
 WowtypeCandidates *wowtype_clipboard_history(void);
 void wowtype_clipboard_clear(void);
+/* 存在哪、留几天（1.21 起）：path 是数据目录里的 clipboard-history.json（只有自己能读），
+ * NULL 或空串只记在内存里，原来存在文件里的连文件一起删掉（设置里关掉了）；keep_days 是 0 不按时间删。
+ * 几个进程可以共用一个文件：每次读、改之前先看别的进程改过没有。返回现在有几条。 */
+int wowtype_clipboard_configure(const char *path, int keep_days);
+/* 系统剪贴板现在是 text（1.21 起；不是文字时传空串），和上次报的一样就什么也不做，所以每秒报一次就行。
+ * app 是现在在用的应用，不知道传 NULL。记下返回 1。 */
+int wowtype_clipboard_observe(const char *text, const char *app);
+/* 全部记录（1.21 起）：一行 JSON {"items":[{"text","time"(Unix 秒),"app","device"}]}，最新的在前；
+ * 字符串归核心，在同一个线程下一次调用前有效。forget 删掉文字是 text 的那条，删掉了返回 1。 */
+const char *wowtype_clipboard_entries_json(void);
+int wowtype_clipboard_forget(const char *text);
 
 /* 自定义词（常用语）按 custom.tsv 的顺序（ABI 1.2 起）：text 是词（转义原样显示），
  * pinyin 是编码，wowtype_candidates_commit 是上屏的文字（\n 换成了换行）。 */

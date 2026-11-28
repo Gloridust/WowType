@@ -2343,9 +2343,13 @@ fn v_space_opens_toolbar() {
     assert_eq!(session.open_panel(), None);
 }
 
+/// 剪贴板历史是整个进程一份：用到它的测试一个一个跑。
+static CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn toolbar_clipboard_and_back() {
     use wowtype_core::session::Tool;
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
     wowtype_core::clipboard::clear();
     // 没打开剪贴板历史：提示去设置里打开
     let mut session = with(engine());
@@ -2366,6 +2370,44 @@ fn toolbar_clipboard_and_back() {
     let frame = type_keys(&mut session, "1");
     assert_eq!(frame.commit.as_deref(), Some("第一行\n第二行"));
     assert!(!frame.learned);
+    assert_eq!(session.open_panel(), None);
+    wowtype_core::clipboard::clear();
+}
+
+#[test]
+fn toolbar_clipboard_ctrl_delete_removes_the_entry() {
+    use wowtype_core::session::Tool;
+    let _clipboard = CLIPBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    wowtype_core::clipboard::clear();
+    for text in ["三", "二", "一"] {
+        wowtype_core::clipboard::remember(text);
+    }
+    let mut session = with(engine());
+    session.configure(Config { clipboard_history: true, ..Config::default() });
+    type_keys(&mut session, "v<sp>1");
+    assert_eq!(shown_texts(&mut session), ["一", "二", "三"]);
+    assert_eq!(session.frame(false).aux, "剪贴板：选一条上屏，Ctrl+Delete 删掉，退格返回");
+    // 光标挪到「二」，Ctrl+Delete 删掉它：还在剪贴板页，光标停在原位（现在是「三」）
+    session.key(&Key::press(keysym::DOWN));
+    let frame = session.key(&ctrl(keysym::DELETE));
+    assert!(frame.handled);
+    assert_eq!(session.open_panel(), Some(Tool::Clipboard));
+    assert_eq!(shown_texts(&mut session), ["一", "三"]);
+    assert_eq!(wowtype_core::clipboard::history(), ["一", "三"]);
+    let frame = type_keys(&mut session, "<sp>");
+    assert_eq!(frame.commit.as_deref(), Some("三"));
+    // 删最后一条：光标往前挪；删光了提示还没有记录
+    type_keys(&mut session, "v<sp>1");
+    session.key(&Key::press(keysym::DOWN));
+    session.key(&ctrl(keysym::BACKSPACE));
+    assert_eq!(shown_texts(&mut session), ["一"]);
+    session.key(&Key { modifiers: modifier::SHIFT, ..Key::press(keysym::DELETE) });
+    assert!(shown_texts(&mut session).is_empty());
+    assert_eq!(session.open_panel(), Some(Tool::Clipboard));
+    assert_eq!(session.frame(false).aux, "剪贴板：还没有记录，复制过的文字会出现在这里");
+    // 别的 Ctrl 组合键照常收起工具栏、交给应用
+    let frame = session.key(&ctrl(u32::from('c')));
+    assert!(!frame.handled);
     assert_eq!(session.open_panel(), None);
     wowtype_core::clipboard::clear();
 }

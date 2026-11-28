@@ -3623,6 +3623,118 @@ std::string readFile(const std::string &path) {
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
+/// 剪贴板历史：每秒看一次剪贴板（连着复制几次、不切换输入框也都记得到），存进只有自己能读的文件，
+/// 工具栏里 Ctrl+Delete 删一条，设置界面（别的进程）清空了马上看得到，关掉就删文件。每格 0.1 秒。
+struct ClipboardHistoryCase {
+    Instance &instance;
+    std::unique_ptr<HarnessInputContext> ic;
+    std::unique_ptr<EventSourceTime> timer;
+    std::string file;
+    int ticks = 0;
+};
+
+void runClipboardHistoryCase(Instance &instance, std::function<void()> done) {
+    if (!fakeClipboard) {
+        std::printf("skip 剪贴板历史（用的是系统装的 clipboard 插件）\n");
+        done();
+        return;
+    }
+    const std::string confDir = std::string(std::getenv("XDG_CONFIG_HOME")) + "/fcitx5/conf";
+    const std::string file = std::string(std::getenv("XDG_DATA_HOME")) + "/wowtype/clipboard-history.json";
+    std::filesystem::create_directories(confDir);
+    auto *addon = instance.addonManager().addon("wowtype");
+    auto *c = new ClipboardHistoryCase{instance, std::make_unique<HarnessInputContext>(instance.inputContextManager()),
+                                       {}, file};
+    setClipboard("甲");
+    std::ofstream(confDir + "/wowtype.conf") << "ClipboardHistory=True\nClipboardHistoryDays=7\nVoice=False\n";
+    addon->reloadConfig();
+    c->ic->focusIn();
+    instance.setCurrentInputMethod(c->ic.get(), "wowtype", true);
+    c->timer = instance.eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
+        [c, done, addon, confDir](EventSourceTime *source, uint64_t) {
+            ++c->ticks;
+            bool finished = false;
+            auto *ic = c->ic.get();
+            switch (c->ticks) {
+            case 15:
+                setClipboard("乙");
+                break;
+            case 30:
+                setClipboard(""); // 复制了图片
+                break;
+            case 45:
+                setClipboard("丙");
+                break;
+            case 60: {
+                namespace fs = std::filesystem;
+                check(fs::exists(c->file), "剪贴板历史：存进了 " + c->file);
+                const auto perms = fs::status(c->file).permissions();
+                check((perms & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none,
+                      "剪贴板历史：文件只有自己能读");
+                const std::string saved = readFile(c->file);
+                check(saved.find("乙") != std::string::npos && saved.find("wowtype-harness") != std::string::npos,
+                      "剪贴板历史：文件里有中间那次复制的和应用名：" + saved);
+                fresh(ic);
+                type(ic, "v<sp>1");
+                const auto items = page(ic);
+                check(items.size() >= 3 && items[0] == "丙" && items[1] == "乙" && items[2] == "甲",
+                      "剪贴板历史：没切换输入框，连着复制的三次都记下了：" + join(items));
+                type(ic, "<down>");
+                send(ic, Key(FcitxKey_Delete, KeyState::Ctrl));
+                const auto after = page(ic);
+                check(after.size() >= 2 && after[0] == "丙" && after[1] == "甲" &&
+                          ic->inputPanel().auxUp().toString().find("剪贴板") != std::string::npos,
+                      "剪贴板历史：Ctrl+Delete 删掉光标处那条、还在剪贴板页：" + join(after));
+                check(readFile(c->file).find("乙") == std::string::npos, "剪贴板历史：文件里也删掉了");
+                type(ic, "<esc>");
+                // 设置界面清空（别的进程整份换掉文件）：马上看得到；剪贴板上还是「丙」，也不记回来
+                std::ofstream(c->file) << "{\"version\":1,\"items\":[]}";
+                break;
+            }
+            case 61: {
+                fresh(ic);
+                type(ic, "v<sp>1");
+                check(page(ic).empty() &&
+                          ic->inputPanel().auxUp().toString().find("还没有记录") != std::string::npos,
+                      "剪贴板历史：设置界面清空了，工具栏里也空了：" + join(page(ic)));
+                type(ic, "<esc>");
+                break;
+            }
+            case 80: {
+                fresh(ic);
+                type(ic, "v<sp>1");
+                check(page(ic).empty(), "剪贴板历史：清空以后，剪贴板上原来那段不记回来：" + join(page(ic)));
+                type(ic, "<esc>");
+                // 关掉：文件删掉，工具栏提示去打开
+                std::ofstream(confDir + "/wowtype.conf") << "Voice=False\n";
+                addon->reloadConfig();
+                check(!std::filesystem::exists(c->file), "剪贴板历史：关掉以后文件删掉了");
+                fresh(ic);
+                type(ic, "v<sp>1");
+                check(page(ic).empty() &&
+                          ic->inputPanel().auxUp().toString().find("没打开") != std::string::npos,
+                      "剪贴板历史：关掉以后提示去设置里打开：" + ic->inputPanel().auxUp().toString());
+                type(ic, "<esc>");
+                finished = true;
+                break;
+            }
+            default:
+                break;
+            }
+            if (!finished) {
+                source->setNextInterval(100000);
+                source->setOneShot();
+                return true;
+            }
+            setClipboard("");
+            c->ic.reset();
+            done();
+            dispatcher->schedule([c]() { delete c; });
+            return true;
+        });
+}
+
 void runSyncCase(Instance &instance, std::function<void()> done) {
     const char *peerOut = std::getenv("WOWTYPE_HARNESS_SYNC_PEER_OUT");
     const char *sendCommand = std::getenv("WOWTYPE_HARNESS_SYNC_SEND");
@@ -4534,9 +4646,11 @@ int main(int argc, char **argv) {
             runGridOverlayCase(instance, [&instance]() {
                 runVoiceCase(instance, [&instance]() {
                     runVoiceCancelCases(instance, [&instance]() {
+                    runClipboardHistoryCase(instance, [&instance]() {
                     runSyncCase(instance, [&instance]() {
                         std::printf(failures ? "KEY HARNESS FAILED (%d)\n" : "KEY HARNESS OK\n", failures);
                         instance.exit();
+                    });
                     });
                     });
                 });
