@@ -242,6 +242,7 @@ fn main() {
     let mut domain_lm_weight = wowtype_core::lm::DOMAIN_LM_WEIGHT;
     let mut arpa_path: Option<String> = None;
     let mut beam: Option<usize> = None;
+    let mut histories: Option<usize> = None;
     let mut max_candidates: Option<usize> = None;
     let mut top_k = 3usize;
     let mut weights = FeatureWeights::default();
@@ -304,6 +305,7 @@ fn main() {
             }
             "--arpa" => arpa_path = Some(value(&mut i, "--arpa")),
             "--beam" => beam = value(&mut i, "--beam").parse().ok(),
+            "--histories" => histories = value(&mut i, "--histories").parse().ok(),
             "--max" => max_candidates = value(&mut i, "--max").parse().ok(),
             "--k" => top_k = value(&mut i, "--k").parse().unwrap_or(3).max(1),
             "--weights" => {
@@ -371,7 +373,7 @@ fn main() {
                 println!("wowtype-eval (--data <目录> | --lexicon <tsv>) --eval <tsv> [--eval <tsv> ...]");
                 println!("  配置：默认和外壳一致（候选上限 1000、词库旁边的 words.lm / english.txt、纠错开、模糊音关）");
                 println!("            [--legacy | --preset shell|legacy] [--lm|--arpa <file>] [--no-lm] [--english <file>] [--no-english]");
-                println!("            [--max n] [--beam n] [--weights name=v,...] [--fuzzy] [--shuangpin [--scheme 方案]] [--no-shuangpin-abbrev] [--domain-lm <file> [--domain-lm-weight w]]");
+                println!("            [--max n] [--beam n] [--histories n] [--weights name=v,...] [--fuzzy] [--shuangpin [--scheme 方案]] [--no-shuangpin-abbrev] [--domain-lm <file> [--domain-lm-weight w]]");
                 println!("            [--typo-cost x] [--completion-cost x] [--abbrev-cost x] [--tail-abbrev-cost x] [--no-typo]");
                 println!("            [--nnlm <file>] [--nnlm-rerank n] [--lm-weight w] [--learn | --learn-from <tsv>]");
                 println!("  输出：[--k n] [--show-top1] [--misses]");
@@ -449,6 +451,9 @@ fn main() {
     }
     if let Some(size) = beam {
         config.beam.beam_size = size.max(1);
+    }
+    if let Some(n) = histories {
+        config.beam.histories_per_word = n.max(1);
     }
     if let Some(cost) = abbrev_cost {
         config.beam.abbrev_cost = cost;
