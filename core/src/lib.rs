@@ -2085,6 +2085,9 @@ impl Engine {
         // 不靠补全、纠错就能完整解析：直接用全拼。
         // 但能切成音节不等于词库里有词：hm、hng 这类叹词音节词库不收，以前只给出原样的 hm，
         // 打 hm（后面、好吗）一个中文候选都没有。一个认识的词都凑不出来就接着试简拼。
+        // 只有把句中的 r 当儿化才切得开的（shurfa 的 shur'fa）也要接着试简拼：那个 r 多半是
+        // 「入」的声母（shu r fa -> 输入法，#330），两边按分数比。花儿好（huarhao）这种照旧比得过。
+        let mut full_found = None;
         if full.has_exact_path() {
             let mut found = self.query_once(&full, at_ms, fuzzy)?;
             self.keep_exact_syllable(&full, &mut found, at_ms, fuzzy)?;
@@ -2092,14 +2095,15 @@ impl Engine {
                 self.fuzzy_fallback(&full, &mut found);
             }
             let any_known = found.iter().any(|c| !c.words.is_empty() && c.words.iter().all(|w| w.known));
-            if !self.config.jianpin_fallback || any_known {
+            if !self.config.jianpin_fallback || (any_known && full.has_path_without_medial_erhua(true)) {
                 return Ok(found);
             }
+            full_found = Some(found);
         }
         // 否则简拼（zg、jzm）、全拼混简拼（kyi、yongzwen）与全拼补全/纠错都试，按分数合并
         let mut merged: Vec<Candidate> = Vec::new();
         if self.config.jianpin_fallback {
-            if let Some(jianpin) = abbrev_graph(&parsed, full.has_path_without_typo()) {
+            if let Some(jianpin) = abbrev_graph(&parsed, full.has_path_without_medial_erhua(false)) {
                 let mut found = self.query_once(&jianpin, at_ms, fuzzy)?;
                 if jianpin.mode() == GraphMode::Mixed {
                     // 混简拼里拿声母、单个字母兜底凑出来的（h e l l o -> "hello"）没有意义
@@ -2108,7 +2112,9 @@ impl Engine {
                 merged.extend(found);
             }
         }
-        if full.has_complete_path() {
+        if let Some(found) = full_found {
+            merged.extend(found);
+        } else if full.has_complete_path() {
             merged.extend(self.query_once(&full, at_ms, fuzzy)?);
         }
         let mut result = dedupe_by_text(merged);

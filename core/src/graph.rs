@@ -201,6 +201,22 @@ impl SyllableGraph {
         self.has_path(|e| !e.typo && e.completion == 0)
     }
 
+    /// 不靠纠错边、也不把句中的 r 当儿化能否走完；`exact` 时补全边也不算。
+    ///
+    /// `shurf`、`shurfa` 里的 r 多半是「入」的声母：只有把它当儿化（shur）才走得通时，
+    /// 全拼图看着能「解释」整串，其实简拼那条路（shu r f -> 输入法）也得试（#330）。
+    /// 末尾的 r（huar、wanr）和隔音符写出来的儿化（hua'r）照旧算。
+    pub fn has_path_without_medial_erhua(&self, exact: bool) -> bool {
+        let n = self.input.len();
+        let letters = &self.input.letters;
+        self.has_path(|e| {
+            let medial_erhua = matches!(e.kind, EdgeKind::Full { erhua: true, .. })
+                && e.end < n
+                && letters.get(e.end - 1) == Some(&b'r');
+            !e.typo && !medial_erhua && (!exact || e.completion == 0)
+        })
+    }
+
     fn has_path(&self, allow: impl Fn(&Edge) -> bool) -> bool {
         let n = self.input.len();
         if n == 0 {
@@ -647,6 +663,18 @@ mod tests {
             "huar 应产生 hua 的儿化边: {:?}",
             segs
         );
+    }
+
+    #[test]
+    fn medial_r_alone_does_not_count_as_a_full_explanation() {
+        // shurfa 只有 shur'fa 切得开：r 多半是声母，得接着试简拼（#330）
+        let g = graph("shurfa", GraphMode::Full);
+        assert!(g.has_exact_path());
+        assert!(!g.has_path_without_medial_erhua(true));
+        // 末尾的儿化、不靠儿化也切得开的照旧
+        assert!(graph("huar", GraphMode::Full).has_path_without_medial_erhua(true));
+        assert!(graph("shurufa", GraphMode::Full).has_path_without_medial_erhua(true));
+        assert!(!graph("huarhao", GraphMode::Full).has_path_without_medial_erhua(true));
     }
 
     #[test]

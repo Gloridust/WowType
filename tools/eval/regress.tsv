@@ -104,3 +104,10 @@ weish	为啥
 zaijianl	再见了
 msl	没事了
 heishenhua	黑神话
+
+# 句中的 r 不一定是儿化：只有把它当儿化才切得开时也试简拼（shu r fa -> 输入法，#330）；末尾的、后面还有完整音节的儿化照旧
+shurf	输入法
+shurfa	输入法
+huarhao	花儿好
+yihuirjian	一会儿见
+wanrle	玩儿了
