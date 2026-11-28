@@ -339,6 +339,9 @@ impl Engine {
     pub fn record_selection_with_pinyin_at(&self, word: &str, pinyin: Option<&str>, at_ms: u64) {
         let word = &self.lexicon_form(word);
         let heat = self.record_selection_at(word, at_ms);
+        if let Some(reading) = pinyin.and_then(|p| learn::single_reading(word, p)) {
+            self.record_reading(word, reading, at_ms);
+        }
         if !self.config.auto_learn || word.is_empty() {
             return;
         }
@@ -351,6 +354,35 @@ impl Engine {
         } else if self.take_new_word(word, at_ms) {
             self.add_learned_word(word, pinyin, heat.max(threshold));
         }
+    }
+
+    /// 单字另按读音记一次热度（[`learn::reading_key`]，#318）。[`Engine::record_selection_at`] 已经按字记过了。
+    ///
+    /// 这个字第一次按读音记时，按字攒下的热度（升级前学的，连这一次）都算在这次的读音上：
+    /// 多半就是常打的那个读音，「或」以前选过的不会因为升级清零。
+    fn record_reading(&self, word: &str, reading: &str, at_ms: u64) {
+        let Ok(mut history) = self.history.write() else {
+            return;
+        };
+        let marker = learn::reading_marker(word);
+        let key = learn::reading_key(word, reading);
+        let first = !history.contains_key(&marker);
+        let mut changes = Vec::new();
+        for key in [marker, key] {
+            let before = history.get(&key).copied();
+            let after = match (first, history.get(word).copied()) {
+                (true, Some(all)) => all,
+                _ => learn::bumped(before, at_ms),
+            };
+            history.insert(key.clone(), after);
+            changes.push(learn::Change::Word {
+                word: key,
+                before,
+                after: Some(after),
+            });
+        }
+        drop(history);
+        self.journal(changes);
     }
 
     /// 学到的词收进用户词库。heat 是选用热度，决定频次。
@@ -1128,6 +1160,8 @@ impl Engine {
         let mut forgot = self.lexicon.remove(word);
         if let Ok(mut history) = self.history.write() {
             forgot |= history.remove(word).is_some();
+            // 单字按读音记的（和|he、和|）也去掉
+            history.retain(|key, _| key == word || learn::base_word(key) != word);
         }
         if let Ok(mut new_words) = self.new_words.write() {
             forgot |= new_words.remove(word).is_some();
@@ -2469,14 +2503,18 @@ impl Engine {
         // 排序用热度（30 天半衰期衰减后的次数，取 ln(1+热度)），见 [`learn`]。
         // 末词只算多字词，而且算一半：选过「种地」，「我想种地」也该靠前；
         // 选过「你」不能把所有以「你」结尾的整句都抬上来。
+        // 单字按读音（[`learn::entry_for_reading`]）：用 he 选的「和」不算到 huo 的「和」上（#318）。
+        let reading = match path.words.as_slice() {
+            [word] if !word.jianpin && word.abbrev == 0 && word.completion == 0 => Some(word.pinyin.as_str()),
+            _ => None,
+        };
         let history_hot_val = self
             .history
             .read()
             .ok()
             .map(|history| {
-                let exact = history
-                    .get(&path.text)
-                    .map(|e| crate::learn::decayed(*e, at_ms))
+                let exact = learn::entry_for_reading(&history, &path.text, reading)
+                    .map(|e| crate::learn::decayed(e, at_ms))
                     .unwrap_or(0.0);
                 let tail = path
                     .words
@@ -2494,7 +2532,7 @@ impl Engine {
             .read()
             .ok()
             .map(|history| {
-                let exact = history.get(&path.text).copied();
+                let exact = learn::entry_for_reading(&history, &path.text, reading);
                 let tail = path
                     .words
                     .last()
@@ -5925,6 +5963,54 @@ mod tests {
             e.record_selection_at("骂", t);
         }
         assert_eq!(&texts("ma", 100)[..2], ["吗", "骂"]);
+    }
+
+    #[test]
+    fn polyphonic_char_heat_stays_with_its_reading() {
+        // #318：用 he 天天选「和」，打 huo 时「和」不该被当成最近常选的字顶到「或」前面
+        let lexicon = concat!(
+            "he\t和\t9000000\n",
+            "huo\t活\t3000000\n",
+            "huo\t或\t1000000\n",
+            "huo\t和\t50000\n",
+        );
+        let e = engine(lexicon);
+        let texts = |e: &Engine, raw: &str, at: u64| e.input_at(raw, at).into_iter().map(|c| c.text).collect::<Vec<_>>();
+        for t in 0..20 {
+            e.record_selection_with_pinyin_at("和", Some("he"), t);
+        }
+        assert_eq!(texts(&e, "he", 100)[0], "和");
+        assert_ne!(texts(&e, "huo", 100)[0], "和", "{:?}", texts(&e, "huo", 100));
+        // 在 huo 下常选「或」，首选就是「或」
+        for t in 100..108 {
+            e.record_selection_with_pinyin_at("或", Some("huo"), t);
+        }
+        assert_eq!(texts(&e, "huo", 200)[0], "或", "{:?}", texts(&e, "huo", 200));
+        // 只打声母照旧按字：常选的「和」还是排第一（#156 那条不变）
+        assert_eq!(texts(&e, "h", 200)[0], "和");
+
+        // 升级前只按字记的热度：这个字第一次按读音记时，都算在这次的读音上
+        let e = engine(lexicon);
+        for t in 0..8 {
+            e.record_selection_at("或", t);
+            e.record_selection_at("和", t);
+        }
+        e.record_selection_with_pinyin_at("或", Some("huo"), 10);
+        e.record_selection_with_pinyin_at("和", Some("he"), 10);
+        assert_eq!(texts(&e, "huo", 20)[0], "或", "{:?}", texts(&e, "huo", 20));
+        assert!(e.history_heat("或|huo", 20) > 8.0);
+        assert_eq!(e.history_heat("和|huo", 20), 0.0);
+        // 撤销学习连按读音记的一起退回去
+        let mark = e.learn_mark();
+        e.record_selection_with_pinyin_at("和", Some("huo"), 30);
+        assert!(e.history_heat("和|huo", 30) > 0.0);
+        assert!(e.undo_learning(mark, e.learn_mark()));
+        assert_eq!(e.history_heat("和|huo", 30), 0.0);
+        // 忘掉这个字：按读音记的也去掉
+        assert!(e.forget_word("和"));
+        assert_eq!(e.history_heat("和|he", 30), 0.0);
+        assert_eq!(e.history_heat("和|", 30), 0.0);
+        assert!(e.history_heat("或|huo", 30) > 0.0);
     }
 
     #[test]
