@@ -3135,8 +3135,9 @@ impl<'e> Session<'e> {
             // 工具栏、表情面板跟着编辑区一起收：失去焦点后面板已经看不见了，会话里还开着的话，
             // 回来打的字母进了表情搜索，空格和数字上屏的是表情，单按 Shift 也切不了中英文
             self.close_tool();
-            // 按着 Shift 时切走的，回来松开不算「单按 Shift」
+            // 按着 Shift 时切走的，回来松开不算「单按 Shift」；先切了的那一下也不再撤
             self.shift.down = None;
+            self.shift.switched = None;
             self.undo_commit = None;
         }
         if commit_pending && !self.translation.source.is_empty() {
