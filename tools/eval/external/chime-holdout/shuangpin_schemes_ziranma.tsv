@@ -1,0 +1,32 @@
+# 外部盲测集：从 chime 的 benchmarks/test_holdout.tsv 转来（https://github.com/tyrchen/chime，提交 d0f5da2，2026-11-27），分类 shuangpin_schemes_ziranma。
+# Copyright (c) 2026 Tian Chen，MIT OR Apache-2.0。只用来量，不拿它调参、不照着它加词，见 tools/eval/external/README.md。
+jntmtmqigewlqylh	今天天气格外晴朗		sp=ziranma
+zirjyuyjiulijiuu	自然语言处理技术		sp=ziranma
+bkiinzxnpyjycsrs	保持内心平静从容		sp=ziranma
+vbmoquuudmmljibfuu	周末去书店买几本书		sp=ziranma
+zkuvzkqijyufbkmj	早睡早起精神饱满		sp=ziranma
+rfvfdamomzyigexijx	认真打磨每一个细节		sp=ziranma
+drcemoxytvlijiky	端侧模型推理极快		sp=ziranma
+bkhuyshugerfynsi	保护用户个人隐私		sp=ziranma
+qmlivixyuiyuzuxw	千里之行始于足下		sp=ziranma
+kextgvhwheliffgs	科学规划合理分工		sp=ziranma
+kwbumfxxzofzihupih	跨部门协作非常顺畅		sp=ziranma
+xitswfdyxydafutiug	系统稳定性大幅提升		sp=ziranma
+hebzreiafhssyixw	喝杯热茶放松一下		sp=ziranma
+qqfgssuddjgvpcxd	秋风送爽丹桂飘香		sp=ziranma
+jmiidrlmzgqdtivi	坚持锻炼增强体质		sp=ziranma
+dlmavgjxyiyuwzhu	代码整洁易于维护		sp=ziranma
+dulisikkysyuidxn	独立思考勇于创新		sp=ziranma
+ipnrhwklwjwufusu	春暖花开万物复苏		sp=ziranma
+uiuiqquixpxujmjn	实事求是循序渐进		sp=ziranma
+yrmzyitmismjyhgd	愿每一天充满阳光		sp=ziranma
+ldhkdexigrubyivsuf	良好的习惯受益终身		sp=ziranma
+gkxcwjigjnrimubc	高效完成今日目标		sp=ziranma
+srfafuzaduxmvujddi	算法复杂度显著降低		sp=ziranma
+ujjmqyqrqyiejmdi	山间清泉清澈见底		sp=ziranma
+ynytgzrfwfnrlild	音乐给人温暖力量		sp=ziranma
+vfiggbtshwjxffqi	真诚沟通化解分歧		sp=ziranma
+igfgpolhyswhviqm	乘风破浪勇往直前		sp=ziranma
+xtyiviysrshvgrts	学以致用融会贯通		sp=ziranma
+hlkotmksrfncfzxd	海阔天空任鸟飞翔		sp=ziranma
+jctauidiyhwhxyks	脚踏实地仰望星空		sp=ziranma

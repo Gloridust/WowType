@@ -68,6 +68,11 @@ scripts/eval.sh /usr/share/wowtype
   和 `context.tsv`（pypinyin 标的）对过：138 句里只有 3 处不一样，都是 pypinyin 标错了（微调、越长、还款），`context.tsv` 里这三条已经手改。
   重新生成 `context.tsv` 时（`make_sentence_eval.py --text daily_sentences.txt --context`，要 jieba 0.42.1、pypinyin）记得再改这三条。
 
+### 外部盲测集
+
+`tools/eval/external/` 放别人写的用例（现在是 chime 的 1010 条整句盲测），`scripts/eval-external.sh <数据目录> --nnlm <nnlm.bin>`
+跑一遍报数。CI 不跑、没有基线：只用来量自家评测集看不出的问题，不照着它调，见 [external/README.md](external/README.md)。
+
 ### 用例格式
 
 ```

@@ -1,0 +1,61 @@
+# 外部盲测集：从 chime 的 benchmarks/test_holdout.tsv 转来（https://github.com/tyrchen/chime，提交 d0f5da2，2026-11-27），分类 code_switch_mixed。
+# Copyright (c) 2026 Tian Chen，MIT OR Apache-2.0。只用来量，不拿它调参、不照着它加词，见 tools/eval/external/README.md。
+woshiyongrustkaifagaojixitong	我使用 Rust 开发高级系统
+zaimacosshangyunxingfeichangliuchang	在 macOS 上运行非常流畅
+qingbangwoshenchazhegeprdedaima	请帮我审查这个 PR 的代码
+bamoxingbaocunweisafetensorsgeshi	把模型保存为 Safetensors 格式
+yongpytorchxunlianduancexiaoquanzhong	用 PyTorch 训练端侧小权重
+bushudaokubernetesjiqunzhong	部署到 Kubernetes 集群中
+shiyongdockerdabaojingxiang	使用 Docker 打包镜像
+tongguogrpcdiaoyonghouduanfuwu	通过 gRPC 调用后端服务
+shujucunchuzaipostgresqlshujuku	数据存储在 PostgreSQL 数据库
+bendiwenjianshiyongsqlitecunchu	本地文件使用 SQLite 存储
+qianduanyongtypescripthevuekaifa	前端用 TypeScript 和 Vue 开发
+peizhinginxzuofanxiangdaili	配置 Nginx 做反向代理|配置 nginx 做反向代理
+zaiiphoneshangceshixinjieko	在 iPhone 上测试新接口
+yongxcodepenxieswiftuiyemian	用 Xcode 编写 SwiftUI 页面
+liyongmlxzaimetalshangtuili	利用 MLX 在 Metal 上推理
+zhegeapideyanchifeichangdi	这个 API 的延迟非常低
+conguggingfacehuoquyuanshimoxing	从 HuggingFace 获取原始模型
+duibichatgptheclaudedehuida	对比 ChatGPT 和 Claude 的回答
+deepseekzaizhongwenrenwushanghenqiang	DeepSeek 在中文任务上很强
+qwenmoxingzhichiduoyuyantuili	Qwen 模型支持多语言推理
+yongfigmashejixindehouxuanlan	用 Figma 设计新的候选栏
+zainotionlizhenglixiangmuwendang	在 Notion 里整理项目文档
+shiyongobsidianjiludushubiji	使用 Obsidian 记录读书笔记
+zaighosttyzhongduanlichakanrizhi	在 Ghostty 终端里查看日志
+peizhisshmiyaodenglufuwuqi	配置 SSH 密钥登录服务器
+jianchahttpszhengshushifouguoqi	检查 HTTPS 证书是否过期
+jiexijsonhetomlpeizhiwenjian	解析 JSON 和 TOML 配置文件
+daochupdfgeshidejishubaogao	导出 PDF 格式的技术报告
+yonglatexpaibanshuxuegongshi	用 LaTeX 排版数学公式
+markdownyufajiandanqingxiyidu	Markdown 语法简单清晰易读
+guazailorashipeiqitishengzhunquelv	挂载 LoRA 适配器提升准确率
+shiyongtokioshixianyiburenwu	使用 Tokio 实现异步任务
+yunxingclippyjianchadaimazhiliang	运行 Clippy 检查代码质量
+tongguohomebrewanzhuangxbanben	通过 Homebrew 安装新版本
+baochigithubcangkuganjingzhengjie	保持 GitHub 仓库干净整洁
+zhegebugyijingxiufubingceshitongguo	这个 bug 已经修复并测试通过
+dakaisdkwendangchakanshuoming	打开 SDK 文档查看说明
+zaiidelitiaoshiduandian	在 IDE 里调试断点
+jianshaocpuhegpudezhanyong	减少 CPU 和 GPU 的占用
+shiyongoauthwanchengshenfenrenzheng	使用 OAuth 完成身份认证
+shengjixitongdaozuixinmacosbanben	升级系统到最新 macOS 版本
+zaibendibushullamatuilifuwu	在本地部署 Llama 推理服务
+shiyongfastapigoujianjiekoufuwu	使用 FastAPI 构建接口服务
+lianjieyuanchengredishuancunjiqun	连接远程 Redis 缓存集群
+bacangkuqianyidaogitlabpingtai	把仓库迁移到 GitLab 平台
+zailiulanqiceshiwebassemblymokuai	在浏览器测试 WebAssembly 模块
+shiyonggraphqljuheduoyuanshuju	使用 GraphQL 聚合多源数据
+tongguowebsockettuisongshishixiaoxi	通过 WebSocket 推送实时消息
+zaiyunduanpeizhicloudflarejiasujiedian	在云端配置 Cloudflare 加速节点
+shiyongterraformguanlijichusheshi	使用 Terraform 管理基础设施
+zaijupyterliyunxingshujufenxi	在 Jupyter 里运行数据分析
+yongtailwindkuaisubianxiejiemianyangshi	用 Tailwind 快速编写界面样式
+zaivscodezhonganzhuangyuyanchajian	在 VSCode 中安装语言插件
+duibimysqlyufenxixingshujuku	对比 MySQL 与分析型数据库
+yongduckdbzhijiechaxunbendiwenjian	用 DuckDB 直接查询本地文件
+zaicolabmianfeishilishangweidiaomoxing	在 Colab 免费实例上微调模型
+tongguovercelyijianyulanqianduanyemian	通过 Vercel 一键预览前端页面
+yongpulumishengmingyunziyuanzhan	用 Pulumi 声明云资源栈
+jiezhucopilotbuquanyangbandaima	借助 Copilot 补全样板代码
