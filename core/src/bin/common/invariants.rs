@@ -39,6 +39,8 @@ use wowtype_core::{
 
 /// 一页候选的个数（min-candidates 的上限）。
 const PAGE: usize = 9;
+/// typo-flood：照着打读得通时，排在正常候选前面的纠错候选最多这么多个（和引擎的 `TYPO_QUOTA` 一样）。
+const TYPO_QUOTA: usize = 3;
 /// completion-outranks-word、fuzzy-outranks-word 只管这么常用以上的词（和引擎的 `EXACT_PROTECT_MIN_FREQ` 一样）。
 const EXACT_WORD_FREQ: f64 = 1000.0;
 
@@ -405,6 +407,25 @@ fn check_one(
                 shape.head.join("/")
             ),
         );
+    }
+    // typo-flood：排第一的不是纠错出来的时（照着打读得通），纠错候选有名额：排在正常候选前面的最多 TYPO_QUOTA 个，
+    // 其余只能在整个列表的最后面。nishi 以前第 12 到 36 个全是纠错的「即使、笔试、迷失……」，ni 的单字被压到第五页
+    if top.is_some_and(|c| !typo(c)) {
+        let last_normal = cands.iter().rposition(|c| !is_raw(c) && !typo(c));
+        let ahead: Vec<&Candidate> = last_normal
+            .map(|n| cands[..n].iter().filter(|c| !is_raw(c) && typo(c)).collect())
+            .unwrap_or_default();
+        if ahead.len() > TYPO_QUOTA {
+            let sample: Vec<&str> = ahead.iter().take(6).map(|c| c.text.as_str()).collect();
+            report(
+                "typo-flood",
+                format!(
+                    "{} 个纠错出来的候选排在正常候选前面（最多 {TYPO_QUOTA} 个）：{}……",
+                    ahead.len(),
+                    sample.join(" ")
+                ),
+            );
+        }
     }
     // no-duplicates
     let mut seen = HashSet::new();
@@ -779,6 +800,7 @@ pub fn run(
         "completion-outranks-word",
         "typo-only-adds",
         "typo-outranks-typed",
+        "typo-flood",
         "fuzzy-only-adds",
         "fuzzy-outranks-word",
         "jianpin-only-adds",

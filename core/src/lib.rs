@@ -1610,6 +1610,8 @@ impl Engine {
         if self.config.more_candidates {
             self.append_more_candidates(raw, display, &normalized, completion, &mut result)?;
         }
+        // 最后一步：纠错候选的名额和位置。放在所有按位置挪候选的步骤之后，没有谁能再把它冲掉
+        settle_corrections(&mut result, raw.len());
         Ok(result)
     }
 
@@ -2960,36 +2962,143 @@ fn protect_exact_input(candidates: &mut Vec<Candidate>) {
 /// 接着把补全的整句挪到「谁嗨哟」后面，「谁还要」就又成了第一个。这里按位置再拦一次，
 /// 不管前面谁动过顺序。只挪第一个照着打的读法前面的。
 fn typos_after_typed(candidates: &mut Vec<Candidate>) {
-    let syllables = |c: &Candidate| c.pinyin.split_whitespace().count();
-    let typed = |c: &Candidate| {
-        !is_raw_candidate(c)
-            && c.features.typo_count == 0.0
-            && c.features.full_jianpin == 0.0
-            && !c.features.fuzzy
-            && !c.words.is_empty()
-            && c.words.iter().all(|w| w.known)
-    };
-    let Some(anchor) = candidates.iter().position(typed) else {
-        return;
-    };
-    let need = syllables(&candidates[anchor]);
-    let yields = |c: &Candidate| c.features.typo_count > 0.0 && syllables(c) >= need;
-    if !candidates[..anchor].iter().any(yields) {
-        return;
+    if yield_to_typed(candidates, is_typed_reading, |c| c.features.typo_count > 0.0) {
+        make_scores_monotonic(candidates);
     }
-    let mut moved = Vec::new();
-    let mut keep = Vec::with_capacity(candidates.len());
-    for (i, c) in candidates.drain(..).enumerate() {
-        if i < anchor && yields(&c) {
-            moved.push(c);
+}
+
+/// 纠错的候选（`correction`）让到照着打的读法（`typed`）后面，返回有没有挪动。[`typos_after_typed`]、
+/// [`settle_corrections`] 共用。
+///
+/// 一个纠错候选要让位，当且仅当列表里有一个音节数不比它多的照着打的读法、而它排在所有这样的读法前面；
+/// 让到第一个这样的读法后面。以前只和**第一个**照着打的读法比音节数：`chaikaibaozhua` 排在前面的照着打的读法是
+/// 五个音节的「拆开抱住啊」（bao zhu a），四个音节的纠错词「拆开爆炸」（zhua 当成 zha）就算「音节更少」不用让，
+/// 可是照着打本来也能读成四个音节（bao zhua），只是那条读法排在后面。
+/// 音节确实更少的（`jintiam` 的「今天」两个音节，照着打至少三个）照旧不让。
+fn yield_to_typed(
+    candidates: &mut Vec<Candidate>,
+    typed: impl Fn(&Candidate) -> bool,
+    correction: impl Fn(&Candidate) -> bool,
+) -> bool {
+    let syllables = |c: &Candidate| c.pinyin.split_whitespace().count();
+    let Some(fewest) = candidates.iter().filter(|c| typed(c)).map(syllables).min() else {
+        return false;
+    };
+    // 到目前为止见过的照着打的读法里最少的音节数
+    let mut seen = usize::MAX;
+    let needs_move = candidates.iter().any(|c| {
+        if typed(c) {
+            seen = seen.min(syllables(c));
+            false
         } else {
-            keep.push(c);
+            correction(c) && syllables(c) >= fewest && syllables(c) < seen
+        }
+    });
+    if !needs_move {
+        return false;
+    }
+    let mut out: Vec<Candidate> = Vec::with_capacity(candidates.len());
+    let mut held: Vec<Candidate> = Vec::new();
+    let mut seen = usize::MAX;
+    for c in candidates.drain(..) {
+        if typed(&c) {
+            let n = syllables(&c);
+            seen = seen.min(n);
+            out.push(c);
+            // 这个读法的音节不比它们多：等它的纠错候选接在它后面，先后不变
+            let (release, keep): (Vec<Candidate>, Vec<Candidate>) =
+                held.into_iter().partition(|h| syllables(h) >= n);
+            out.extend(release);
+            held = keep;
+        } else if correction(&c) && syllables(&c) >= fewest && syllables(&c) < seen {
+            held.push(c);
+        } else {
+            out.push(c);
         }
     }
-    let at = keep.iter().position(typed).map_or(keep.len(), |i| i + 1);
-    keep.splice(at..at, moved);
-    make_scores_monotonic(&mut keep);
-    *candidates = keep;
+    out.extend(held);
+    *candidates = out;
+    true
+}
+
+/// 「照着打的读法」：不纠错、不是简拼、不是模糊音兜底，每个词词库里都有。末音节补全出来的也算
+/// （`nish` 的「你说」：字母一个没改，只是还没打完）。[`typos_after_typed`]、[`settle_corrections`] 用同一个定义。
+fn is_typed_reading(c: &Candidate) -> bool {
+    !is_raw_candidate(c)
+        && c.features.typo_count == 0.0
+        && c.features.full_jianpin == 0.0
+        && !c.features.fuzzy
+        && !c.words.is_empty()
+        && c.words.iter().all(|w| w.known)
+}
+
+/// 照着打的读法读得通时，纠错出来的候选最多这么多个能排在照着打的候选前面，见 [`settle_corrections`]。
+/// librime 的做法是一次最多出 4 个纠错候选（`max_corrections_`）。
+const TYPO_QUOTA: usize = 3;
+
+/// 整条管线的最后一步：纠错是「添加可疑的候选」，有名额，不许成片排在正常候选前面。
+///
+/// 1. 输入照着字母读得通时（有一个用完整个输入的照着打的读法，见 [`is_typed_reading`]），纠错的候选不排在
+///    第一个照着打的读法前面，除非它用的音节更少（`jintiam` 的「今天」）。[`typos_after_typed`] 在拼句首词之前
+///    拦过一次；这里是最后一步，后面再没有按位置挪候选的步骤能把它冲掉。
+/// 2. 排第一的不是纠错出来的时，纠错的候选只留最前面的 [`TYPO_QUOTA`] 个在原来的位置，其余的挪到整个列表的
+///    最后面（不删：纠错只「加」）。以前整句、整词的纠错结果成片接在第一页的句首词后面：`nishi` 第 12 到 36 个
+///    全是 n 当成 j、b、m 纠出来的「即使、笔试、迷失……」，ni 剩下的单字、换切法的词都被压到第五页以后。
+///    第一名读得通（全拼、补全、简拼都算：`mhw` 的「美猴王」）时，按错键的可能性本来就小，值得一看的只有最好的那几个。
+///
+/// 排第一的本身就是纠错出来的（`zhognguo`、`nihoa` 本来就读不通，`jintiam` 纠了以后音节更少）时不限名额：
+/// 这时纠错的就是正经候选。用户选过的纠错词不占名额也不挪。`total` 是整个输入的字节数。
+fn settle_corrections(candidates: &mut Vec<Candidate>, total: usize) {
+    let correction = |c: &Candidate| !is_raw_candidate(c) && c.features.typo_count > 0.0;
+    let picked = |c: &Candidate| c.features.history_use_count > 0.0;
+    if !candidates.iter().any(correction) {
+        return;
+    }
+
+    // 1. 让位：音节不比照着打的读法少的纠错候选，不排在那个读法前面
+    let mut changed = yield_to_typed(
+        candidates,
+        |c| c.consumed >= total && is_typed_reading(c),
+        |c| c.consumed >= total && correction(c),
+    );
+
+    // 2. 名额：第一名不是纠错的时，排在正常候选前面的纠错候选最多 TYPO_QUOTA 个
+    let top_corrected = candidates
+        .iter()
+        .find(|c| !is_raw_candidate(c))
+        .is_some_and(correction);
+    let last_normal = candidates
+        .iter()
+        .rposition(|c| !is_raw_candidate(c) && !correction(c));
+    if let (false, Some(last_normal)) = (top_corrected, last_normal) {
+        let counted = |c: &Candidate| correction(c) && !picked(c);
+        if candidates[..last_normal].iter().filter(|c| counted(c)).count() > TYPO_QUOTA {
+            let mut keep = Vec::with_capacity(candidates.len());
+            let mut rest = Vec::new();
+            let mut kept = 0usize;
+            for (i, c) in candidates.drain(..).enumerate() {
+                if i < last_normal && counted(&c) {
+                    kept += 1;
+                    if kept > TYPO_QUOTA {
+                        rest.push(c);
+                        continue;
+                    }
+                }
+                keep.push(c);
+            }
+            // 接在最后一个正常候选后面（原来就在最后的纠错候选之前），先后不变
+            let at = keep
+                .iter()
+                .rposition(|c| !is_raw_candidate(c) && !correction(c))
+                .map_or(keep.len(), |i| i + 1);
+            keep.splice(at..at, rest);
+            *candidates = keep;
+            changed = true;
+        }
+    }
+    if changed {
+        make_scores_monotonic(candidates);
+    }
 }
 
 /// 照着打、打全了、整个输入正好是词库里一个够常用的词（[`EXACT_PROTECT_MIN_FREQ`]）。
@@ -3649,7 +3758,12 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
             let first = kept.is_empty();
             // 整句的名额被纠错出来的整句占满、前面一个照着打的都没有时，照着打的这一句照样留：接着上文打 weihuj，
             // 前面全是「委会」「维护」这些纠错的，照着打的「委户籍」「维护及」以前一个都不剩（纠错只能「加」候选）
-            let over_cap = sentences >= cap && !(typed(&c) && !kept.iter().any(typed));
+            // 反过来也一样：纠错出来的整句让到照着打的后面以后（chaikaibaozhua 的「拆开爆炸」让给「拆开抱住啊」），
+            // 名额可能已经被照着打的整句占满；最好的那一条纠错整句照样留着（放在句首词后面），纠错才是「加」了候选
+            let corrected = |c: &Candidate| c.features.typo_count > 0.0;
+            let over_cap = sentences >= cap
+                && !(typed(&c) && !kept.iter().any(typed))
+                && !(corrected(&c) && !kept.iter().any(corrected));
             if !first
                 && (over_cap || kept.iter().any(|k| differs_only_at_tail(&k.text, &c.text)))
             {
@@ -6292,6 +6406,115 @@ mod tests {
             }],
             consumed,
         }
+    }
+
+    #[test]
+    fn corrections_have_a_quota_when_the_input_reads_as_typed() {
+        // nishi：照着打读得通，第一名是「你是」。纠错出来的整词以前成片接在句首单字后面，
+        // ni 剩下的单字被压到好几页以后。只留最前面的 TYPO_QUOTA 个，其余挪到最后
+        let mut list = vec![
+            ranked("你是", "ni shi", 0.0, 5),
+            ranked("你", "ni", 0.0, 2),
+            ranked("即使", "ji shi", 1.0, 5),
+            ranked("笔试", "bi shi", 1.0, 5),
+            ranked("及时", "ji shi", 1.0, 5),
+            ranked("迷失", "mi shi", 1.0, 5),
+            ranked("技师", "ji shi", 1.0, 5),
+            ranked("倪", "ni", 0.0, 2),
+            ranked("霓", "ni", 0.0, 2),
+        ];
+        settle_corrections(&mut list, 5);
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(
+            texts,
+            ["你是", "你", "即使", "笔试", "及时", "倪", "霓", "迷失", "技师"],
+            "只留 {TYPO_QUOTA} 个纠错候选在原位，其余到最后，先后不变"
+        );
+        assert!(
+            list.windows(2).all(|w| w[0].score > w[1].score),
+            "分数跟着顺序递减"
+        );
+
+        // 名额以内的不动
+        let mut list = vec![
+            ranked("今天", "jin tian", 0.0, 7),
+            ranked("见天", "jian tian", 1.0, 7),
+            ranked("今", "jin", 0.0, 3),
+        ];
+        settle_corrections(&mut list, 7);
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["今天", "见天", "今"]);
+
+        // 简拼排第一也算读得通（mhw 的「美猴王」）：纠错的照样有名额
+        let mut list = vec![ranked("美猴王", "m h w", 0.0, 3)];
+        list[0].features.full_jianpin = 1.0;
+        for word in ["木屋", "木纹", "目无", "牧文", "木碗"] {
+            list.push(ranked(word, "mu wu", 1.0, 3));
+        }
+        list.push(ranked("没", "m", 0.0, 1));
+        settle_corrections(&mut list, 3);
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["美猴王", "木屋", "木纹", "目无", "没", "牧文", "木碗"]);
+    }
+
+    #[test]
+    fn corrections_are_not_capped_when_the_top_is_a_correction() {
+        // jintiam：纠一处的「今天」两个音节就读完了，照着打要四个音节（金提阿玛）。这串字母多半就是按错了，
+        // 纠错的是正经候选：不让位，也不限名额
+        let mut list = vec![
+            ranked("今天", "jin tian", 1.0, 7),
+            ranked("金提阿玛", "jin ti a ma", 0.0, 7),
+            ranked("今", "jin", 0.0, 3),
+            ranked("今日", "jin ri", 1.0, 5),
+            ranked("简体", "jian ti", 1.0, 5),
+            ranked("金田", "jin tian", 1.0, 7),
+            ranked("进", "jin", 0.0, 3),
+        ];
+        let before: Vec<String> = list.iter().map(|c| c.text.clone()).collect();
+        settle_corrections(&mut list, 7);
+        let after: Vec<String> = list.iter().map(|c| c.text.clone()).collect();
+        assert_eq!(after, before);
+
+        // zhognguo：没有照着打的读法，同样不动
+        let mut list = vec![
+            ranked("中国", "zhong guo", 1.0, 8),
+            ranked("钟国", "zhong guo", 1.0, 8),
+            ranked("种过", "zhong guo", 1.0, 8),
+            ranked("重过", "zhong guo", 1.0, 8),
+            ranked("中", "zh", 0.0, 2),
+        ];
+        let before: Vec<String> = list.iter().map(|c| c.text.clone()).collect();
+        settle_corrections(&mut list, 8);
+        let after: Vec<String> = list.iter().map(|c| c.text.clone()).collect();
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn the_last_step_puts_a_correction_behind_the_typed_reading() {
+        // 不管前面哪一步把纠错的挪到了第一个，最后一步都把它放回照着打的读法后面（音节不比它少时）
+        let mut list = vec![
+            ranked("谁还要", "shei hai yao", 1.0, 9),
+            ranked("谁嗨哟", "shei hai yo", 0.0, 9),
+            ranked("谁", "shei", 0.0, 4),
+        ];
+        settle_corrections(&mut list, 9);
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["谁嗨哟", "谁还要", "谁"]);
+
+        // 用户选过的纠错词不挪、不占名额
+        let mut list = vec![
+            ranked("你是", "ni shi", 0.0, 5),
+            ranked("即使", "ji shi", 1.0, 5),
+            ranked("笔试", "bi shi", 1.0, 5),
+            ranked("及时", "ji shi", 1.0, 5),
+            ranked("迷失", "mi shi", 1.0, 5),
+            ranked("技师", "ji shi", 1.0, 5),
+            ranked("你", "ni", 0.0, 2),
+        ];
+        list[4].features.history_use_count = 2.0;
+        settle_corrections(&mut list, 5);
+        let texts: Vec<&str> = list.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["你是", "即使", "笔试", "及时", "迷失", "你", "技师"]);
     }
 
     #[test]
