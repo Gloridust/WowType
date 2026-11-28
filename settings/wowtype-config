@@ -7249,9 +7249,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         if error:
             self.toast(f"导出失败：{error}")
             return GLib.SOURCE_REMOVE
-        toast = Adw.Toast(title=f"已保存到 {_home(path)}", button_label="提交问题", timeout=8)
-        toast.connect("button-clicked", lambda _t: self.open_url(ISSUES_URL))
-        self.toasts.add_toast(toast)
+        self.button_toast(f"已保存到 {_home(path)}", "提交问题", lambda: self.open_url(ISSUES_URL), timeout=8)
         return GLib.SOURCE_REMOVE
 
     def on_layout_changed(self, row, _param):
@@ -8566,17 +8564,14 @@ class SettingsWindow(Adw.ApplicationWindow):
             return
         self.refresh_clipboard(force=True)
         if removed is None:
-            return
-        toast = Adw.Toast(title="已删除这一条", button_label="撤销")
-
-        def undo(_toast):
+            return None
+        def undo():
             try:
                 restore_clipboard_entry(removed)
             except OSError as e:
                 self.toast(f"撤销失败：{e}")
             self.refresh_clipboard(force=True)
-        toast.connect("button-clicked", undo)
-        self.toasts.add_toast(toast)
+        return self.button_toast("已删除这一条", "撤销", undo)
 
     def clipboard_clear_now(self):
         try:
@@ -8702,13 +8697,10 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.words = [(p, w) for p, w in self.words if w != word]
         self.save_words()
         shown = word.replace("\\n", "⏎")
-        toast = Adw.Toast(title=GLib.markup_escape_text(f"已删除「{shown}」"), button_label="撤销")
-
-        def undo(_toast):
+        def undo():
             self.words += removed
             self.save_words()
-        toast.connect("button-clicked", undo)
-        self.toasts.add_toast(toast)
+        self.button_toast(f"已删除「{shown}」", "撤销", undo)
 
     def save_words(self):
         try:
@@ -9023,6 +9015,22 @@ class SettingsWindow(Adw.ApplicationWindow):
 
     def toast(self, text):
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(text), timeout=3))
+
+    def button_toast(self, text, label, on_click, timeout=5):
+        """带一个按钮的提示（撤销、提交问题）。button-clicked 信号是 libadwaita 1.2 才有的；
+        1.1（Ubuntu 22.04）用窗口动作 win.toast-button，点的是最近一个提示的按钮。"""
+        toast = Adw.Toast(title=GLib.markup_escape_text(text), button_label=label, timeout=timeout)
+        if GObject.signal_lookup("button-clicked", Adw.Toast) != 0:
+            toast.connect("button-clicked", lambda _t: on_click())
+        else:
+            if self.lookup_action("toast-button") is None:
+                action = Gio.SimpleAction.new("toast-button", None)
+                action.connect("activate", lambda *_a: self.toast_button_click and self.toast_button_click())
+                self.add_action(action)
+            self.toast_button_click = on_click
+            toast.set_action_name("win.toast-button")
+        self.toasts.add_toast(toast)
+        return toast
 
     # ---------------- 菜单
 

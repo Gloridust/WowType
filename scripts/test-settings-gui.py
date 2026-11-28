@@ -629,13 +629,18 @@ def run(app):
         win.clipboard_search.set_text("")
         pump_until(lambda: len(rows()) == 8, 3)
         win.copy_clipboard_entry(items[1])
-        win.remove_clipboard_entry(items[1])
+        toast = win.remove_clipboard_entry(items[1])
         got, forgotten = ns["read_clipboard_history"](history)
         check(len(got) == 8 and forgotten == ns["clipboard_text_hash"](items[1]["text"]), "删一条该记着它的指纹")
         check(len(rows()) == 7, "删掉以后列表少一条")
-        ns["restore_clipboard_entry"](items[1], history)
-        win.refresh_clipboard(force=True)
-        check(len(rows()) == 8, "撤销以后放回去")
+        # 点「撤销」：libadwaita 1.2 起是按钮的信号，1.1（22.04）是窗口动作
+        from gi.repository import GObject
+        if GObject.signal_lookup("button-clicked", Adw.Toast):
+            toast.emit("button-clicked")
+        else:
+            win.lookup_action("toast-button").activate(None)
+        pump(0.2)
+        check(len(rows()) == 8 and ns["read_clipboard_history"](history)[1] is None, "撤销以后放回去、指纹去掉")
         dialog_window = new_windows(win, lambda: win.on_clipboard_clear(None))
         for w in dialog_window:
             w.close()
