@@ -243,12 +243,15 @@ struct ShiftTap {
     /// 按下的是哪个 Shift（keysym）、按键码、什么时候按下的。
     down: Option<(u32, u32, u64)>,
     /// 等着看是不是双击（[`Config::shift_double_tap`]）：上一下单按松开的时刻，这一下还没切。
+    /// 只在打字途中、「译」里攒着原文时这样等：那时切了撤不回去（切英文会把打的字母上屏）。
     pending: Option<u64>,
+    /// 没在打字时单按立刻就切了（提示马上出来，#310），间隔以内又单按一下就切回去：松开的时刻、切之前的模式。
+    switched: Option<(u64, Mode)>,
 }
 
 /// 双击 Shift 的间隔（毫秒，[`Config::shift_double_tap`]）：单按松开以后这么久以内又按下 Shift、
-/// 再单按一下，两下都不算（JetBrains 的双击 Shift 是「到处搜索」，#253）。系统的双击间隔多在 300–500，
-/// 再长单按以后不接着打字时「中 / 英」提示就晚得看得出来。
+/// 再单按一下，两下都不算（JetBrains 的双击 Shift 是「到处搜索」，#253）。系统的双击间隔多在 300–500。
+/// 没在打字时第一下立刻就切、第二下切回去（[`ShiftTap::switched`]），提示不用等这么久（#310）。
 pub const SHIFT_DOUBLE_TAP_MS: u64 = 350;
 
 impl Key {
@@ -531,10 +534,10 @@ pub struct Config {
     pub shift_toggle: ShiftToggle,
     /// 按住 Shift 多久以内松开才算单按（毫秒）：按久了多半是想打大写或者犹豫了。
     pub shift_tap_ms: u32,
-    /// 双击 Shift 不切换（#253，JetBrains 的双击 Shift 是「到处搜索」）：单按以后先不切，等
-    /// [`SHIFT_DOUBLE_TAP_MS`]；这么久以内又单按一下就两下都不算，模式不变、frame 里也没有切换。
-    /// 没等到第二下：按了别的键（这个键照切了以后的模式处理）、到了时间（[`Session::tick`]）、
-    /// 第二下没算成单按时才切。外壳要会按 frame 的 `wake_after_ms` 调 tick，并且跟着 tick、
+    /// 双击 Shift 不切换（#253，JetBrains 的双击 Shift 是「到处搜索」）：[`SHIFT_DOUBLE_TAP_MS`]
+    /// 以内又单按一下就两下都不算，模式回到第一下之前。没在打字时第一下立刻就切（提示马上出来，#310），
+    /// 第二下切回去；打字途中（切了撤不回去）第一下先不切，等：按了别的键（这个键照切了以后的模式处理）、
+    /// 到了时间（[`Session::tick`]）、第二下没算成单按时才切。外壳要会按 frame 的 `wake_after_ms` 调 tick，并且跟着 tick、
     /// OBSERVE、Shift 的 frame 里的 `mode_changed`，所以默认关（C 接口里旧外壳没给这一项时也是关）。
     /// 按键没带时刻（`time_ms` 为 0）时照旧立刻切。
     pub shift_double_tap: bool,
@@ -2108,8 +2111,9 @@ impl<'e> Session<'e> {
     pub fn set_mode(&mut self, mode: Mode) -> Frame {
         self.last_choice = None;
         self.trace_via("mode");
-        // 外面直接定了模式：还在等双击的那一下单按不再切
+        // 外面直接定了模式：还在等双击的那一下单按不再切，先切了的那一下也不再撤
         self.shift.pending = None;
+        self.shift.switched = None;
         self.switch_mode(mode);
         self.frame(true)
     }
@@ -2209,9 +2213,13 @@ impl<'e> Session<'e> {
             if wanted && !other && !panel {
                 let held = matches!(self.shift.down, Some((s, _, _)) if s == sym) && key.repeat;
                 if !held {
-                    // 过了双击间隔才按下：上一下单按照切，这一下重新算
-                    let late = |at: u64| key.time_ms.saturating_sub(at) > SHIFT_DOUBLE_TAP_MS;
-                    if key.time_ms != 0 && self.shift.pending.is_some_and(late) {
+                    // 过了双击间隔才按下：上一下单按照切（先切了的不再撤），这一下重新算。
+                    // 时刻比上一下还早（外壳换了时钟）也不算双击
+                    let late = |at: u64| key.time_ms < at || key.time_ms - at > SHIFT_DOUBLE_TAP_MS;
+                    if key.time_ms != 0
+                        && (self.shift.pending.is_some_and(late)
+                            || self.shift.switched.is_some_and(|(at, _)| late(at)))
+                    {
                         self.flush_shift_tap();
                     }
                     self.shift.down = Some((sym, key.code, key.time_ms));
@@ -2244,6 +2252,14 @@ impl<'e> Session<'e> {
             self.flush_shift_tap();
             return Some(false);
         }
+        if let Some((_, before)) = self.shift.switched.take() {
+            // 双击，第一下已经切了：切回去，两下都不算；只翻一句（#191）时接着进出「译」
+            self.switch_mode(before);
+            if self.one_shot() {
+                self.toggle_translate();
+            }
+            return Some(true);
+        }
         if self.shift.pending.take().is_some() {
             // 双击：第二下在间隔以内按下（晚了的在按下时已经切过了），两下都不算。
             // 互译只翻一句（#191）时双击是进出「译」：和互译键一样，打到一半的拼音带进去；进不了时两下都不算
@@ -2253,7 +2269,14 @@ impl<'e> Session<'e> {
             return Some(false);
         }
         if self.config.shift_double_tap && key.time_ms != 0 {
-            // 先不切，等等看有没有第二下（frame 的 wake_after_ms 叫外壳到时间调 tick）
+            if !self.composing() && self.translation.source.is_empty() {
+                // 没在打字：切了撤得回去，立刻切，提示马上出来（#310）；间隔以内的第二下再切回去
+                let before = self.mode;
+                self.toggle_mode();
+                self.shift.switched = Some((key.time_ms, before));
+                return Some(true);
+            }
+            // 打字途中：先不切，等等看有没有第二下（frame 的 wake_after_ms 叫外壳到时间调 tick）
             self.shift.pending = Some(key.time_ms);
             return Some(false);
         }
@@ -2261,8 +2284,9 @@ impl<'e> Session<'e> {
         Some(true)
     }
 
-    /// 还在等双击的那一下单按：现在切（没等来第二下）。
+    /// 还在等双击的那一下单按：现在切（没等来第二下）；先切了的那一下不再撤。
     fn flush_shift_tap(&mut self) {
+        self.shift.switched = None;
         if self.shift.pending.take().is_some() {
             self.toggle_mode();
         }

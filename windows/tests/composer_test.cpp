@@ -1027,8 +1027,8 @@ int main(int argc, char **argv) {
         c->shiftChanged(true, false, 3000, false);
         check(!c->shiftChanged(false, false, 3800, false) && !settleShift(*c, 4300), "按太久不算单按");
         c->shiftChanged(true, false, 5000, true);
-        c->shiftChanged(false, false, 5100, true);
-        check(settleShift(*c, 5500) && c->mode() == Composer::Mode::Chinese, "右 Shift 单按切回中文");
+        check(c->shiftChanged(false, false, 5100, true) && c->mode() == Composer::Mode::Chinese,
+              "右 Shift 单按马上切回中文（没在打字，#310）");
         Config left;
         left.setValue("ShiftToggle", "Left");
         c->apply(left);
@@ -1060,14 +1060,14 @@ int main(int argc, char **argv) {
         c->shiftChanged(false, false, 6080, false);
         c->otherModifierChanged();
         check(c->mode() == Composer::Mode::Chinese, "等双击时按了别的修饰键：先切回中文");
-        // 过了间隔才按第二下（定时器晚了）：第一下在按下时切，第二下自己再等
+        // 没在打字：单按松开马上切（#310）；过了间隔才按的第二下不算双击，松开再切回来
         c->shiftChanged(true, false, 7000, false);
-        c->shiftChanged(false, false, 7080, false);
+        check(c->shiftChanged(false, false, 7080, false) && c->mode() == Composer::Mode::English,
+              "没在打字：单按松开马上切英文");
         c->shiftChanged(true, false, 7600, false);
-        check(c->mode() == Composer::Mode::English, "过了间隔才按第二下：第一下照切");
-        c->shiftChanged(false, false, 7680, false);
-        check(c->mode() == Composer::Mode::English && settleShift(*c, 8100) && c->mode() == Composer::Mode::Chinese,
-              "第二下到时间也切");
+        check(c->mode() == Composer::Mode::English, "过了间隔才按第二下：第一下不撤");
+        check(c->shiftChanged(false, false, 7680, false) && c->mode() == Composer::Mode::Chinese,
+              "第二下松开也马上切");
     }
     {
         // #191：互译只翻一句（TranslateOneShot）。翻译器填了地址和模型就算能翻（这里连不上，不等译文：
@@ -1091,8 +1091,7 @@ int main(int argc, char **argv) {
             return c->shiftChanged(false, false, at + 330, false);
         };
         c->shiftChanged(true, false, 1000, false);
-        c->shiftChanged(false, false, 1080, false);
-        check(settleShift(*c, 1500) && c->mode() == M::English, "#191：单按 Shift 先到英文");
+        check(c->shiftChanged(false, false, 1080, false) && c->mode() == M::English, "#191：单按 Shift 先到英文");
         check(doubleTap(2000) && c->mode() == M::Translate, "#191：英文里双击进「译」（这一下切了模式）");
         check(!settleShift(*c, 3000) && c->mode() == M::Translate, "#191：过了间隔也不再切");
         type(*c, "nihao ");
@@ -1101,8 +1100,7 @@ int main(int argc, char **argv) {
                   c->translateSource().empty(),
               "#191：Esc 放弃，回到英文", client->committed);
         c->shiftChanged(true, false, 4000, false);
-        c->shiftChanged(false, false, 4080, false);
-        check(settleShift(*c, 4500) && c->mode() == M::Chinese, "#191：单按回中文（不经过「译」）");
+        check(c->shiftChanged(false, false, 4080, false) && c->mode() == M::Chinese, "#191：单按回中文（不经过「译」）");
         // 打到一半双击：拼音带进「译」接着打；Shift+回车上屏原文，回到中文，照「译」记统计
         type(*c, "ni");
         check(doubleTap(5000) && c->mode() == M::Translate && c->isComposing() && client->committed.empty(),
@@ -1118,7 +1116,8 @@ int main(int argc, char **argv) {
         // 关着：双击两下都不算，单按照旧 中 → 英 → 译
         config.setValue("TranslateOneShot", "False");
         c->apply(config);
-        check(!doubleTap(9000) && !settleShift(*c, 10000) && c->mode() == M::Chinese, "#191：关着时双击 Shift 不切");
+        doubleTap(9000);
+        check(!settleShift(*c, 10000) && c->mode() == M::Chinese, "#191：关着时双击 Shift 两下抵掉，还是中文");
         tapShift(*c);
         tapShift(*c);
         check(c->mode() == M::Translate, "#191：关着时单按照旧切到「译」");

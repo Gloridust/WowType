@@ -376,8 +376,8 @@ do {
     _ = c.shiftChanged(down: true, otherModifiers: false, now: 3.0)
     check(!c.shiftChanged(down: false, otherModifiers: false, now: 3.8) && !settleShift(c, at: 4.3), "按太久不算单按")
     _ = c.shiftChanged(down: true, otherModifiers: false, now: 5.0)
-    _ = c.shiftChanged(down: false, otherModifiers: false, now: 5.1)
-    check(settleShift(c, at: 5.5) && c.mode == .chinese, "再单按切回中文")
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 5.1) && c.mode == .chinese,
+          "再单按马上切回中文（没在打字，#310）")
 }
 
 do {
@@ -402,12 +402,11 @@ do {
     _ = c.shiftChanged(down: false, otherModifiers: false, now: 6.08)
     c.otherModifierChanged()
     check(c.mode == .chinese, "等双击时按了别的修饰键：先切回中文")
-    // 过了间隔才按第二下（轮询晚了）：第一下在按下时切，第二下自己再等
+    // 没在打字：单按松开马上切（#310）；过了间隔才按的第二下不算双击，松开再切回来
     _ = c.shiftChanged(down: true, otherModifiers: false, now: 7.0)
-    _ = c.shiftChanged(down: false, otherModifiers: false, now: 7.08)
-    check(c.shiftChanged(down: true, otherModifiers: false, now: 7.6) && c.mode == .english, "过了间隔才按第二下：第一下照切")
-    _ = c.shiftChanged(down: false, otherModifiers: false, now: 7.68)
-    check(c.mode == .english && settleShift(c, at: 8.1) && c.mode == .chinese, "第二下到时间也切")
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 7.08) && c.mode == .english, "没在打字：单按松开马上切英文")
+    check(!c.shiftChanged(down: true, otherModifiers: false, now: 7.6) && c.mode == .english, "过了间隔才按第二下：第一下不撤")
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 7.68) && c.mode == .chinese, "第二下松开也马上切")
 }
 
 do {
@@ -858,8 +857,8 @@ withConfig({ $0.shiftToggle = .right }) { c, _ in
     check(!c.shiftChanged(down: false, otherModifiers: false, now: 1.1, right: false) && !settleShift(c, at: 1.5)
               && c.mode == .chinese, "只用右 Shift：左 Shift 不切")
     _ = c.shiftChanged(down: true, otherModifiers: false, now: 2.0, right: true)
-    _ = c.shiftChanged(down: false, otherModifiers: false, now: 2.1, right: true)
-    check(settleShift(c, at: 2.5) && c.mode == .english, "右 Shift 切英文")
+    check(c.shiftChanged(down: false, otherModifiers: false, now: 2.1, right: true) && c.mode == .english,
+          "右 Shift 切英文")
     var off = c.config
     off.shiftToggle = .off
     c.apply(off)
@@ -1588,7 +1587,7 @@ do {
     _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 1.1)
     _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 2.0)
     _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 2.1)
-    check(settleShift(r.c, at: 2.5) && r.c.mode == .translate, "单按两次 Shift 到译（隔开一秒，不算双击）")
+    check(r.c.mode == .translate, "单按两次 Shift 到译（隔开一秒，不算双击）")
     // #253：双击不进「译」，也不动
     _ = r.c.shiftChanged(down: true, otherModifiers: false, now: 3.0)
     _ = r.c.shiftChanged(down: false, otherModifiers: false, now: 3.08)
@@ -1760,7 +1759,8 @@ do {
     let off = translateRig()
     off.c.switchMode(to: .chinese)
     off.clock.now = shiftClock + 10
-    check(!doubleTapShift(off.c, at: off.clock.now) && off.c.mode == .chinese, "关着：双击 Shift 不切")
+    _ = doubleTapShift(off.c, at: off.clock.now)
+    check(off.c.mode == .chinese, "关着：双击 Shift 两下抵掉，还是中文")
     off.tick(1)
     check(off.c.mode == .chinese, "关着：过了间隔也不切")
     tapShift(off.c)
