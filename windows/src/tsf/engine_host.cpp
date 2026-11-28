@@ -128,6 +128,13 @@ void EngineHost::loadConfig() {
             // 关掉时记录器丢掉内存里还没写的计数，以后什么都不记
             wowtype_stats_set_enabled(stats_, config_.flag("TypingStats"));
         }
+        // 开发者模式（默认关）：开着时核心把每次选词、上屏明文记进数据目录的 devlog.jsonl（docs/DEVLOG.md），
+        // 会话的每次调用自己写，这里只管开关。几个应用进程各写各的，都是整行追加
+        if (config_.flag("DeveloperMode")) {
+            wowtype_devlog_configure(narrow(dataDir() + L"\\devlog.jsonl").c_str(), 1);
+        } else {
+            wowtype_devlog_configure(nullptr, 0);
+        }
         if (WowtypeEngineHandle *engine = engine_.load()) {
             applyEngineSettings(engine);
         }
@@ -270,6 +277,15 @@ void EngineHost::ensureLoading() {
         loadConfig();
     }
     wowtype_recent_emoji_path(narrow(dataDir() + L"\\emoji-recent.txt").c_str());
+    {
+        // 开发者模式的记录里带上是在哪个应用里打的：这个 DLL 加载在应用进程里，exe 的名字就是应用
+        wchar_t exe[MAX_PATH] = {};
+        std::wstring name(exe, GetModuleFileNameW(nullptr, exe, MAX_PATH));
+        if (const auto slash = name.find_last_of(L"\\/"); slash != std::wstring::npos) {
+            name.erase(0, slash + 1);
+        }
+        wowtype_devlog_set_app(narrow(name).c_str());
+    }
     // 打字统计的记录器：建好时是关着的（不读不建文件），按 TypingStats 打开。几个应用进程各有一个，
     // 核心写文件时先读回再合并，计数不会互相盖掉
     stats_ = wowtype_stats_new(narrow(dataDir() + L"\\stats.json").c_str());

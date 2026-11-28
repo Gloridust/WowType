@@ -288,6 +288,9 @@ public struct WowtypeConfig: Equatable {
     public var betaUpdates = false
     /// 打字统计（TypingStats，默认关）：开了才在本机按天记计数（字数、按键次数），不记打的内容
     public var typingStats = false
+    /// 开发者模式（DeveloperMode，默认关）：开了以后把每次上屏打的输入、当时的候选、选了第几个明文记在本机
+    /// （docs/DEVLOG.md），调排序用
+    public var developerMode = false
     /// 设置窗口的主题、强调色（只管设置窗口，输入法不读）
     public var settingsTheme = SettingsTheme.system
     public var settingsAccent = "Green"
@@ -433,7 +436,8 @@ public struct WowtypeConfig: Equatable {
         "ClipboardSync", "ClipboardSyncLan", "ClipboardSyncRelayUrl", "ClipboardSyncDeviceName", "ClipboardSyncPaste",
         "Voice", "VoiceKey", "VoiceSilenceTimeout",
         "VoiceCopy", "EmojiKey",
-        "ToggleKey", "TranslateModeKey", "CheckUpdate", "BetaUpdates", "TypingStats", "SettingsTheme", "SettingsAccent",
+        "ToggleKey", "TranslateModeKey", "CheckUpdate", "BetaUpdates", "TypingStats", "DeveloperMode",
+        "SettingsTheme", "SettingsAccent",
         "Translate", "TranslateTarget", "TranslateBaseUrl", "TranslateModel", "TranslateFormal", "TranslateOneShot",
         "TranslateLocal", "TranslateLocalModel", "TranslateLlamaServer", "TranslateIdleMinutes",
     ]
@@ -459,6 +463,7 @@ public struct WowtypeConfig: Equatable {
         "Translate": \.translate, "TranslateFormal": \.translateFormal, "TranslateOneShot": \.translateOneShot,
         "TranslateLocal": \.translateLocal,
         "CheckUpdate": \.checkUpdate, "BetaUpdates": \.betaUpdates, "TypingStats": \.typingStats,
+        "DeveloperMode": \.developerMode,
     ]
 
     /// 按文件里的写法改一项。不认识的键、认不出的值不管（保持原值）。
@@ -823,6 +828,8 @@ public struct WowtypeConfig: Equatable {
         BetaUpdates=\(b(d.betaUpdates))
         # 打字统计：只在本机按天记字数、按键次数这些计数，不记打的内容；默认关，关着时什么都不记
         TypingStats=\(b(d.typingStats))
+        # 开发者模式：把每次上屏打的输入、当时的候选、选了第几个明文记进数据目录的 devlog.jsonl（调排序用）；默认关
+        DeveloperMode=\(b(d.developerMode))
         # 设置窗口的主题：System 跟随系统、Light 浅色、Dark 深色（只管设置窗口，不管候选框）
         SettingsTheme=\(d.settingsTheme.rawValue)
         # 设置窗口的强调色：Green 绿色、Blue 蓝色、Purple 紫色、Orange 橙色、Pink 粉色

@@ -314,6 +314,9 @@ FCITX_CONFIGURATION(
     // 打字统计默认关；开了也只在本机记每天的计数（字数、按键次数），不记打的内容，见 docs/CONFIG.md
     fcitx::Option<bool> typingStats{this, "TypingStats",
                                     "打字统计（只在本机记每天的字数和按键次数，不记打的内容）", false};
+    // 开发者模式默认关；开了以后核心把打的字、当时的候选、选了第几个明文记在本机，调排序用，见 docs/DEVLOG.md
+    fcitx::Option<bool> developerMode{this, "DeveloperMode",
+                                      "开发者模式（把打的字、候选和选了第几个明文记在本机，调试用）", false};
     // 互译：API Key 不放这里（这个文件谁都能读），在 ~/.config/wowtype/translate.key（0600）
     fcitx::Option<bool> translate{this, "Translate", "互译（打中文出外文，单按 Shift 或互译键切到「译」）",
                                   false};
@@ -754,6 +757,8 @@ private:
     /// 打字统计（按天聚合，见 core/src/stats.rs）；数据目录找不到时为空。TypingStats 关着时记录器什么都不做。
     WowtypeStats *stats_ = nullptr;
     bool typingStats_ = false;
+    /// 开发者模式（DeveloperMode，默认关）：开着时核心把每次选词、上屏记进 devlog.jsonl（core/src/devlog.rs）。
+    bool developerMode_ = false;
 
     WowtypeVoice *voice_ = nullptr;
     /// 语音结果同时复制到剪贴板（默认关）。

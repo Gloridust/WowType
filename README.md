@@ -620,6 +620,9 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
                                            # （不给 WAV 时跑「没有模型按右 Alt 只提示」）
 ```
 
+想知道排序对自己真实打的字准不准：在设置里打开「开发者模式」（默认关，会把打的字明文记在本机，打开时有说明），
+打一阵子以后用 `tools/devlog.py` 看首选命中率、哪些词总是排不到第一个，也能转成评测用例，见 [docs/DEVLOG.md](docs/DEVLOG.md)。
+
 改了排序，用 `scripts/eval.sh <数据目录>` 跑仓库里的评测集、和基线对比改前改后（CI 也跑这个，回归集必须全过；见 [tools/eval/README.md](tools/eval/README.md)，`wowtype-eval` 的用法见 [docs/ENGINE.md](docs/ENGINE.md#调排序)）。
 推送 `v*` 标签会自动编译各发行版的安装包并发布到 Releases。
 
@@ -638,6 +641,7 @@ WOWTYPE_VOICE_WAV=说的话.wav WOWTYPE_VOICE_EXPECT=期望的字 scripts/addon-
 - 输入示例：[docs/USAGE.md](docs/USAGE.md)
 - 设置项、环境变量、数据文件：[docs/CONFIG.md](docs/CONFIG.md)
 - 跨设备复制粘贴：[docs/SYNC.md](docs/SYNC.md)
+- 开发者模式的打字记录（调排序用）：[docs/DEVLOG.md](docs/DEVLOG.md)
 - 从源码构建：[docs/INSTALL.md](docs/INSTALL.md)
 - 卸载：[docs/INSTALL.md](docs/INSTALL.md#卸载)
 - 目前做不到的：[docs/LIMITATIONS.md](docs/LIMITATIONS.md)

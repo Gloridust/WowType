@@ -1428,6 +1428,22 @@ void WowtypeEngine::applyConfig() {
         // 关掉时记录器丢掉内存里还没写的计数，以后什么都不记
         wowtype_stats_set_enabled(stats_, typingStats_ ? 1 : 0);
     }
+    // 开发者模式（默认关）：打开以后核心把每次选词、上屏明文记进 ~/.local/share/wowtype/devlog.jsonl，
+    // 会话的每次调用自己写，这里只管开关。密码框里的不记（按键带 NO_LEARN）
+    developerMode_ = envOr("WOWTYPE_DEVELOPER_MODE", *config_.developerMode);
+    {
+        std::string devlog;
+        if (const char *env = std::getenv("WOWTYPE_DEVLOG"); env && *env) {
+            devlog = env;
+        } else if (const std::string dir = userDataDir(); !dir.empty()) {
+            devlog = dir + "/devlog.jsonl";
+        }
+        if (developerMode_ && !devlog.empty()) {
+            wowtype_devlog_configure(devlog.c_str(), 1);
+        } else {
+            wowtype_devlog_configure(nullptr, 0);
+        }
+    }
     dateTime_ = envOr("WOWTYPE_DATETIME", *config_.dateTime);
     calculator_ = envOr("WOWTYPE_CALC", *config_.calculator);
     toolbar_ = envOr("WOWTYPE_TOOLBAR", *config_.toolbar);
@@ -1572,7 +1588,8 @@ void WowtypeEngine::applyConfig() {
              << " 互译=" << translateEnabled_ << "("
              << (translateAvailable() ? translateModel + " → " + translateTarget : "未配置")
              << ")"
-             << " 检查更新=" << *config_.checkUpdate << " 打字统计=" << typingStats_;
+             << " 检查更新=" << *config_.checkUpdate << " 打字统计=" << typingStats_
+             << " 开发者模式=" << developerMode_;
     if (core_) {
         applyCoreSettings();
     }
@@ -2890,6 +2907,8 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     }
     // 最近用过的 emoji 在核心里（所有输入框共用），存在 ~/.local/share/wowtype/emoji-recent.txt
     wowtype_recent_emoji_path(recentEmojiPath().c_str());
+    // 开发者模式的记录里带上是在哪个应用里打的（关着时只是记个名字，什么都不写）
+    wowtype_devlog_set_app(ic->program().c_str());
     sampleClipboard(ic);
     if (sync_ && syncEnabled_) {
         // 有人在用：中转服务那边保持连接，别的设备复制的马上能到

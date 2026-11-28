@@ -322,6 +322,7 @@ private struct GeneralPage: View {
                 Image(systemName: "trash").foregroundColor(.secondary)
             }
         }
+        DeveloperGroup(model: model)
     }
 
     /// 方向键那一行的副标题：这种用法和候选排列下各个方向键做什么（和 Linux 设置一样）
@@ -647,6 +648,88 @@ private struct InputPage: View {
 
     private var lexiconColor: Color? {
         model.lexiconKind == .custom && model.customLexiconMissing ? palette.warning : nil
+    }
+}
+
+/// 开发者模式（docs/DEVLOG.md，和 Linux 设置的「常规 → 开发者」一样）：默认关，打开要先确认——记下来的是
+/// 明文的打字记录；记录能导出、清空。只有输入法写记录文件，这里只看条数和大小。
+private struct DeveloperGroup: View {
+    @ObservedObject var model: SettingsModel
+    @State private var confirmOn = false
+    @State private var confirmClear = false
+    @State private var status = ""
+    @State private var hasRecords = false
+    @State private var hasFiles = false
+    private let tick = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+
+    private var path: String {
+        model.supportDir.appendingPathComponent(DevLog.fileName).path
+    }
+
+    var body: some View {
+        PrefGroup("开发者", info: DevLog.info) {
+            SwitchRow(title: "开发者模式", subtitle: "把打的字、候选和选了第几个明文记在本机，调试用",
+                      isOn: Binding(get: { model.config.developerMode },
+                                    set: { on in
+                                        if on {
+                                            // 先不打开：点了「打开，开始记录」才真的打开
+                                            confirmOn = true
+                                        } else {
+                                            model.config.developerMode = false
+                                            reload()
+                                        }
+                                    }))
+                .alert("打开开发者模式？", isPresented: $confirmOn) {
+                    Button("打开，开始记录") {
+                        model.config.developerMode = true
+                        reload()
+                    }
+                    Button("取消", role: .cancel) {}
+                } message: {
+                    Text(DevLog.warning)
+                }
+            RowDivider()
+            ActionRow(title: "打字记录", subtitle: status) {
+                Button("导出…") { export() }
+                    .disabled(!hasRecords)
+                Button("清空", role: .destructive) { confirmClear = true }
+                    .disabled(!hasFiles)
+            }
+            .confirmationDialog("清空打字记录？", isPresented: $confirmClear) {
+                Button("清空", role: .destructive) { clear() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("已经记下的都会删掉，不能恢复。开关保持现在的位置。")
+            }
+        }
+        .onAppear { reload() }
+        .onReceive(tick) { _ in reload() }
+    }
+
+    private func reload() {
+        status = DevLog.statusText(path: path, enabled: model.config.developerMode)
+        hasRecords = DevLog.summary(path).count > 0
+        hasFiles = !DevLog.files(path).isEmpty
+    }
+
+    private func clear() {
+        model.showToast(DevLog.clear(path: path) ? "打字记录已清空" : "清空失败")
+        reload()
+    }
+
+    private func export() {
+        let panel = NSSavePanel()
+        let stamp = DateFormatter()
+        stamp.dateFormat = "yyyyMMdd-HHmmss"
+        panel.nameFieldStringValue = "wowtype-devlog-\(stamp.string(from: Date())).jsonl"
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let count = try DevLog.export(from: path, to: url.path)
+            model.showToast("\(count) 条打字记录已保存（明文，别随手发给别人）")
+        } catch {
+            model.showToast("导出失败：\(error.localizedDescription)")
+        }
     }
 }
 

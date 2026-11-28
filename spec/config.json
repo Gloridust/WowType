@@ -240,6 +240,9 @@
     {"key": "TypingStats", "type": "bool", "default": false,
      "platforms": ["fcitx5", "settings", "macos", "windows"],
      "note": "打字统计（设置的「统计」页）。默认关：关着时什么都不记、不建 stats.json。打开以后只在本机按天记聚合计数（字数、各类字符数、活跃时长、每个键按了几次、输入模式和双拼方案的字数、候选位置），不记打的内容、拼音、按键顺序和时刻，密码框里的不算。清空：设置里「清除统计」（stats.clear 里的整数加一、删掉 stats.json），见 docs/CONFIG.md「打字统计」"},
+    {"key": "DeveloperMode", "type": "bool", "default": false,
+     "platforms": ["fcitx5", "settings", "macos", "windows"],
+     "note": "开发者模式（调排序用）。默认关：关着时什么都不记、不建文件。打开以后输入法把每次上屏明文记进数据目录的 devlog.jsonl（一行一个 JSON）：打的原始输入、光标前的上文、当时的候选、选了第几个、怎么选的，放弃的和上屏后紧接着退格的也记，密码框里的不记。这是一份明文的打字记录，设置界面打开时要弹窗确认，「导出日志」不带它；清空：设置里「清空记录」（删掉 devlog.jsonl 和 devlog.jsonl.1）。见 docs/DEVLOG.md"},
     {"key": "SettingsTheme", "type": "enum", "default": "System",
      "values": [
        {"value": "System", "name": "跟随系统"},

@@ -1325,6 +1325,39 @@ int main(int argc, char **argv) {
         check(pairs().find("p\t略\t号\t") != std::string::npos, "没清空时照常学搭配（略 → 号）");
     }
 
+    // ---------------------------------------------------------------- 开发者模式的打字记录（docs/DEVLOG.md）
+    {
+        check(!Config().flag("DeveloperMode") && Config::parse("DeveloperMode=True\n").flag("DeveloperMode"),
+              "DeveloperMode 默认关、读得出来");
+        const std::string devlog = (dir / "devlog.jsonl").string();
+        auto lines = [&devlog]() {
+            std::vector<std::string> out;
+            std::ifstream in(devlog);
+            for (std::string line; std::getline(in, line);) {
+                out.push_back(line);
+            }
+            return out;
+        };
+        auto has = [](const std::string &line, const std::string &part) { return line.find(part) != std::string::npos; };
+        auto [c, client] = fresh();
+        type(*c, "nihao ");
+        check(lines().empty() && wowtype_devlog_enabled() == 0, "开发者模式关着时什么都不记");
+        // 外壳读到 DeveloperMode=True 时就是这样打开的（engine_host.cpp 的 loadConfig）
+        check(wowtype_devlog_configure(devlog.c_str(), 1) == 0 && wowtype_devlog_enabled() == 1, "打开开发者模式");
+        wowtype_devlog_set_app("notepad.exe");
+        type(*c, "nihao ");
+        auto got = lines();
+        check(got.size() == 1 && has(got[0], "\"e\":\"commit\"") && has(got[0], "\"input\":\"nihao\"") &&
+                  has(got[0], "\"pick\":1") && has(got[0], "\"via\":\"space\"") && has(got[0], "\"cands\":[") &&
+                  has(got[0], "\"app\":\"notepad.exe\""),
+              "开发者模式：上屏记一行（输入、选了第几个、怎么选的、候选、应用）", got.empty() ? "没有记录" : got[0]);
+        check(wowtype_devlog_configure(nullptr, 0) == 0 && wowtype_devlog_enabled() == 0, "关上开发者模式");
+        type(*c, "nihao ");
+        check(lines().size() == 1, "开发者模式关掉以后不再记");
+        check(wowtype_devlog_clear(devlog.c_str()) == 0 && lines().empty(), "清空打字记录");
+        wowtype_devlog_set_app(nullptr);
+    }
+
     wowtype_engine_free(engine);
     std::error_code ignored;
     std::filesystem::remove_all(dir, ignored);

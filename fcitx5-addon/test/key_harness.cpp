@@ -1706,6 +1706,50 @@ void runCases(Instance &instance) {
     }
     fresh(ic.get());
 
+    // 开发者模式（默认关）：打开以后每次上屏在 devlog.jsonl 里记一行（打了什么、选了第几个），关掉就不记
+    {
+        const std::string devlog = std::string(std::getenv("XDG_DATA_HOME")) + "/wowtype/devlog.jsonl";
+        auto lines = [&devlog]() {
+            std::vector<std::string> out;
+            std::ifstream in(devlog);
+            for (std::string line; std::getline(in, line);) {
+                out.push_back(line);
+            }
+            return out;
+        };
+        auto has = [](const std::string &line, const std::string &part) {
+            return line.find(part) != std::string::npos;
+        };
+        type(ic.get(), "nihao<sp>");
+        check(lines().empty(), "开发者模式关着时什么都不记");
+        std::ofstream(configDir + "/wowtype.conf") << "DeveloperMode=True\n";
+        addon->reloadConfig();
+        fresh(ic.get());
+        type(ic.get(), "nihao<sp>");
+        const std::string committed = ic->committed;
+        auto got = lines();
+        check(got.size() == 1 && has(got[0], "\"e\":\"commit\"") && has(got[0], "\"input\":\"nihao\"") &&
+                  has(got[0], "\"text\":\"" + committed + "\"") && has(got[0], "\"pick\":1") &&
+                  has(got[0], "\"via\":\"space\"") && has(got[0], "\"cands\":[") &&
+                  has(got[0], "\"app\":\"wowtype-harness\""),
+              "开发者模式：上屏记一行（输入、上屏的字、选了第几个、怎么选的、候选、应用）：" +
+                  (got.empty() ? std::string("没有记录") : got[0]));
+        type(ic.get(), "<bs>");
+        got = lines();
+        check(got.size() == 2 && has(got[1], "\"e\":\"backspace\""), "开发者模式：上屏后紧接着退格记一行");
+        type(ic.get(), "ni<esc>");
+        got = lines();
+        check(got.size() == 3 && has(got[2], "\"e\":\"abandon\"") && has(got[2], "\"input\":\"ni\""),
+              "开发者模式：Esc 放弃记一行");
+        std::ofstream(configDir + "/wowtype.conf") << "DeveloperMode=False\n";
+        addon->reloadConfig();
+        fresh(ic.get());
+        type(ic.get(), "nihao<sp>");
+        check(lines().size() == 3, "开发者模式关掉以后不再记");
+        std::filesystem::remove(devlog);
+        fresh(ic.get());
+    }
+
     // 删掉文件再 reload：回到默认
     std::filesystem::remove(configDir + "/wowtype.conf");
     std::filesystem::remove(customFile);

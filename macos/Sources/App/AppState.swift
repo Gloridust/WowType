@@ -121,6 +121,13 @@ final class AppState {
         }
     }
 
+    /// 设置里的 DeveloperMode（默认关）：开着时核心把每次选词、上屏明文记进数据目录的 devlog.jsonl，
+    /// 会话的每次调用自己写，这里只管开关。
+    private func applyDeveloperSettings() {
+        DevLog.apply(enabled: config.developerMode,
+                     path: supportDir.appendingPathComponent(DevLog.fileName).path)
+    }
+
     /// 设置里的 TypingStats：关掉时记录器丢掉内存里还没写的计数，以后什么都不记。
     private func applyStatsSettings() {
         guard let stats else { return }
@@ -277,6 +284,7 @@ final class AppState {
             configGeneration += 1
             applyTranslateSettings()
             applyStatsSettings()
+            applyDeveloperSettings()
             applyClipboardSyncSettings()
             NSLog("WowType: 设置 %@ 每页%d 模糊音=%d(%u) 纠错=%d 双拼=%d(%@) 五笔=%d Shift切换=%@ 繁体=%d 半角标点=%d 字号=%d 词库=%@ 工具栏=%d 剪贴板历史=%d 表情键=%@ 互译=%@",
                   config.horizontal ? "横排" : "竖排", config.pageSize, config.fuzzy ? 1 : 0, config.fuzzyGroups,

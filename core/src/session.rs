@@ -20,6 +20,8 @@
 //! （打字途中的标点、其他可见字符、吃掉的光标键）。鼠标点候选按全局序号调
 //! [`Session::choose`]，表情面板往编辑区加搜索词用 [`Session::append`]，这些过渡用法挪完以后会删掉。
 
+use serde_json::{json, Value};
+
 use crate::datetime::LocalTime;
 pub use crate::symbols::PunctStyle;
 use crate::translate::JobState;
@@ -657,6 +659,27 @@ const EMOJI_SLOT: usize = 2;
 /// 五笔的逐码提示最多列几个（只打一码时以它开头的有四五千条，列多了没用）。
 const WUBI_MORE: usize = 50;
 
+/// 开发者模式的记录（[`crate::devlog`]，默认关）：开着时会话把每次选词、上屏、放弃记成 JSON 攒在
+/// `out` 里，C 接口每次调用完取走写文件。密码框（[`key_hints::NO_LEARN`]）里什么都不攒。
+#[derive(Clone, Debug, Default)]
+struct Trace {
+    on: bool,
+    /// 攒着还没取走的事件。
+    out: Vec<Value>,
+    /// 这次输入里已经选的几步（句首词、以词定字），上屏或放弃时跟着事件一起交出去。
+    steps: Vec<Value>,
+    /// 这次输入从第一个键起按过的键（字母原样，别的键写成 `<名字>`）。
+    keys: String,
+    /// 这次输入第一个键的时刻（按键没带时刻是 0）。
+    started_ms: u64,
+    /// 这次调用是怎么来的：按键的名字，或者 click（鼠标点候选）、reset、mode。
+    via: String,
+    /// 这次调用的时刻（按键带的；没带、不是按键来的是 0）。
+    at_ms: u64,
+    /// 刚上屏的字：下一个键是退格时记一条 backspace。
+    last_commit: Option<String>,
+}
+
 /// 一个输入框的会话。只能在一个线程里用。
 ///
 /// 引擎是后台载入的，载入好之前 `engine` 是 None（照样能打字，只是没有候选）。
@@ -729,6 +752,8 @@ pub struct Session<'e> {
     undo_commit: Option<std::ops::Range<u64>>,
     /// 这次上屏开始学习前的学习日志位置（没有已选的词时，上屏的学习从这里算）。
     commit_start: Option<u64>,
+    /// 开发者模式的记录（默认关），见 [`Session::set_trace`]。
+    trace: Trace,
     /// 上屏以后的联想，没有是 None。
     association: Option<Association>,
     /// 这次调用选词上屏了（后面没再上屏标点之类）：调用结束时出联想。
@@ -796,6 +821,7 @@ impl Default for Session<'_> {
             now_ms: 0,
             undo_commit: None,
             commit_start: None,
+            trace: Trace::default(),
             association: None,
             association_due: false,
             next_char: None,
@@ -885,6 +911,10 @@ impl<'e> Session<'e> {
         if key.time_ms != 0 {
             self.now_ms = key.time_ms;
         }
+        if self.trace.on {
+            self.trace.via = key_token(key);
+            self.trace.at_ms = key.time_ms;
+        }
         if let Some(handled) = self.shift_key(key) {
             return self.frame(handled);
         }
@@ -942,12 +972,23 @@ impl<'e> Session<'e> {
             // 外壳报 Shift 时不带提示：留着上一个键的（密码框里双击 Shift 进不了「译」，#191）
             self.hints = key.hints;
         }
+        // 开发者模式：打字途中的键记进这次输入的按键串（开始这次输入的那个键在处理完以后记）
+        let traced = self.trace.on && !is_modifier_keysym(key.keysym);
+        let was_composing = self.composing();
+        if traced && was_composing {
+            self.trace_key();
+        }
         if !is_modifier_keysym(key.keysym) {
             // 上屏后紧接着按退格（编辑区空着，退格要交给应用删字）：刚才那次上屏是打错了，
             // 学到的东西退回去。按了别的键就不算了（只修最近一次、只在紧接着时）
             let undo = self.undo_commit.take();
             if let Some(span) = undo.filter(|_| self.backspace_undoes(key)) {
                 self.unlearn(&span);
+            }
+            if let Some(text) = self.trace.last_commit.take() {
+                if self.tracing() && self.backspace_undoes(key) {
+                    self.trace.out.push(json!({"e": "backspace", "text": text}));
+                }
             }
         }
         let surrounding = key.hints & key_hints::SURROUNDING != 0;
@@ -984,8 +1025,181 @@ impl<'e> Session<'e> {
             }
             self.pair_key_passed(key);
         }
+        if traced {
+            if !was_composing && self.composing() {
+                self.trace_key();
+            }
+            self.trace_settle();
+        }
         self.settle_association();
         self.frame(handled)
+    }
+
+    /// 开发者模式的记录（[`crate::devlog`]）开不开。关上时攒着的都丢掉。
+    pub fn set_trace(&mut self, on: bool) {
+        if self.trace.on != on {
+            self.trace = Trace { on, ..Trace::default() };
+        }
+    }
+
+    /// 取走攒着的记录（每条一个 JSON 对象，没有时刻：写文件的时候加）。
+    pub fn take_trace(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.trace.out)
+    }
+
+    /// 现在记不记：开着，而且不在密码框里。
+    fn tracing(&self) -> bool {
+        self.trace.on && !self.sensitive()
+    }
+
+    /// 把这次调用的键记进这次输入的按键串。
+    fn trace_key(&mut self) {
+        // 工具栏、表情面板里打的是搜索词，不是要上屏的输入：不记
+        if !self.tracing() || self.tool.is_some() {
+            return;
+        }
+        if self.trace.keys.is_empty() {
+            self.trace.started_ms = self.trace.at_ms;
+        }
+        let token = &self.trace.via;
+        if token.chars().count() == 1 {
+            self.trace.keys.push_str(token);
+        } else {
+            self.trace.keys.push('<');
+            self.trace.keys.push_str(token);
+            self.trace.keys.push('>');
+        }
+    }
+
+    /// 记一步选词，选之前调（记的是那时还没选的输入和候选框里的候选）。index 是全部候选里的序号；
+    /// None 是没选候选、原样上屏输入。part：以词定字只取了这个词的第一个（first）还是最后一个（last）字。
+    fn trace_step(&mut self, index: Option<usize>, chosen: Option<&Candidate>, part: &str) {
+        if !self.tracing() {
+            return;
+        }
+        let size = self.page_size();
+        let keep = (size * 2)
+            .max(index.map_or(0, |i| i + 1))
+            .min(crate::devlog::MAX_CANDIDATES);
+        let rest = self.remaining().to_owned();
+        let list = self.candidates();
+        let total = list.len();
+        let cands: Vec<Value> = list.iter().take(keep).map(trace_candidate).collect();
+        let mut step = json!({
+            "via": self.trace.via,
+            "rest": rest,
+            "pick": index.map_or(0, |i| i + 1),
+            "page": self.page,
+            "page_size": size,
+            "total": total,
+            "cands": cands,
+        });
+        if self.expanded {
+            step["expanded"] = true.into();
+        }
+        match chosen {
+            Some(c) => {
+                step["text"] = c.text.as_str().into();
+                step["consumed"] = c.consumed.into();
+                step["kind"] = kind_name(c.kind).into();
+                if !c.pinyin.is_empty() {
+                    step["pinyin"] = c.pinyin.as_str().into();
+                }
+                if c.commit != c.text {
+                    step["commit"] = c.commit.as_str().into();
+                }
+            }
+            None => {
+                step["text"] = rest.as_str().into();
+                step["consumed"] = rest.len().into();
+                step["kind"] = "raw".into();
+            }
+        }
+        if !part.is_empty() {
+            step["char"] = part.into();
+        }
+        self.trace.steps.push(step);
+    }
+
+    /// 一条 commit / abandon 事件公共的几项。
+    fn trace_event(&self, kind: &str, steps: Vec<Value>, keys: String) -> Value {
+        let mode = match self.mode {
+            Mode::Chinese => "zh",
+            Mode::English => "en",
+            Mode::Translate => "translate",
+        };
+        let scheme = if self.wubi() {
+            if self.temp_pinyin() { "wubi-pinyin".to_owned() } else { "wubi".to_owned() }
+        } else if let Some(config) = self.engine.map(Engine::config).filter(|c| c.shuangpin) {
+            format!("shuangpin:{}", config.shuangpin_scheme.id())
+        } else {
+            "pinyin".to_owned()
+        };
+        let mut event = json!({
+            "e": kind,
+            "mode": mode,
+            "scheme": scheme,
+            "input": self.input,
+            "context": self.context,
+            "keys": keys,
+            "steps": steps,
+        });
+        if let Some(config) = self.engine.map(Engine::config) {
+            // 排序跟着这几项变：回放的时候要照着设
+            event["cfg"] = json!({
+                "fuzzy": config.fuzzy,
+                "traditional": config.traditional,
+                "typo": config.typo_correction,
+                "english": config.english_candidate,
+                "nnlm": config.nnlm_rerank,
+            });
+        }
+        event
+    }
+
+    /// 这次输入要上屏了（清空编辑区之前调）：记一条 commit。
+    fn trace_commit(&mut self, text: &str) {
+        if !self.trace.on {
+            return;
+        }
+        let steps = std::mem::take(&mut self.trace.steps);
+        let keys = std::mem::take(&mut self.trace.keys);
+        let started = std::mem::take(&mut self.trace.started_ms);
+        self.trace.last_commit = None;
+        if self.sensitive() || (steps.is_empty() && self.input.is_empty()) {
+            return;
+        }
+        let mut event = self.trace_event("commit", steps, keys);
+        event["text"] = text.into();
+        if started != 0 && self.trace.at_ms >= started {
+            event["ms"] = (self.trace.at_ms - started).into();
+        }
+        self.trace.out.push(event);
+        self.trace.last_commit = Some(text.to_owned());
+    }
+
+    /// 这次输入放弃了（Esc、失去焦点；清空编辑区之前调）：记一条 abandon。上屏走的是 [`Session::trace_commit`]，
+    /// 它已经把按键串取走了，这里就不再记。
+    fn trace_abandon(&mut self) {
+        if !self.trace.on || self.trace.keys.is_empty() {
+            return;
+        }
+        let steps = std::mem::take(&mut self.trace.steps);
+        let keys = std::mem::take(&mut self.trace.keys);
+        self.trace.started_ms = 0;
+        if self.sensitive() {
+            return;
+        }
+        let mut event = self.trace_event("abandon", steps, keys);
+        event["via"] = self.trace.via.as_str().into();
+        self.trace.out.push(event);
+    }
+
+    /// 按键处理完：编辑区空了、按键串还在，是一个一个删光的，也算放弃。
+    fn trace_settle(&mut self) {
+        if !self.composing() {
+            self.trace_abandon();
+        }
     }
 
     /// 联想开着时的键。Some：联想处理完了；None：联想关了（或者是单按的修饰键，联想留着），照原来的规则处理。
@@ -1129,10 +1343,35 @@ impl<'e> Session<'e> {
             self.learn(plain, "");
             self.learned = true;
         }
+        if self.tracing() {
+            let cands: Vec<Value> = state
+                .items
+                .iter()
+                .take(crate::devlog::MAX_CANDIDATES)
+                .map(trace_candidate)
+                .collect();
+            self.trace.steps.push(json!({
+                "via": self.trace.via,
+                "rest": "",
+                "pick": index + 1,
+                "total": state.items.len(),
+                "text": item.text,
+                "kind": "association",
+                "cands": cands,
+            }));
+        }
         self.finish(item.commit.clone());
         self.last_choice = Some(item.clone());
         self.association_due = true;
         true
+    }
+
+    /// 开发者模式：这次调用不是按键来的（鼠标点候选、失去焦点、外面切了模式）。
+    fn trace_via(&mut self, via: &str) {
+        if self.trace.on {
+            self.trace.via = via.to_owned();
+            self.trace.at_ms = 0;
+        }
     }
 
     /// 这个键是上屏后紧接着的退格：不带修饰键（CapsLock、NumLock 不算），没在打字、没开面板，
@@ -1868,6 +2107,7 @@ impl<'e> Session<'e> {
     /// 切到 mode（外部命令、设置里的默认模式、外壳全局的模式）。切到英文时打到一半的原样上屏。
     pub fn set_mode(&mut self, mode: Mode) -> Frame {
         self.last_choice = None;
+        self.trace_via("mode");
         // 外面直接定了模式：还在等双击的那一下单按不再切
         self.shift.pending = None;
         self.switch_mode(mode);
@@ -2726,6 +2966,7 @@ impl<'e> Session<'e> {
         };
         self.last_choice = None;
         self.last_choice_index = 0;
+        self.trace_step(Some(index), Some(&chosen), if last { "last" } else { "first" });
         if chosen.consumed < self.remaining().len() {
             let mark = self.learn_mark();
             self.push_selection(Selection {
@@ -2844,6 +3085,10 @@ impl<'e> Session<'e> {
     /// 上文也不算数了（回来时光标可能在别处）。互译攒着的原文不动，要丢掉用 [`Session::clear_translation`]。
     pub fn reset(&mut self, commit_pending: bool) -> Frame {
         self.last_choice = None;
+        self.trace_via("reset");
+        if !commit_pending {
+            self.trace.last_commit = None;
+        }
         // 切走输入法、失去焦点、点鼠标挪了光标（应用会重置输入法）：会话看不到之后光标去了哪
         self.pairs.clear();
         self.reported_prev = None;
@@ -3010,6 +3255,9 @@ impl<'e> Session<'e> {
 
     /// 放弃编辑区（Esc、删光、失去焦点）：已选的句首词学到的东西也退回去（选错了才会放弃）。
     fn clear(&mut self) {
+        if !self.input.is_empty() {
+            self.trace_abandon();
+        }
         while self.pop_selection() {}
         self.input.clear();
         self.caret = None;
@@ -3383,6 +3631,7 @@ impl<'e> Session<'e> {
     pub fn choose(&mut self, index: usize) -> Frame {
         self.last_choice = None;
         self.last_choice_index = 0;
+        self.trace_via("click");
         if self.tool.is_some() {
             let ok = self.tool.as_ref().is_some_and(|t| index < t.items.len());
             if ok {
@@ -3405,6 +3654,7 @@ impl<'e> Session<'e> {
     pub fn select(&mut self, index: usize) -> Frame {
         self.last_choice = None;
         self.last_choice_index = 0;
+        self.trace_via("click");
         if self.tool.is_some() {
             let shown = self.frame(false);
             return self.choose(shown.cand_start + index);
@@ -3428,6 +3678,7 @@ impl<'e> Session<'e> {
         let Some(chosen) = self.candidates().get(index).cloned() else {
             return false;
         };
+        self.trace_step(Some(index), Some(&chosen), "");
         let remaining = self.remaining().len();
         match chosen.kind {
             CandidateKind::Emoji => {
@@ -3474,6 +3725,7 @@ impl<'e> Session<'e> {
     }
 
     fn commit_input_now(&mut self) {
+        self.trace_step(None, None, "");
         let tail = self.remaining().to_owned();
         self.commit_with(&tail, "");
     }
@@ -3569,6 +3821,7 @@ impl<'e> Session<'e> {
     /// 上屏 text（空的不上屏，frame 取走），清空编辑区。已选的词连同这次学到的都算这次上屏的，
     /// 上屏后紧接着按退格时一起撤销。
     fn finish(&mut self, text: String) {
+        self.trace_commit(&text);
         let end = self.learn_mark();
         let start = self
             .selections
@@ -3698,6 +3951,65 @@ fn ends_sentence(text: &str) -> bool {
 }
 
 /// 单独的修饰键（Shift、Ctrl、Alt、Super、CapsLock、AltGr……）。
+/// 开发者模式的记录里一个候选：`t` 字、`p` 拼音、`n` 用掉输入的字节数、`k` 类别（引擎的词不写）。
+fn trace_candidate(candidate: &Candidate) -> Value {
+    let mut out = json!({"t": candidate.text, "n": candidate.consumed});
+    if !candidate.pinyin.is_empty() {
+        out["p"] = candidate.pinyin.as_str().into();
+    }
+    if candidate.kind != CandidateKind::Word {
+        out["k"] = kind_name(candidate.kind).into();
+    }
+    out
+}
+
+fn kind_name(kind: CandidateKind) -> &'static str {
+    match kind {
+        CandidateKind::Word => "word",
+        CandidateKind::Plain => "plain",
+        CandidateKind::Emoji => "emoji",
+    }
+}
+
+/// 开发者模式的记录里一个键的名字：可见的 ASCII 字符就是它自己，别的键是名字，带 Ctrl / Alt / Super 时
+/// 前面加上；外壳认出来的候选动作（翻页按钮、热键）是 `action:` 加动作名。
+fn key_token(key: &Key) -> String {
+    if !matches!(key.action, KeyAction::None | KeyAction::Observe) {
+        return format!("action:{:?}", key.action);
+    }
+    let name = match key.keysym {
+        keysym::SPACE => "space".to_owned(),
+        keysym::RETURN | keysym::KP_ENTER => "enter".to_owned(),
+        keysym::BACKSPACE => "backspace".to_owned(),
+        keysym::TAB | keysym::ISO_LEFT_TAB => "tab".to_owned(),
+        keysym::ESCAPE => "esc".to_owned(),
+        keysym::DELETE | keysym::KP_DELETE => "delete".to_owned(),
+        keysym::LEFT => "left".to_owned(),
+        keysym::RIGHT => "right".to_owned(),
+        keysym::UP => "up".to_owned(),
+        keysym::DOWN => "down".to_owned(),
+        keysym::PAGE_UP => "pgup".to_owned(),
+        keysym::PAGE_DOWN => "pgdn".to_owned(),
+        keysym::HOME => "home".to_owned(),
+        keysym::END => "end".to_owned(),
+        keysym::SHIFT_L | keysym::SHIFT_R => "shift".to_owned(),
+        sym => match char::from_u32(sym).filter(char::is_ascii_graphic) {
+            Some(c) => c.to_string(),
+            None => format!("0x{sym:x}"),
+        },
+    };
+    let mut prefix = String::new();
+    for (bit, label) in [(modifier::CTRL, "ctrl+"), (modifier::ALT, "alt+"), (modifier::SUPER, "super+")] {
+        if key.modifiers & bit != 0 {
+            prefix.push_str(label);
+        }
+    }
+    if name.chars().count() > 1 && key.modifiers & modifier::SHIFT != 0 && name != "shift" {
+        prefix.push_str("shift+");
+    }
+    prefix + &name
+}
+
 fn is_modifier_keysym(sym: u32) -> bool {
     (0xffe1..=0xffee).contains(&sym) || (0xfe01..=0xfe13).contains(&sym)
 }

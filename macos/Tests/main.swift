@@ -2918,6 +2918,64 @@ func checkStats() {
 }
 checkStats()
 
+/// 开发者模式的打字记录（docs/DEVLOG.md）：默认关；打开以后输入器打的每次上屏都记一行，能数、导出、清空。
+func checkDevLog() {
+    check(!WowtypeConfig().developerMode && WowtypeConfig.parse("DeveloperMode=True\n").developerMode,
+          "DeveloperMode 默认关、读得出来")
+    let dir = "/tmp/wowtype-devlog-\(getpid())"
+    mkdir(dir, 0o700)
+    let path = dir + "/" + DevLog.fileName
+    func lines() -> [String] {
+        guard let f = fopen(path, "r") else { return [] }
+        defer { fclose(f) }
+        var out: [String] = []
+        var buffer = [CChar](repeating: 0, count: 1 << 16)
+        while fgets(&buffer, Int32(buffer.count), f) != nil {
+            out.append(String(cString: buffer))
+        }
+        return out
+    }
+    let (c, client) = fresh()
+    type(c, "nihao ")
+    check(lines().isEmpty && DevLog.summary(path).count == 0, "开发者模式关着时什么都不记")
+    check(DevLog.statusText(path: path, enabled: false) == "开发者模式关着，什么都不记"
+          && DevLog.statusText(path: path, enabled: true) == "还没有记录", "打字记录的状态：没有记录")
+
+    DevLog.apply(enabled: true, path: path)
+    DevLog.setApp("com.example.Editor")
+    client.committed = ""
+    type(c, "nihao ")
+    var got = lines()
+    check(got.count == 1 && got[0].contains("\"e\":\"commit\"") && got[0].contains("\"input\":\"nihao\"")
+          && got[0].contains("\"pick\":1") && got[0].contains("\"via\":\"space\"")
+          && got[0].contains("\"app\":\"com.example.Editor\"") && got[0].contains("\"cands\":["),
+          "开发者模式：上屏记一行（输入、选了第几个、怎么选的、候选、应用）", got.first ?? "没有记录")
+    _ = c.handle(.key(Keysym.backspace))
+    got = lines()
+    check(got.count == 2 && got[1].contains("\"e\":\"backspace\""), "开发者模式：上屏后紧接着退格记一行")
+    check(DevLog.summary(path).count == 2 && DevLog.files(path) == [path], "打字记录有两条")
+    check(DevLog.statusText(path: path, enabled: true).hasPrefix("2 条，")
+          && DevLog.statusText(path: path, enabled: false).hasSuffix("（开发者模式关着，不再记新的）"),
+          "打字记录的状态：有记录", DevLog.statusText(path: path, enabled: true))
+
+    // 导出：旧的（.1）在前合成一个，只有自己能读
+    writeFile(path + ".1", "{\"e\":\"commit\",\"text\":\"旧\"}\n")
+    let out = dir + "/out.jsonl"
+    let exported = (try? DevLog.export(from: path, to: out)) ?? -1
+    var info = stat()
+    check(exported == 3 && stat(out, &info) == 0 && info.st_mode & 0o777 == 0o600, "导出三条，只有自己能读", "\(exported)")
+
+    // 关掉以后不再记；清空删掉两份
+    DevLog.apply(enabled: false, path: path)
+    type(c, "nihao ")
+    check(lines().count == 2, "开发者模式关掉以后不再记")
+    check(DevLog.clear(path: path) && DevLog.files(path).isEmpty && DevLog.summary(path).count == 0, "清空打字记录")
+    DevLog.setApp("")
+    unlink(out)
+    rmdir(dir)
+}
+checkDevLog()
+
 checkConfigContract()
 checkLexiconPackContract()
 

@@ -212,6 +212,7 @@ TranslateIdleMinutes=5
 CheckUpdate=True
 BetaUpdates=False
 TypingStats=False
+DeveloperMode=False
 SettingsTheme=System
 SettingsAccent=Green
 Lexicon=
@@ -235,6 +236,7 @@ Lexicon=
 | `Association` | 联想：选词、整句上屏以后给出一页常跟在后面的词（词级模型里的，加上自己用过的搭配）。按 `Tab` 进联想行，再用空格、回车、数字上屏，`Esc` 退出，也能用鼠标点；没按 `Tab` 时接着打字、数字、标点、空格、回车都照常（数字不选联想，中文后面常接着打数字）。五笔、互译、密码框里不出。默认关（0.5.0 预发布时默认开），在设置的「输入」页打开 |
 | `SettingsTheme`、`SettingsAccent` | 设置窗口自己的主题和强调色（「常规 → 设置窗口」），只管设置窗口，不管候选框，输入法不读；Linux、macOS、Windows 三端都有，选项一样，见下面的[设置窗口的主题和强调色](#设置窗口的主题和强调色) |
 | `TypingStats` | [打字统计](#打字统计)，默认关。关着时什么都不记、不建文件；打开以后只在本机记每天的聚合计数，不记打的内容。在设置的「统计」页打开、清除 |
+| `DeveloperMode` | [开发者模式](DEVLOG.md)，调排序用，默认关。关着时什么都不记、不建文件；打开以后把每次上屏**明文**记进数据目录的 `devlog.jsonl`：打的原始输入、光标前的上文、当时的候选、选了第几个，放弃的和上屏后马上退格的也记，密码框里的不记。在设置里打开要先确认（Linux、macOS 在「常规 → 开发者」，Windows 在「输入」页最后），那里也能导出、清空；「导出日志」不带它 |
 | `InputScheme` | 输入方案，设置界面里是「输入方案」的单选：`Quanpin` 拼音（默认）、`Shuangpin` 双拼、`Wubi86` 五笔 86。五笔要数据目录里有五笔码表 `wubi86.tsv`（安装包里带着，查找顺序和词库一样，环境变量是 `WOWTYPE_WUBI`）；没有时设置里「五笔输入」灰掉，配置文件里写了 `Wubi86` 的照全拼打，候选框上方提示没有码表。五笔怎么打见 [README 的五笔](../README.md#五笔) |
 | `Shuangpin` | 0.3.12 及以前的双拼开关，已经不是设置项。文件里没有 `InputScheme` 时，`Shuangpin=True` 读成 `InputScheme=Shuangpin`；有 `InputScheme` 时不看它。三端存盘时都不写它，下次存盘这一行就没了 |
 | `WubiAutoCommit` | 五笔打满四码、只有一个字词时直接上屏，默认 `True`。只在五笔时显示 |

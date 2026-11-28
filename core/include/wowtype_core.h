@@ -16,7 +16,7 @@
  * 删函数或改参数含义时升主版本。外壳启动时用 wowtype_abi_version() 比对主版本。
  * 规则见 docs/ABI.md。 */
 #define WOWTYPE_ABI_VERSION_MAJOR 1
-#define WOWTYPE_ABI_VERSION_MINOR 19
+#define WOWTYPE_ABI_VERSION_MINOR 20
 
 #ifdef __cplusplus
 extern "C" {
@@ -753,6 +753,27 @@ int wowtype_stats_clear(const char *path);
 
 /* 当前 Unix 毫秒。 */
 int64_t wowtype_stats_now_ms(void);
+
+/* ---- 开发者模式的打字记录（ABI 1.20 起） ----
+ *
+ * 调排序用的明文记录（docs/DEVLOG.md）：每次上屏记下打的原始输入、光标前的上文、当时的候选、选了第几个、
+ * 怎么选的，放弃的和上屏后紧接着退格的也记。一行一个 JSON，追加进 path（0600，超过 16 MB 换一个，
+ * 旧的留一份 path.1）。密码框（按键带 WOWTYPE_KEY_HINT_NO_LEARN）里不记。
+ *
+ * 默认关：外壳读到 wowtype.conf 的 DeveloperMode=True 才调 wowtype_devlog_configure(path, 1)，
+ * 关掉时调 wowtype_devlog_configure(NULL, 0)。整个进程一份；打开以后会话的每次调用
+ * （wowtype_session_key / _select / _choose / _reset ……）自己把记录写进文件，外壳不用再做别的。
+ * 这是明文的打字记录：设置界面打开它时要说清楚，「导出日志」不要带上它。
+ */
+
+/* 打开（enabled 非 0）或关上。打开却没给路径返回 -1（照样是关着的），其余返回 0。 */
+int wowtype_devlog_configure(const char *path, int enabled);
+/* 开着没有（1 / 0）。 */
+int wowtype_devlog_enabled(void);
+/* 现在有焦点的应用（程序名、bundle id、exe 名），记在每条记录的 app 里；NULL 或空串是不知道。 */
+void wowtype_devlog_set_app(const char *name);
+/* 设置界面用：清空记录（删掉 path 和 path.1）。成功返回 0。 */
+int wowtype_devlog_clear(const char *path);
 
 /* ---- 跨设备剪贴板（ABI 1.19 起） ----
  *

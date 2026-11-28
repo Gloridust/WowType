@@ -121,6 +121,17 @@ CUSTOM_FILE = os.environ.get("WOWTYPE_CUSTOM") or os.path.join(DATA_DIR, "custom
 STATS_FILE = os.path.join(DATA_DIR, "stats.json")
 STATS_CLEAR_FILE = os.path.join(DATA_DIR, "stats.clear")
 STATS_BAD_FILE = STATS_FILE + ".bad"
+# 开发者模式（DeveloperMode 开着时）：输入法把每次上屏明文记进 DEVLOG_FILE，一行一个 JSON（core/src/devlog.rs、
+# docs/DEVLOG.md），超过 16 MB 换一个、旧的留一份 .1。设置界面只看大小、导出、清空；「导出日志」不带它。
+DEVLOG_FILE = os.environ.get("WOWTYPE_DEVLOG") or os.path.join(DATA_DIR, "devlog.jsonl")
+DEVLOG_WARNING = (
+    "打开以后，WowType 会把你打的字明文记在这台电脑上：每次上屏的拼音、光标前的几个字、"
+    "当时的候选、选了第几个，还有在哪个应用里打的。\n\n"
+    "密码框里的不记；但终端里的密码提示这类没有标成密码框的地方，在中文模式下打的密码会被记下来。\n\n"
+    "记录只存在本机，不上传，「导出日志」也不带它。调试完请关掉，并清空记录。")
+DEVLOG_INFO = (
+    "调排序用：记下每次上屏打的拼音、当时的候选和选了第几个，放弃的、上屏后马上退格的也记。"
+    "用 tools/devlog.py 看汇总、转成评测用例。默认关，记录是明文的。")
 VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
 STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
 # 插件和设置界面共用的日志（插件那边见 fcitx5-addon/src/wowtype_log.h），不记打的字
@@ -409,6 +420,7 @@ DEFAULTS = {
     "BetaUpdates": "False",
     # 打字统计默认关：关着时输入法什么都不记
     "TypingStats": "False",
+    "DeveloperMode": "False",
     # 设置窗口自己的主题和强调色（输入法不读），见 SETTINGS_THEMES、SETTINGS_ACCENTS
     "SettingsTheme": "System",
     "SettingsAccent": "Green",
@@ -846,6 +858,83 @@ def clear_stats(path=None, clear_path=None):
             os.remove(name)
         except FileNotFoundError:
             pass
+
+
+def devlog_files(path=None):
+    """开发者模式的记录文件，旧的在前（换下来的 .1、现在的）；只列存在的。"""
+    path = path or DEVLOG_FILE
+    return [name for name in (path + ".1", path) if os.path.isfile(name)]
+
+
+def devlog_summary(path=None):
+    """(条数, 字节数)：一行一条。读不了的当没有。"""
+    lines = size = 0
+    for name in devlog_files(path):
+        try:
+            size += os.path.getsize(name)
+            with open(name, "rb") as f:
+                lines += sum(chunk.count(b"\n") for chunk in iter(lambda: f.read(1 << 20), b""))
+        except OSError:
+            pass
+    return lines, size
+
+
+def clear_devlog(path=None):
+    """清空开发者模式的记录（和 core 的 devlog::clear 一样：删掉记录和换下来的旧文件）。输入法开着关着都行。"""
+    path = path or DEVLOG_FILE
+    for name in (path, path + ".1"):
+        try:
+            os.remove(name)
+        except FileNotFoundError:
+            pass
+
+
+def export_devlog(dest, path=None):
+    """把记录（旧的在前）合成一个文件存到 dest，只有自己能读。返回条数。"""
+    files = devlog_files(path)
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        os.chmod(dest, 0o600)
+        for name in files:
+            with open(name, "rb") as f:
+                shutil.copyfileobj(f, out)
+    with open(dest, "rb") as f:
+        return sum(chunk.count(b"\n") for chunk in iter(lambda: f.read(1 << 20), b""))
+
+
+def devlog_size(n):
+    return f"{n / 1e6:.1f} MB" if n >= 1e6 else f"{max(n / 1e3, 0.1):.1f} KB"
+
+
+def devlog_self_test():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "wowtype", "devlog.jsonl")
+        assert devlog_files(path) == [] and devlog_summary(path) == (0, 0)
+        clear_devlog(path)  # 没有文件也不报错
+        os.makedirs(os.path.dirname(path))
+        with open(path + ".1", "w", encoding="utf-8") as f:
+            f.write('{"e":"commit","text":"旧"}\n')
+        with open(path, "w", encoding="utf-8") as f:
+            f.write('{"e":"commit","text":"你好"}\n{"e":"backspace","text":"你好"}\n')
+        assert devlog_files(path) == [path + ".1", path]
+        count, size = devlog_summary(path)
+        assert count == 3 and size == os.path.getsize(path) + os.path.getsize(path + ".1"), (count, size)
+        # 导出：旧的在前合成一个，只有自己能读
+        dest = os.path.join(tmp, "out.jsonl")
+        assert export_devlog(dest, path) == 3
+        with open(dest, encoding="utf-8") as f:
+            texts = [json.loads(line).get("text") for line in f]
+        assert texts == ["旧", "你好", "你好"], texts
+        assert os.stat(dest).st_mode & 0o777 == 0o600
+        clear_devlog(path)
+        assert devlog_files(path) == [] and devlog_summary(path) == (0, 0)
+        assert export_devlog(dest, path) == 0 and os.path.getsize(dest) == 0
+    # 「导出日志」不带打字记录
+    assert not {"DEVLOG_FILE", "devlog_files", "export_devlog"} & set(collect_diagnostics.__code__.co_names)
+    assert (devlog_size(512), devlog_size(2_500_000)) == ("0.5 KB", "2.5 MB")
+    assert DEFAULTS["DeveloperMode"] == "False"
+    print("devlog self-test ok")
 
 
 def stats_self_test():
@@ -5258,6 +5347,7 @@ class _AlertDialog:
     def __init__(self, heading="", body=""):
         self.heading, self.body = heading, body
         self.responses, self.styles, self.handlers = [], {}, []
+        self.dialog = None
 
     def add_response(self, response_id, label):
         self.responses.append((response_id, label))
@@ -5284,7 +5374,14 @@ class _AlertDialog:
             for handler in self.handlers:
                 handler(self, answer)
         dialog.connect("response", answered)
+        self.dialog = dialog
         dialog.present()
+
+    def close(self):
+        """跟 Adw.Dialog.close 一样：关掉算取消。"""
+        dialog, self.dialog = self.dialog, None
+        if dialog is not None:
+            dialog.response(Gtk.ResponseType.DELETE_EVENT)
 
 
 class _AboutDialog:
@@ -6107,7 +6204,115 @@ class SettingsWindow(Adw.ApplicationWindow):
         issue_row.connect("activated", lambda _row: self.open_url(ISSUES_URL))
         help_group.add(issue_row)
         page.add(help_group)
+
+        # 开发者：默认关，打开要先确认（记下来的是明文的打字记录），见 docs/DEVLOG.md
+        dev_group = Adw.PreferencesGroup(title="开发者")
+        self.devmode_row = SwitchRow(title="开发者模式")
+        self.devmode_row.set_subtitle("把打的字、候选和选了第几个明文记在本机，调试用")
+        self.devmode_row.set_active(self.values["DeveloperMode"] == "True")
+        self.add_info(self.devmode_row, DEVLOG_INFO)
+        # 不进 self.switches：打开要先确认，不能和别的开关一样一拨就存
+        self.devmode_row.connect("notify::active", self.on_developer_mode)
+        dev_group.add(self.devmode_row)
+        self.devlog_row = Adw.ActionRow(title="打字记录")
+        self.devlog_export = Gtk.Button(label="导出…", valign=Gtk.Align.CENTER)
+        self.devlog_export.connect("clicked", self.on_devlog_export)
+        self.devlog_row.add_suffix(self.devlog_export)
+        self.devlog_clear = Gtk.Button(label="清空", valign=Gtk.Align.CENTER)
+        self.devlog_clear.add_css_class("destructive-action")
+        self.devlog_clear.connect("clicked", self.on_devlog_clear)
+        self.devlog_row.add_suffix(self.devlog_clear)
+        dev_group.add(self.devlog_row)
+        page.add(dev_group)
+        self.refresh_devlog()
+        GLib.timeout_add_seconds(3, self.devlog_tick)
         return page
+
+    def devlog_tick(self):
+        if self.stack.get_visible_child_name() == "general":
+            self.refresh_devlog()
+        return True
+
+    def refresh_devlog(self):
+        """「打字记录」那一行：有多少条、多大；没有记录时导出和清空点不了。"""
+        count, size = devlog_summary()
+        on = self.values.get("DeveloperMode") == "True"
+        if count:
+            text = f"{count} 条，{devlog_size(size)}，在 {_home(DEVLOG_FILE)}"
+            if not on:
+                text += "（开发者模式关着，不再记新的）"
+        else:
+            text = "还没有记录" if on else "开发者模式关着，什么都不记"
+        self.devlog_row.set_subtitle(GLib.markup_escape_text(text))
+        self.devlog_export.set_sensitive(count > 0)
+        self.devlog_clear.set_sensitive(bool(devlog_files()))
+
+    def on_developer_mode(self, row, _param):
+        if self.quiet_switch:
+            return
+        if not row.get_active():
+            self.set_value("DeveloperMode", "False")
+            self.refresh_devlog()
+            return
+        if self.values.get("DeveloperMode") == "True":
+            return
+        # 先拨回去：点了「打开」才真的打开
+        self.set_developer_switch(False)
+        self.devmode_dialog = self.confirm("打开开发者模式？", DEVLOG_WARNING, "打开，开始记录",
+                                           self.developer_mode_confirmed)
+
+    def set_developer_switch(self, on):
+        self.quiet_switch = True
+        self.devmode_row.set_active(on)
+        self.quiet_switch = False
+
+    def developer_mode_confirmed(self):
+        self.set_developer_switch(True)
+        self.set_value("DeveloperMode", "True")
+        self.refresh_devlog()
+
+    def devlog_clear_now(self):
+        try:
+            clear_devlog()
+        except OSError as e:
+            self.toast(f"清空失败：{e}")
+        else:
+            self.toast("打字记录已清空")
+        self.refresh_devlog()
+
+    def on_devlog_clear(self, _button):
+        count, _size = devlog_summary()
+        clear = self.devlog_clear_now
+        dialog = AlertDialog(heading="清空打字记录？",
+                             body=f"已经记下的 {count} 条都会删掉，不能恢复。开关保持现在的位置。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("clear", "清空")
+        dialog.set_response_appearance("clear", ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", lambda _d, response: response == "clear" and clear())
+        dialog.present(self)
+        self.devlog_clear_dialog = dialog
+
+    def on_devlog_export(self, _button):
+        dialog = FileDialog(title="导出打字记录", initial_name=time.strftime("wowtype-devlog-%Y%m%d-%H%M%S.jsonl"))
+        downloads = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOWNLOAD)
+        if downloads and os.path.isdir(downloads):
+            dialog.set_initial_folder(Gio.File.new_for_path(downloads))
+
+        def chosen(dialog, result):
+            try:
+                file = dialog.save_finish(result)
+            except GLib.Error:
+                return  # 取消
+            self.devlog_export_to(file.get_path())
+        dialog.save(self, None, chosen)
+
+    def devlog_export_to(self, path):
+        try:
+            count = export_devlog(path)
+        except OSError as e:
+            self.toast(f"导出失败：{e}")
+            return
+        self.toast(f"{count} 条打字记录已保存到 {_home(path)}（明文，别随手发给别人）")
 
     # ---------------- 词库（在「输入」页最上面）
 
@@ -8434,6 +8639,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.page_row.set_value(int(DEFAULTS["PageSize"]))
             for key, row in self.switches.items():
                 row.set_active(DEFAULTS[key] == "True")
+            self.set_developer_switch(False)
+            self.refresh_devlog()
             self.scheme_checks[DEFAULTS["InputScheme"]].set_active(True)
             self.scheme_row.set_selected(0)
             self.shift_row.set_selected(0)
@@ -8639,6 +8846,7 @@ if __name__ == "__main__":
         lexicon_self_test()
         stale_copy_self_test()
         stats_self_test()
+        devlog_self_test()
         nnlm_self_test()
         nnlm_choice_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」

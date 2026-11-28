@@ -260,6 +260,8 @@ class WowTypeInputController: IMKInputController {
             }
         }
         AppState.shared.activeController = self
+        // 开发者模式的记录里带上是在哪个应用里打的（关着时只是记个名字，什么都不写）
+        DevLog.setApp(textInput?.bundleIdentifier() ?? "")
         // 剪贴板历史（设置里打开时）：切换输入框时看一眼（和 Linux 一样，另外打开工具栏的剪贴板页时也看）
         AppState.shared.sampleClipboard()
         AppState.shared.touchClipboardSync()

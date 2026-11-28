@@ -107,6 +107,15 @@ constexpr int kIdSyncJoin = 130;
 constexpr int kIdSyncUnpair = 131;
 constexpr int kIdSyncToken = 132;
 constexpr int kIdSyncPing = 133;
+constexpr int kIdDevlogExport = 134;
+constexpr int kIdDevlogClear = 135;
+/// 勾上「开发者模式」时问一句（三端一样，Linux 是 DEVLOG_WARNING）。
+constexpr wchar_t kDeveloperWarning[] =
+    L"打开以后，WowType 会把你打的字明文记在这台电脑上：每次上屏的拼音、光标前的几个字、当时的候选、"
+    L"选了第几个，还有在哪个应用里打的。\n\n"
+    L"密码框里的不记；但终端里的密码提示这类没有标成密码框的地方，在中文模式下打的密码会被记下来。\n\n"
+    L"记录只存在本机（数据目录的 devlog.jsonl），不上传，「复制诊断信息」也不带它。调试完请关掉，并清空记录。\n\n"
+    L"点「确定」以后再点「保存」才开始记。";
 constexpr UINT_PTR kTimerSyncPair = 2;
 constexpr UINT kMessageSyncPing = WM_APP + 7;
 constexpr wchar_t kSyncAgentClass[] = L"WowTypeSyncAgent";
@@ -161,7 +170,9 @@ const std::vector<Page> &pages() {
         {L"候选", {"CandidateLayout", "PageSize", "CandidateFontSize", "ArrowKeys", "PageKeysMinusEqual",
                    "PageKeysBracket", "PageKeysCommaPeriod", "PageKeysTab", "SelectKeys", "PickChar", "Association"}},
         {L"输入", {"TypoCorrection", "RareExtChars", "InlineSpaceSeparator", "DateTime", "Calculator", "AutoSpace", "AutoSpaceLetters",
-                   "AutoSpaceDigits", "EmojiSuggest"}},
+                   "AutoSpaceDigits", "EmojiSuggest",
+                   // 开发者模式排在最后：勾上要先确认，下面是导出、清空打字记录的两个按钮（docs/DEVLOG.md）
+                   "DeveloperMode"}},
         {L"模糊音", {"Fuzzy", "FuzzyZh", "FuzzyCh", "FuzzySh", "FuzzyNL", "FuzzyFH", "FuzzyRL", "FuzzyAn", "FuzzyEn",
                      "FuzzyIn", "FuzzyIan", "FuzzyUan", "FuzzyUn", "FuzzyAnAi", "FuzzyHuangWang", "FuzzyUnIong",
                      "FuzzyEngOng"}},
@@ -193,6 +204,7 @@ const std::map<std::string, std::wstring> &labels() {
         {"Traditional", L"输出繁体字"},
         {"Lexicon", L"词库文件（留空用自带的）"},
         {"TypingStats", L"打字统计（只在本机记计数，不记内容）"},
+        {"DeveloperMode", L"开发者模式（把打的字、候选和选了第几个明文记在本机，调试用）"},
         // 主题、强调色两个下拉框排在同一行（layout），强调色那一行不另写名字
         {"SettingsTheme", L"设置窗口的主题、强调色"},
         {"CandidateLayout", L"候选排列"},
@@ -540,6 +552,8 @@ private:
     int statsPage() const { return static_cast<int>(pages().size()) + 1; }
     void refreshStats();
     void clearStats();
+    void exportDevlog();
+    void clearDevlog();
     void copyDiagnostics();
     // 自定义词页
     void loadWords();
@@ -617,6 +631,9 @@ private:
     HWND removeWord_ = nullptr;
     HWND importWords_ = nullptr;
     HWND nnlm_ = nullptr;
+    /// 开发者模式的打字记录（数据目录的 devlog.jsonl）：导出、清空
+    HWND devlogExport_ = nullptr;
+    HWND devlogClear_ = nullptr;
     HWND statsText_ = nullptr;
     HWND statsChart_ = nullptr;
     HWND statsRefresh_ = nullptr;
@@ -841,6 +858,8 @@ void SettingsWindow::build() {
     syncToken_ = child(L"EDIT", L"", WS_BORDER | ES_AUTOHSCROLL | ES_PASSWORD | WS_TABSTOP, kIdSyncToken);
     syncPing_ = child(L"BUTTON", L"测试中转服务", BS_PUSHBUTTON | WS_TABSTOP, kIdSyncPing);
     nnlm_ = child(L"BUTTON", L"导入整句增强模型（微信输入法的 nlrgpt2_nnlm.bin）…", BS_PUSHBUTTON | WS_TABSTOP, kIdNnlm);
+    devlogExport_ = child(L"BUTTON", L"导出打字记录（开发者模式记的，明文）…", BS_PUSHBUTTON | WS_TABSTOP, kIdDevlogExport);
+    devlogClear_ = child(L"BUTTON", L"清空打字记录", BS_PUSHBUTTON | WS_TABSTOP, kIdDevlogClear);
     voiceModel_ = child(L"BUTTON", L"导入语音模型（含 .xnet 和 dict.decoder.utf8.txt 的文件夹）…",
                         BS_PUSHBUTTON | WS_TABSTOP, kIdVoiceModel);
     dataDirButton_ = child(L"BUTTON", L"打开数据目录", BS_PUSHBUTTON | WS_VISIBLE | WS_TABSTOP, kIdDataDir);
@@ -951,7 +970,8 @@ void SettingsWindow::layout() {
     // 输入页、语音页最后各有一个导入模型的按钮
     using ButtonOnPage = std::pair<HWND, const wchar_t *>;
     for (const auto &[button, title] :
-         {ButtonOnPage{nnlm_, L"输入"}, ButtonOnPage{voiceDownload_, L"语音"}, ButtonOnPage{voiceModel_, L"语音"},
+         {ButtonOnPage{nnlm_, L"输入"}, ButtonOnPage{devlogExport_, L"输入"}, ButtonOnPage{devlogClear_, L"输入"},
+          ButtonOnPage{voiceDownload_, L"语音"}, ButtonOnPage{voiceModel_, L"语音"},
           ButtonOnPage{updateCheck_, L"常规"}, ButtonOnPage{updateInstall_, L"常规"}, ButtonOnPage{diagnostics_, L"常规"}}) {
         const auto page = static_cast<std::size_t>(pageNamed(title));
         MoveWindow(button, margin * 2, y[page] + scale(6), width - margin * 4, scale(28), FALSE);
@@ -1041,6 +1061,8 @@ void SettingsWindow::showPage(int page) {
     }
     refreshTranslate();
     ShowWindow(nnlm_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
+    ShowWindow(devlogExport_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
+    ShowWindow(devlogClear_, page == pageNamed(L"输入") ? SW_SHOW : SW_HIDE);
     for (HWND h : {syncStatus_, syncHost_, syncCodeLabel_, syncCode_, syncJoin_, syncUnpair_, syncTokenLabel_,
                    syncToken_, syncPing_}) {
         ShowWindow(h, page == pageNamed(L"跨设备") ? SW_SHOW : SW_HIDE);
@@ -2018,6 +2040,47 @@ void SettingsWindow::clearStats() {
     SetWindowTextW(status_, L"统计清空了");
 }
 
+void SettingsWindow::exportDevlog() {
+    // 换下来的旧文件（.1）在前，合成一个
+    const std::wstring path = dataDir() + L"\\devlog.jsonl";
+    const std::string all = readFile(path + L".1").value_or("") + readFile(path).value_or("");
+    if (all.empty()) {
+        SetWindowTextW(status_, L"还没有打字记录（开发者模式开着、打过字才有）");
+        return;
+    }
+    wchar_t file[MAX_PATH * 2] = L"wowtype-devlog.jsonl";
+    OPENFILENAMEW save{};
+    save.lStructSize = sizeof save;
+    save.hwndOwner = hwnd_;
+    save.lpstrFilter = L"打字记录（*.jsonl）\0*.jsonl\0所有文件\0*.*\0";
+    save.lpstrFile = file;
+    save.nMaxFile = static_cast<DWORD>(std::size(file));
+    save.lpstrDefExt = L"jsonl";
+    save.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    if (!GetSaveFileNameW(&save)) {
+        return;
+    }
+    if (!writeFile(file, all)) {
+        SetWindowTextW(status_, L"导出失败");
+        return;
+    }
+    const auto count = std::count(all.begin(), all.end(), '\n');
+    SetWindowTextW(status_, (std::to_wstring(count) + L" 条打字记录已保存（明文，别随手发给别人）").c_str());
+}
+
+void SettingsWindow::clearDevlog() {
+    if (MessageBoxW(hwnd_, L"清空所有打字记录？清空以后找不回来。开关保持现在的位置。", L"WowType",
+                    MB_OKCANCEL | MB_ICONQUESTION) != IDOK) {
+        return;
+    }
+    // 和另两端一样由核心清：删掉 devlog.jsonl 和换下来的 devlog.jsonl.1
+    if (wowtype_devlog_clear(narrow(dataDir() + L"\\devlog.jsonl").c_str()) != 0) {
+        SetWindowTextW(status_, L"清空失败");
+        return;
+    }
+    SetWindowTextW(status_, L"打字记录清空了");
+}
+
 void SettingsWindow::copyDiagnostics() {
     std::string text = "WowType " WOWTYPE_VERSION "（Windows）\n";
     {
@@ -2360,6 +2423,12 @@ LRESULT SettingsWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
         case kIdStatsClear:
             clearStats();
             return 0;
+        case kIdDevlogExport:
+            exportDevlog();
+            return 0;
+        case kIdDevlogClear:
+            clearDevlog();
+            return 0;
         case kIdDiagnostics:
             copyDiagnostics();
             return 0;
@@ -2454,6 +2523,17 @@ LRESULT SettingsWindow::handle(UINT message, WPARAM wParam, LPARAM lParam) {
             ShellExecuteW(hwnd_, L"open", dataDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
         default:
+            // 开发者模式：勾上的时候先问一句（记下来的是明文的打字记录），不同意就退回去
+            if (HIWORD(wParam) == BN_CLICKED) {
+                for (const auto &row : rows_) {
+                    if (row.control == reinterpret_cast<HWND>(lParam) && std::string(row.def->key) == "DeveloperMode" &&
+                        SendMessageW(row.control, BM_GETCHECK, 0, 0) == BST_CHECKED &&
+                        MessageBoxW(hwnd_, kDeveloperWarning, L"打开开发者模式？",
+                                    MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) {
+                        SendMessageW(row.control, BM_SETCHECK, BST_UNCHECKED, 0);
+                    }
+                }
+            }
             // 主题、强调色的下拉框：选了马上换上（存盘还是点「保存」）
             if (HIWORD(wParam) == CBN_SELCHANGE) {
                 for (const auto &row : rows_) {

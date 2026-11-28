@@ -4376,3 +4376,197 @@ fn lagging_surrounding_keeps_context_and_mouse_choice() {
     assert_eq!(choose_text(&mut session, "你好").commit.as_deref(), Some("你好"));
     assert_eq!(type_with_prev(&mut session, ".", Some('1')).commit.as_deref(), Some("。"));
 }
+
+// ---- 开发者模式的记录（core/src/devlog.rs、docs/DEVLOG.md）----
+
+fn traced(engine: &'static Engine) -> Session<'static> {
+    let mut session = with(engine);
+    session.set_trace(true);
+    session
+}
+
+#[test]
+fn trace_is_off_by_default() {
+    let mut session = with(engine());
+    assert_eq!(type_keys(&mut session, "nihao<sp>").commit.as_deref(), Some("你好"));
+    type_keys(&mut session, "ni<esc>");
+    assert!(session.take_trace().is_empty());
+}
+
+#[test]
+fn trace_records_what_was_typed_and_which_candidate_was_picked() {
+    let mut session = traced(engine());
+    type_keys(&mut session, "nihao");
+    let shown = texts(&mut session);
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好"));
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    let event = &events[0];
+    assert_eq!(event["e"], "commit");
+    assert_eq!(event["mode"], "zh");
+    assert_eq!(event["scheme"], "pinyin");
+    assert_eq!(event["input"], "nihao");
+    assert_eq!(event["text"], "你好");
+    assert_eq!(event["context"], "");
+    assert_eq!(event["keys"], "nihao<space>");
+    assert!(event["cfg"].is_object(), "{event}");
+    let steps = event["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["via"], "space");
+    assert_eq!(steps[0]["pick"], 1);
+    assert_eq!(steps[0]["rest"], "nihao");
+    assert_eq!(steps[0]["text"], "你好");
+    assert_eq!(steps[0]["pinyin"], "ni hao");
+    assert_eq!(steps[0]["kind"], "word");
+    assert_eq!(steps[0]["total"], shown.len());
+    // 候选框里那时有什么也记下来了，顺序和显示的一样
+    let cands: Vec<&str> = steps[0]["cands"].as_array().unwrap().iter().map(|c| c["t"].as_str().unwrap()).collect();
+    assert_eq!(cands, shown.iter().take(cands.len()).map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(cands[0], "你好");
+    // 取走以后就没有了
+    assert!(session.take_trace().is_empty());
+
+    // 数字键选第二个：记的是第 2 个和它的字；上文是刚才上屏的
+    type_keys(&mut session, "nihao");
+    let shown = texts(&mut session);
+    assert!(shown.len() >= 2, "{shown:?}");
+    assert_eq!(type_keys(&mut session, "2").commit.as_deref(), Some(shown[1].as_str()));
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["context"], "你好");
+    assert_eq!(events[0]["keys"], "nihao2");
+    assert_eq!(events[0]["steps"][0]["via"], "2");
+    assert_eq!(events[0]["steps"][0]["pick"], 2);
+    assert_eq!(events[0]["steps"][0]["text"], shown[1].as_str());
+}
+
+#[test]
+fn trace_keeps_every_step_of_a_sentence_picked_in_parts() {
+    let mut session = traced(engine());
+    type_keys(&mut session, "nihaozhongguo");
+    let at = texts(&mut session).iter().position(|t| t == "你好").unwrap();
+    assert_eq!(choose_text(&mut session, "你好").commit, None);
+    assert!(session.take_trace().is_empty(), "还没上屏，先攒着");
+    assert_eq!(type_keys(&mut session, "<sp>").commit.as_deref(), Some("你好中国"));
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["input"], "nihaozhongguo");
+    assert_eq!(events[0]["text"], "你好中国");
+    let steps = events[0]["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["via"], "click", "鼠标点的");
+    assert_eq!(steps[0]["rest"], "nihaozhongguo");
+    assert_eq!(steps[0]["pick"], at + 1);
+    assert_eq!(steps[0]["text"], "你好");
+    assert_eq!(steps[0]["consumed"], 5);
+    assert_eq!(steps[1]["via"], "space");
+    assert_eq!(steps[1]["rest"], "zhongguo");
+    assert_eq!(steps[1]["pick"], 1);
+    assert_eq!(steps[1]["text"], "中国");
+}
+
+#[test]
+fn trace_records_raw_commits_abandons_and_backspace_after_commit() {
+    // 回车原样上屏：没选候选（pick 0），候选框里有什么照样记
+    let mut session = traced(engine());
+    assert_eq!(type_keys(&mut session, "nihao<cr>").commit.as_deref(), Some("nihao"));
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["text"], "nihao");
+    assert_eq!(events[0]["steps"][0]["via"], "enter");
+    assert_eq!(events[0]["steps"][0]["pick"], 0);
+    assert_eq!(events[0]["steps"][0]["kind"], "raw");
+    assert_eq!(events[0]["steps"][0]["cands"][0]["t"], "你好");
+
+    // Esc 放弃
+    type_keys(&mut session, "niha<esc>");
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["e"], "abandon");
+    assert_eq!(events[0]["via"], "esc");
+    assert_eq!(events[0]["input"], "niha");
+    assert_eq!(events[0]["keys"], "niha<esc>");
+
+    // 一个一个删光也算放弃
+    type_keys(&mut session, "ni<bs><bs>");
+    assert!(!session.composing());
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["e"], "abandon");
+    assert_eq!(events[0]["keys"], "ni<backspace><backspace>");
+
+    // 失去焦点：打到一半的丢了
+    type_keys(&mut session, "ni");
+    session.reset(false);
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((&events[0]["e"], &events[0]["via"]), (&"abandon".into(), &"reset".into()));
+    // 切走输入法：原样上屏
+    type_keys(&mut session, "ni");
+    assert_eq!(session.reset(true).commit.as_deref(), Some("ni"));
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!((&events[0]["e"], &events[0]["steps"][0]["via"]), (&"commit".into(), &"reset".into()));
+
+    // 上屏以后紧接着按退格：多半是选错了
+    type_keys(&mut session, "nihao<sp><bs>");
+    let events = session.take_trace();
+    assert_eq!(events.len(), 2, "{events:?}");
+    assert_eq!(events[1]["e"], "backspace");
+    assert_eq!(events[1]["text"], "你好");
+    // 隔了别的键再按退格不算
+    type_keys(&mut session, "nihao<sp><left><bs>");
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["e"], "commit");
+}
+
+#[test]
+fn trace_times_a_composition_and_names_modified_keys() {
+    let mut session = traced(engine());
+    let mut at = 1000;
+    for c in "nihao ".chars() {
+        at += 100;
+        session.key(&Key { time_ms: at, ..Key::char(c) });
+    }
+    let events = session.take_trace();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0]["ms"], 500, "从第一个键到上屏");
+    // 不带时刻的键不记用时
+    type_keys(&mut session, "nihao<sp>");
+    assert!(session.take_trace()[0].get("ms").is_none());
+    // 打字途中的 Ctrl+A 这类键带上修饰键的名字
+    type_keys(&mut session, "ni");
+    session.key(&Key { modifiers: modifier::CTRL, ..Key::char('a') });
+    type_keys(&mut session, "<esc>");
+    let events = session.take_trace();
+    assert_eq!(events.last().unwrap()["keys"].as_str().map(|k| k.starts_with("ni<ctrl+a>")), Some(true), "{events:?}");
+}
+
+#[test]
+fn trace_skips_the_emoji_panel_search() {
+    // 表情面板里打的是搜索词：不当成一次输入记，关掉面板也不算放弃
+    let mut session = traced(engine());
+    session.toggle_emoji_panel();
+    type_keys(&mut session, "xiao<esc>");
+    assert!(!session.composing());
+    assert!(session.take_trace().is_empty());
+    // 关了面板以后照常记
+    type_keys(&mut session, "nihao<sp>");
+    assert_eq!(session.take_trace().len(), 1);
+}
+
+#[test]
+fn trace_stays_out_of_password_fields() {
+    use wowtype_core::session::key_hints::NO_LEARN;
+    let mut session = traced(engine());
+    let secret = |key: Key| Key { hints: NO_LEARN, ..key };
+    assert_eq!(type_keys_with(&mut session, "nihao<sp><bs>", secret).commit, None);
+    type_keys_with(&mut session, "mima<cr>", secret);
+    type_keys_with(&mut session, "ni<esc>", secret);
+    assert!(session.take_trace().is_empty());
+    // 关掉以后攒着的也丢掉
+    type_keys(&mut session, "nihao<sp>");
+    session.set_trace(false);
+    assert!(session.take_trace().is_empty());
+}

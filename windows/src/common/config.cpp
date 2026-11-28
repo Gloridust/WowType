@@ -173,6 +173,8 @@ const std::vector<SettingDef> &settingDefs() {
         {"CheckUpdate", T::Bool, "True"},
         {"BetaUpdates", T::Bool, "False"},
         {"TypingStats", T::Bool, "False"},
+        // 开发者模式（默认关）：把每次上屏打的输入、当时的候选、选了第几个明文记进数据目录的 devlog.jsonl
+        {"DeveloperMode", T::Bool, "False"},
         // 设置窗口自己的主题、强调色（输入法不读），可选值和名字见 look.h
         {"SettingsTheme", T::Enum, "System", 0, 0, {"System", "Light", "Dark"}},
         {"SettingsAccent", T::Enum, "Green", 0, 0, {"Green", "Blue", "Purple", "Orange", "Pink"}},

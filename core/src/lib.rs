@@ -11,6 +11,8 @@ pub mod clipboard;
 pub mod convert;
 pub mod datamark;
 pub mod datetime;
+pub mod devlog;
+pub mod devlog_ffi;
 pub mod emoji;
 pub mod ffi;
 pub mod fsutil;

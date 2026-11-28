@@ -568,6 +568,11 @@ unsafe fn write_sized<T: Copy>(out: *mut T, mut value: T) {
 
 impl WowtypeSession {
     fn publish(&mut self, frame: Frame) -> *const WowtypeFrame {
+        // 开发者模式（默认关）：会话这次调用攒的记录写进文件
+        let traced = self.session.take_trace();
+        if !traced.is_empty() {
+            crate::devlog::write(traced);
+        }
         self.commit = frame.commit.as_deref().map(to_c);
         self.preedit = to_c(&frame.preedit);
         self.shown_start = frame.cand_start;
@@ -633,6 +638,7 @@ impl WowtypeSession {
         f: impl FnOnce(&mut Session<'static>) -> Frame,
     ) -> *const WowtypeFrame {
         let inner = &mut self.session;
+        inner.set_trace(crate::devlog::enabled());
         match panic::catch_unwind(panic::AssertUnwindSafe(|| f(inner))) {
             Ok(frame) => self.publish(frame),
             Err(_) => {
@@ -1213,6 +1219,64 @@ mod tests {
         assert_eq!(c(frame.commit), "nihaom");
         assert_eq!(c(frame.preedit), "");
         unsafe { wowtype_session_free(session) };
+    }
+
+    #[test]
+    fn developer_log_is_written_by_session_calls_while_enabled() {
+        use crate::devlog_ffi::{wowtype_devlog_clear, wowtype_devlog_configure, wowtype_devlog_enabled, wowtype_devlog_set_app};
+        let _guard = crate::devlog::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("wowtype-devlog-ffi-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(crate::devlog::FILE_NAME);
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // 这个测试开着的时候别的测试的会话也会往里写：只看自己这几条（输入是 devlogffi 开头的）
+        let mine = || -> Vec<serde_json::Value> {
+            std::fs::read_to_string(&path)
+                .unwrap_or_default()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .filter(|event| event["input"].as_str().is_some_and(|input| input.starts_with("devlogffi")))
+                .collect()
+        };
+        let type_and_commit = |input: &str| {
+            let session = unsafe { wowtype_session_new(ptr::null_mut(), ptr::null()) };
+            for ch in input.bytes() {
+                press(session, u32::from(ch));
+            }
+            assert_eq!(c(unsafe { &*wowtype_session_reset(session, 1) }.commit), input);
+            unsafe { wowtype_session_free(session) };
+        };
+
+        // 默认关着：什么都不写
+        assert_eq!(unsafe { wowtype_devlog_configure(ptr::null(), 0) }, 0);
+        assert_eq!(wowtype_devlog_enabled(), 0);
+        type_and_commit("devlogffia");
+        assert!(mine().is_empty());
+        // 打开却没给路径：不算开
+        assert_eq!(unsafe { wowtype_devlog_configure(ptr::null(), 1) }, -1);
+        assert_eq!(wowtype_devlog_enabled(), 0);
+
+        assert_eq!(unsafe { wowtype_devlog_configure(c_path.as_ptr(), 1) }, 0);
+        assert_eq!(wowtype_devlog_enabled(), 1);
+        unsafe { wowtype_devlog_set_app(c"org.example.Editor".as_ptr()) };
+        type_and_commit("devlogffib");
+        let events = mine();
+        assert_eq!(events.len(), 1, "{events:?}");
+        assert_eq!(events[0]["e"], "commit");
+        assert_eq!(events[0]["text"], "devlogffib");
+        assert_eq!(events[0]["steps"][0]["via"], "reset");
+        assert_eq!(events[0]["steps"][0]["kind"], "raw");
+        assert_eq!(events[0]["ver"], env!("CARGO_PKG_VERSION"));
+        assert!(events[0]["t"].as_i64().unwrap() > 0);
+
+        // 清空、关上以后不再写
+        assert_eq!(unsafe { wowtype_devlog_clear(c_path.as_ptr()) }, 0);
+        assert!(mine().is_empty());
+        assert_eq!(unsafe { wowtype_devlog_configure(ptr::null(), 0) }, 0);
+        unsafe { wowtype_devlog_set_app(ptr::null()) };
+        type_and_commit("devlogffic");
+        assert!(mine().is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -539,6 +539,49 @@ def run(app):
               "取消配对以后应该回到没配对")
         check(json.load(open(other, encoding="utf-8"))["group_key"], "取消配对不该动别的设备")
     step("跨设备复制粘贴：配对、取消、中转服务的口令", clipboard_sync)
+
+    def developer_mode():
+        # 开发者模式：拨开关先问，确认了才写进设置；记录能看条数、导出、清空
+        devlog = ns["DEVLOG_FILE"]
+        check(devlog.startswith(home), f"打字记录不在临时目录里：{devlog}")
+        conf = lambda: open(ns["CONFIG_FILE"], encoding="utf-8").read()  # noqa: E731
+        check(win.values["DeveloperMode"] == "False" and not win.devmode_row.get_active(), "默认该关着")
+        check("什么都不记" in win.devlog_row.get_subtitle(), win.devlog_row.get_subtitle())
+        check(not win.devlog_export.get_sensitive() and not win.devlog_clear.get_sensitive(), "没有记录时点不了")
+        win.devmode_row.set_active(True)
+        pump(0.3)
+        check(not win.devmode_row.get_active() and win.values["DeveloperMode"] == "False",
+              "没确认之前不该打开")
+        check("DeveloperMode=True" not in conf(), "没确认之前不该写进设置")
+        check("明文" in ns["DEVLOG_WARNING"] and "密码" in ns["DEVLOG_WARNING"], "警告里要说清楚记的是明文")
+        win.devmode_dialog.close()
+        pump(0.3)
+        check(win.values["DeveloperMode"] == "False", "关掉弹窗算取消")
+        win.developer_mode_confirmed()
+        pump(0.4)  # 设置隔 250 ms 才存盘
+        check(win.devmode_row.get_active() and "DeveloperMode=True" in conf(), "确认以后该打开并写进设置")
+        check("还没有记录" in win.devlog_row.get_subtitle(), win.devlog_row.get_subtitle())
+        # 输入法记了两条（这里替它写）
+        os.makedirs(os.path.dirname(devlog), exist_ok=True)
+        with open(devlog, "w", encoding="utf-8") as f:
+            f.write('{"e":"commit","input":"nihao","text":"你好"}\n{"e":"backspace","text":"你好"}\n')
+        win.refresh_devlog()
+        check("2 条" in win.devlog_row.get_subtitle(), win.devlog_row.get_subtitle())
+        check(win.devlog_export.get_sensitive() and win.devlog_clear.get_sensitive(), "有记录时该能导出、清空")
+        out = os.path.join(home, "devlog-export.jsonl")
+        win.devlog_export_to(out)
+        check(open(out, encoding="utf-8").read().count("\n") == 2, "导出的该是两条")
+        check("devlog" not in ns["collect_diagnostics"]() and "nihao" not in ns["collect_diagnostics"](),
+              "导出日志不该带打字记录")
+        # 关掉以后记录还在，说清楚不再记新的；清空以后没有了
+        win.devmode_row.set_active(False)
+        pump(0.4)
+        check("DeveloperMode=True" not in conf(), "关掉该写回设置")
+        check("不再记新的" in win.devlog_row.get_subtitle(), win.devlog_row.get_subtitle())
+        win.devlog_clear_now()
+        check(not os.path.exists(devlog) and "什么都不记" in win.devlog_row.get_subtitle(), "清空以后该没有记录")
+    step("开发者模式：确认才打开，记录能导出和清空", developer_mode)
+    dialog("清空打字记录（取消）", lambda: win.on_devlog_clear(None))
     dialog("恢复默认设置（确定）", win.on_reset, answer=1)
     dialog("导出日志（取消）", win.on_export_log)
     dialog("导入自定义词（取消）", win.on_import_words)
