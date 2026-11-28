@@ -81,6 +81,7 @@ export class VoiceOverlay {
         this._lastFrame = 0;
         this._t = 0;
         this._hideTimeout = 0;
+        this._unredirectInhibited = false;
 
         this._build();
 
@@ -110,9 +111,26 @@ export class VoiceOverlay {
             this._hideTimeout = 0;
         }
         this._timeline.stop();
+        this._releaseUnredirect();
         this._pill.destroy();
         this._timeline = null;
         this._caret.destroy();
+    }
+
+    // 全屏的窗口（浏览器全屏、视频）Mutter 直接扫描输出，Shell 画的浮条只在动画那一下合上去、之后看不见（#331）。
+    // 显示期间先关掉直接扫描输出，收起再打开，和 Shell 自己的 OSD、Dash 一样
+    _inhibitUnredirect() {
+        if (this._unredirectInhibited)
+            return;
+        global.compositor?.disable_unredirect?.();
+        this._unredirectInhibited = true;
+    }
+
+    _releaseUnredirect() {
+        if (!this._unredirectInhibited)
+            return;
+        this._unredirectInhibited = false;
+        global.compositor?.enable_unredirect?.();
     }
 
     _build() {
@@ -242,13 +260,19 @@ export class VoiceOverlay {
         Main.layoutManager.uiGroup.set_child_above_sibling(this._pill, null);
         this._pill.show();
         this._pill.ease({
-            opacity: 255,
             translation_y: 0,
             scale_x: 1,
             scale_y: 1,
             duration: POP_MS,
             mode: Clutter.AnimationMode.EASE_OUT_BACK,
         });
+        // 透明度单独淡入：EASE_OUT_BACK 会冲过 255，溢出成接近透明，浮条淡入完闪一下（#331）
+        this._pill.ease({
+            opacity: 255,
+            duration: POP_MS,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        });
+        this._inhibitUnredirect();
         this._lastFrame = 0;
         this._timeline.start();
     }
@@ -290,6 +314,7 @@ export class VoiceOverlay {
     _stop() {
         this._timeline.stop();
         this._caret.hide();
+        this._releaseUnredirect();
     }
 
     // ── 位置 ────────────────────────────────────────────────────────────
