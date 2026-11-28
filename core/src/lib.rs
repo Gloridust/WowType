@@ -1907,6 +1907,28 @@ impl Engine {
             tail.push((tier, c));
         }
         tail.sort_by_key(|(tier, _)| *tier); // 稳定排序：同一层里的先后不变
+        // 同字时留照着打的那条（同 compose_candidates）：haio 里把 o 当成多按的键纠出来的整词「骸」（hai）已经在前面了，
+        // 长尾里照着打的句首字「骸」（hai，o 留着接着打）以前被它按字去重掉。排第一的那条不动
+        {
+            let typed_tail: std::collections::HashSet<&str> = tail
+                .iter()
+                .filter(|(_, c)| c.features.typo_count == 0.0)
+                .map(|(_, c)| c.text.as_str())
+                .collect();
+            let first = result.iter().position(|c| !is_raw_candidate(c));
+            let mut index = 0usize;
+            result.retain(|c| {
+                let at = index;
+                index += 1;
+                let replaced = Some(at) != first
+                    && c.features.typo_count > 0.0
+                    && typed_tail.contains(c.text.as_str());
+                if replaced {
+                    seen.remove(&c.text);
+                }
+                !replaced
+            });
+        }
         for (_, mut candidate) in tail {
             if result.len() >= max {
                 break;
@@ -3416,10 +3438,17 @@ fn prefix_on_syllable_boundaries(
         .filter(|c| c.is_ascii_alphabetic())
         .collect();
     let syllables = syllables_of(top);
+    // 最后一个音节前面的都和字母对得上：只是末音节补全出来的（daziy 的「打字员」da zi yuan），不是简拼
+    let head_aligned = syllables
+        .split_last()
+        .is_some_and(|(_, head)| letters.starts_with(&head.concat()));
     if syllables.len() >= 2
-        && (top.features.full_jianpin > 0.0 || syllables.concat().len() > letters.len() + 2)
+        && (top.features.full_jianpin > 0.0
+            || (syllables.concat().len() > letters.len() + 2 && !head_aligned))
     {
-        // 简拼（zgrm）字母和音节对不上，不按边界筛
+        // 简拼（zgrm）字母和音节对不上，不按边界筛。
+        // 以前只看长度：末音节补全出三个以上字母时（y -> yuan、zh -> zhuang）也被当成简拼整个不筛，
+        // 纠错出来的句首字（daziy 的「带、代、待」dai）排到 da 的常用字前面，「大」「打」反而被挤掉
         return Vec::new();
     }
     // 第一名是纠错出来的（yusezhi 的「越职」yue zhi、gaj 的「感」gan）时，用户照着打的读法
@@ -3774,6 +3803,18 @@ fn compose_candidates(result: &mut Vec<Candidate>, prefix: Vec<Candidate>, max: 
         kept.push(c);
     }
 
+    // 同字时留照着打的那条：lingjias 的句首词「凌驾」（ling jia，s 留着接着打）和把 s 当成多按的键纠出来的整词
+    // 「凌驾」字一样，以前留的是纠错的整词（排在句首单字后面），照着打的句首词被它去重掉了，选它还会把刚打的 s 吞掉。
+    // 排第一的那条不动：它是纠错的时（chaoxik 的「抄袭」、nihaoo 的「你好」，纠了以后音节更少）就是正经候选
+    let mut index = 0usize;
+    kept.retain(|r| {
+        index += 1;
+        index == 1
+            || r.features.typo_count == 0.0
+            || !prefix
+                .iter()
+                .any(|p| p.features.typo_count == 0.0 && p.text == r.text)
+    });
     let mut seen: HashMap<String, ()> = HashMap::new();
     let prefix: Vec<Candidate> = prefix
         .into_iter()
@@ -6639,6 +6680,66 @@ mod tests {
         let mut result = vec![corrected, typed];
         compose_candidates(&mut result, Vec::new(), 10);
         assert!(result.iter().any(|c| c.text == "没雨哦"));
+    }
+
+    #[test]
+    fn a_long_tail_completion_is_not_mistaken_for_jianpin() {
+        // daziy：第一名「打字员」的末音节是补全出来的（y -> yuan），比字母多三个。以前只看长度就当成简拼、
+        // 句首词整个不筛：纠错出来的「带」（dai）留着，排到 da 的常用字前面
+        let mut top = ranked("打字员", "da zi yuan", 0.0, 5);
+        top.features.prefix_completion = 3.0;
+        let result = vec![top];
+        let mut prefix = vec![
+            ranked("打字", "da zi", 0.0, 4),
+            ranked("带", "dai", 1.0, 3),
+            ranked("大", "da", 0.0, 2),
+            ranked("打", "da", 0.0, 2),
+        ];
+        prefix_on_syllable_boundaries(&result, "daziy", &mut prefix);
+        let texts: Vec<&str> = prefix.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, ["打字", "打", "大"], "纠错的句首字去掉，照着打的按音节边界留");
+
+        // 真的简拼（zgrm -> 中国人民）照旧不按边界筛
+        let mut top = ranked("中国人民", "zhong guo ren min", 0.0, 4);
+        top.features.full_jianpin = 1.0;
+        let result = vec![top];
+        let mut prefix = vec![ranked("中国", "zhong guo", 0.0, 2)];
+        prefix_on_syllable_boundaries(&result, "zgrm", &mut prefix);
+        assert_eq!(prefix.len(), 1);
+    }
+
+    #[test]
+    fn a_typed_prefix_word_wins_over_the_same_word_from_a_correction() {
+        // lingjias：句首词「凌驾」（ling jia，s 留着接着打）和把 s 当成多按的键纠出来的整词「凌驾」字一样。
+        // 留照着打的句首词：以前它被纠错的整词去重掉，选「凌驾」会把刚打的 s 吞掉
+        let mut top = ranked("零假设", "ling jia she", 0.0, 8);
+        top.score = -10.0;
+        let mut corrected = ranked("凌驾", "ling jia", 1.0, 8);
+        corrected.score = -18.0;
+        let mut result = vec![top, corrected];
+        let prefix = vec![ranked("凌驾", "ling jia", 0.0, 7), ranked("令", "ling", 0.0, 4)];
+        compose_candidates(&mut result, prefix, 10);
+        let got: Vec<(&str, usize, f32)> = result
+            .iter()
+            .map(|c| (c.text.as_str(), c.consumed, c.features.typo_count))
+            .collect();
+        assert_eq!(got, [("零假设", 8, 0.0), ("凌驾", 7, 0.0), ("令", 4, 0.0)]);
+
+        // 排第一的本身是纠错的（chaoxik 的「抄袭」，k 当成多按的键）：它是正经候选，不让给同字的句首词；
+        // 后面同字的纠错词（超细）照样让给照着打的句首词
+        let mut top = ranked("抄袭", "chao xi", 1.0, 7);
+        top.score = -8.0;
+        let mut other = ranked("超细", "chao xi", 1.0, 7);
+        other.score = -15.0;
+        let mut result = vec![top, other];
+        let prefix = vec![
+            ranked("抄袭", "chao xi", 0.0, 6),
+            ranked("超细", "chao xi", 0.0, 6),
+            ranked("抄", "chao", 0.0, 4),
+        ];
+        compose_candidates(&mut result, prefix, 10);
+        let got: Vec<(&str, usize)> = result.iter().map(|c| (c.text.as_str(), c.consumed)).collect();
+        assert_eq!(got, [("抄袭", 7), ("超细", 6), ("抄", 4)]);
     }
 
     #[test]

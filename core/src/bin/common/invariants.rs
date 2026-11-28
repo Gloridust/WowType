@@ -508,13 +508,27 @@ fn only_adds(
             _ => "jianpin-outranks-typed",
         }
     };
+    let on_top = on.iter().find(|c| !is_raw(c));
     // 词库里的词（整词、句首词、单字）一个都不能少；几个词拼的整句有上限、会换拼法，只要还有一个照着打的整句
     let mut missing: Vec<&str> = off
         .iter()
         .filter(|c| !is_raw(c))
         .take(PAGE)
         .filter(|c| is_word(c) && plain_typed(lexicon, c))
-        .filter(|c| !on.iter().any(|o| o.text == c.text))
+        // 「还在」要么用掉的键一样多，要么不是这个机制加进来的：lingjias 的句首词「凌驾」（ling jia，s 留着接着打）
+        // 换成把 s 当多按的键纠出来的整词「凌驾」，字一样，选它却会把 s 吞掉，不算还在。
+        // 开着时排第一的那条除外：它按规矩可以是这个机制加的（chaoxik 的「抄袭」纠了以后音节更少、kaoyang 的「考研」
+        // 照着打只能硬凑），同字的句首词和它去重是对的
+        // 只对纠错这样查：模糊音兜底、简拼加的整词（kaoyang 的「考验」）本来就该用完整个输入，比句首词「考验」（kao yan，剩个 g）有用
+        .filter(|c| {
+            !on.iter().any(|o| {
+                o.text == c.text
+                    && (mechanism.name != "typo"
+                        || o.consumed == c.consumed
+                        || !(mechanism.added)(o)
+                        || on_top.is_some_and(|t| std::ptr::eq(t, o)))
+            })
+        })
         .map(|c| c.text.as_str())
         .collect();
     // 关掉时排第一的照着打的读法（关掉一种机制时另外几种照样会加候选，那些不算）：整句也要还在
