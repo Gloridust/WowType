@@ -1452,11 +1452,18 @@ void WowtypeEngine::applyConfig() {
     shuangpinAbbrev_ = envOr("WOWTYPE_SHUANGPIN_ABBREV", *config_.shuangpinAbbrev);
     syncEnabled_ = envOr("WOWTYPE_CLIPBOARD_SYNC", *config_.clipboardSync);
     syncPaste_ = *config_.clipboardSyncPaste;
-    // 别的设备复制过来的也放在剪贴板历史里：同步开着时不清
-    if (!clipboardHistory_ && !syncEnabled_) {
-        wowtype_clipboard_clear();
+    // 剪贴板历史开着：存进文件（重启以后还在，设置界面看得到）。关着：只在内存里（跨设备收到的），
+    // 刚关掉时核心把文件删掉；同步也关着就连内存里的一起清掉
+    {
+        const std::string file = clipboardHistoryFile();
+        wowtype_clipboard_configure(clipboardHistory_ && !file.empty() ? file.c_str() : nullptr,
+                                    *config_.clipboardHistoryDays);
+        if (!clipboardHistory_ && !syncEnabled_) {
+            wowtype_clipboard_clear();
+        }
     }
     applySync();
+    applyClipboardTimer();
     autoSpaceFlags_ = *config_.autoSpace ? (*config_.autoSpaceLetters ? 1 : 0) |
                                                (*config_.autoSpaceDigits ? 2 : 0)
                                          : 0;
@@ -1740,7 +1747,7 @@ WowtypeEngine::~WowtypeEngine() {
         wowtype_translate_free(translator_);
         translator_ = nullptr;
     }
-    syncTimer_.reset();
+    clipboardTimer_.reset();
     if (sync_) {
         wowtype_sync_free(sync_);
         sync_ = nullptr;
@@ -2255,10 +2262,40 @@ void WowtypeEngine::sampleClipboard(fcitx::InputContext *ic) {
     if (!clipboardHistory_) {
         return;
     }
-    const auto text = latestClipboard(ic);
-    if (text && !text->empty()) {
-        wowtype_clipboard_remember(text->c_str());
+    // 空的也报（复制的是图片）：之后再复制同一段文字才认得出是新的一次。核心看变没变，没变不记
+    if (const auto text = latestClipboard(ic)) {
+        const std::string app = ic ? ic->program() : std::string();
+        wowtype_clipboard_observe(text->c_str(), app.c_str());
     }
+}
+
+std::string WowtypeEngine::clipboardHistoryFile() const {
+    if (const char *env = std::getenv("WOWTYPE_CLIPBOARD_HISTORY_FILE"); env && *env) {
+        return env;
+    }
+    const std::string dir = userDataDir();
+    return dir.empty() ? std::string() : dir + "/clipboard-history.json";
+}
+
+void WowtypeEngine::applyClipboardTimer() {
+    if (!clipboardHistory_ && !(sync_ && syncEnabled_)) {
+        clipboardTimer_.reset();
+        return;
+    }
+    if (clipboardTimer_) {
+        return;
+    }
+    constexpr uint64_t kClipboardPollUsec = 1000 * 1000;
+    clipboardTimer_ = instance_->eventLoop().addTimeEvent(
+        CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kClipboardPollUsec, kTimerAccuracyUsec,
+        [this](fcitx::EventSourceTime *source, uint64_t) {
+            // 连着复制好几次、中间没切换输入框也都记得到（以前只在切换输入框、打开工具栏时看一眼）
+            sampleClipboard(instance_->mostRecentInputContext());
+            tickSync();
+            source->setNextInterval(kClipboardPollUsec);
+            source->setOneShot();
+            return true;
+        });
 }
 
 std::string WowtypeEngine::syncStateFile() const {
@@ -2283,7 +2320,6 @@ void WowtypeEngine::applySync() {
     }
     if (!sync_) {
         // 没打开过，或者核心没带同步
-        syncTimer_.reset();
         return;
     }
     std::string name = *config_.clipboardSyncDeviceName;
@@ -2306,21 +2342,6 @@ void WowtypeEngine::applySync() {
     config.device_name = name.c_str();
     // 设置没变时核心什么都不做；变了在它自己的线程里重起，不卡这里
     wowtype_sync_configure(sync_, &config);
-    if (!syncEnabled_) {
-        syncTimer_.reset();
-        return;
-    }
-    if (!syncTimer_) {
-        constexpr uint64_t kSyncPollUsec = 1000 * 1000;
-        syncTimer_ = instance_->eventLoop().addTimeEvent(
-            CLOCK_MONOTONIC, fcitx::now(CLOCK_MONOTONIC) + kSyncPollUsec, kTimerAccuracyUsec,
-            [this](fcitx::EventSourceTime *source, uint64_t) {
-                tickSync();
-                source->setNextInterval(kSyncPollUsec);
-                source->setOneShot();
-                return true;
-            });
-    }
 }
 
 void WowtypeEngine::tickSync() {

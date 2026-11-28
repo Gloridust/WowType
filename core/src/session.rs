@@ -1871,13 +1871,18 @@ impl<'e> Session<'e> {
         if is_modifier_keysym(key.keysym) {
             return false;
         }
+        let Some(state) = self.tool.clone() else {
+            return false;
+        };
+        // 剪贴板页里 Ctrl+Delete（Ctrl+退格、Shift+Delete）：删掉光标处这一条，和忘掉学错的词一样的键
+        if key.is_forget() && state.tool == Tool::Clipboard {
+            self.forget_clipboard_item(&state);
+            return true;
+        }
         if key.modifiers & (modifier::CTRL | modifier::ALT | modifier::SUPER) != 0 {
             self.close_tool();
             return false;
         }
-        let Some(state) = self.tool.clone() else {
-            return false;
-        };
         if matches!(state.tool, Tool::Emoji { .. }) {
             self.emoji_key(key, state);
         } else {
@@ -1930,6 +1935,19 @@ impl<'e> Session<'e> {
         }
         if let Some(state) = self.tool.as_mut() {
             state.cursor = cursor;
+        }
+    }
+
+    /// 从剪贴板历史里删掉光标处这一条，列表重读，光标停在原来的位置（删的是最后一条就往前挪一个）。
+    fn forget_clipboard_item(&mut self, state: &ToolState) {
+        let Some(item) = state.items.get(state.cursor.min(state.items.len().saturating_sub(1))) else {
+            return;
+        };
+        crate::clipboard::forget(&item.commit);
+        let cursor = state.cursor;
+        self.open_tool_now(Tool::Clipboard, state.query.clone());
+        if let Some(state) = self.tool.as_mut() {
+            state.cursor = cursor.min(state.items.len().saturating_sub(1));
         }
     }
 
@@ -2066,7 +2084,7 @@ impl<'e> Session<'e> {
         let empty = state.items.is_empty();
         match state.tool {
             Tool::Menu => "工具栏：数字键选择，Esc 关闭".to_owned(),
-            Tool::Clipboard if !empty => "剪贴板：选一条上屏，退格返回".to_owned(),
+            Tool::Clipboard if !empty => "剪贴板：选一条上屏，Ctrl+Delete 删掉，退格返回".to_owned(),
             Tool::Clipboard if self.config.clipboard_history => {
                 "剪贴板：还没有记录，复制过的文字会出现在这里".to_owned()
             }

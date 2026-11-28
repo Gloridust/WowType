@@ -132,6 +132,30 @@ DEVLOG_WARNING = (
 DEVLOG_INFO = (
     "调排序用：记下每次上屏打的拼音、当时的候选和选了第几个，放弃的、上屏后马上退格的也记。"
     "用 tools/devlog.py 看汇总、转成评测用例。默认关，记录是明文的。")
+# 剪贴板历史（ClipboardHistory 开着时）：输入法每秒看一次剪贴板，复制过的文字存进这个文件（core/src/clipboard.rs，
+# 只有自己能读，最新的在前，最多 200 条）。设置界面列出来、删一条、清空；关掉时删掉文件。
+CLIPBOARD_HISTORY_FILE = (os.environ.get("WOWTYPE_CLIPBOARD_HISTORY_FILE")
+                          or os.path.join(DATA_DIR, "clipboard-history.json"))
+CLIPBOARD_HISTORY_MAX = 200
+CLIPBOARD_HISTORY_MAX_BYTES = 16 * 1024
+# 「保留多久」的选项：(显示, ClipboardHistoryDays)
+CLIPBOARD_KEEP_CHOICES = [("1 天", "1"), ("7 天", "7"), ("30 天", "30"), ("一直留着", "0")]
+CLIPBOARD_WARNING = (
+    "打开以后，WowType 每秒看一次剪贴板，把复制过的文字存在这台电脑上（最多 200 条，只有你自己能读），"
+    "打 v 再按空格、或者在这一页里能找回来。\n\n"
+    "密码框里不看剪贴板。但从密码管理器复制的密码，输入法分不出来，也会被记下并显示出来："
+    "常用密码管理器的话，可以在 fcitx5 的剪贴板设置里打开「Do not show password from password managers」，"
+    "或者复制完密码到这一页删掉那一条。\n\n"
+    "记录不上传。关掉开关时全部删掉。")
+CLIPBOARD_INFO = (
+    "打开后每秒看一次剪贴板，复制过的文字都记下来（最多 200 条，每条最多 16 KB；图片、文件不记），"
+    "最新的在前，同一段复制两次只留一条。\n\n"
+    "打字时打 v 再按空格，选「剪贴板」，数字键上屏，Ctrl+Delete 删掉光标处那一条。"
+    "这一页能搜索、复制回剪贴板、删除。\n\n"
+    "记录存在 ~/.local/share/wowtype/clipboard-history.json，只有自己能读；超过「保留多久」的自动删掉，"
+    "关掉开关时全部删掉。跨设备复制粘贴收到的也在这里。\n\n"
+    "读剪贴板靠 fcitx5 自带的 clipboard 插件：没装、关掉了它就记不到。GNOME 的 Wayland 会话里可能只记得到"
+    "在有输入框的窗口里复制的。")
 VOICE_MODEL_DIR = os.environ.get("WOWTYPE_VOICE_MODEL_DIR") or os.path.join(DATA_DIR, "wtlocal")
 STATE_DIR = os.path.join(_xdg("XDG_STATE_HOME", "~/.local/state"), "wowtype")
 # 插件和设置界面共用的日志（插件那边见 fcitx5-addon/src/wowtype_log.h），不记打的字
@@ -388,6 +412,7 @@ DEFAULTS = {
     "Calculator": "True",
     "Toolbar": "True",
     "ClipboardHistory": "False",
+    "ClipboardHistoryDays": "7",
     "ClipboardSync": "False",
     "ClipboardSyncLan": "True",
     "ClipboardSyncRelayUrl": "",
@@ -432,6 +457,7 @@ DEFAULTS = {
 RANGES = {
     "PageSize": (3, 9),
     "TranslateIdleMinutes": (0, 240),
+    "ClipboardHistoryDays": (0, 365),
     "VoiceSilenceTimeout": (0, 60000),
 }
 
@@ -935,6 +961,194 @@ def devlog_self_test():
     assert (devlog_size(512), devlog_size(2_500_000)) == ("0.5 KB", "2.5 MB")
     assert DEFAULTS["DeveloperMode"] == "False"
     print("devlog self-test ok")
+
+
+def clipboard_text_hash(text):
+    """一段文字的指纹，和 core/src/clipboard.rs 的 text_hash 一样（FNV-1a 64 位，16 位小写十六进制）。"""
+    value = 0xcbf29ce484222325
+    for byte in text.encode("utf-8"):
+        value = ((value ^ byte) * 0x100000001b3) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016x}"
+
+
+def read_clipboard_history(path=None, keep_days=0, now=None):
+    """(记录, forgotten)：记录是 [{"text", "time", "app", "device"}…]，最新的在前；超过 keep_days 天的不要
+    （0 不按时间删）。没有文件、读不了、格式不对都当没有。"""
+    path = path or CLIPBOARD_HISTORY_FILE
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        raw = data.get("items")
+    except (OSError, ValueError, AttributeError):
+        return [], None
+    if not isinstance(raw, list):
+        return [], None
+    oldest = (time.time() if now is None else now) - keep_days * 86400 if keep_days > 0 else None
+    items = []
+    for item in raw:
+        if not isinstance(item, dict) or not isinstance(item.get("text"), str):
+            continue
+        text = item["text"]
+        if not text.strip() or len(text.encode("utf-8")) > CLIPBOARD_HISTORY_MAX_BYTES:
+            continue
+        when = item.get("time") if isinstance(item.get("time"), int) else 0
+        if oldest is not None and when < oldest:
+            continue
+        items.append({"text": text, "time": when,
+                      "app": item.get("app") if isinstance(item.get("app"), str) else "",
+                      "device": item.get("device") if isinstance(item.get("device"), str) else ""})
+    forgotten = data.get("forgotten") if isinstance(data.get("forgotten"), str) else None
+    return items[:CLIPBOARD_HISTORY_MAX], forgotten or None
+
+
+def write_clipboard_history(items, forgotten=None, path=None):
+    """整份写回（先写同目录的临时文件再改名，只有自己能读），格式和输入法写的一样。"""
+    path = path or CLIPBOARD_HISTORY_FILE
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = {"version": 1, "items": [{"text": e["text"], "time": int(e.get("time") or 0),
+                                     "app": e.get("app") or "", "device": e.get("device") or ""}
+                                    for e in items[:CLIPBOARD_HISTORY_MAX]]}
+    if forgotten:
+        data["forgotten"] = forgotten
+    tmp = os.path.join(os.path.dirname(path), f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def forget_clipboard_entry(text, path=None):
+    """删掉文字是 text 的那条；删掉的那条多半还在剪贴板上，记下它的指纹，输入法不会再把它记回来。
+    返回删掉的那条（没有返回 None）。"""
+    items, _forgotten = read_clipboard_history(path)
+    removed = next((e for e in items if e["text"] == text), None)
+    if removed is None:
+        return None
+    write_clipboard_history([e for e in items if e["text"] != text], clipboard_text_hash(text), path)
+    return removed
+
+
+def restore_clipboard_entry(entry, path=None):
+    """撤销删除：放回去（按时间排），不再记着它的指纹。"""
+    items, forgotten = read_clipboard_history(path)
+    if forgotten == clipboard_text_hash(entry["text"]):
+        forgotten = None
+    items = sorted([e for e in items if e["text"] != entry["text"]] + [entry], key=lambda e: -e["time"])
+    write_clipboard_history(items, forgotten, path)
+
+
+def clear_clipboard_history(path=None):
+    """全部删掉：留一个空文件，记着最新那条的指纹（它多半还在剪贴板上，输入法重启时不该把它记回来）。"""
+    path = path or CLIPBOARD_HISTORY_FILE
+    items, forgotten = read_clipboard_history(path)
+    if not items and not os.path.exists(path):
+        return
+    write_clipboard_history([], clipboard_text_hash(items[0]["text"]) if items else forgotten, path)
+
+
+def delete_clipboard_history(path=None):
+    """关掉剪贴板历史：连文件一起删掉（输入法读设置时也会删）。"""
+    try:
+        os.remove(path or CLIPBOARD_HISTORY_FILE)
+    except FileNotFoundError:
+        pass
+
+
+def clipboard_preview(text, limit=120):
+    """列表里的一行：换行显示成 ⏎，连着的空白并成一个，太长的截断。"""
+    shown = re.sub(r"[ \t]+", " ", text.strip().replace("\r\n", "\n").replace("\n", " ⏎ "))
+    return shown if len(shown) <= limit else shown[:limit - 1] + "…"
+
+
+def clipboard_when(stamp, now=None):
+    """「刚才」「5 分钟前」「3 小时前」「昨天 14:02」「11月20日 14:02」「2025年11月20日」。"""
+    now = time.time() if now is None else now
+    ago = now - stamp
+    if ago < 60:
+        return "刚才"
+    if ago < 3600:
+        return f"{int(ago // 60)} 分钟前"
+    then, today = time.localtime(stamp), time.localtime(now)
+    if ago < 12 * 3600 or then[:3] == today[:3]:
+        return f"{int(ago // 3600)} 小时前" if then[:3] != today[:3] or ago < 6 * 3600 else time.strftime("%H:%M", then)
+    yesterday = time.localtime(now - 86400)
+    if then[:3] == yesterday[:3]:
+        return time.strftime("昨天 %H:%M", then)
+    if then.tm_year == today.tm_year:
+        return f"{then.tm_mon}月{then.tm_mday}日 " + time.strftime("%H:%M", then)
+    return f"{then.tm_year}年{then.tm_mon}月{then.tm_mday}日"
+
+
+def clipboard_source(entry):
+    """从哪来的：别的设备复制的是「来自 那台」，本机的是应用名（不知道是空串）。"""
+    if entry.get("device"):
+        return f"来自 {entry['device']}"
+    return entry.get("app") or ""
+
+
+def clipboard_self_test():
+    import tempfile
+    # 和 core/src/clipboard.rs 的 text_hash_is_fnv1a 一样
+    assert clipboard_text_hash("") == "cbf29ce484222325" and clipboard_text_hash("a") == "af63dc4c8601ec8c"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "wowtype", "clipboard-history.json")
+        assert read_clipboard_history(path) == ([], None)
+        clear_clipboard_history(path)  # 没有文件：什么也不做
+        assert not os.path.exists(path)
+        items = [{"text": "新的", "time": 2000, "app": "gedit", "device": ""},
+                 {"text": "别的设备", "time": 1500, "app": "", "device": "MacBook"},
+                 {"text": "老的\n两行", "time": 100, "app": "", "device": ""}]
+        write_clipboard_history(items, None, path)
+        assert os.stat(path).st_mode & 0o777 == 0o600
+        assert read_clipboard_history(path)[0] == items
+        # 按天数筛：现在是 1 天零 200 秒，一天以前的不要
+        assert [e["text"] for e in read_clipboard_history(path, keep_days=1, now=86400 + 200)[0]] == ["新的", "别的设备"]
+        # 删一条：记着它的指纹；撤销：放回原处，指纹去掉
+        removed = forget_clipboard_entry("别的设备", path)
+        assert removed == items[1]
+        assert forget_clipboard_entry("没有的", path) is None
+        got, forgotten = read_clipboard_history(path)
+        assert [e["text"] for e in got] == ["新的", "老的\n两行"] and forgotten == clipboard_text_hash("别的设备")
+        restore_clipboard_entry(removed, path)
+        assert read_clipboard_history(path) == (items, None)
+        # 清空：留空文件，记着最新那条的指纹
+        clear_clipboard_history(path)
+        assert read_clipboard_history(path) == ([], clipboard_text_hash("新的"))
+        delete_clipboard_history(path)
+        assert not os.path.exists(path)
+        delete_clipboard_history(path)
+        # 坏文件、不认得的条目当没有
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("not json")
+        assert read_clipboard_history(path) == ([], None)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"items": [{"text": 1}, {"text": "  "}, {"text": "好的", "time": "x"}]}, f)
+        assert read_clipboard_history(path)[0] == [{"text": "好的", "time": 0, "app": "", "device": ""}]
+        assert not [name for name in os.listdir(os.path.dirname(path)) if name.endswith(".tmp")]
+    assert clipboard_preview("  a\n\tb  ") == "a ⏎ b"
+    assert clipboard_preview("x" * 200).endswith("…") and len(clipboard_preview("x" * 200)) == 120
+    now = time.mktime((2026, 11, 28, 15, 0, 0, 0, 0, -1))
+    assert clipboard_when(now - 10, now) == "刚才" and clipboard_when(now - 300, now) == "5 分钟前"
+    assert clipboard_when(now - 3 * 3600, now) == "3 小时前"
+    assert clipboard_when(now - 8 * 3600, now) == "07:00"
+    assert clipboard_when(now - 86400, now) == "昨天 15:00"
+    assert clipboard_when(now - 8 * 86400, now) == "11月20日 15:00"
+    assert clipboard_when(now - 400 * 86400, now).endswith("日") and "2025年" in clipboard_when(now - 400 * 86400, now)
+    assert clipboard_source({"app": "gedit", "device": ""}) == "gedit"
+    assert clipboard_source({"app": "", "device": "Pixel"}) == "来自 Pixel"
+    # 「导出日志」不带剪贴板历史
+    assert not {"CLIPBOARD_HISTORY_FILE", "read_clipboard_history"} & set(collect_diagnostics.__code__.co_names)
+    assert DEFAULTS["ClipboardHistory"] == "False" and DEFAULTS["ClipboardHistoryDays"] == "7"
+    assert [v for _, v in CLIPBOARD_KEEP_CHOICES].count(DEFAULTS["ClipboardHistoryDays"]) == 1
+    print("clipboard self-test ok")
 
 
 def stats_self_test():
@@ -5486,6 +5700,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             ("voice", "语音", "audio-input-microphone-symbolic", self.build_voice),
             ("translate", "翻译", "preferences-desktop-locale-symbolic", self.build_translate),
             ("words", "自定义词", "accessories-dictionary-symbolic", self.build_words),
+            ("clipboard", "剪贴板", "edit-paste-symbolic", self.build_clipboard),
             ("stats", "统计", "wowtype-stats-symbolic", self.build_stats),
             ("update", "更新", "software-update-available-symbolic", self.build_update),
         )
@@ -6686,10 +6901,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         extras.add(self.calc_row)
         self.toolbar_row = self.make_switch("Toolbar", "工具栏", None)
         extras.add(self.toolbar_row)
-        clipboard = self.make_switch("ClipboardHistory", "记录剪贴板历史", "复制的密码也可能被记下")
-        self.add_info(clipboard, "给工具栏里的「剪贴板」用，最多记 20 条，只在内存里，关掉开关或重启输入法就清空。"
-                                 "复制过的密码也会被记下并显示出来。")
-        extras.add(clipboard)
+        # 「剪贴板」页有剪贴板历史的开关和记录
         self.select_names = [name for _, name in SELECT_KEYS]
         self.select_row = Adw.ComboRow(
             title="分号、引号选词", model=Gtk.StringList.new([label for label, _ in SELECT_KEYS]))
@@ -8185,6 +8397,207 @@ class SettingsWindow(Adw.ApplicationWindow):
         row.set_subtitle(GLib.markup_escape_text(message))
         log(f"测试翻译服务成功（{seconds:.1f} 秒）")
 
+    # ---------------- 剪贴板历史
+
+    def build_clipboard(self):
+        page = self.new_page()
+        group = Adw.PreferencesGroup(title="剪贴板历史")
+        group.set_header_suffix(self.info_button(CLIPBOARD_INFO))
+        self.clipboard_row = SwitchRow(title="记录剪贴板历史")
+        self.clipboard_row.set_subtitle("复制过的文字存在本机，打 v 再按空格也能选")
+        self.clipboard_row.set_active(self.values["ClipboardHistory"] == "True")
+        # 不进 self.switches：打开要先确认，关掉要删记录
+        self.clipboard_row.connect("notify::active", self.on_clipboard_history)
+        group.add(self.clipboard_row)
+        self.clipboard_days = list(CLIPBOARD_KEEP_CHOICES)
+        current = self.values.get("ClipboardHistoryDays", DEFAULTS["ClipboardHistoryDays"])
+        if current not in [v for _, v in self.clipboard_days]:
+            self.clipboard_days.append((f"{current} 天", current))  # 手改过设置文件
+        self.clipboard_days_row = Adw.ComboRow(
+            title="保留多久", subtitle="更早的自动删掉",
+            model=Gtk.StringList.new([label for label, _ in self.clipboard_days]))
+        self.clipboard_days_row.set_selected([v for _, v in self.clipboard_days].index(current))
+        self.clipboard_days_row.connect("notify::selected", self.on_clipboard_days)
+        group.add(self.clipboard_days_row)
+        page.add(group)
+
+        self.clipboard_group = Adw.PreferencesGroup(title="记录")
+        self.clipboard_search = Gtk.SearchEntry(placeholder_text="搜索", valign=Gtk.Align.CENTER)
+        self.clipboard_search.connect("search-changed", lambda _e: self.rebuild_clipboard_list())
+        header = Gtk.Box(spacing=6, valign=Gtk.Align.CENTER)
+        header.append(self.clipboard_search)
+        self.clipboard_clear = Gtk.Button(label="全部清空", valign=Gtk.Align.CENTER)
+        self.clipboard_clear.add_css_class("destructive-action")
+        self.clipboard_clear.connect("clicked", self.on_clipboard_clear)
+        header.append(self.clipboard_clear)
+        self.clipboard_group.set_header_suffix(header)
+        self.clipboard_box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.clipboard_box.add_css_class("boxed-list")
+        self.clipboard_group.add(self.clipboard_box)
+        page.add(self.clipboard_group)
+        self.clipboard_items = []
+        self.clipboard_stamp = None
+        self.refresh_clipboard(force=True)
+        GLib.timeout_add_seconds(2, self.clipboard_tick)
+        return page
+
+    def clipboard_tick(self):
+        # 输入法每秒可能记一条：开着这一页时跟着刷新（文件变了才重画）
+        if self.stack.get_visible_child_name() == "clipboard":
+            self.refresh_clipboard()
+        return True
+
+    def clipboard_keep_days(self):
+        try:
+            return max(0, min(365, int(self.values.get("ClipboardHistoryDays", "7"))))
+        except ValueError:
+            return 7
+
+    def refresh_clipboard(self, force=False):
+        try:
+            st = os.stat(CLIPBOARD_HISTORY_FILE)
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if stamp == self.clipboard_stamp and not force:
+            return
+        self.clipboard_stamp = stamp
+        on = self.values.get("ClipboardHistory") == "True"
+        self.clipboard_items = read_clipboard_history(keep_days=self.clipboard_keep_days())[0] if on else []
+        self.clipboard_days_row.set_sensitive(on)
+        self.rebuild_clipboard_list()
+
+    def rebuild_clipboard_list(self):
+        while (child := self.clipboard_box.get_first_child()) is not None:
+            self.clipboard_box.remove(child)
+        on = self.values.get("ClipboardHistory") == "True"
+        items = self.clipboard_items
+        query = self.clipboard_search.get_text().strip().lower()
+        shown = [e for e in items if not query or query in e["text"].lower()
+                 or query in clipboard_source(e).lower()]
+        self.clipboard_group.set_title(f"记录（{len(items)}）" if items else "记录")
+        self.clipboard_search.set_visible(len(items) > 5)
+        self.clipboard_clear.set_visible(bool(items))
+        if not shown:
+            if not on:
+                text = "剪贴板历史关着：打开以后，复制过的文字会出现在这里"
+            elif not items:
+                text = "还没有记录：复制一段文字试试"
+            else:
+                text = "没找到"
+            empty = Adw.ActionRow(title=text)
+            empty.add_css_class("dim-label")
+            self.clipboard_box.append(empty)
+            return
+        now = time.time()
+        for entry in shown:
+            meta = "　·　".join(x for x in (clipboard_when(entry["time"], now), clipboard_source(entry)) if x)
+            row = Adw.ActionRow(title=GLib.markup_escape_text(clipboard_preview(entry["text"])),
+                                subtitle=GLib.markup_escape_text(meta))
+            row.set_title_lines(2)
+            for icon, tip, handler in (("edit-copy-symbolic", "复制", self.copy_clipboard_entry),
+                                       ("user-trash-symbolic", "删除", self.remove_clipboard_entry)):
+                button = Gtk.Button(icon_name=icon, tooltip_text=tip, valign=Gtk.Align.CENTER)
+                button.add_css_class("flat")
+                button.connect("clicked", lambda _b, e=entry, h=handler: h(e))
+                row.add_suffix(button)
+            self.clipboard_box.append(row)
+
+    def on_clipboard_history(self, row, _param):
+        if self.quiet_switch:
+            return
+        if not row.get_active():
+            if self.values.get("ClipboardHistory") != "True":
+                return
+            count = len(self.clipboard_items)
+            if not count:
+                self.clipboard_history_off()
+                return
+            # 先拨回去：点了「关掉并删除」才真的关
+            self.set_clipboard_switch(True)
+            self.clipboard_dialog = self.confirm(
+                "关掉剪贴板历史？", f"已经记下的 {count} 条会全部删掉，不能恢复。", "关掉并删除",
+                self.clipboard_history_off)
+            return
+        if self.values.get("ClipboardHistory") == "True":
+            return
+        self.set_clipboard_switch(False)
+        self.clipboard_dialog = self.confirm("打开剪贴板历史？", CLIPBOARD_WARNING, "打开",
+                                             self.clipboard_history_confirmed)
+
+    def set_clipboard_switch(self, on):
+        self.quiet_switch = True
+        self.clipboard_row.set_active(on)
+        self.quiet_switch = False
+
+    def clipboard_history_confirmed(self):
+        self.set_clipboard_switch(True)
+        self.set_value("ClipboardHistory", "True")
+        self.refresh_clipboard(force=True)
+
+    def clipboard_history_off(self):
+        self.set_clipboard_switch(False)
+        self.set_value("ClipboardHistory", "False")
+        try:
+            delete_clipboard_history()
+        except OSError as e:
+            self.toast(f"删除记录失败：{e}")
+        self.refresh_clipboard(force=True)
+
+    def on_clipboard_days(self, row, _param):
+        index = row.get_selected()
+        if 0 <= index < len(self.clipboard_days):
+            self.set_value("ClipboardHistoryDays", self.clipboard_days[index][1])
+            self.refresh_clipboard(force=True)
+
+    def copy_clipboard_entry(self, entry):
+        display = Gdk.Display.get_default()
+        if display is None:
+            return
+        data = GLib.Bytes.new(entry["text"].encode("utf-8"))
+        display.get_clipboard().set_content(Gdk.ContentProvider.new_for_bytes("text/plain;charset=utf-8", data))
+        self.toast("已复制，按 Ctrl+V 粘贴")
+
+    def remove_clipboard_entry(self, entry):
+        try:
+            removed = forget_clipboard_entry(entry["text"])
+        except OSError as e:
+            self.toast(f"删除失败：{e}")
+            return
+        self.refresh_clipboard(force=True)
+        if removed is None:
+            return
+        toast = Adw.Toast(title="已删除这一条", button_label="撤销")
+
+        def undo(_toast):
+            try:
+                restore_clipboard_entry(removed)
+            except OSError as e:
+                self.toast(f"撤销失败：{e}")
+            self.refresh_clipboard(force=True)
+        toast.connect("button-clicked", undo)
+        self.toasts.add_toast(toast)
+
+    def clipboard_clear_now(self):
+        try:
+            clear_clipboard_history()
+        except OSError as e:
+            self.toast(f"清空失败：{e}")
+        else:
+            self.toast("剪贴板历史已清空")
+        self.refresh_clipboard(force=True)
+
+    def on_clipboard_clear(self, _button):
+        count = len(self.clipboard_items)
+        dialog = AlertDialog(heading="清空剪贴板历史？",
+                             body=f"已经记下的 {count} 条都会删掉，不能恢复。之后复制的照常记。")
+        dialog.add_response("cancel", "取消")
+        dialog.add_response("clear", "清空")
+        dialog.set_response_appearance("clear", ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", lambda _d, response: response == "clear" and self.clipboard_clear_now())
+        dialog.present(self)
+        self.clipboard_clear_dialog = dialog
+
     # ---------------- 自定义词
 
     def build_words(self):
@@ -8641,6 +9054,12 @@ class SettingsWindow(Adw.ApplicationWindow):
                 row.set_active(DEFAULTS[key] == "True")
             self.set_developer_switch(False)
             self.refresh_devlog()
+            # 剪贴板历史回到默认（关）：记录删掉
+            self.set_clipboard_switch(False)
+            delete_clipboard_history()
+            self.clipboard_days_row.set_selected(
+                [v for _, v in self.clipboard_days].index(DEFAULTS["ClipboardHistoryDays"]))
+            self.refresh_clipboard(force=True)
             self.scheme_checks[DEFAULTS["InputScheme"]].set_active(True)
             self.scheme_row.set_selected(0)
             self.shift_row.set_selected(0)
@@ -8847,6 +9266,7 @@ if __name__ == "__main__":
         stale_copy_self_test()
         stats_self_test()
         devlog_self_test()
+        clipboard_self_test()
         nnlm_self_test()
         nnlm_choice_self_test()
         # fcitx5 默认配置：左 Shift 是「临时切换输入法」

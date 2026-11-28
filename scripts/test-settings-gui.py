@@ -116,7 +116,7 @@ def run(app):
         errors.append("设置窗口没打开")
         app.quit()
         return GLib.SOURCE_REMOVE
-    for page in ("general", "input", "emoji", "voice", "translate", "words", "stats", "update"):
+    for page in ("general", "input", "emoji", "voice", "translate", "words", "clipboard", "stats", "update"):
         step(f"打开「{page}」页", lambda p=page: win.show_page(p))
 
     def spin():
@@ -582,6 +582,78 @@ def run(app):
         check(not os.path.exists(devlog) and "什么都不记" in win.devlog_row.get_subtitle(), "清空以后该没有记录")
     step("开发者模式：确认才打开，记录能导出和清空", developer_mode)
     dialog("清空打字记录（取消）", lambda: win.on_devlog_clear(None))
+
+    def clipboard_history():
+        # 剪贴板历史：打开先问；输入法记下的（这里替它写文件）列出来，能搜、删一条再撤销、复制、清空；
+        # 关掉也先问，确认了连文件一起删掉
+        history = ns["CLIPBOARD_HISTORY_FILE"]
+        check(history.startswith(home), f"剪贴板历史不在临时目录里：{history}")
+        conf = lambda: open(ns["CONFIG_FILE"], encoding="utf-8").read()  # noqa: E731
+        win.show_page("clipboard")
+
+        def rows():
+            out, child = [], win.clipboard_box.get_first_child()
+            while child is not None:
+                out.append(child)
+                child = child.get_next_sibling()
+            return out
+        check(win.values["ClipboardHistory"] == "False" and not win.clipboard_row.get_active(), "默认该关着")
+        check("关着" in rows()[0].get_title(), rows()[0].get_title())
+        win.clipboard_row.set_active(True)
+        pump(0.3)
+        check(not win.clipboard_row.get_active() and "ClipboardHistory=True" not in conf(), "没确认之前不该打开")
+        check("密码" in ns["CLIPBOARD_WARNING"], "警告里要说密码")
+        win.clipboard_dialog.close()
+        pump(0.3)
+        win.clipboard_history_confirmed()
+        pump(0.4)
+        check(win.clipboard_row.get_active() and "ClipboardHistory=True" in conf(), "确认以后该打开并写进设置")
+        check("还没有记录" in rows()[0].get_title(), rows()[0].get_title())
+        # 保留多久：选 30 天
+        win.clipboard_days_row.set_selected([v for _, v in win.clipboard_days].index("30"))
+        pump(0.4)
+        check("ClipboardHistoryDays=30" in conf(), "保留 30 天没写进设置")
+        now = int(time.time())
+        items = [{"text": f"第{i}条 <b>&", "time": now - i * 60, "app": "gedit", "device": ""} for i in range(7)]
+        items.append({"text": "从别的设备\n两行", "time": now - 3600, "app": "", "device": "MacBook"})
+        items.append({"text": "四十天前的", "time": now - 40 * 86400, "app": "", "device": ""})
+        ns["write_clipboard_history"](items, None, history)
+        pump_until(lambda: len(rows()) == 8, 5)
+        check(len(rows()) == 8, f"该列出 8 条（四十天前的不列）：{[r.get_title() for r in rows()]}")
+        check(rows()[0].get_title() == GLib.markup_escape_text("第0条 <b>&"), rows()[0].get_title())
+        check("MacBook" in rows()[7].get_subtitle() and "⏎" in rows()[7].get_title(), rows()[7].get_subtitle())
+        check(win.clipboard_search.get_visible(), "多于 5 条该能搜")
+        win.clipboard_search.set_text("macbook")
+        pump_until(lambda: len(rows()) == 1, 3)
+        check(len(rows()) == 1, "按来源搜")
+        win.clipboard_search.set_text("")
+        pump_until(lambda: len(rows()) == 8, 3)
+        win.copy_clipboard_entry(items[1])
+        win.remove_clipboard_entry(items[1])
+        got, forgotten = ns["read_clipboard_history"](history)
+        check(len(got) == 8 and forgotten == ns["clipboard_text_hash"](items[1]["text"]), "删一条该记着它的指纹")
+        check(len(rows()) == 7, "删掉以后列表少一条")
+        ns["restore_clipboard_entry"](items[1], history)
+        win.refresh_clipboard(force=True)
+        check(len(rows()) == 8, "撤销以后放回去")
+        dialog_window = new_windows(win, lambda: win.on_clipboard_clear(None))
+        for w in dialog_window:
+            w.close()
+        win.clipboard_clear_now()
+        check(ns["read_clipboard_history"](history)[0] == [] and "还没有记录" in rows()[0].get_title(), "清空以后没有记录")
+        # 关掉：有记录时先问；确认以后文件删掉
+        ns["write_clipboard_history"](items[:2], None, history)
+        win.refresh_clipboard(force=True)
+        win.clipboard_row.set_active(False)
+        pump(0.3)
+        check(win.clipboard_row.get_active() and win.values["ClipboardHistory"] == "True", "关掉之前先问")
+        win.clipboard_dialog.close()
+        pump(0.3)
+        win.clipboard_history_off()
+        pump(0.4)
+        check("ClipboardHistory=True" not in conf() and not os.path.exists(history), "关掉以后删掉记录")
+        check("关着" in rows()[0].get_title(), rows()[0].get_title())
+    step("剪贴板历史：确认才打开，记录能搜、删、复制、清空，关掉删文件", clipboard_history)
     dialog("恢复默认设置（确定）", win.on_reset, answer=1)
     dialog("导出日志（取消）", win.on_export_log)
     dialog("导入自定义词（取消）", win.on_import_words)
