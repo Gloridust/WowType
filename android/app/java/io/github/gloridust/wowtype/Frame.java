@@ -1,0 +1,110 @@
+package io.github.gloridust.wowtype;
+
+/** 会话一次调用之后要做的事，和 {@code WowtypeFrame} 一一对应（见 core/include/wowtype_core.h）。 */
+public final class Frame {
+    /** 会话处理了这个键；false 时交给应用（软键盘自己把字打进去）。 */
+    public final boolean handled;
+    /** 要上屏的字，没有是 null。 */
+    public final String commit;
+    /** 编辑区（拼音），不为 null，可能为空串。 */
+    public final String preedit;
+    /** 编辑区光标（UTF-8 字节偏移）。 */
+    public final int preeditCursor;
+    /** 候选框上方的一行提示（五笔空码、没有码表），没有是 null。 */
+    public final String aux;
+    /** 0 普通一页，1 展开面板，2 表情面板，3 工具栏。 */
+    public final int panel;
+    public final int candCount;
+    /** 光标在这一页里的位置，-1 是翻走了。 */
+    public final int candCursor;
+    public final boolean hasPrev;
+    public final boolean hasNext;
+    public final int mode;
+    public final boolean modeChanged;
+    public final boolean learned;
+    public final boolean forgot;
+    public final String[] candidates;
+    public final String[] comments;
+    /** >0：这么久以后调一次 {@link Session#tick()}（互译等译文、单按 Shift 等双击）。 */
+    public final int wakeAfterMs;
+    /** 互译：攒着的原文、译文、方向标签、状态行。不是「译」时都是空串。 */
+    public final String translateSource;
+    public final String translateText;
+    public final String translateTitle;
+    public final String translateStatus;
+    public final boolean translateDone;
+    /** 自动配对：上屏后把光标挪几格（负左正右） / 退格时还要删掉光标后的右标点。 */
+    public final int cursorDelta;
+    public final int deleteNext;
+
+    Frame(boolean handled, String commit, String preedit, int preeditCursor, String aux, int panel,
+          int candCount, int candCursor, boolean hasPrev, boolean hasNext, int mode,
+          boolean modeChanged, boolean learned, boolean forgot, String[] candidates, String[] comments,
+          int wakeAfterMs, String translateSource, String translateText, String translateTitle,
+          String translateStatus, boolean translateDone, int cursorDelta, int deleteNext) {
+        this.handled = handled;
+        this.commit = commit;
+        this.preedit = preedit;
+        this.preeditCursor = preeditCursor;
+        this.aux = aux;
+        this.panel = panel;
+        this.candCount = candCount;
+        this.candCursor = candCursor;
+        this.hasPrev = hasPrev;
+        this.hasNext = hasNext;
+        this.mode = mode;
+        this.modeChanged = modeChanged;
+        this.learned = learned;
+        this.forgot = forgot;
+        this.candidates = candidates;
+        this.comments = comments;
+        this.wakeAfterMs = wakeAfterMs;
+        this.translateSource = translateSource;
+        this.translateText = translateText;
+        this.translateTitle = translateTitle;
+        this.translateStatus = translateStatus;
+        this.translateDone = translateDone;
+        this.cursorDelta = cursorDelta;
+        this.deleteNext = deleteNext;
+    }
+
+    static Frame empty() {
+        return new Frame(false, null, "", 0, null, 0, 0, -1, false, false, 0, false, false, false,
+                new String[0], new String[0], 0, "", "", "", "", false, 0, 0);
+    }
+
+    static Frame from(Object[] a) {
+        if (a == null || a.length < 24) return empty();
+        String[] candidates = (String[]) a[14];
+        String[] comments = (String[]) a[15];
+        return new Frame(
+                ((Integer) a[0]) != 0,
+                (String) a[1],
+                a[2] == null ? "" : (String) a[2],
+                ((Integer) a[3]),
+                (String) a[4],
+                ((Integer) a[5]),
+                ((Integer) a[6]),
+                ((Integer) a[7]),
+                ((Boolean) a[8]),
+                ((Boolean) a[9]),
+                ((Integer) a[10]),
+                ((Boolean) a[11]),
+                ((Boolean) a[12]),
+                ((Boolean) a[13]),
+                candidates == null ? new String[0] : candidates,
+                comments == null ? new String[0] : comments,
+                ((Integer) a[16]),
+                a[17] == null ? "" : (String) a[17],
+                a[18] == null ? "" : (String) a[18],
+                a[19] == null ? "" : (String) a[19],
+                a[20] == null ? "" : (String) a[20],
+                ((Boolean) a[21]),
+                ((Integer) a[22]),
+                ((Integer) a[23]));
+    }
+
+    public boolean isComposing() {
+        return preedit != null && !preedit.isEmpty();
+    }
+}

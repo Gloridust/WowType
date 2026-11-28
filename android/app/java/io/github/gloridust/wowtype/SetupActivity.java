@@ -1,0 +1,197 @@
+package io.github.gloridust.wowtype;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.graphics.Typeface;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.ViewGroup;
+import android.view.inputmethod.InputMethodInfo;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+/**
+ * 设置 / 启用页。输入法本身没有配置项：这里只做三件事——告诉用户怎么启用、
+ * 帮忙打开系统选择器、提前把词库解出来并载入（第一次要几秒，别等到打字时才发现）。
+ */
+public final class SetupActivity extends Activity {
+    private Theme theme;
+
+    private final EngineHost.Listener engineListener = this::updateStatus;
+    private TextView state;
+    private TextView engineState;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        theme = Theme.get(this);
+
+        int pad = dp(20);
+        LinearLayout column = new LinearLayout(this);
+        column.setOrientation(LinearLayout.VERTICAL);
+        column.setPadding(pad, pad, pad, pad);
+        column.setBackgroundColor(theme.background);
+
+        TextView title = new TextView(this);
+        title.setText(R.string.app_name);
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextColor(theme.text);
+        column.addView(title);
+
+        TextView intro = new TextView(this);
+        intro.setText(R.string.setup_intro);
+        intro.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        intro.setTextColor(theme.text);
+        intro.setLineSpacing(dp(4), 1f);
+        column.addView(intro, margins(0, dp(10), 0, 0));
+
+        state = new TextView(this);
+        state.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        state.setTextColor(theme.accent);
+        column.addView(state, margins(0, dp(18), 0, 0));
+
+        engineState = new TextView(this);
+        engineState.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        engineState.setTextColor(theme.muted);
+        column.addView(engineState, margins(0, dp(6), 0, 0));
+
+        column.addView(button(R.string.setup_enable, v ->
+                startActivity(new Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))), margins(0, dp(20), 0, 0));
+        column.addView(button(R.string.setup_choose, v -> {
+            InputMethodManager imm = getSystemService(InputMethodManager.class);
+            if (imm != null) imm.showInputMethodPicker();
+        }), margins(0, dp(10), 0, 0));
+        column.addView(button(R.string.setup_load, v -> {
+            engineState.setText(R.string.setup_loading);
+            EngineHost.get().start(this, engineListener);
+        }), margins(0, dp(10), 0, 0));
+        column.addView(button(R.string.setup_settings, v ->
+                startActivity(new Intent(this, SettingsActivity.class))), margins(0, dp(10), 0, 0));
+        column.addView(button(R.string.setup_check_update, v -> checkUpdate(true)),
+                margins(0, dp(10), 0, 0));
+
+        TextView usage = new TextView(this);
+        usage.setText(R.string.setup_usage);
+        usage.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        usage.setTextColor(theme.muted);
+        usage.setLineSpacing(dp(4), 1f);
+        column.addView(usage, margins(0, dp(24), 0, 0));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(column);
+        setContentView(scroll);
+
+        EngineHost.get().start(this, engineListener);
+        checkUpdate(false);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateStatus();
+    }
+
+    @Override
+    protected void onDestroy() {
+        EngineHost.get().removeListener(engineListener);
+        super.onDestroy();
+    }
+
+    /** 检查更新：默认每天最多一次；手动点按钮时不管开关和间隔。 */
+    private void checkUpdate(boolean manual) {
+        Prefs prefs = Prefs.get(this);
+        long now = System.currentTimeMillis();
+        if (!manual) {
+            if (!prefs.checkUpdate()) return;
+            if (now - prefs.raw().getLong("LastUpdateCheckMs", 0L) < 24 * 3600 * 1000L) return;
+            prefs.raw().edit().putLong("LastUpdateCheckMs", now).apply();
+        }
+        UpdateCheck.check(this, prefs.betaUpdates(), (version, url) -> {
+            if (version == null) {
+                if (manual) Toast.makeText(this, "已经是最新版本", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle("发现新版本 " + version)
+                    .setMessage("当前版本 " + versionName())
+                    .setPositiveButton("打开下载页", (dialog, which) -> UpdateCheck.open(this, url))
+                    .setNegativeButton("以后", null)
+                    .show();
+        });
+    }
+
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    private void updateStatus() {
+        try {
+            boolean enabled = isEnabled();
+            state.setText(enabled ? R.string.setup_enabled : R.string.setup_disabled);
+            state.setTextColor(enabled ? theme.accent : theme.muted);
+            engineState.setText(EngineHost.get().status() + "（ABI " + Native.versionText() + "）");
+        } catch (Throwable t) {
+            // 引导页是唯一入口：状态探测怎么失败都不能让 onResume 抛出去
+            state.setText("状态读取失败：" + t);
+            state.setTextColor(theme.muted);
+        }
+    }
+
+    /**
+     * 系统启用的输入法里有没有我们。
+     *
+     * 不能读 {@code Settings.Secure.ENABLED_INPUT_METHODS}：Android 14 起这个 key 只允许
+     * targetSdk ≤ 33 的应用读，targetSdk 35 会抛 SecurityException，一进 onResume 就闪退
+     *（OPPO Android 17 上实测 122 次崩溃都是这个）。{@link InputMethodManager} 的公开 API
+     * 不需要权限，语义一样。
+     */
+    private boolean isEnabled() {
+        try {
+            InputMethodManager imm = getSystemService(InputMethodManager.class);
+            if (imm == null) return false;
+            // InputMethodInfo.getId() 有的版本写全类名，有的写 ".类名"（API 24 就是后者）
+            String fullId = getPackageName() + "/" + WowTypeImeService.class.getName();
+            String shortId = getPackageName() + "/." + WowTypeImeService.class.getSimpleName();
+            for (InputMethodInfo info : imm.getEnabledInputMethodList()) {
+                String id = info.getId();
+                if (fullId.equals(id) || shortId.equals(id)) return true;
+            }
+        } catch (Throwable ignored) {
+            // OEM 的输入法服务异常时按未启用处理
+        }
+        return false;
+    }
+
+    private Button button(int text, android.view.View.OnClickListener onClick) {
+        Button button = new Button(this);
+        button.setText(text);
+        button.setAllCaps(false);
+        button.setTextColor(0xFFFFFFFF);
+        button.setBackgroundColor(theme.accent);
+        button.setOnClickListener(onClick);
+        return button;
+    }
+
+    private LinearLayout.LayoutParams margins(int left, int top, int right, int bottom) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.setMargins(left, top, right, bottom);
+        return params;
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+}

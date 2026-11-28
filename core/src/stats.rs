@@ -443,7 +443,7 @@ impl Recorder {
     /// 一次物理按键。`down` 为假时只松开（用来识别长按和合成重复）。
     ///
     /// `platform`：0 = X11/fcitx5（`code` 是 XKB 键码，内部减 8 成 evdev），1 = macOS（`NSEvent.keyCode`），
-    /// 2 = Windows（扫描码，扩展键或上 0xE000，见 [`key_id`]）。
+    /// 2 = Windows（扫描码，扩展键或上 0xE000，见 [`key_id`]），3 = Android（KeyEvent 键码）。
     /// `flags` 带 [`SENSITIVE`]（密码框）时不算。
     pub fn key(&mut self, platform: i32, code: u32, down: bool, flags: u32, now_ms: i64) {
         if !self.enabled {
@@ -468,7 +468,7 @@ impl Recorder {
             }
             // macOS 的 InputMethodKit 只送按下（没有松开），自动重复由外壳的 `isARepeat` 挡掉；
             // Windows 的外壳也只送按下，自动重复看 lParam 的「之前已按下」位挡掉
-            1 | 2 if down => {}
+            1 | 2 | 3 if down => {}
             _ => return,
         }
         if flags & SENSITIVE != 0 {
@@ -833,15 +833,64 @@ fn is_emoji(ch: char) -> bool {
 /// 物理键码 → `KeyboardEvent.code` 风格的 id。
 ///
 /// `platform`：0 = X11（XKB 键码，evdev + 8；fcitx5 给的就是这个），1 = macOS（`NSEvent.keyCode`），
-/// 2 = Windows（键盘消息 lParam 里的扫描码，带扩展键位的或上 0xE000：右 Ctrl 是 0xE01D）。
+/// 2 = Windows（键盘消息 lParam 里的扫描码，带扩展键位的或上 0xE000：右 Ctrl 是 0xE01D），
+/// 3 = Android（`android.view.KeyEvent.getKeyCode()`）。
 /// 热力图画不出的键（F13 以后、媒体键、打印屏幕……）返回 `None`，不计入。
 pub fn key_id(platform: i32, code: u32) -> Option<&'static str> {
     match platform {
         0 => x11_key_id(code.checked_sub(8)?),
         1 => macos_key_id(u16::try_from(code).ok()?),
         2 => windows_key_id(code),
+        3 => android_key_id(code),
         _ => None,
     }
+}
+
+/// Android 的 KeyEvent 键码，名字和桌面版的 `KeyboardEvent.code` 对齐，三端写同一个 stats.json。
+fn android_key_id(code: u32) -> Option<&'static str> {
+    Some(match code {
+        29..=54 => ["KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI",
+                    "KeyJ", "KeyK", "KeyL", "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR",
+                    "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX", "KeyY", "KeyZ"]
+            [(code - 29) as usize],
+        7..=16 => ["Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6",
+                   "Digit7", "Digit8", "Digit9"][(code - 7) as usize],
+        62 => "Space",
+        66 => "Enter",
+        67 => "Backspace",
+        61 => "Tab",
+        55 => "Comma",
+        56 => "Period",
+        69 => "Minus",
+        70 => "Equal",
+        71 => "BracketLeft",
+        72 => "BracketRight",
+        73 => "Backslash",
+        74 => "Semicolon",
+        75 => "Quote",
+        76 => "Slash",
+        68 => "Backquote",
+        59 => "ShiftLeft",
+        60 => "ShiftRight",
+        113 => "ControlLeft",
+        114 => "ControlRight",
+        57 => "AltLeft",
+        58 => "AltRight",
+        117 => "MetaLeft",
+        118 => "MetaRight",
+        111 => "Escape",
+        19 => "ArrowUp",
+        20 => "ArrowDown",
+        21 => "ArrowLeft",
+        22 => "ArrowRight",
+        92 => "PageUp",
+        93 => "PageDown",
+        122 => "Home",
+        123 => "End",
+        112 => "Delete",
+        124 => "Insert",
+        _ => return None,
+    })
 }
 
 /// Windows 的扫描码（第 1 套）：不带扩展位的主键区和 Linux 的 evdev 键码一样（两边都照 PC 的扫描码编），
