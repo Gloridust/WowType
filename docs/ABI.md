@@ -35,6 +35,7 @@
 | 1.18 | 0.7.7 | 鼠标忘词（#229）：加 `wowtype_session_can_forget`（全部候选里第 index 个是不是学过的词，不改会话，外壳据此决定右键菜单给不给「忘掉这个词」）、`wowtype_session_forget`（忘掉第 index 个，和光标在它上面按 Ctrl+Delete 一样：候选原地重算，页码和光标不动，真忘掉了 `frame->forgot` = 1）。序号和 `_choose` 一样是整个列表的；`WowtypeFrame` 末尾加 `cand_start`（显示的第一个候选在整个列表里的序号，显示的第 i 个是 `cand_start + i`） |
 | 1.19 | 0.7.13 | 跨设备复制粘贴（[SYNC.md](SYNC.md)）：加 `wowtype_sync_new` / `_free` / `_configure`（`WowtypeSyncConfig`，带 `size`）/ `_observe`（本机剪贴板现在是什么）/ `_touch` / `_poll`（取别的设备复制的，同时记进剪贴板历史）/ `_from` / `_status`（一行 JSON）；配对给设置界面用：`wowtype_sync_pair_host` / `_pair_join`（`WowtypeSyncPairConfig`）/ `_pairing_state` / `_pairing_text` / `_pairing_free`、`wowtype_sync_unpair`、`wowtype_sync_paired`、`wowtype_sync_ping`（这一个要连网、会等）。线程都是核心自己的，别的函数都不阻塞。核心不带 `sync` 特性编译时 `_new` 返回 NULL、其余什么也不做 |
 | 1.20 | 0.7.14 | 开发者模式的打字记录（[DEVLOG.md](DEVLOG.md)）：加 `wowtype_devlog_configure`（记录文件的路径、开不开；整个进程一份）/ `_enabled` / `_set_app`（现在在哪个应用里打字）/ `_clear`（设置界面清空）。打开以后会话的每次调用（`wowtype_session_key` / `_select` / `_choose` / `_reset`……）自己把记录写进文件，外壳不用再做别的；关着时（默认）和以前一样，什么都不记 |
+| 1.21 | 0.7.17 | 剪贴板历史能存进文件（[CONFIG.md](CONFIG.md#剪贴板历史)）：加 `wowtype_clipboard_configure`（存在哪、留几天；NULL 只在内存里，原来存在文件里的连文件删掉）/ `_observe`（系统剪贴板现在是什么、在哪个应用里，和上次报的一样就不记，每秒报一次就行）/ `_entries_json`（全部记录，带时间、应用、设备）/ `_forget`（删一条）。最多 200 条；`wowtype_clipboard_remember` 改成等于 `_observe(text, NULL)`，`_clear` 存在文件里时留一个空文件。几个进程可以共用一个文件。跨设备收到的记着是哪台设备 |
 
 ## 所有权和生命周期
 
