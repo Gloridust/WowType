@@ -149,6 +149,7 @@ const std::vector<SettingDef> &settingDefs() {
         {"Calculator", T::Bool, "True"},
         {"Toolbar", T::Bool, "True"},
         {"ClipboardHistory", T::Bool, "False"},
+        {"ClipboardHistoryDays", T::Int, "7", 0, 365},
         // 跨设备复制粘贴（docs/SYNC.md）。Windows 上由设置程序起的后台进程收发（--sync-agent），
         // 收到的总是放进系统剪贴板，所以没有 ClipboardSyncPaste
         {"ClipboardSync", T::Bool, "False"},
