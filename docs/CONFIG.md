@@ -545,6 +545,8 @@ cargo run --release -p wowtype-core --bin wowtype-lmbuild -- \
 - **强调色**（`SettingsAccent`）：`Green` 绿色（默认，WowType 绿）、`Blue` 蓝色、`Purple` 紫色、`Orange` 橙色、`Pink` 粉色。
   用在选中的页面、按钮、开关和统计的图上。三端用同一张颜色表（[`spec/config.json`](../spec/config.json) 的 `SettingsAccent`）：
   每种颜色带一个放白字用的深一点的版本（和白字的对比度至少 4.7:1）、一个深色背景上当字用的浅一点的版本（至少 4.5:1）。
+  Windows 的设置窗口里只有选中的页面和统计的图跟它：勾选框、按钮、下拉框是系统控件，跟「设置 → 个性化 → 颜色」里的系统强调色（#312）。
+  三端的候选框都不跟它，选中的候选一直是 WowType 绿。
 
 不能自己写 CSS 换样式：macOS、Windows 的设置窗口不是用 CSS 画的，三端只做三端都有的选项。
 
