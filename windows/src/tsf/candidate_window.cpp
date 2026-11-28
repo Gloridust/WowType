@@ -27,10 +27,10 @@ struct Palette {
 Palette palette(bool dark) {
     if (dark) {
         return {D2D1::ColorF(0x2B2B2B), D2D1::ColorF(0x454545), D2D1::ColorF(0xF2F2F2),
-                D2D1::ColorF(0x9A9A9A), D2D1::ColorF(0x3D7EDB), D2D1::ColorF(0xFFFFFF)};
+                D2D1::ColorF(0x9A9A9A), D2D1::ColorF(0x13B57C), D2D1::ColorF(0xFFFFFF)};
     }
     return {D2D1::ColorF(0xFFFFFF), D2D1::ColorF(0xD0D0D0), D2D1::ColorF(0x1F1F1F),
-            D2D1::ColorF(0x8A8A8A), D2D1::ColorF(0x2F6FD6), D2D1::ColorF(0xFFFFFF)};
+            D2D1::ColorF(0x8A8A8A), D2D1::ColorF(0x0EAF76), D2D1::ColorF(0xFFFFFF)};
 }
 
 /// 系统的「应用模式」是深色时候选框也用深色。

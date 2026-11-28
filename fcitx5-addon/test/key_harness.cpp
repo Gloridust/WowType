@@ -300,6 +300,40 @@ void runCases(Instance &instance) {
     type(ic.get(), "Hello<sp>");
     check(ic->committed == "Hello", "大写保留 Hello，实际 " + ic->committed);
 
+    // #271：fcitx5 的 KeyEvent::key() 会去掉 CapsLock，插件要从 rawKey/origKey 补回来。
+    // 没在打字时开着大写锁定按 A/P/I 直接交给应用，不进编辑区
+    fresh(ic.get());
+    {
+        std::string eaten;
+        for (const char c : {'A', 'P', 'I'}) {
+            KeyEvent press(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), false);
+            if (ic->keyEvent(press)) {
+                eaten += c;
+            }
+            KeyEvent release(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), true);
+            ic->keyEvent(release);
+        }
+        check(eaten.empty() && preedit(ic.get()).empty() && page(ic.get()).empty() && ic->committed.empty(),
+              "大写锁定下 API 直接交给应用，实际 编辑区「" + preedit(ic.get()) + "」上屏「" + ic->committed +
+                  "」被吃掉「" + eaten + "」");
+    }
+    // 大写锁定下标点也按英文半角交给应用（API_KEY）
+    fresh(ic.get());
+    {
+        std::string eaten;
+        for (const char c : {'_', ':', ',', '.'}) {
+            KeyEvent press(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), false);
+            if (ic->keyEvent(press)) {
+                eaten += c;
+            }
+            KeyEvent release(ic.get(), Key(static_cast<KeySym>(c), KeyState::CapsLock), true);
+            ic->keyEvent(release);
+        }
+        check(eaten.empty() && preedit(ic.get()).empty() && page(ic.get()).empty() && ic->committed.empty(),
+              "大写锁定下标点直接交给应用，实际 编辑区「" + preedit(ic.get()) + "」上屏「" + ic->committed +
+                  "」被吃掉「" + eaten + "」");
+    }
+
     // 打全了的拼音正好是一个词：它排第一，不被高频补全（重点）、单字（看）换掉
     fresh(ic.get());
     type(ic.get(), "zhongdi<sp>");
@@ -441,6 +475,31 @@ void runCases(Instance &instance) {
                 std::string(Instance::version()).c_str());
 #endif
 
+    // #271：打字途中按 CapsLock 先把编辑区原样上屏，再交给应用；提示显示 EN，再按一次回到当前模式
+    fresh(ic.get());
+    type(ic.get(), "nihao");
+    {
+        const std::string modeBefore = instance.inputMethodLabel(ic.get());
+        check(!preedit(ic.get()).empty(), "CapsLock 前编辑区有拼音：" + preedit(ic.get()));
+        KeyEvent press(ic.get(), Key(FcitxKey_Caps_Lock), false);
+        const bool taken = ic->keyEvent(press);
+        check(!taken, "CapsLock 按下交给应用");
+        check(ic->committed == "nihao", "CapsLock 先把编辑区的 nihao 原样上屏，实际 " + ic->committed);
+        check(preedit(ic.get()).empty() && page(ic.get()).empty(),
+              "上屏后编辑区和候选清空，实际 " + preedit(ic.get()));
+        check(instance.inputMethodLabel(ic.get()) == "EN",
+              "CapsLock 开着提示 EN，实际 " + instance.inputMethodLabel(ic.get()));
+        KeyEvent release(ic.get(), Key(FcitxKey_Caps_Lock, KeyState::CapsLock), true);
+        ic->keyEvent(release);
+        KeyEvent off(ic.get(), Key(FcitxKey_Caps_Lock, KeyState::CapsLock), false);
+        const bool offTaken = ic->keyEvent(off);
+        check(!offTaken, "关闭 CapsLock 也交给应用");
+        KeyEvent offRelease(ic.get(), Key(FcitxKey_Caps_Lock), true);
+        ic->keyEvent(offRelease);
+        check(instance.inputMethodLabel(ic.get()) == modeBefore,
+              "关闭 CapsLock 后提示回到当前模式，实际 " + instance.inputMethodLabel(ic.get()));
+    }
+
     // 打字途中会话不管的键（小键盘的 + - * / .、F 键、Insert、不是 ASCII 的键……）都吃掉：
     // 交给应用的话，小键盘的 + 先到应用、上屏后成了「+你好」，F5 把网页刷新掉
     fresh(ic.get());
@@ -469,9 +528,10 @@ void runCases(Instance &instance) {
                   ic->passed.empty(),
               "吃掉以后编辑区和候选不动：" + preedit(ic.get()) + " 上屏「" + ic->committed + "」");
         // 修饰键、锁定键本身，松开的键，带 Ctrl / Alt / Super 的组合键照常交给应用
+        // （CapsLock 另有上屏和 EN 提示，前面单独测）
         std::string eaten;
         for (const KeySym sym : {FcitxKey_Control_L, FcitxKey_Alt_L, FcitxKey_Super_L,
-                                 FcitxKey_Caps_Lock, FcitxKey_Num_Lock, FcitxKey_ISO_Level3_Shift}) {
+                                 FcitxKey_Num_Lock, FcitxKey_ISO_Level3_Shift}) {
             KeyEvent press(ic.get(), Key(sym), false);
             if (ic->keyEvent(press)) {
                 eaten += Key(sym).toString() + " ";
@@ -2031,23 +2091,31 @@ void runCases(Instance &instance) {
         check(tapShift(FcitxKey_Shift_L) && label() == "中", "#253：左 Shift 双击也不切");
         settle();
         fresh(ic.get());
-        // 单按：先不切；接着打字时先切，这个字母照英文交给应用（和以前单按立刻切一样）
-        check(tapShift(FcitxKey_Shift_R) && label() == "中", "#253：单按先不切（等双击）");
+        // 单按：没在打字时松开就切（#310），接着打的字母照英文交给应用
+        check(tapShift(FcitxKey_Shift_R) && label() == "英", "#310：没在打字时单按马上切英文：" + label());
         type(ic.get(), "a");
         check(ic->passed == "a" && ic->committed.empty() && preedit(ic.get()).empty() && label() == "英",
               "#253：单按以后接着打字：先切英文，a 交给应用：" + ic->passed + " " + label());
         fresh(ic.get());
-        // 慢的第二下（过了间隔才按下）：第一下照切，第二下自己再等
+        // 慢的第二下（过了间隔才按下）：不算双击，第一下不撤，第二下松开再切回来
         tapShift(FcitxKey_Shift_R);
         settle();
         KeyEvent slowPress(ic.get(), Key(FcitxKey_Shift_R), false);
-        check(!ic->keyEvent(slowPress) && label() == "中", "#253：过了间隔才按第二下：第一下照切（回中文）");
+        check(!ic->keyEvent(slowPress) && label() == "中", "#253：过了间隔才按第二下：第一下不撤（还是中）");
         KeyEvent slowRelease(ic.get(), Key(FcitxKey_Shift_R, KeyState::Shift), true);
-        check(!ic->keyEvent(slowRelease) && label() == "中", "#253：第二下松开也交给应用，先不切");
-        // 等着的时候输入框重置（点了别处、换窗口）：那一下照切
+        check(!ic->keyEvent(slowRelease) && label() == "英", "#253：第二下松开也交给应用，马上切英文");
+        settle();
+        tapShift(FcitxKey_Shift_R);
+        settle();
+        check(label() == "中", "#253：再单按回中文：" + label());
+        // 打到一半单按先等着；等的时候输入框重置（点了别处、换窗口）：那一下照切
+        type(ic.get(), "ni");
+        tapShift(FcitxKey_Shift_R);
+        check(label() == "中", "#253：打到一半单按先等双击：" + label());
         ic->focusOut();
         ic->focusIn();
         check(label() == "英", "#253：等双击时输入框重置，照切英文：" + label());
+        fresh(ic.get());
         type(ic.get(), "b");
         check(ic->passed == "b" && label() == "英", "#253：重置后是英文：" + ic->passed);
         fresh(ic.get());
@@ -3193,16 +3261,18 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
     auto label = [c](HarnessInputContext *ic) { return c->instance.inputMethodLabel(ic); };
     auto waitedFrom = std::make_shared<uint64_t>(0);
     auto tappedLabel = std::make_shared<std::string>();
-    s.push_back({"#253：单按 Shift 先不切，0.35 秒后定时器里切英文",
-                 [addon, reset, label, tappedLabel](HarnessInputContext *ic) {
+    // 下一步要连按的，这一步的检查先等过双击间隔，免得两步的单按连成一次双击
+    s.push_back({"#310：没在打字时单按 Shift 马上切英文",
+                 [addon, reset, label, tappedLabel, waitedFrom](HarnessInputContext *ic) {
                      ::unsetenv("WOWTYPE_SHIFT_DOUBLE_TAP");
                      addon->reloadConfig();
                      reset(ic);
                      tapKey(ic, FcitxKey_Shift_R);
                      *tappedLabel = label(ic);
+                     *waitedFrom = now(CLOCK_MONOTONIC);
                  },
-                 [label, tappedLabel](HarnessInputContext *ic) {
-                     return *tappedLabel == "中" && label(ic) == "英";
+                 [label, tappedLabel, waitedFrom](HarnessInputContext *ic) {
+                     return *tappedLabel == "英" && label(ic) == "英" && now(CLOCK_MONOTONIC) - *waitedFrom > 450000;
                  }});
     s.push_back({"#253：双击 Shift 过了间隔也不切",
                  [waitedFrom](HarnessInputContext *ic) {
@@ -3213,9 +3283,27 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                  [label, waitedFrom](HarnessInputContext *ic) {
                      return now(CLOCK_MONOTONIC) - *waitedFrom > 700000 && label(ic) == "英";
                  }});
-    s.push_back({"#253：再单按一下，定时器里切回中文",
+    s.push_back({"#253：再单按一下，马上切回中文",
                  [](HarnessInputContext *ic) { tapKey(ic, FcitxKey_Shift_R); },
                  [label](HarnessInputContext *ic) { return label(ic) == "中"; }});
+    s.push_back({"#253：打到一半单按先等，0.35 秒后定时器里切英文、字母原样上屏",
+                 [reset, label, tappedLabel](HarnessInputContext *ic) {
+                     reset(ic);
+                     type(ic, "ni");
+                     tapKey(ic, FcitxKey_Shift_R);
+                     *tappedLabel = label(ic);
+                 },
+                 [label, tappedLabel](HarnessInputContext *ic) {
+                     return *tappedLabel == "中" && label(ic) == "英" && ic->committed == "ni";
+                 }});
+    s.push_back({"#253：单按回中文（等过双击间隔再接着测）",
+                 [waitedFrom](HarnessInputContext *ic) {
+                     tapKey(ic, FcitxKey_Shift_R);
+                     *waitedFrom = now(CLOCK_MONOTONIC);
+                 },
+                 [label, waitedFrom](HarnessInputContext *ic) {
+                     return label(ic) == "中" && now(CLOCK_MONOTONIC) - *waitedFrom > 450000;
+                 }});
     // #191：互译只翻一句（TranslateOneShot）。双击判断开着（上面 #253 的几步打开的），单按要等定时器切
     auto oneShotConfig = [c, addon, url](bool on) {
         std::ofstream(c->configFile) << "Translate=True\nTranslateBaseUrl=" << url
@@ -3230,8 +3318,8 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                      tapKey(ic, FcitxKey_Shift_R);
                      *tappedLabel = label(ic);
                      tapKey(ic, FcitxKey_Shift_R);
-                     check(*tappedLabel == "中" && label(ic) == "译",
-                           "#191：第一下先等着，第二下进「译」：" + *tappedLabel + " " + label(ic));
+                     check(*tappedLabel == "英" && label(ic) == "译",
+                           "#191：第一下马上切，第二下撤回再进「译」：" + *tappedLabel + " " + label(ic));
                      type(ic, "zhongguo<sp>");
                  },
                  [label](HarnessInputContext *ic) {
@@ -3248,11 +3336,14 @@ void runTranslateCase(Instance &instance, std::function<void()> done) {
                             inlineText(ic).empty();
                  }});
     s.push_back({"#191：单次互译开着，单按 Shift 只切中英（先到英文）",
-                 [reset](HarnessInputContext *ic) {
+                 [reset, waitedFrom](HarnessInputContext *ic) {
                      reset(ic);
                      tapKey(ic, FcitxKey_Shift_R);
+                     *waitedFrom = now(CLOCK_MONOTONIC);
                  },
-                 [label](HarnessInputContext *ic) { return label(ic) == "英"; }});
+                 [label, waitedFrom](HarnessInputContext *ic) {
+                     return label(ic) == "英" && now(CLOCK_MONOTONIC) - *waitedFrom > 450000;
+                 }});
     s.push_back({"#191：英文里双击进「译」，等译文出来",
                  [label](HarnessInputContext *ic) {
                      tapKey(ic, FcitxKey_Shift_R);

@@ -501,6 +501,52 @@ pub fn history_text_with(
     out
 }
 
+/// 单字按读音另记的热度（`w` 行的键是 `和|he`、`和|huo`），再加一个 `和|` 表示「这个字已经按读音记了」。
+///
+/// 选词热度本来只按字记：用 he 天天打的「和」，打 huo 时也带着那么高的热度，被当成「最近常选的字」
+/// 顶到「或」前面，「或」选多少次都翻不过来（#318）。`了`（le / liao）、`还`（hai / huan）也一样。
+/// 记过读音的单字排序时只看这个读音的；还没记过的（升级前学的）照旧按字。词（两个字以上）照旧按字记。
+pub fn reading_key(word: &str, reading: &str) -> String {
+    format!("{word}|{reading}")
+}
+
+/// [`reading_key`] 的标记：有这一项，这个字就只看按读音记的热度。
+/// （`w` 行原样存；旧版本读进来也只是多几个永远对不上候选的键。）
+pub fn reading_marker(word: &str) -> String {
+    format!("{word}|")
+}
+
+/// 单字和它这次的读音（一个完整的全拼音节）：按读音记热度的只有这种；只打了声母（l）、别的返回 None，
+/// 照旧按字（「最近常选的字只打声母时也排第一」不变）。
+pub fn single_reading<'a>(word: &str, pinyin: &'a str) -> Option<&'a str> {
+    let pinyin = pinyin.trim();
+    let mut chars = word.chars();
+    let one_char = chars.next().is_some_and(|c| !c.is_ascii()) && chars.next().is_none();
+    (one_char && crate::syllable::syllable_from_bytes(pinyin.as_bytes()).is_some()).then_some(pinyin)
+}
+
+/// 排序用的选词记录：单字记过读音（有 [`reading_marker`]）时只看这个读音的，没记过的按字。
+pub fn entry_for_reading(
+    words: &HashMap<String, HistoryEntry>,
+    word: &str,
+    reading: Option<&str>,
+) -> Option<HistoryEntry> {
+    if let Some(reading) = reading.and_then(|r| single_reading(word, r)) {
+        if words.contains_key(&reading_marker(word)) {
+            return words.get(&reading_key(word, reading)).copied();
+        }
+    }
+    words.get(word).copied()
+}
+
+/// 按读音记的键（`和|he`、`和|`）是哪个字的；别的键原样返回。忘掉一个字时连它按读音记的一起去掉。
+pub fn base_word(key: &str) -> &str {
+    match key.split_once('|') {
+        Some((word, _)) if word.chars().count() == 1 => word,
+        _ => key,
+    }
+}
+
 /// 把忘掉的词用到学到的东西上：在忘掉之前（`last_used_ms` 不比忘掉的时间晚）学到的这个词的热度、
 /// 和它有关的搭配、候选新词都去掉；忘掉以后又用过的（热度更新过）说明又要了，留着，这条忘掉的记录也不要了。
 /// 用户词库没有时间，由 [`crate::Engine`] 按留下的记录去掉。
@@ -515,7 +561,7 @@ pub fn apply_forgotten(
     }
     forgotten.retain(|word, at| words.get(word).map_or(true, |e| e.last_used_ms <= *at));
     let before = |word: &str, ms: u64| forgotten.get(word).is_some_and(|at| ms <= *at);
-    words.retain(|word, e| !before(word, e.last_used_ms));
+    words.retain(|word, e| !before(base_word(word), e.last_used_ms));
     pairs.retain(|prev, cur, e| !before(prev, e.last_used_ms) && !before(cur, e.last_used_ms));
     new_words.retain(|word, n| !before(word, n.at_ms));
 }

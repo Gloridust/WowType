@@ -544,6 +544,8 @@ private:
     /// 现在的模式：「中文」「英文」「互译」；提示框和托盘上的一个字「中」「英」「译」。
     const char *modeTitle() const;
     const char *modeLabel() const;
+    /// 提示 CapsLock 状态：开着显示 EN，关着显示当前模式；同时更新状态栏。
+    void showCapsLockInformation(fcitx::InputContext *ic);
     /// 现在是互译模式，而且这个输入框能用（密码框里不翻译、不往外发）。
     bool translating(fcitx::InputContext *ic) const;
     /// 这个输入框能翻译：不是密码框。
@@ -742,6 +744,8 @@ private:
     bool asciiMode_ = false;
     /// 互译模式（和英文模式一样全局生效）。
     bool translateMode_ = false;
+    /// 大写锁定开着：字母直接给应用，提示显示 EN（#271）。按 CapsLock 翻转，别的键按原始状态校正。
+    bool capsLockOn_ = false;
     /// 进「译」之前的模式（WOWTYPE_MODE_*）：别的输入框里进的「译」，在这个输入框里按互译键也回到那儿。
     int translateFrom_ = WOWTYPE_MODE_CHINESE;
     bool traditional_ = false;

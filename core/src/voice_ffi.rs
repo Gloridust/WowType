@@ -174,13 +174,15 @@ struct Shared {
 }
 
 /// 一块 PCM 的音量：-60 dB（安静房间）到 -10 dB（大声说话）映射到 0–100。
+/// 先减掉均值：有的内置麦克风带直流偏移，不说话时波形也差不多是满的（#331）。只用来画波形，不影响听没听到说话。
 fn level_of(pcm: &[i16]) -> u8 {
     if pcm.is_empty() {
         return 0;
     }
+    let mean = pcm.iter().map(|&v| v as f64).sum::<f64>() / pcm.len() as f64;
     let energy = pcm
         .iter()
-        .map(|&v| (v as f64 / 32768.0).powi(2))
+        .map(|&v| ((v as f64 - mean) / 32768.0).powi(2))
         .sum::<f64>()
         / pcm.len() as f64;
     let db = 10.0 * energy.max(1e-10).log10();
@@ -682,6 +684,10 @@ mod tests {
         assert!(level_of(&[8000, -8000].repeat(160)) > 70);
         let quiet = level_of(&[60, -60].repeat(160));
         assert!(quiet > 0 && quiet < 40, "{quiet}");
+        // 直流偏移（不说话时整段都偏在 6000 左右）不算音量；偏移上面的说话照样算
+        assert_eq!(level_of(&[6000; 320]), 0);
+        let offset_speech: Vec<i16> = [8000, -8000].repeat(160).iter().map(|v| v / 2 + 6000).collect();
+        assert!(level_of(&offset_speech) > 60);
     }
 
     #[test]

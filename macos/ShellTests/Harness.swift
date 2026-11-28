@@ -106,13 +106,14 @@ func type(_ c: TestController, _ text: String) {
 /// 上一下 Shift 松开的事件时刻
 private var lastShiftUp: TimeInterval = 0
 
-/// 单按一下 Shift（按下、0.1 秒后松开）。事件时刻和真键盘一样往后走：下一下在上一下松开 0.2 秒以后，
-/// 不然会被当成 Electron 那种重报的回弹。单按先等双击（#253）：接着跑 run loop，等输入控制器的轮询
-/// 到时间切、弹出新的「中 / 英」提示（CI 的机器上定时器可能晚一些，最多等 1.5 秒；不该切时等满），
-/// 下一下也就不会和这一下算成双击。wait 为 false 时不等（紧接着按别的键，那个键之前先切）。
+/// 单按一下 Shift（按下、0.1 秒后松开）。事件时刻和真键盘一样往后走：下一下在上一下松开 0.45 秒以后（不算回弹）。
+/// 没在打字时松开就切（#310）；打到一半时先等双击，接着跑 run loop，等输入控制器的轮询到时间切、弹出新的
+/// 「中 / 英」提示（CI 的机器上定时器可能晚一些，最多等 1.5 秒；不该切时等满）。会话按真实时间认双击（#253），
+/// 所以至少等 0.4 秒，下一下不会和这一下算成双击。wait 为 false 时不等（紧接着按别的键，那个键之前先切）。
 func tapShift(_ c: TestController, right: Bool = false, wait: Bool = true) {
-    let t = max(ProcessInfo.processInfo.systemUptime, lastShiftUp + 0.2)
+    let t = max(ProcessInfo.processInfo.systemUptime, lastShiftUp + 0.45)
     let before = panel?.aux
+    let released = Date()
     _ = c.handle(shiftEvent(down: true, right: right, at: t), client: c.fake)
     _ = c.handle(shiftEvent(down: false, right: right, at: t + 0.1), client: c.fake)
     lastShiftUp = t + 0.1
@@ -121,12 +122,17 @@ func tapShift(_ c: TestController, right: Bool = false, wait: Bool = true) {
     repeat {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
     } while Date() < deadline && (panel?.aux == nil || panel?.aux == before)
+    // 会话按输入控制器的时钟（真实时间）认双击：下一下要真的隔开双击间隔
+    let rest = 0.4 - Date().timeIntervalSince(released)
+    if rest > 0 {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: rest))
+    }
 }
 
 /// 双击 Shift（两下单按，事件时刻隔 0.15 秒，不是回弹），中间不跑 run loop。
 /// 返回四个事件是不是都交给了应用（JetBrains 要看到它们才认得出双击）。
 func doubleTapShift(_ c: TestController) -> Bool {
-    let t = max(ProcessInfo.processInfo.systemUptime, lastShiftUp + 0.2)
+    let t = max(ProcessInfo.processInfo.systemUptime, lastShiftUp + 0.45)
     var passed = true
     for (down, at) in [(true, t), (false, t + 0.08), (true, t + 0.23), (false, t + 0.31)] {
         passed = !c.handle(shiftEvent(down: down, right: false, at: at), client: c.fake) && passed
