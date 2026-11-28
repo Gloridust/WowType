@@ -9,7 +9,7 @@
 //! 5. 按词典代价 + 二元 LM 分数累计，每个位置保留 beam_size 条状态。
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::graph::{Edge, GraphMode, SyllableGraph};
 use crate::lexicon::{freq_cost, is_ext_char, Lexicon};
@@ -54,6 +54,13 @@ pub struct BeamConfig {
     ///
     /// 默认关：常见的中文字体（Noto CJK、思源、苹方）都没有这些字，列出来只是一排方块。
     pub rare_ext_chars: bool,
+    /// 剪枝时同一个末词最多留几条历史（前面的字不一样的），见 [`prune`]。
+    ///
+    /// 1 就是二元模型下的维特比：末词相同的只留最好的一条，句子中间的另一种选法（海边的「完风 / 晚风」吹着……）
+    /// 走到下一个词就被并掉，最后出来的几条整句只在句尾不一样，神经语言模型重排时根本看不到句中的另一种写法。
+    /// 留 3 条时，别人写的整句（chime 的 1010 条盲测，带 nnlm）top1 59.5% -> 63.5%、前 9 里有正确整句的 64.8% -> 72.4%；
+    /// 不带神经语言模型时各组评测逐条不变（二元模型下的最优路径没变）。
+    pub histories_per_word: usize,
 }
 
 impl Default for BeamConfig {
@@ -73,6 +80,7 @@ impl Default for BeamConfig {
             abbrev_cost: 2.0,
             tail_abbrev_cost: 4.0,
             rare_ext_chars: false,
+            histories_per_word: 3,
         }
     }
 }
@@ -139,6 +147,19 @@ struct Node {
     typos: usize,
     completion: usize,
     jianpin: bool,
+    /// 到这里为止整串文字的哈希（FNV-1a，逐词接着算）：[`prune`] 用它认出「同一串字、切法不同」的状态。
+    text_hash: u64,
+}
+
+/// [`Node::text_hash`] 的起点和递推（FNV-1a）。
+const TEXT_HASH_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+fn extend_text_hash(mut hash: u64, text: &str) -> u64 {
+    for b in text.bytes() {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// 从某个位置出发的一个可选词（已知词或兜底音节）。
@@ -288,13 +309,15 @@ pub fn beam_search(
         typos: 0,
         completion: 0,
         jianpin: false,
+        text_hash: TEXT_HASH_SEED,
     });
 
+    let per_word = config.histories_per_word.max(1);
     for pos in 0..n {
         if buckets[pos].is_empty() {
             continue;
         }
-        let states = prune(std::mem::take(&mut buckets[pos]), beam_size, |node| {
+        let states = prune(std::mem::take(&mut buckets[pos]), beam_size, per_word, |node| {
             node.word.map(|(f, i)| spans[f][i].word.text.as_str())
         });
         spans[pos] = collect_spans(
@@ -339,6 +362,7 @@ pub fn beam_search(
                     typos: state.typos + word.typos,
                     completion: state.completion + word.completion,
                     jianpin: state.jianpin || word.jianpin,
+                    text_hash: extend_text_hash(state.text_hash, &word.text),
                 };
                 buckets[word.end].push(next);
             }
@@ -799,7 +823,12 @@ fn pinyin_of(keys: &[SyllableQuery]) -> String {
 /// 纠错最少的状态在每个位置至少留这么多个，不管分数排第几（见 [`prune`]）。
 const TYPED_RESERVE: usize = 4;
 
-/// 同一位置内剪枝：末词相同、纠错处数也相同的只留最好的一条（二元模型下它们后续完全等价），再取前 beam_size。
+/// 同一位置内剪枝：末词相同、纠错处数也相同的状态最多留 `per_word` 条（[`BeamConfig::histories_per_word`]），
+/// 而且文字得不一样；再取前 beam_size。
+///
+/// 二元模型下末词相同的状态后续完全等价，只留最好的一条（`per_word` = 1）就够选出分数最高的整句。
+/// 但那样最后剩下的整句只在句尾不同，句子中间的另一种选法早被并掉了；多留几条，神经语言模型重排时才有的挑。
+/// 末词相同、前面的字也一样只是切法不同的（不 | 知道 | 的、不知道 | 的）只算一条，不占名额。
 ///
 /// 纠错处数不同的不能并成一条：`cehaohou` 走到 hao 后面时，「的 | 好」（c 当成按错的 d，「的」词频高）
 /// 和「测 | 好」末词都是「好」，以前只留分数高的「的 | 好」，没纠错的读法到这里就断了，
@@ -807,7 +836,7 @@ const TYPED_RESERVE: usize = 4;
 ///
 /// 另外，这个位置上纠错最少的那些状态至少留 [`TYPED_RESERVE`] 个，哪怕分数排在 beam_size 以外：
 /// 「照着打的字母读」的路径必须能走到底，排不排第一由后面的排序决定。
-fn prune<'a, F>(states: Vec<Node>, beam_size: usize, last_word: F) -> Vec<Node>
+fn prune<'a, F>(states: Vec<Node>, beam_size: usize, per_word: usize, last_word: F) -> Vec<Node>
 where
     F: Fn(&Node) -> Option<&'a str>,
 {
@@ -820,7 +849,8 @@ where
         .collect();
     order.sort_unstable_by(|a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
     let fewest = states.iter().map(|s| s.typos).min().unwrap_or(0);
-    let mut seen: HashMap<(&'a str, usize), ()> = HashMap::new();
+    let mut seen: HashMap<(&'a str, usize), usize> = HashMap::new();
+    let mut texts: HashSet<(u64, &'a str, usize)> = HashSet::new();
     let mut out = Vec::with_capacity(beam_size + TYPED_RESERVE);
     let mut typed = 0usize;
     for state in order.iter().map(|&(_, i)| states[i as usize]) {
@@ -831,10 +861,17 @@ where
             }
             continue;
         }
-        let key = (last_word(&state).unwrap_or(""), state.typos);
-        if seen.insert(key, ()).is_some() {
+        let last = last_word(&state).unwrap_or("");
+        let kept = seen.entry((last, state.typos)).or_insert(0);
+        if *kept >= per_word {
             continue;
         }
+        // 末词相同、前面的字也一样（只是切法不同）的只留分数最高的那条，不占这个末词的名额。
+        // 末词不同的不管字一不一样都留：二元模型下它们后面接的词分数不同
+        if per_word > 1 && !texts.insert((state.text_hash, last, state.typos)) {
+            continue;
+        }
+        *kept += 1;
         typed += usize::from(state.typos == fewest);
         out.push(state);
     }
@@ -876,6 +913,40 @@ mod tests {
         let texts: Vec<&str> = paths.iter().map(|p| p.text.as_str()).collect();
         assert!(texts.contains(&"先"), "缺少 先: {:?}", texts);
         assert!(texts.contains(&"西安"), "缺少 西安: {:?}", texts);
+    }
+
+    #[test]
+    fn histories_per_word_keeps_mid_sentence_alternatives() {
+        // 晚风 | 吹 | 着 和 完 | 风 | 吹 | 着：走到「吹」时末词相同。只留一条历史的话句中的另一种写法到这里就没了，
+        // 最后出来的整句只在句尾不一样，重排时没得挑
+        let g = graph("wanfengchuizhe", GraphMode::Full);
+        let lex = MemoryLexicon::from_tsv_str(
+            "wan feng\t晚风\t300\nwan\t完\t900\nfeng\t风\t900\nchui\t吹\t900\nzhe\t着\t900\n",
+        )
+        .unwrap();
+        let lm = BigramLm::default();
+        let texts = |histories: usize| -> Vec<String> {
+            let config = BeamConfig {
+                histories_per_word: histories,
+                ..BeamConfig::default()
+            };
+            beam_search(&g, &lex, &lm, &config)
+                .into_iter()
+                .map(|p| p.text)
+                .collect()
+        };
+        let one = texts(1);
+        assert_eq!(
+            one.iter().filter(|t| *t == "晚风吹着" || *t == "完风吹着").count(),
+            1,
+            "只留一条历史：{one:?}"
+        );
+        let three = texts(3);
+        assert!(
+            three.iter().any(|t| t == "晚风吹着") && three.iter().any(|t| t == "完风吹着"),
+            "留三条历史时两种写法都在：{three:?}"
+        );
+        assert_eq!(one[0], three[0], "第一名（二元模型下的最优）不变");
     }
 
     #[test]

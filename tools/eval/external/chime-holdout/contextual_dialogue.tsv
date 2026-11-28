@@ -1,0 +1,22 @@
+# 外部盲测集：从 chime 的 benchmarks/test_holdout.tsv 转来（https://github.com/tyrchen/chime，提交 d0f5da2，2026-11-27），分类 contextual_dialogue。
+# Copyright (c) 2026 Tian Chen，MIT OR Apache-2.0。只用来量，不拿它调参、不照着它加词，见 tools/eval/external/README.md。
+chumenjideduochuanyijianwaitao	出门记得多穿一件外套	今天降温了，
+zhongyuquedinglexiayibufangan	终于确定了下一步方案	刚才开会讨论了很久，
+genbentingbuxialai	根本停不下来	这本小说太精彩了，
+womenhaishidachehuijia	我们还是打车回家	外面雨越下越大，
+xuyaolijiqinglijiurizhi	需要立即清理旧日志	服务器磁盘空间快满了，
+quanjiaweizuozaiyiqichifan	全家围坐在一起吃饭	妈妈做了一桌子好菜，
+zhiyaohuagetujiumingbaile	只要画个图就明白了	这道题思路其实很简单，
+zhoumohaohaodasaoyixiaweisheng	周末好好打扫一下卫生	刚搬进新租的公寓，
+jintianzaoshangyoudianfankun	今天早上有点犯困	昨晚熬夜赶项目进度，
+kuaidiannashangxinglizouba	快点拿上行李走吧	高铁马上就要检票了，
+zuihaotiqianwangshangpaidui	最好提前网上排队	这家餐厅周末人很多，
+fanhuishouhoujianxiuyixia	返回售后检修一下	耳机左耳突然没声音了，
+henduoshimindaihaizilaichunyou	很多市民带孩子来春游	春天公园里百花齐放，
+dazideshihoushengyinhenqingcui	打字的时候声音很清脆	新买的机械键盘手感很好，
+xiankanyixiazhixingjihua	先看一下执行计划	数据库查询突然变慢了，
+mingtiankaishijieruxinxiangmu	明天开始接入新项目	团队新招了一位前端工程师，
+womenpingchangduopeipeita	我们平常多陪陪她	奶奶年纪大了，
+zhoumowomenqukanwangta	周末我们去看望他	爷爷平时最喜欢下象棋，
+quanjiadouweitagaoxing	全家都为她高兴	妹妹今年刚考上大学，
+meichangbisaitadouhenpin	每场比赛他都很拼	弟弟在篮球队打主力，

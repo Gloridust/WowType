@@ -8,6 +8,7 @@
 //!   加 --lm words.lm 带上词级语言模型，--nnlm nlrgpt2_nnlm.bin 带上神经语言模型重排；加 --no-prefix 关掉句首词候选，对比它的开销；--max N 设候选总数（输入法里是 300）；
 //!   --s2t s2t.tsv 载入简繁表并打开繁体输出
 //!   --dump out.txt 不计时，把每个前缀的前 50 个候选写进 out.txt（改性能前后各跑一次 diff，候选必须一个不差）
+//!   --histories N 束搜索里同一个末词留几条历史（BeamConfig::histories_per_word，对比它的开销）
 //!   --fuzzy 分组 打开模糊音（分组是 syllable::fuzzy 的位掩码，比如 0xFFFF 是全部分组）
 //! 五笔：... -- --lexicon lexicon.tsv --wubi wubi86.tsv
 //!   码表载入耗时和内存；按输入会话逐键打码表里的码（四码唯一上屏、顶字都照真的走）和几句 z 临时拼音，
@@ -28,6 +29,7 @@ fn main() {
     let mut no_prefix = false;
     let mut domain_lm_path: Option<String> = None;
     let mut max_candidates: Option<usize> = None;
+    let mut histories: Option<usize> = None;
     let mut nnlm_path: Option<String> = None;
     let mut lm_path: Option<String> = None;
     let mut s2t_path: Option<String> = None;
@@ -65,6 +67,10 @@ fn main() {
                     v.strip_prefix("0x")
                         .map_or_else(|| v.parse().ok(), |hex| u32::from_str_radix(hex, 16).ok())
                 });
+            }
+            "--histories" => {
+                i += 1;
+                histories = args.get(i).and_then(|v| v.parse().ok());
             }
             "--max" => {
                 i += 1;
@@ -147,6 +153,9 @@ fn main() {
     };
     let lex: Arc<dyn Lexicon> = Arc::new(lexicon);
     let mut config = EngineConfig::default();
+    if let Some(n) = histories {
+        config.beam.histories_per_word = n.max(1);
+    }
     if let Some(max) = max_candidates {
         config.max_candidates = max;
     }
