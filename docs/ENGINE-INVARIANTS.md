@@ -263,6 +263,13 @@ scripts/invariants.sh /usr/share/wowtype --inv-limit 0                      # �
 「灵机」是 ling ji | a s 这种换切法才对得上的词，跟着第一名的切法时有时无。不带模型时不出现，所以 CI 不拦。
 建议的修法就是第 7 节第 4 条：句首词不按第一名的切法筛，从输入开头起、落在任一种照着打的切法的音节边界上的词都留。
 
+2026-11-28 更新（「纠错有名额」那一批改完以后，带模型重跑）：`lingjias`、`biwans` 不再违反；还剩 `duochuang`、`wanshir`，
+多了一条同类的 `xinniankuailewanshir`（开关纠错时排第一的在「万事如」wan shi ru 和「万事儿」wan shir 之间换）。
+引擎没见过的输入（chime 盲测里的 851 条全拼整句逐键，带、不带模型）上，只在带模型时才出现的违反从 7 个输入降到 0 个
+（包括纠错排第一的 `chaikaibaozhua`、`zunzhaoyizhuanshifuyaoqiewuzixingt`）；带不带模型都违反的还有两个输入没改：
+`xiaolvtishengfi`（照着打只能靠生僻字「覅」fiao 读通，纠错的「效率提升地」排第一）、
+`yundongchuhanzhihouzhengger`（第 4 个硬凑的整句被整句名额去掉）。
+
 ### 模糊音兜底：照着打是现成的词时让位（用户定的）
 
 模糊音关着时，第一名偏弱就由 `fuzzy_fallback` 补一两个模糊音的词，分数高出一截就排第一。这有两种情况，用户定的规矩是分开对待：
