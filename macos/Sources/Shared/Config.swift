@@ -254,8 +254,11 @@ public struct WowtypeConfig: Equatable {
     public var autoSpaceDigits = true
     /// v + 空格打开工具栏（剪贴板、常用语、符号、表情；双拼、五笔时不开）
     public var toolbar = true
-    /// 记录剪贴板历史（只在内存里，最多 20 条）。默认关：可能把复制的密码也记下来
+    /// 记录剪贴板历史：输入法每秒看一次剪贴板，复制过的文字存在数据目录的 clipboard-history.json
+    /// （最多 200 条），v + 空格的「剪贴板」和设置窗口的「剪贴板历史」里看、删。默认关
     public var clipboardHistory = false
+    /// 剪贴板历史留几天，0 是不按时间删
+    public var clipboardHistoryDays = 7
     /// 跨设备复制粘贴（docs/SYNC.md）：一台设备上复制的文字，在配过对的另一台上直接粘贴。默认关；
     /// 配对在设置窗口里做，组密钥在数据目录的 sync.json，中转服务的访问口令在 sync-relay.key
     public var clipboardSync = false
@@ -432,7 +435,7 @@ public struct WowtypeConfig: Equatable {
         "ShuangpinAbbrev", "WubiAutoCommit", "WubiHint", "ShiftToggle", "InitialMode", "WindowMode",
         "Traditional",
         "PunctuationStyle", "AutoPairPunct", "DateTime", "Calculator", "EmojiSuggest", "AutoSpace", "AutoSpaceLetters",
-        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory",
+        "AutoSpaceDigits", "Lexicon", "Toolbar", "ClipboardHistory", "ClipboardHistoryDays",
         "ClipboardSync", "ClipboardSyncLan", "ClipboardSyncRelayUrl", "ClipboardSyncDeviceName", "ClipboardSyncPaste",
         "Voice", "VoiceKey", "VoiceSilenceTimeout",
         "VoiceCopy", "EmojiKey",
@@ -528,6 +531,8 @@ public struct WowtypeConfig: Equatable {
         case "TranslateLlamaServer": translateLlamaServer = value
         case "TranslateIdleMinutes":
             if let n = Int(value) { translateIdleMinutes = min(max(n, 0), 240) }
+        case "ClipboardHistoryDays":
+            if let n = Int(value) { clipboardHistoryDays = min(max(n, 0), 365) }
         default:
             break
         }
@@ -566,6 +571,7 @@ public struct WowtypeConfig: Equatable {
         case "TranslateLocalModel": return translateLocalModel
         case "TranslateLlamaServer": return translateLlamaServer
         case "TranslateIdleMinutes": return String(translateIdleMinutes)
+        case "ClipboardHistoryDays": return String(clipboardHistoryDays)
         default: return nil
         }
     }
@@ -794,8 +800,10 @@ public struct WowtypeConfig: Equatable {
 
         # 只打一个 v 再按空格打开工具栏：剪贴板、常用语、符号、表情（双拼、五笔时不开）
         Toolbar=\(b(d.toolbar))
-        # 工具栏里记剪贴板历史（只在内存里，最多 20 条）。可能把复制的密码也记下来，默认关
+        # 剪贴板历史：每秒看一次剪贴板，复制过的文字存在本机（最多 200 条），v + 空格的「剪贴板」和设置窗口里看。
+        # 默认关；关掉时删掉记录。ClipboardHistoryDays 是留几天，0 不按时间删
         ClipboardHistory=\(b(d.clipboardHistory))
+        ClipboardHistoryDays=\(d.clipboardHistoryDays)
         # 跨设备复制粘贴：一台设备上复制的文字，在配过对的另一台上直接粘贴（配对在设置窗口「输入」页做）。
         # 内容端到端加密；同一个局域网里直接传，不在一个局域网时走自己部署的中转服务（留空不用）
         ClipboardSync=\(b(d.clipboardSync))

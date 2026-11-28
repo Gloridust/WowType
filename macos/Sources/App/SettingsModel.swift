@@ -8,7 +8,7 @@ import AppKit
 import AVFoundation
 
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, input, emoji, voice, translate, words, stats
+    case general, input, emoji, voice, translate, words, clipboard, stats
 
     var id: String { rawValue }
 
@@ -20,6 +20,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .voice: return "语音"
         case .translate: return "翻译"
         case .words: return "自定义词"
+        case .clipboard: return "剪贴板"
         case .stats: return "统计"
         }
     }
@@ -33,6 +34,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .voice: return "mic"
         case .translate: return "character.bubble"
         case .words: return "book.closed"
+        case .clipboard: return "doc.on.clipboard"
         case .stats: return "list.bullet.rectangle"
         }
     }

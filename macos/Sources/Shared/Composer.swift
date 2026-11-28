@@ -298,7 +298,7 @@ public final class Composer {
     /// Ctrl+Delete 忘掉了学错的词以后调用（外壳马上存学习数据，免得重启又回来）。
     public var onForget: (() -> Void)?
     /// 打开工具栏的剪贴板页时调用（设置里 ClipboardHistory 开着时）：外壳看一眼系统剪贴板，
-    /// 有新的就交给 ClipboardHistory.remember。
+    /// 有新的就交给 ClipboardHistory.observe。
     public var sampleClipboard: (() -> Void)?
     /// 最近用过的 emoji（表情面板里排最前）。
     /// 最近用过的 emoji（在核心里，一个进程一份）；测试里换一个只在内存里的

@@ -7,6 +7,7 @@
 // 不依赖 AppKit。
 
 import CWowtype
+import Foundation
 #if canImport(Glibc)
 import Glibc
 #else
@@ -28,9 +29,61 @@ public enum ToolPanel: Equatable {
     }
 }
 
-/// 剪贴板历史：在核心里，只在内存，最多 20 条，最新的在前。输入法自己不碰系统剪贴板，外壳读到了交进来。
+/// 剪贴板历史的一条（设置窗口列出来用）。
+public struct ClipboardEntry: Equatable {
+    public let text: String
+    /// 记下（最近一次复制）的时间，Unix 秒
+    public let time: Int
+    /// 复制时在用的应用，不知道是空串
+    public let app: String
+    /// 别的设备复制过来的：那台设备的名字
+    public let device: String
+
+    public init(text: String, time: Int, app: String = "", device: String = "") {
+        self.text = text
+        self.time = time
+        self.app = app
+        self.device = device
+    }
+
+    /// 从哪来的：别的设备的是「来自 那台」，本机的是应用名
+    public var source: String { device.isEmpty ? app : "来自 \(device)" }
+}
+
+/// 剪贴板历史（docs/CONFIG.md「剪贴板历史」）：在核心里。输入法进程每秒看一次系统剪贴板，变了交给
+/// observe；设置里开着时存在数据目录的 clipboard-history.json（只有自己能读，最多 200 条），
+/// 设置窗口那个进程读同一个文件、删条目。关着时只在内存里（跨设备收到的）。
 public enum ClipboardHistory {
-    /// 记下一条（空白、超过 16 KB 的不记）；记下了返回 true。
+    public static let fileName = "clipboard-history.json"
+
+    public static let warning = "打开以后，WowType 每秒看一次剪贴板，把复制过的文字存在这台 Mac 上"
+        + "（最多 200 条，只有你自己能读），打 v 再按空格、或者在这一页里能找回来。\n\n"
+        + "密码管理器标了「不要记」的（1Password、钥匙串这类）不记；没标的密码会被记下并显示出来，"
+        + "可以到这一页删掉那一条。\n\n记录不上传。关掉开关时全部删掉。"
+
+    public static let info = "打开后每秒看一次剪贴板，复制过的文字都记下来（最多 200 条，每条最多 16 KB；"
+        + "图片、文件不记），最新的在前，同一段复制两次只留一条。\n\n"
+        + "打字时打 v 再按空格，选「剪贴板」，数字键上屏，Control+Delete 删掉光标处那一条。"
+        + "这一页能搜索、复制回剪贴板、删除。\n\n"
+        + "记录存在 ~/Library/Application Support/WowType/clipboard-history.json，只有自己能读；"
+        + "超过「保留多久」的自动删掉，关掉开关时全部删掉。跨设备复制粘贴收到的也在这里。"
+
+    /// 「保留多久」的选项（ClipboardHistoryDays）
+    public static let keepChoices: [(String, Int)] = [("1 天", 1), ("7 天", 7), ("30 天", 30), ("一直留着", 0)]
+
+    /// 存在哪、留几天（0 不按时间删）。path 是 nil：只记在内存里，原来存在文件里的连文件一起删掉。返回有几条。
+    @discardableResult
+    public static func configure(path: String?, keepDays: Int) -> Int {
+        Int(wowtype_clipboard_configure(path ?? "", Int32(clamping: keepDays)))
+    }
+
+    /// 系统剪贴板现在是 text（复制的不是文字时传空串）；和上次报的一样就不记。记下了返回 true。
+    @discardableResult
+    public static func observe(_ text: String, app: String = "") -> Bool {
+        wowtype_clipboard_observe(text, app) == 1
+    }
+
+    /// 等于 observe(text)。
     @discardableResult
     public static func remember(_ text: String) -> Bool {
         wowtype_clipboard_remember(text) == 1
@@ -40,9 +93,67 @@ public enum ClipboardHistory {
         wowtype_clipboard_clear()
     }
 
-    /// 记着的，最新的在前。
+    /// 删掉文字是 text 的那条；删掉了返回 true。
+    @discardableResult
+    public static func forget(_ text: String) -> Bool {
+        wowtype_clipboard_forget(text) == 1
+    }
+
+    /// 记着的文字，最新的在前。
     public static var items: [String] {
         readCandidates(wowtype_clipboard_history()).map(\.commit)
+    }
+
+    /// 全部记录，最新的在前。
+    public static var entries: [ClipboardEntry] {
+        guard let raw = wowtype_clipboard_entries_json(),
+              let data = String(cString: raw).data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = object["items"] as? [[String: Any]]
+        else { return [] }
+        return items.compactMap { item in
+            guard let text = item["text"] as? String else { return nil }
+            return ClipboardEntry(text: text, time: (item["time"] as? NSNumber)?.intValue ?? 0,
+                                  app: item["app"] as? String ?? "", device: item["device"] as? String ?? "")
+        }
+    }
+
+    /// 列表里的一行：换行显示成 ⏎，连着的空格、制表符并成一个，太长的截断（和 Linux 设置界面的一样）。
+    public static func preview(_ text: String, limit: Int = 120) -> String {
+        let lines = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: " ⏎ ")
+        var shown = ""
+        var lastBlank = false
+        for ch in lines {
+            let blank = ch == " " || ch == "\t"
+            if blank && lastBlank { continue }
+            shown.append(blank ? " " : ch)
+            lastBlank = blank
+        }
+        guard shown.count > limit else { return shown }
+        return String(shown.prefix(limit - 1)) + "…"
+    }
+
+    /// 「刚才」「5 分钟前」「3 小时前」「07:00」「昨天 14:02」「11月20日 14:02」「2025年11月20日」（和 Linux 的一样）。
+    public static func when(_ time: Int, now: Date = Date(), calendar: Calendar = .current) -> String {
+        let ago = Int(now.timeIntervalSince1970) - time
+        if ago < 60 { return "刚才" }
+        if ago < 3600 { return "\(ago / 60) 分钟前" }
+        let then = Date(timeIntervalSince1970: TimeInterval(time))
+        let sameDay = calendar.isDate(then, inSameDayAs: now)
+        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: then)
+        let clock = String(format: "%02d:%02d", parts.hour ?? 0, parts.minute ?? 0)
+        if ago < 12 * 3600 || sameDay {
+            return !sameDay || ago < 6 * 3600 ? "\(ago / 3600) 小时前" : clock
+        }
+        if calendar.isDate(then, inSameDayAs: now.addingTimeInterval(-86400)) {
+            return "昨天 \(clock)"
+        }
+        if parts.year == calendar.component(.year, from: now) {
+            return "\(parts.month ?? 0)月\(parts.day ?? 0)日 \(clock)"
+        }
+        return "\(parts.year ?? 0)年\(parts.month ?? 0)月\(parts.day ?? 0)日"
     }
 }
 
